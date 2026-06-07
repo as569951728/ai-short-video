@@ -66,6 +66,13 @@ V1 先验证：
 - 最大技术风险是模型输出结构不稳定，导致用户误以为系统不可用，或拿 Mock / 低质量内容对外验证。
 - 下一步必须按 `真实模型准入 -> 3 条候选内容 -> 1 条演示案例 -> 5 个真实沟通 -> 1 次明确报价` 推进。
 
+最新方向复盘：
+
+- 当前所做事情和大方向相符：V1 已从方案、Mock 闭环推进到真实模型准入。
+- 当前所做事情和目标相符：系统已经服务于“外行可用”和“100 元收入验证”两个铁律。
+- 成功最关键的三个动作：做出演示案例、联系 5 个真实对象、根据真实反馈只修成交障碍。
+- 失败最可能的三个原因：继续堆功能不联系客户、演示案例质量不可信、目标客户选错。
+
 代码仓库：
 
 - GitHub remote：`https://github.com/as569951728/ai-short-video.git`
@@ -142,6 +149,7 @@ V1 系统可用的定义：
 - [x] 将 V1 默认模型设为 `deepseek-v4-flash`。
 - [x] 修正模型提示词：要求 hook 带问号、脚本长度、标准 JSON 字符串和分镜数量。
 - [x] `deepseek-v4-flash` 已通过 3 条模型质量准入测试。
+- [x] 写入方向一致性复盘：`docs/ops/V1_ALIGNMENT_RETROSPECTIVE.md`。
 
 ## 进行中
 
@@ -289,6 +297,7 @@ V1 系统可用的定义：
 - V1 落地实施计划：`docs/superpowers/plans/2026-06-06-v1-validation-execution-plan.md`
 - 首个 100 元运营方案：`docs/ops/2026-06-06-first-100-rmb-ops-plan.md`
 - 首个 100 元销售验证包：`docs/ops/2026-06-06-first-100-rmb-sales-kit.md`
+- V1 方向一致性复盘：`docs/ops/V1_ALIGNMENT_RETROSPECTIVE.md`
 - V1 用户流程：`docs/v1/V1_USER_FLOW.md`
 - V1 页面规格：`docs/v1/V1_SCREEN_SPEC.md`
 - V1 数据模型：`docs/v1/V1_DATA_MODEL.md`
