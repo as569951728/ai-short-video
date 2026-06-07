@@ -1,0 +1,1751 @@
+import React, { useMemo, useState } from 'react';
+import { createRoot } from 'react-dom/client';
+import {
+  ArrowLeft,
+  BarChart3,
+  CheckCircle2,
+  ClipboardList,
+  Copy,
+  DollarSign,
+  Download,
+  FileText,
+  FolderOpen,
+  Lightbulb,
+  MessageSquare,
+  PenLine,
+  Play,
+  RefreshCw,
+  Save,
+  Settings,
+  Sparkles,
+  Trash2,
+  User,
+  Wand2
+} from 'lucide-react';
+import './styles.css';
+
+type Screen =
+  | 'home'
+  | 'wizard'
+  | 'editor'
+  | 'quality'
+  | 'export'
+  | 'publish'
+  | 'review'
+  | 'cases'
+  | 'profile'
+  | 'revenue'
+  | 'settings';
+
+type Platform = '抖音' | '视频号' | '小红书' | 'B站';
+type Genre = '都市逆袭' | '悬疑反转' | '情感故事' | '职场复仇' | 'AI 科幻';
+type Goal = '故事短视频' | '小说转短视频' | '故事草稿';
+
+interface CreationInput {
+  goal: Goal;
+  platform: Platform;
+  genre: Genre;
+  idea: string;
+}
+
+interface StoryboardRow {
+  scene: string;
+  voiceover: string;
+  visual: string;
+  subtitle: string;
+}
+
+interface QualityScore {
+  hookStrength: number;
+  emotionalDensity: number;
+  conflictClarity: number;
+  informationGain: number;
+  conversationalStyle: number;
+  visualExecutability: number;
+  platformFit: number;
+  samenessRisk: number;
+  copyrightRisk: number;
+  aiTraceRisk: number;
+  recommendations: string[];
+}
+
+interface GeneratedPackage {
+  hook: string;
+  script: string;
+  storyboard: StoryboardRow[];
+  subtitles: string[];
+  titleOptions: string[];
+  selectedTitle: string;
+  coverCopyOptions: string[];
+  selectedCoverCopy: string;
+  publishCopy: string;
+  score: QualityScore;
+}
+
+interface PublishRecord {
+  platform: Platform;
+  publishedAt: string;
+  url: string;
+  views: number;
+  likes: number;
+  comments: number;
+  saves: number;
+  follows: number;
+  notes: string;
+}
+
+interface AccountProfile {
+  accountName: string;
+  targetAudience: string;
+  contentStyle: string;
+  monetizationGoal: string;
+}
+
+type RevenueStatus = '待联系' | '已联系' | '已体验' | '强意向' | '已付款' | '无效';
+
+interface RevenueLead {
+  id: string;
+  name: string;
+  channel: string;
+  need: string;
+  offer: string;
+  status: RevenueStatus;
+  amount: number;
+  nextAction: string;
+  reply?: string;
+  objection?: string;
+  followUpAt?: string;
+  note: string;
+  createdAt: string;
+}
+
+interface TouchpointSeed {
+  name: string;
+  channel: string;
+  need: string;
+  nextAction: string;
+}
+
+interface ModelQualityCase {
+  name: string;
+  input: CreationInput;
+  focus: string;
+}
+
+interface ModelQualityResult {
+  caseName: string;
+  idea: string;
+  title: string;
+  score: number;
+  passed: boolean;
+  source: string;
+  message: string;
+  warnings: string[];
+}
+
+interface OperatingStep {
+  label: string;
+  why: string;
+  done: boolean;
+  actionLabel: string;
+  targetScreen: Screen;
+}
+
+interface Project {
+  id: string;
+  input: CreationInput;
+  profile?: AccountProfile;
+  generated: GeneratedPackage;
+  publishRecord?: PublishRecord;
+  isShowcase?: boolean;
+  createdAt: string;
+}
+
+const platforms: Platform[] = ['抖音', '视频号', '小红书', 'B站'];
+const genres: Genre[] = ['都市逆袭', '悬疑反转', '情感故事', '职场复仇', 'AI 科幻'];
+const goals: Goal[] = ['故事短视频', '小说转短视频', '故事草稿'];
+
+const defaultInput: CreationInput = {
+  goal: '故事短视频',
+  platform: '抖音',
+  genre: '都市逆袭',
+  idea: ''
+};
+
+const modelQualityCases: ModelQualityCase[] = [
+  {
+    name: '职场逆袭',
+    input: {
+      goal: '故事短视频',
+      platform: '抖音',
+      genre: '职场复仇',
+      idea: '程序员发现项目失败不是技术问题，而是有人故意隐藏关键数据'
+    },
+    focus: '强冲突、反击动作、结尾悬念'
+  },
+  {
+    name: '情感故事',
+    input: {
+      goal: '故事短视频',
+      platform: '视频号',
+      genre: '情感故事',
+      idea: '一个总是退让的人，终于在家庭聚餐上说出真实想法'
+    },
+    focus: '情绪递进、口语化、真实细节'
+  },
+  {
+    name: '小说转短视频',
+    input: {
+      goal: '小说转短视频',
+      platform: '小红书',
+      genre: '悬疑反转',
+      idea: '女主每晚都会收到一条来自三年前自己的短信，提醒她不要相信最亲近的人'
+    },
+    focus: '反转线索、画面可执行、标题吸引力'
+  }
+];
+
+const lastProjectKey = 'aishortvideo:last-project';
+const projectsKey = 'aishortvideo:projects';
+const profileKey = 'aishortvideo:account-profile';
+const revenueLeadsKey = 'aishortvideo:revenue-leads';
+const modelQualityResultsKey = 'aishortvideo:model-quality-results';
+
+const defaultProfile: AccountProfile = {
+  accountName: '',
+  targetAudience: '',
+  contentStyle: '强钩子、强冲突、短句口语化',
+  monetizationGoal: '先验证内容数据，再做系统诊断或试点'
+};
+
+const revenueStatuses: RevenueStatus[] = ['待联系', '已联系', '已体验', '强意向', '已付款', '无效'];
+
+const objectionOptions = [
+  '暂时不需要',
+  '不知道发什么',
+  '担心没效果',
+  '觉得太贵',
+  '想先看看案例',
+  '没有时间配合',
+  '需要和别人商量'
+];
+
+const revenueOffers = [
+  {
+    name: '0 元演示',
+    price: 0,
+    usage: '给潜在客户看系统如何从一句话生成内容包，换取需求反馈。'
+  },
+  {
+    name: '29 元系统生成服务',
+    price: 29,
+    usage: '你代客户用系统生成 1 条可发布故事短视频素材包。'
+  },
+  {
+    name: '99 元系统诊断',
+    price: 99,
+    usage: '基于客户账号或想法，输出 3 条内容方向、1 条样稿和系统改进建议。'
+  },
+  {
+    name: '100 元以上试点定金',
+    price: 100,
+    usage: '客户愿意参与小范围试点，验证系统是否能持续产出内容。'
+  }
+];
+
+const touchpointSeeds: TouchpointSeed[] = [
+  { name: '正在做抖音故事号的朋友', channel: '私聊', need: '缺稳定脚本和分镜，更新压力大', nextAction: '发 0 元演示，索要一句话选题' },
+  { name: '想做副业账号的技术同事', channel: '私聊', need: '有技术能力但不知道发什么内容', nextAction: '展示程序员逆袭故事样稿' },
+  { name: '小红书副业内容群', channel: '社群', need: '需要低成本内容选题和脚本', nextAction: '发系统生成前后对比' },
+  { name: 'AI 工具交流群', channel: '社群', need: '关心 AI 工作流和可替换模型', nextAction: '邀请体验系统诊断' },
+  { name: '小说作者或网文群', channel: '社群', need: '想把小说片段改成短视频脚本', nextAction: '提供小说转短视频演示' },
+  { name: '短剧剪辑从业者', channel: '私聊', need: '需要故事钩子和分镜拆解', nextAction: '报价 29 元生成一条素材包' },
+  { name: '本地创业者社群', channel: '社群', need: '需要低成本宣传内容', nextAction: '问是否愿意用真实业务试一条' },
+  { name: '公众号写作者', channel: '私聊', need: '想把文章改成视频口播', nextAction: '演示文章核心转故事脚本' },
+  { name: '视频号运营者', channel: '私聊', need: '需要更稳的内容结构和复盘', nextAction: '报价 99 元诊断' },
+  { name: '做课程或知识付费的人', channel: '私聊', need: '需要短视频引流脚本', nextAction: '给 3 个内容方向' },
+  { name: '个人 IP 训练营学员', channel: '社群', need: '不知道如何把经历讲成故事', nextAction: '发故事短视频样稿' },
+  { name: '职场内容账号', channel: '平台私信', need: '需要职场冲突和反转故事', nextAction: '发 29 元生成服务' },
+  { name: '情感故事账号', channel: '平台私信', need: '需要情绪拉扯和结尾悬念', nextAction: '发情感故事样稿' },
+  { name: 'AI 副业博主', channel: '平台私信', need: '需要可展示 AI 系统案例', nextAction: '邀请看 V1 演示' },
+  { name: '剪映模板作者', channel: '平台私信', need: '缺脚本和标题素材', nextAction: '问是否需要批量脚本包' },
+  { name: '大学生副业群', channel: '社群', need: '想低成本试内容变现', nextAction: '发 0 元演示入口' },
+  { name: '本地商家老板', channel: '私聊', need: '不会写短视频故事文案', nextAction: '用真实店铺生成一条' },
+  { name: 'AI 编程学习者', channel: '社群', need: '想看 AI 产品如何落地赚钱', nextAction: '演示系统并收集反馈' },
+  { name: '自由职业者', channel: '私聊', need: '想提高内容生产效率', nextAction: '报价 99 元诊断' },
+  { name: '内容代运营小团队', channel: '私聊', need: '需要稳定产出脚本和复盘', nextAction: '谈 100 元以上试点定金' }
+];
+
+const defaultRevenueLead: Omit<RevenueLead, 'id' | 'createdAt'> = {
+  name: '',
+  channel: '',
+  need: '',
+  offer: '29 元系统生成服务',
+  status: '待联系',
+  amount: 0,
+  nextAction: '',
+  reply: '',
+  objection: '',
+  followUpAt: '',
+  note: ''
+};
+
+function defaultPublishRecord(platform: Platform = '抖音'): PublishRecord {
+  return {
+    platform,
+    publishedAt: new Date().toISOString().slice(0, 16),
+    url: '',
+    views: 0,
+    likes: 0,
+    comments: 0,
+    saves: 0,
+    follows: 0,
+    notes: ''
+  };
+}
+
+function readRevenueLeads() {
+  const raw = localStorage.getItem(revenueLeadsKey);
+  if (!raw) return [];
+
+  try {
+    return JSON.parse(raw) as RevenueLead[];
+  } catch {
+    return [];
+  }
+}
+
+function readModelQualityResults() {
+  const raw = localStorage.getItem(modelQualityResultsKey);
+  if (!raw) return [];
+
+  try {
+    return JSON.parse(raw) as ModelQualityResult[];
+  } catch {
+    return [];
+  }
+}
+
+function readStoredProjects() {
+  const raw = localStorage.getItem(projectsKey);
+  if (!raw) {
+    const lastRaw = localStorage.getItem(lastProjectKey);
+    if (!lastRaw) return [];
+
+    try {
+      return [JSON.parse(lastRaw) as Project];
+    } catch {
+      return [];
+    }
+  }
+
+  try {
+    return JSON.parse(raw) as Project[];
+  } catch {
+    return [];
+  }
+}
+
+function readLastProject() {
+  const raw = localStorage.getItem(lastProjectKey);
+  if (!raw) return null;
+
+  try {
+    return JSON.parse(raw) as Project;
+  } catch {
+    return null;
+  }
+}
+
+function readStoredProfile() {
+  const raw = localStorage.getItem(profileKey);
+  if (!raw) return defaultProfile;
+
+  try {
+    return { ...defaultProfile, ...(JSON.parse(raw) as AccountProfile) };
+  } catch {
+    return defaultProfile;
+  }
+}
+
+function totalScore(score: QualityScore) {
+  return (
+    score.hookStrength +
+    score.emotionalDensity +
+    score.conflictClarity +
+    score.informationGain +
+    score.conversationalStyle +
+    score.visualExecutability +
+    score.platformFit +
+    score.samenessRisk +
+    score.copyrightRisk +
+    score.aiTraceRisk
+  );
+}
+
+function evaluateModelQuality(generated: GeneratedPackage) {
+  const score = totalScore(generated.score);
+  const warnings: string[] = [];
+  const compactScriptLength = generated.script.replace(/\s/g, '').length;
+  const fullText = `${generated.hook}\n${generated.script}\n${generated.publishCopy}`;
+
+  if (score < 38) warnings.push('质检总分低于 38/50。');
+  if (generated.storyboard.length < 5) warnings.push('分镜少于 5 段，剪辑执行信息不足。');
+  if (compactScriptLength < 180) warnings.push('脚本正文偏短，可能不能支撑一条完整短视频。');
+  if (generated.titleOptions.length < 3) warnings.push('标题候选少于 3 个。');
+  if (!/[？?]/.test(generated.hook)) warnings.push('开头钩子缺少明确问题或悬念。');
+  if (/作为一个AI|抱歉|无法满足|不能提供/.test(fullText)) warnings.push('内容里出现模型拒答或 AI 身份痕迹。');
+
+  return {
+    score,
+    passed: warnings.length === 0,
+    warnings
+  };
+}
+
+function buildModelQualityStatus(results: ModelQualityResult[]) {
+  if (results.length === 0) return '未测试';
+
+  const passCount = results.filter((result) => result.passed).length;
+  return passCount === modelQualityCases.length
+    ? '准入通过：3 条测试全部达标，可以进入真实案例生产。'
+    : `准入未通过：${passCount}/${modelQualityCases.length} 条达标，暂时不要拿这个模型对外演示。`;
+}
+
+function shortText(value: string, maxLength = 30) {
+  const clean = value.trim().replace(/[。！？!?]+$/g, '');
+  return clean.length > maxLength ? `${clean.slice(0, maxLength)}...` : clean;
+}
+
+function inferStoryElements(idea: string, genre: Genre) {
+  const cleanIdea = idea.trim();
+  const isTechStory = /程序员|代码|自动化|AI|系统|项目|工具/.test(cleanIdea);
+  const isWorkplaceStory = /公司|团队|老板|同事|会议|裁员|项目|职场/.test(cleanIdea);
+
+  if (isTechStory || isWorkplaceStory || genre === '职场复仇') {
+    return {
+      protagonist: isTechStory ? '程序员' : '职场普通人',
+      pressure: cleanIdea.includes('裁') ? '公司裁员名单已经快要公布' : '所有人都觉得他已经没有机会',
+      weapon: isTechStory ? '自动化工具和关键数据' : '一份被忽略的证据',
+      opponent: cleanIdea.includes('裁') ? '准备放弃团队的人' : '一直压制他的人',
+      win: cleanIdea.includes('项目') ? '把快要失败的项目重新救回来' : '让局势当场反转',
+      twist: isTechStory ? '系统日志里出现了另一个人的操作记录' : '真正的幕后决策人还没有露面',
+      scene: isTechStory ? '深夜工位、会议室投影、项目看板快速刷新' : '会议室、工位、走廊里的低声对话'
+    };
+  }
+
+  if (genre === '情感故事') {
+    return {
+      protagonist: '关系里一直退让的人',
+      pressure: '对方把他的沉默当成理所当然',
+      weapon: '一次终于说出口的选择',
+      opponent: '最亲近却最伤他的人',
+      win: '把关系里的主动权拿回来',
+      twist: '对方留下的最后一句话并不是真的告别',
+      scene: '餐桌、雨夜街口、未发送的聊天记录'
+    };
+  }
+
+  if (genre === '悬疑反转') {
+    return {
+      protagonist: '发现异常细节的人',
+      pressure: '所有证据都指向一个看似确定的结论',
+      weapon: '一个没人注意到的时间差',
+      opponent: '提前布好局的人',
+      win: '拆穿最关键的谎言',
+      twist: '他以为抓住了凶手，却发现自己才是诱饵',
+      scene: '监控画面、空走廊、反复出现的手机铃声'
+    };
+  }
+
+  return {
+    protagonist: '普通人',
+    pressure: '他突然被推到一个必须选择的位置',
+    weapon: '一个看似不起眼的线索',
+    opponent: '想把他踢出局的人',
+    win: '用最小的动作完成第一次翻盘',
+    twist: '同样的秘密正在被第二个人发现',
+    scene: '人群、手机消息、突然安静下来的房间'
+  };
+}
+
+function generatePackage(input: CreationInput, profile?: AccountProfile): GeneratedPackage {
+  const idea = input.idea.trim() || '一个普通人突然抓住一次翻盘机会';
+  const compactIdea = shortText(idea);
+  const story = inferStoryElements(idea, input.genre);
+  const audienceHint = profile?.targetAudience ? `这条内容默认写给${profile.targetAudience}。` : '';
+  const styleHint = profile?.contentStyle ? `整体风格：${profile.contentStyle}。` : '';
+  const genreTone: Record<Genre, string> = {
+    都市逆袭: '压抑开局、反击升级、结尾留悬念',
+    悬疑反转: '异常细节、误导线索、最后反转',
+    情感故事: '关系冲突、情绪拉扯、选择代价',
+    职场复仇: '不公遭遇、证据反击、局势翻盘',
+    'AI 科幻': '技术异变、人性选择、未来后果'
+  };
+  const platformHint: Record<Platform, string> = {
+    抖音: '前三秒直接抛冲突，句子短，节奏快',
+    视频号: '叙事清楚，情绪稳，结尾适合转发讨论',
+    小红书: '标题更像经历分享，强调代入感和反差',
+    B站: '逻辑更完整，允许多一点背景和解释'
+  };
+
+  const hook = `${story.pressure}，${story.protagonist}手里只剩${story.weapon}。他应该先救自己，还是先救所有人？`;
+  const script = `开头：${hook}
+
+第一段：${story.protagonist}原本只想安稳过完这一天，可${story.pressure}。${audienceHint}${styleHint}他越想装作没事，越发现自己已经被推到了最危险的位置。
+
+第二段：他没有立刻争辩，而是把${story.weapon}藏在手里，先做了一次小范围验证。结果一出来，他知道自己不是在赌气，而是真的抓到了翻盘机会。
+
+第三段：麻烦也从这时候开始。${story.opponent}以为局面已经定了，甚至准备把责任推到他身上。他必须在沉默离开和当场反击之间做选择。
+
+第四段：他没有吵，也没有求情，只是把最关键的一步提前做完。等所有人反应过来时，他已经${story.win}。
+
+结尾：可他刚松一口气，就看见一个新的异常：${story.twist}。下一集，真正的压力才刚刚开始。`;
+
+  const storyboard: StoryboardRow[] = [
+    {
+      scene: '开头钩子',
+      voiceover: hook,
+      visual: story.scene,
+      subtitle: hook
+    },
+    {
+      scene: '压力落下',
+      voiceover: `${story.pressure}，他却只能先装作不知道。`,
+      visual: '消息弹窗、会议室沉默、主角盯着屏幕不说话。',
+      subtitle: '真正的危机，往往不是突然来的。'
+    },
+    {
+      scene: '找到武器',
+      voiceover: `他把${story.weapon}整理出来，先验证，再出手。`,
+      visual: '屏幕上数据快速滚动，主角删掉草稿后重新写下计划。',
+      subtitle: '他不是冲动，他是在等证据成形。'
+    },
+    {
+      scene: '反击',
+      voiceover: `等${story.opponent}以为稳赢时，他把结果摆上了桌。`,
+      visual: '会议室投影亮起，对方表情从轻松变成僵住。',
+      subtitle: '真正的反击，从不需要大声。'
+    },
+    {
+      scene: '悬念结尾',
+      voiceover: `可就在他以为结束时，${story.twist}。`,
+      visual: '画面突然安静，只剩一条新消息停在屏幕中央。',
+      subtitle: '翻盘之后，才是真正的下一关。'
+    }
+  ];
+
+  const titleOptions = [
+    `${story.protagonist}只用两天，把坏局面改成了翻盘局`,
+    `所有人都以为他要出局，直到他拿出${story.weapon}`,
+    `${input.genre}故事：${compactIdea}`,
+    `他没有吵架，只用一个结果让所有人安静`,
+    `如果只剩最后一次机会，你会先救自己吗？`
+  ];
+
+  const coverCopyOptions = [
+    '最后两天，他开始反击',
+    '普通人的第一次翻盘',
+    shortText(story.weapon, 12)
+  ];
+
+  const score: QualityScore = {
+    hookStrength: input.idea.trim().length > 8 ? 4 : 3,
+    emotionalDensity: 4,
+    conflictClarity: 4,
+    informationGain: 4,
+    conversationalStyle: 4,
+    visualExecutability: 4,
+    platformFit: input.platform === 'B站' ? 3 : 4,
+    samenessRisk: 3,
+    copyrightRisk: 5,
+    aiTraceRisk: 3,
+    recommendations: [
+      `按${input.platform}发布时注意：${platformHint[input.platform]}。`,
+      `当前题材应强化：${genreTone[input.genre]}。`,
+      profile?.targetAudience ? `账号画像提醒：内容要让${profile.targetAudience}快速代入。` : '建议补充账号目标受众，后续生成会更稳定。',
+      '建议人工补充一个更具体的生活细节，降低 AI 套话感。'
+    ]
+  };
+
+  return {
+    hook,
+    script,
+    storyboard,
+    subtitles: storyboard.map((row) => row.subtitle),
+    titleOptions,
+    selectedTitle: titleOptions[0],
+    coverCopyOptions,
+    selectedCoverCopy: coverCopyOptions[0],
+    publishCopy: `今天用 AIShortvideo 生成了一条${input.genre}故事短视频脚本：${titleOptions[0]}。${profile?.monetizationGoal ? `本账号目标：${profile.monetizationGoal}。` : ''}欢迎评论你会怎么改这个结尾。`,
+    score
+  };
+}
+
+function buildMarkdown(project: Project) {
+  const { input, generated } = project;
+  return `# ${generated.selectedTitle}
+
+平台：${input.platform}
+题材：${input.genre}
+目标：${input.goal}
+
+## 开头钩子
+
+${generated.hook}
+
+## 脚本
+
+${generated.script}
+
+## 分镜表
+
+${generated.storyboard
+    .map((row, index) => `${index + 1}. ${row.scene}
+   旁白：${row.voiceover}
+   画面：${row.visual}
+   字幕：${row.subtitle}`)
+    .join('\n\n')}
+
+## 字幕
+
+${generated.subtitles.join('\n')}
+
+## 标题
+
+${generated.selectedTitle}
+
+## 封面文案
+
+${generated.selectedCoverCopy}
+
+## 发布文案
+
+${generated.publishCopy}
+
+## 发布前质检
+
+总分：${totalScore(generated.score)}/50
+
+${generated.score.recommendations.map((item) => `- ${item}`).join('\n')}
+
+## AI 内容标识提醒
+
+如使用 AI 生成或合成内容，请根据目标平台规则添加必要标识，并避免使用未授权音乐、图片、影视素材、声音或真实人物肖像。
+`;
+}
+
+function buildOutreachMessage(lead: Omit<RevenueLead, 'id' | 'createdAt'>, showcaseProject: Project | null) {
+  const targetName = lead.name.trim() || '你好';
+  const offer = lead.offer || '29 元系统生成服务';
+  const caseLine = showcaseProject
+    ? `我现在手里有一条已经人工确认过的系统演示案例：《${showcaseProject.generated.selectedTitle}》，可以给你看从一句话到脚本、分镜、字幕、封面文案和质检的完整过程。`
+    : '我还在准备可对外展示的案例。你如果愿意，我可以先用系统现场生成一条演示案例，给你看从一句话到完整素材包的过程。';
+  const needLine = lead.need.trim()
+    ? `我看你的情况可能是：${lead.need.trim()}。`
+    : '我想先了解你现在内容生产最卡的是选题、脚本、分镜，还是发布后的复盘。';
+
+  return `${targetName}，我最近做了一个 AI 短视频/故事内容生成系统，先不做复杂 SaaS，只验证一件事：能不能让没有内容经验的人，从一句话想法生成一条可发布的故事短视频素材包。
+
+${needLine}
+
+${caseLine}
+
+如果你愿意，我可以先给你做一次 0 元演示；如果你觉得有用，也可以按「${offer}」试一条真实内容。目标不是承诺爆款，而是看这个系统能不能帮你更快产出、修改和发布。
+
+你可以直接给我一个账号方向，或者一句话想法，我用系统给你跑一版。`;
+}
+
+function buildDemoBrief(showcaseProject: Project | null) {
+  if (!showcaseProject) {
+    return `# AIShortvideo 演示材料
+
+当前还没有已标记的对外演示案例。
+
+建议先完成：
+
+1. 打开“开始创作”。
+2. 输入一个真实故事想法。
+3. 生成素材包。
+4. 在“案例”页把人工确认过的内容设为演示案例。
+5. 回到“收入”页，用演示材料发给第一个潜在客户。`;
+  }
+
+  return `# AIShortvideo 演示材料
+
+案例标题：${showcaseProject.generated.selectedTitle}
+平台：${showcaseProject.input.platform}
+题材：${showcaseProject.input.genre}
+
+## 系统能产出什么
+
+- 标题候选
+- 开头钩子
+- 口播脚本
+- 分镜
+- 字幕
+- 封面文案
+- 发布文案
+- 发布前质检
+
+## 演示钩子
+
+${showcaseProject.generated.hook}
+
+## 交付价值
+
+这个系统不是只给 Prompt，而是把一次短视频故事内容生产拆成可操作流程：输入想法、生成内容包、人工编辑、发布前质检、导出、发布记录、复盘和线索收入验证。
+
+## 可报价版本
+
+- 0 元演示：看系统生成过程，换反馈。
+- 29 元系统生成服务：交付 1 条完整素材包。
+- 99 元系统诊断：给 3 个方向、1 条样稿和建议。
+- 100 元以上试点定金：连续试 3 到 5 条内容，记录发布反馈。`;
+}
+
+function buildTodayContactPlan(todayLeads: RevenueLead[], showcaseProject: Project | null) {
+  if (todayLeads.length === 0) {
+    return `# 今日联系清单
+
+当前还没有待联系对象。
+
+建议先点击“生成今日 5 个”，系统会从 20 个触点里自动补齐今天要联系的人。`;
+  }
+
+  const caseLine = showcaseProject
+    ? `演示案例：《${showcaseProject.generated.selectedTitle}》`
+    : '演示案例：尚未设置，请先到案例页设置对外演示案例。';
+
+  return `# 今日联系清单
+
+目标：今天先联系 ${todayLeads.length} 个对象，至少拿到 1 个回复。
+${caseLine}
+
+${todayLeads.map((lead, index) => `${index + 1}. ${lead.name}
+   渠道：${lead.channel || '待补'}
+   需求：${lead.need || '待确认'}
+   报价：${lead.offer}
+   下一步：${lead.nextAction || '发送系统演示话术'}`).join('\n\n')}
+
+执行规则：
+- 发出后立刻把状态标为“已联系”。
+- 对方愿意继续看样稿，标为“强意向”。
+- 不用等系统更完美，先验证真实反馈。`;
+}
+
+function buildObjectionReply(lead: Omit<RevenueLead, 'id' | 'createdAt'>, showcaseProject: Project | null) {
+  const targetName = lead.name.trim() || '你';
+  const caseLine = showcaseProject
+    ? `我可以先给你看这条已确认演示案例：《${showcaseProject.generated.selectedTitle}》。`
+    : '我也可以先现场跑一条演示，让你看系统是不是能产出可改、可发的内容包。';
+  const objection = lead.objection || '想先看看案例';
+
+  const replies: Record<string, string> = {
+    暂时不需要: `${targetName}，没问题。我不想硬推工具。你现在如果暂时不需要，可以先把一个账号方向或一句话想法丢给我，我免费跑一版演示，你看结果有没有参考价值就行。`,
+    不知道发什么: `${targetName}，这正好是系统想解决的问题。你不用先有完整选题，只要给我一个方向，比如“职场逆袭”“情感故事”“AI 工具副业”，系统会先生成标题、钩子、脚本和分镜，再一起挑能发的版本。`,
+    担心没效果: `${targetName}，这个担心合理。我也不承诺爆款，所以第一步只做低成本验证：先生成 1 条素材包，看它能不能减少你写脚本和分镜的时间，再决定是否继续。`,
+    觉得太贵: `${targetName}，可以先不做 99 元诊断，先用 0 元演示或 29 元单条生成服务试一条。目标是先判断系统产出的内容对你有没有用，不急着做大单。`,
+    想先看看案例: `${targetName}，可以。${caseLine} 你主要看三点：脚本是否能读、分镜是否能拍、发布前质检是否能指导修改。`,
+    没有时间配合: `${targetName}，不用你深度配合。你只要给一个方向或一句话想法，我先生成一版；你有空时只需要告诉我“哪里不像你想要的”，我再改。`,
+    需要和别人商量: `${targetName}，可以。我先发你一份演示材料摘要，里面有系统能交付什么、报价版本和一个案例。你们内部看完后，如果觉得值得试，再从 29 元单条开始。`
+  };
+
+  return replies[objection] || replies.想先看看案例;
+}
+
+function App() {
+  const [screen, setScreen] = useState<Screen>('home');
+  const [input, setInput] = useState<CreationInput>(defaultInput);
+  const [projects, setProjects] = useState<Project[]>(readStoredProjects);
+  const [project, setProject] = useState<Project | null>(() => readLastProject() ?? readStoredProjects()[0] ?? null);
+  const [publishRecord, setPublishRecord] = useState<PublishRecord>(() => defaultPublishRecord(project?.input.platform));
+  const [modelStatus, setModelStatus] = useState('未测试');
+  const [modelQualityResults, setModelQualityResults] = useState<ModelQualityResult[]>(readModelQualityResults);
+  const [modelQualityStatus, setModelQualityStatus] = useState(() => buildModelQualityStatus(readModelQualityResults()));
+  const [profileStatus, setProfileStatus] = useState('');
+  const [generationStatus, setGenerationStatus] = useState('');
+  const [copyStatus, setCopyStatus] = useState('');
+  const [profile, setProfile] = useState<AccountProfile>(readStoredProfile);
+  const [revenueLeads, setRevenueLeads] = useState<RevenueLead[]>(readRevenueLeads);
+  const [leadDraft, setLeadDraft] = useState(defaultRevenueLead);
+  const [modelConfig, setModelConfig] = useState({
+    baseUrl: '',
+    apiKey: '',
+    model: ''
+  });
+
+  const markdown = useMemo(() => (project ? buildMarkdown(project) : ''), [project]);
+  const showcaseProject = useMemo(
+    () => projects.find((item) => item.isShowcase) ?? null,
+    [projects]
+  );
+  const outreachMessage = useMemo(() => buildOutreachMessage(leadDraft, showcaseProject), [leadDraft, showcaseProject]);
+  const demoBrief = useMemo(() => buildDemoBrief(showcaseProject), [showcaseProject]);
+  const objectionReply = useMemo(() => buildObjectionReply(leadDraft, showcaseProject), [leadDraft, showcaseProject]);
+  const paidRevenue = revenueLeads.reduce((sum, lead) => sum + (lead.status === '已付款' ? lead.amount : 0), 0);
+  const strongSignalCount = revenueLeads.filter((lead) => lead.status === '强意向' || lead.status === '已付款').length;
+  const interviewCount = revenueLeads.filter((lead) => lead.status !== '待联系' && lead.status !== '无效').length;
+  const todayContactLeads = revenueLeads.filter((lead) => lead.status === '待联系');
+  const todayContactCount = todayContactLeads.length;
+  const todayContactPlan = useMemo(() => buildTodayContactPlan(todayContactLeads, showcaseProject), [todayContactLeads, showcaseProject]);
+  const modelQualityPassed = modelQualityResults.length === modelQualityCases.length && modelQualityResults.every((result) => result.passed);
+  const operatingSteps: OperatingStep[] = [
+    {
+      label: '补齐账号画像',
+      why: '让生成内容有目标受众和变现方向，不只是泛泛故事。',
+      done: Boolean(profile.accountName && profile.targetAudience && profile.monetizationGoal),
+      actionLabel: '去填写',
+      targetScreen: 'profile'
+    },
+    {
+      label: '通过 3 条模型准入测试',
+      why: '真实模型未通过前，不拿内容对外演示或收费。',
+      done: modelQualityPassed,
+      actionLabel: '去测试',
+      targetScreen: 'settings'
+    },
+    {
+      label: '生成首个候选案例',
+      why: '先有一条完整内容包，才能判断脚本、分镜和质检是否可交付。',
+      done: projects.length > 0,
+      actionLabel: '开始创作',
+      targetScreen: 'wizard'
+    },
+    {
+      label: '设为对外演示案例',
+      why: '收入页只引用人工确认过的案例，避免把测试内容发给客户。',
+      done: Boolean(showcaseProject),
+      actionLabel: '去案例库',
+      targetScreen: 'cases'
+    },
+    {
+      label: '准备今日 5 个联系对象',
+      why: '赚钱验证必须进入真实沟通，不能只继续做功能。',
+      done: todayContactCount >= 5,
+      actionLabel: '去收入页',
+      targetScreen: 'revenue'
+    },
+    {
+      label: '完成 10 个访谈记录',
+      why: '没有访谈数据，就不知道系统到底解决谁的痛点。',
+      done: interviewCount >= 10,
+      actionLabel: '去记录',
+      targetScreen: 'revenue'
+    },
+    {
+      label: '拿到首个 100 元信号',
+      why: 'V1 的商业验收是 14 天内拿到真实收入或等价试点。',
+      done: paidRevenue >= 100,
+      actionLabel: '去跟进',
+      targetScreen: 'revenue'
+    }
+  ];
+  const completedOperatingSteps = operatingSteps.filter((step) => step.done).length;
+
+  function persist(nextProject: Project) {
+    setProject(nextProject);
+    localStorage.setItem(lastProjectKey, JSON.stringify(nextProject));
+    setProjects((currentProjects) => {
+      const nextProjects = [
+        nextProject,
+        ...currentProjects.filter((item) => item.id !== nextProject.id)
+      ].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      localStorage.setItem(projectsKey, JSON.stringify(nextProjects));
+      return nextProjects;
+    });
+  }
+
+  async function requestModelGeneratedPackage() {
+    try {
+      const response = await fetch('http://127.0.0.1:8787/api/generate/story-package', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ input, profile, modelConfig })
+      });
+      const result = await response.json();
+      if (result.ok && result.generated) {
+        setGenerationStatus(result.message);
+        return result.generated as GeneratedPackage;
+      }
+      setGenerationStatus(result.message || '真实模型不可用，已使用本地 Mock 生成。');
+      return null;
+    } catch {
+      setGenerationStatus('本地 API 服务未启动，已使用本地 Mock 生成。');
+      return null;
+    }
+  }
+
+  async function createProject() {
+    setGenerationStatus('正在生成...');
+    const modelGenerated = await requestModelGeneratedPackage();
+    const generated = modelGenerated ?? generatePackage(input, profile);
+    const nextProject: Project = {
+      id: crypto.randomUUID(),
+      input,
+      profile,
+      generated,
+      createdAt: new Date().toISOString()
+    };
+    persist(nextProject);
+    setPublishRecord(defaultPublishRecord(input.platform));
+    setScreen('editor');
+  }
+
+  function openProject(savedProject: Project) {
+    setProject(savedProject);
+    localStorage.setItem(lastProjectKey, JSON.stringify(savedProject));
+    setPublishRecord(savedProject.publishRecord ?? defaultPublishRecord(savedProject.input.platform));
+    setScreen('editor');
+  }
+
+  function updateGenerated(partial: Partial<GeneratedPackage>) {
+    if (!project) return;
+    persist({ ...project, generated: { ...project.generated, ...partial } });
+  }
+
+  function markShowcase(targetProject: Project) {
+    const nextProjects = projects.map((item) => ({
+      ...item,
+      isShowcase: item.id === targetProject.id
+    }));
+    setProjects(nextProjects);
+    localStorage.setItem(projectsKey, JSON.stringify(nextProjects));
+
+    const nextProject = { ...targetProject, isShowcase: true };
+    setProject(nextProject);
+    localStorage.setItem(lastProjectKey, JSON.stringify(nextProject));
+  }
+
+  function rewriteHook() {
+    if (!project) return;
+    const story = inferStoryElements(project.input.idea, project.input.genre);
+    updateGenerated({
+      hook: `他以为自己只是撑过今天，直到${story.pressure}。而他手里唯一能用的，是${story.weapon}。`
+    });
+  }
+
+  function makeConversational() {
+    if (!project) return;
+    updateGenerated({
+      script: project.generated.script.replaceAll('主角', '他').replaceAll('真正的冲突出现了。', '麻烦也就是从这时候开始的。')
+    });
+  }
+
+  function savePublishRecord() {
+    if (!project) return;
+    const nextProject = { ...project, publishRecord };
+    persist(nextProject);
+    setScreen('review');
+  }
+
+  async function testModelConnection() {
+    setModelStatus('正在测试连接...');
+    try {
+      const response = await fetch('http://127.0.0.1:8787/api/model/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(modelConfig)
+      });
+      const result = await response.json();
+      setModelStatus(result.ok ? result.message : `${result.message}${result.detail ? ` ${result.detail}` : ''}`);
+    } catch {
+      setModelStatus('本地 API 服务未启动。请先运行 npm run api。');
+    }
+  }
+
+  async function runModelQualityGate() {
+    setModelQualityStatus('正在运行 3 条准入测试...');
+    setModelQualityResults([]);
+
+    const results: ModelQualityResult[] = [];
+    for (const testCase of modelQualityCases) {
+      try {
+        const response = await fetch('http://127.0.0.1:8787/api/generate/story-package', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ input: testCase.input, profile, modelConfig })
+        });
+        const result = await response.json();
+
+        if (result.ok && result.generated) {
+          const generated = result.generated as GeneratedPackage;
+          const evaluation = evaluateModelQuality(generated);
+          results.push({
+            caseName: testCase.name,
+            idea: testCase.input.idea,
+            title: generated.selectedTitle,
+            score: evaluation.score,
+            passed: evaluation.passed,
+            source: '真实模型',
+            message: result.message || '真实模型生成完成。',
+            warnings: evaluation.warnings
+          });
+        } else {
+          const fallback = generatePackage(testCase.input, profile);
+          const evaluation = evaluateModelQuality(fallback);
+          results.push({
+            caseName: testCase.name,
+            idea: testCase.input.idea,
+            title: fallback.selectedTitle,
+            score: evaluation.score,
+            passed: false,
+            source: '未通过真实模型',
+            message: result.message || '真实模型未完成生成。',
+            warnings: [`真实模型未完成生成：${result.message || '未知错误'}`, ...evaluation.warnings]
+          });
+        }
+      } catch {
+        results.push({
+          caseName: testCase.name,
+          idea: testCase.input.idea,
+          title: '未生成',
+          score: 0,
+          passed: false,
+          source: '本地 API 不可用',
+          message: '本地 API 服务未启动或不可访问。',
+          warnings: ['请先运行 npm run api，并配置可用的模型。']
+        });
+      }
+    }
+
+    setModelQualityResults(results);
+    localStorage.setItem(modelQualityResultsKey, JSON.stringify(results));
+    setModelQualityStatus(buildModelQualityStatus(results));
+  }
+
+  function saveProfile() {
+    localStorage.setItem(profileKey, JSON.stringify(profile));
+    setProfileStatus('账号画像已保存，后续生成会参考这些定位。');
+  }
+
+  function saveRevenueLead() {
+    const name = leadDraft.name.trim();
+    if (!name) return;
+
+    const nextLead: RevenueLead = {
+      ...leadDraft,
+      name,
+      amount: Number(leadDraft.amount) || 0,
+      id: crypto.randomUUID(),
+      createdAt: new Date().toISOString()
+    };
+    const nextLeads = [nextLead, ...revenueLeads];
+    setRevenueLeads(nextLeads);
+    localStorage.setItem(revenueLeadsKey, JSON.stringify(nextLeads));
+    setLeadDraft(defaultRevenueLead);
+  }
+
+  function deleteRevenueLead(id: string) {
+    const nextLeads = revenueLeads.filter((lead) => lead.id !== id);
+    setRevenueLeads(nextLeads);
+    localStorage.setItem(revenueLeadsKey, JSON.stringify(nextLeads));
+  }
+
+  function updateRevenueLead(id: string, partial: Partial<RevenueLead>) {
+    const nextLeads = revenueLeads.map((lead) => (
+      lead.id === id ? { ...lead, ...partial } : lead
+    ));
+    setRevenueLeads(nextLeads);
+    localStorage.setItem(revenueLeadsKey, JSON.stringify(nextLeads));
+  }
+
+  function useTouchpoint(seed: TouchpointSeed) {
+    setLeadDraft({
+      ...defaultRevenueLead,
+      name: seed.name,
+      channel: seed.channel,
+      need: seed.need,
+      nextAction: seed.nextAction
+    });
+  }
+
+  function addTouchpointLead(seed: TouchpointSeed) {
+    const exists = revenueLeads.some((lead) => lead.name === seed.name && lead.channel === seed.channel);
+    if (exists) {
+      setCopyStatus('这个触点已经在线索记录里。');
+      return;
+    }
+
+    const nextLead: RevenueLead = {
+      ...defaultRevenueLead,
+      name: seed.name,
+      channel: seed.channel,
+      need: seed.need,
+      nextAction: seed.nextAction,
+      id: crypto.randomUUID(),
+      createdAt: new Date().toISOString()
+    };
+    const nextLeads = [nextLead, ...revenueLeads];
+    setRevenueLeads(nextLeads);
+    localStorage.setItem(revenueLeadsKey, JSON.stringify(nextLeads));
+    setCopyStatus('已加入今日待联系清单。');
+  }
+
+  function generateTodayLeads() {
+    const existingKeys = new Set(revenueLeads.map((lead) => `${lead.channel}-${lead.name}`));
+    const needCount = Math.max(0, 5 - todayContactCount);
+    const seedsToAdd = touchpointSeeds
+      .filter((seed) => !existingKeys.has(`${seed.channel}-${seed.name}`))
+      .slice(0, needCount);
+
+    if (seedsToAdd.length === 0) {
+      setCopyStatus(todayContactCount >= 5 ? '今日待联系已经达到 5 个。' : '没有新的触点可加入。');
+      return;
+    }
+
+    const newLeads: RevenueLead[] = seedsToAdd.map((seed) => ({
+      ...defaultRevenueLead,
+      name: seed.name,
+      channel: seed.channel,
+      need: seed.need,
+      nextAction: seed.nextAction,
+      id: crypto.randomUUID(),
+      createdAt: new Date().toISOString()
+    }));
+    const nextLeads = [...newLeads, ...revenueLeads];
+    setRevenueLeads(nextLeads);
+    localStorage.setItem(revenueLeadsKey, JSON.stringify(nextLeads));
+    setCopyStatus(`已生成 ${newLeads.length} 个今日待联系对象。`);
+  }
+
+  async function copyText(value: string, label: string, elementId: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopyStatus(`${label}已复制，可以直接发送。`);
+      return;
+    } catch {
+      const element = document.getElementById(elementId);
+      if (element instanceof HTMLTextAreaElement) {
+        element.focus();
+        element.select();
+      }
+      setCopyStatus(`${label}复制失败，已选中文本，请手动复制。`);
+    }
+  }
+
+  return (
+    <div className="app">
+      <aside className="sidebar">
+        <div className="brand">
+          <div className="brand-mark"><Sparkles size={18} /></div>
+          <div>
+            <strong>AIShortvideo</strong>
+            <span>V1 验证切片</span>
+          </div>
+        </div>
+        <nav>
+          <button className={screen === 'home' ? 'active' : ''} onClick={() => setScreen('home')}><Play size={18} />工作台</button>
+          <button className={screen === 'wizard' ? 'active' : ''} onClick={() => setScreen('wizard')}><Wand2 size={18} />开始创作</button>
+          <button className={screen === 'cases' ? 'active' : ''} onClick={() => setScreen('cases')}><FolderOpen size={18} />案例</button>
+          <button className={screen === 'profile' ? 'active' : ''} onClick={() => setScreen('profile')}><User size={18} />账号</button>
+          <button className={screen === 'revenue' ? 'active' : ''} onClick={() => setScreen('revenue')}><DollarSign size={18} />收入</button>
+          <button className={screen === 'review' ? 'active' : ''} onClick={() => setScreen('review')}><BarChart3 size={18} />复盘</button>
+          <button className={screen === 'settings' ? 'active' : ''} onClick={() => setScreen('settings')}><Settings size={18} />设置</button>
+        </nav>
+        <div className="sidebar-note">
+          <strong>纠偏提醒</strong>
+          <p>当前只做故事类短视频主线，不做自动发布、自动剪辑、SaaS。</p>
+        </div>
+      </aside>
+
+      <main className="main">
+        {screen !== 'home' && (
+          <button className="ghost back" onClick={() => setScreen('home')}><ArrowLeft size={18} />返回工作台</button>
+        )}
+        {screen === 'home' && (
+          <>
+            <section className="hero">
+              <div>
+                <p className="eyebrow">简单易用 + 能赚到钱</p>
+                <h1>用系统生成第一条可发布故事短视频</h1>
+                <p className="lead">V1 只验证一条主线：一句话想法到脚本、分镜、字幕、标题、封面文案、发布文案、质检和导出。</p>
+                <button className="primary large" onClick={() => setScreen('wizard')}><Wand2 size={20} />开始创作</button>
+              </div>
+              <div className="status-panel">
+                <div><span>V1 可用目标</span><strong>30 分钟导出</strong></div>
+                <div><span>商业验收</span><strong>14 天 100 元</strong></div>
+                <div><span>本地案例</span><strong>{projects.length} 条</strong></div>
+                <div><span>收入进度</span><strong>¥{paidRevenue}/100</strong></div>
+                <div><span>演示案例</span><strong>{showcaseProject ? '已设置' : '未设置'}</strong></div>
+                <div><span>模型准入</span><strong>{modelQualityPassed ? '已通过' : '未通过'}</strong></div>
+              </div>
+            </section>
+            <section className="panel">
+              <div className="panel-title">
+                <div>
+                  <p className="eyebrow">项目推进看板</p>
+                  <h2>当前做到 {completedOperatingSteps}/{operatingSteps.length}</h2>
+                </div>
+                <span className="pill">先做能影响 100 元验证的事</span>
+              </div>
+              <div className="ops-checklist">
+                {operatingSteps.map((step) => (
+                  <div className={`ops-step ${step.done ? 'done' : ''}`} key={step.label}>
+                    <div className="ops-step-icon">
+                      {step.done ? <CheckCircle2 size={18} /> : <ClipboardList size={18} />}
+                    </div>
+                    <div>
+                      <strong>{step.label}</strong>
+                      <p>{step.why}</p>
+                    </div>
+                    <button className={step.done ? 'secondary' : 'primary'} onClick={() => setScreen(step.targetScreen)}>
+                      {step.done ? '查看' : step.actionLabel}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </>
+        )}
+
+        {screen === 'wizard' && (
+          <section className="panel narrow">
+            <h2>开始创作</h2>
+            <p className="muted">只填 4 项。不要写 Prompt，系统会按模板生成完整素材包。</p>
+            <label>创作目标
+              <select value={input.goal} onChange={(event) => setInput({ ...input, goal: event.target.value as Goal })}>
+                {goals.map((goal) => <option key={goal}>{goal}</option>)}
+              </select>
+            </label>
+            <label>目标平台
+              <select value={input.platform} onChange={(event) => setInput({ ...input, platform: event.target.value as Platform })}>
+                {platforms.map((platform) => <option key={platform}>{platform}</option>)}
+              </select>
+            </label>
+            <label>题材
+              <select value={input.genre} onChange={(event) => setInput({ ...input, genre: event.target.value as Genre })}>
+                {genres.map((genre) => <option key={genre}>{genre}</option>)}
+              </select>
+            </label>
+            <label>一句话想法
+              <textarea
+                value={input.idea}
+                onChange={(event) => setInput({ ...input, idea: event.target.value })}
+                placeholder="例如：一个程序员提前知道明天会发生什么，并用这个能力完成第一次反击"
+              />
+            </label>
+            <button className="primary" disabled={!input.idea.trim()} onClick={createProject}><Sparkles size={18} />生成素材包</button>
+            {generationStatus && <p className="status-text">{generationStatus}</p>}
+          </section>
+        )}
+
+        {screen === 'editor' && project && (
+          <section className="workspace">
+            <header className="section-header">
+              <div>
+                <p className="eyebrow">{project.input.platform} / {project.input.genre}</p>
+                <h2>{project.generated.selectedTitle}</h2>
+                {generationStatus && <p className="muted">{generationStatus}</p>}
+              </div>
+              <button className="primary" onClick={() => setScreen('quality')}><ClipboardList size={18} />发布前质检</button>
+            </header>
+            <div className="grid two">
+              <article className="panel">
+                <h3>开头钩子</h3>
+                <p className="script-block">{project.generated.hook}</p>
+                <button className="secondary" onClick={rewriteHook}><RefreshCw size={16} />开头更吸引人</button>
+              </article>
+              <article className="panel">
+                <h3>标题</h3>
+                <div className="option-list">
+                  {project.generated.titleOptions.map((title) => (
+                    <button
+                      key={title}
+                      className={title === project.generated.selectedTitle ? 'selected' : ''}
+                      onClick={() => updateGenerated({ selectedTitle: title })}
+                    >
+                      {title}
+                    </button>
+                  ))}
+                </div>
+              </article>
+            </div>
+            <article className="panel">
+              <div className="panel-title">
+                <h3>脚本</h3>
+                <button className="secondary" onClick={makeConversational}><PenLine size={16} />改得更口语</button>
+              </div>
+              <pre className="script-block">{project.generated.script}</pre>
+            </article>
+            <article className="panel">
+              <h3>分镜和字幕</h3>
+              <div className="table">
+                {project.generated.storyboard.map((row, index) => (
+                  <div className="table-row" key={row.scene}>
+                    <strong>{index + 1}. {row.scene}</strong>
+                    <span>{row.visual}</span>
+                    <span>{row.subtitle}</span>
+                  </div>
+                ))}
+              </div>
+            </article>
+          </section>
+        )}
+
+        {screen === 'quality' && project && (
+          <section className="workspace">
+            <header className="section-header">
+              <div>
+                <p className="eyebrow">发布前质检</p>
+                <h2>总分 {totalScore(project.generated.score)}/50</h2>
+              </div>
+              <button className="primary" onClick={() => setScreen('export')}><Download size={18} />导出内容包</button>
+            </header>
+            <div className="score-grid">
+              {[
+                ['钩子强度', project.generated.score.hookStrength],
+                ['情绪密度', project.generated.score.emotionalDensity],
+                ['冲突清晰', project.generated.score.conflictClarity],
+                ['信息增量', project.generated.score.informationGain],
+                ['口语化', project.generated.score.conversationalStyle],
+                ['画面可执行', project.generated.score.visualExecutability],
+                ['平台适配', project.generated.score.platformFit],
+                ['同质化风险', project.generated.score.samenessRisk],
+                ['版权风险', project.generated.score.copyrightRisk],
+                ['AI 痕迹', project.generated.score.aiTraceRisk]
+              ].map(([label, value]) => (
+                <div className="score-item" key={label}>
+                  <span>{label}</span>
+                  <strong>{value}/5</strong>
+                </div>
+              ))}
+            </div>
+            <article className="panel">
+              <h3>修改建议</h3>
+              <ul className="clean-list">
+                {project.generated.score.recommendations.map((item) => <li key={item}>{item}</li>)}
+              </ul>
+              <button className="secondary" onClick={makeConversational}><Wand2 size={16} />一键降低 AI 味</button>
+            </article>
+          </section>
+        )}
+
+        {screen === 'export' && project && (
+          <section className="panel">
+            <header className="section-header">
+              <div>
+                <p className="eyebrow">导出内容包</p>
+                <h2>可复制到剪辑和发布流程</h2>
+              </div>
+              <button className="primary" onClick={() => navigator.clipboard.writeText(markdown)}><ClipboardList size={18} />复制 Markdown</button>
+            </header>
+            <textarea className="export-box" readOnly value={markdown} />
+            <button className="primary" onClick={() => setScreen('publish')}><Save size={18} />发布后记录数据</button>
+          </section>
+        )}
+
+        {screen === 'publish' && project && (
+          <section className="panel narrow">
+            <h2>发布记录</h2>
+            <label>平台
+              <select value={publishRecord.platform} onChange={(event) => setPublishRecord({ ...publishRecord, platform: event.target.value as Platform })}>
+                {platforms.map((platform) => <option key={platform}>{platform}</option>)}
+              </select>
+            </label>
+            <label>发布时间
+              <input type="datetime-local" value={publishRecord.publishedAt} onChange={(event) => setPublishRecord({ ...publishRecord, publishedAt: event.target.value })} />
+            </label>
+            <label>内容链接
+              <input value={publishRecord.url} onChange={(event) => setPublishRecord({ ...publishRecord, url: event.target.value })} />
+            </label>
+            <div className="grid three compact">
+              {(['views', 'likes', 'comments', 'saves', 'follows'] as const).map((key) => (
+                <label key={key}>{key}
+                  <input type="number" min="0" value={publishRecord[key]} onChange={(event) => setPublishRecord({ ...publishRecord, [key]: Number(event.target.value) })} />
+                </label>
+              ))}
+            </div>
+            <label>备注
+              <textarea value={publishRecord.notes} onChange={(event) => setPublishRecord({ ...publishRecord, notes: event.target.value })} />
+            </label>
+            <button className="primary" onClick={savePublishRecord}><Save size={18} />保存并查看复盘</button>
+          </section>
+        )}
+
+        {screen === 'review' && (
+          <section className="workspace">
+            <header className="section-header">
+              <div>
+                <p className="eyebrow">简单复盘</p>
+                <h2>下一条内容怎么改</h2>
+              </div>
+              <button className="primary" onClick={() => setScreen('wizard')}><Lightbulb size={18} />继续生成下一条</button>
+            </header>
+            {!project?.publishRecord ? (
+              <article className="panel empty">
+                <FileText size={28} />
+                <p>还没有发布记录。先导出内容并发布，再回来填写基础数据。</p>
+              </article>
+            ) : (
+              <div className="grid three">
+                <article className="panel metric"><span>播放</span><strong>{project.publishRecord.views}</strong></article>
+                <article className="panel metric"><span>点赞</span><strong>{project.publishRecord.likes}</strong></article>
+                <article className="panel metric"><span>评论</span><strong>{project.publishRecord.comments}</strong></article>
+                <article className="panel wide">
+                  <h3>建议</h3>
+                  <p>下一条优先测试同题材的不同开头钩子。当前目标不是追求爆款，而是验证哪个钩子结构更容易产生互动。</p>
+                </article>
+              </div>
+            )}
+          </section>
+        )}
+
+        {screen === 'cases' && (
+          <section className="workspace">
+            <header className="section-header">
+              <div>
+                <p className="eyebrow">案例库</p>
+                <h2>已生成内容包</h2>
+              </div>
+              <button className="primary" onClick={() => setScreen('wizard')}><Wand2 size={18} />生成新案例</button>
+            </header>
+            {projects.length === 0 ? (
+              <article className="panel empty">
+                <FolderOpen size={28} />
+                <p>还没有案例。先生成一条内容包，再用它做发布和复盘验证。</p>
+              </article>
+            ) : (
+              <div className="case-list">
+                {projects.map((item) => (
+                  <article className="panel case-item" key={item.id}>
+                    <div>
+                      <p className="eyebrow">{item.input.platform} / {item.input.genre}</p>
+                      <h3>{item.generated.selectedTitle}</h3>
+                      <p className="muted">{shortText(item.input.idea, 72)}</p>
+                      {item.isShowcase && <p className="status-text">当前对外演示案例</p>}
+                    </div>
+                    <div className="case-meta">
+                      <span>{new Date(item.createdAt).toLocaleString()}</span>
+                      <span>{item.publishRecord ? '已记录发布数据' : '未发布'}</span>
+                    </div>
+                    <div className="case-actions">
+                      <button className="secondary" onClick={() => openProject(item)}><FolderOpen size={16} />打开</button>
+                      <button className="secondary" onClick={() => markShowcase(item)}><Sparkles size={16} />设为演示</button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
+        {screen === 'profile' && (
+          <section className="panel narrow">
+            <h2>账号画像</h2>
+            <p className="muted">不填也能生成；填写后会影响钩子、脚本语气和质检建议。</p>
+            <label>账号名称
+              <input
+                value={profile.accountName}
+                onChange={(event) => setProfile({ ...profile, accountName: event.target.value })}
+                placeholder="例如：程序员逆袭故事"
+              />
+            </label>
+            <label>目标受众
+              <input
+                value={profile.targetAudience}
+                onChange={(event) => setProfile({ ...profile, targetAudience: event.target.value })}
+                placeholder="例如：25-35 岁职场技术人"
+              />
+            </label>
+            <label>内容风格
+              <select
+                value={profile.contentStyle}
+                onChange={(event) => setProfile({ ...profile, contentStyle: event.target.value })}
+              >
+                <option>强钩子、强冲突、短句口语化</option>
+                <option>情绪真实、节奏稳、适合转发讨论</option>
+                <option>悬疑铺垫、细节反转、结尾强悬念</option>
+                <option>经验分享、代入感强、轻故事化</option>
+              </select>
+            </label>
+            <label>变现方向
+              <textarea
+                value={profile.monetizationGoal}
+                onChange={(event) => setProfile({ ...profile, monetizationGoal: event.target.value })}
+              />
+            </label>
+            <button className="primary" onClick={saveProfile}><Save size={18} />保存账号画像</button>
+            {profileStatus && <p className="status-text">{profileStatus}</p>}
+          </section>
+        )}
+
+        {screen === 'revenue' && (
+          <section className="workspace">
+            <header className="section-header">
+              <div>
+                <p className="eyebrow">首个 100 元验证</p>
+                <h2>用系统产出案例，再换真实付费信号</h2>
+              </div>
+              <button className="primary" onClick={saveRevenueLead}><Save size={18} />保存线索</button>
+            </header>
+            <div className="grid three">
+              <article className="panel metric"><span>已收款</span><strong>¥{paidRevenue}</strong></article>
+              <article className="panel metric"><span>线索</span><strong>{revenueLeads.length}</strong></article>
+              <article className="panel metric"><span>强信号</span><strong>{strongSignalCount}</strong></article>
+              <article className="panel metric"><span>访谈记录</span><strong>{interviewCount}/10</strong></article>
+              <article className="panel metric"><span>触点清单</span><strong>{touchpointSeeds.length}/20</strong></article>
+              <article className="panel metric"><span>今日待联系</span><strong>{todayContactCount}</strong></article>
+            </div>
+            <article className="panel">
+              <div className="panel-title">
+                <h3>今日执行清单</h3>
+                <div className="touchpoint-actions">
+                  <button className="secondary" onClick={generateTodayLeads}><Save size={16} />生成今日 5 个</button>
+                  <button className="secondary" onClick={() => copyText(todayContactPlan, '今日清单', 'today-contact-plan')}><Copy size={16} />复制清单</button>
+                </div>
+              </div>
+              <p className="muted">先完成 5 个真实联系动作，再讨论要不要继续做功能。</p>
+              <textarea id="today-contact-plan" className="message-box compact-message" readOnly value={todayContactPlan} />
+            </article>
+            <article className="panel">
+              <h3>报价版本</h3>
+              <div className="offer-list">
+                {revenueOffers.map((offer) => (
+                  <div className="offer-item" key={offer.name}>
+                    <strong>{offer.name}</strong>
+                    <span>¥{offer.price}</span>
+                    <p>{offer.usage}</p>
+                  </div>
+                ))}
+              </div>
+            </article>
+            <article className="panel">
+              <h3>20 个触点清单</h3>
+              <p className="muted">先找有内容生产痛点的人，不从陌生大市场开始。</p>
+              <div className="touchpoint-list">
+                {touchpointSeeds.map((seed) => (
+                  <div className="touchpoint-row" key={`${seed.channel}-${seed.name}`}>
+                    <div>
+                      <strong>{seed.name}</strong>
+                      <span>{seed.channel} / {seed.need}</span>
+                    </div>
+                    <p>{seed.nextAction}</p>
+                    <div className="touchpoint-actions">
+                      <button className="secondary" onClick={() => useTouchpoint(seed)}><MessageSquare size={16} />填入线索</button>
+                      <button className="secondary" onClick={() => addTouchpointLead(seed)}><Save size={16} />加入今日</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </article>
+            <section className="grid two">
+              <article className="panel">
+                <h3>新增线索</h3>
+                <label>客户或账号
+                  <input
+                    value={leadDraft.name}
+                    onChange={(event) => setLeadDraft({ ...leadDraft, name: event.target.value })}
+                    placeholder="例如：某内容创业者 / 某社群朋友"
+                  />
+                </label>
+                <label>来源渠道
+                  <input
+                    value={leadDraft.channel}
+                    onChange={(event) => setLeadDraft({ ...leadDraft, channel: event.target.value })}
+                    placeholder="例如：朋友圈、小红书、微信群"
+                  />
+                </label>
+                <label>需求
+                  <textarea
+                    value={leadDraft.need}
+                    onChange={(event) => setLeadDraft({ ...leadDraft, need: event.target.value })}
+                    placeholder="对方想解决什么内容生产问题"
+                  />
+                </label>
+              </article>
+              <article className="panel">
+                <h3>成交跟进</h3>
+                <label>报价
+                  <select value={leadDraft.offer} onChange={(event) => setLeadDraft({ ...leadDraft, offer: event.target.value })}>
+                    {revenueOffers.map((offer) => <option key={offer.name}>{offer.name}</option>)}
+                  </select>
+                </label>
+                <label>状态
+                  <select value={leadDraft.status} onChange={(event) => setLeadDraft({ ...leadDraft, status: event.target.value as RevenueStatus })}>
+                    {revenueStatuses.map((status) => <option key={status}>{status}</option>)}
+                  </select>
+                </label>
+                <label>金额
+                  <input
+                    type="number"
+                    min="0"
+                    value={leadDraft.amount}
+                    onChange={(event) => setLeadDraft({ ...leadDraft, amount: Number(event.target.value) })}
+                  />
+                </label>
+                <label>下一步
+                  <input
+                    value={leadDraft.nextAction}
+                    onChange={(event) => setLeadDraft({ ...leadDraft, nextAction: event.target.value })}
+                    placeholder="例如：今晚发 1 条演示案例"
+                  />
+                </label>
+                <label>客户回复
+                  <textarea
+                    value={leadDraft.reply}
+                    onChange={(event) => setLeadDraft({ ...leadDraft, reply: event.target.value })}
+                    placeholder="记录对方真实反馈，不要脑补"
+                  />
+                </label>
+                <label>异议类型
+                  <select value={leadDraft.objection} onChange={(event) => setLeadDraft({ ...leadDraft, objection: event.target.value })}>
+                    <option value="">未选择</option>
+                    {objectionOptions.map((option) => <option key={option}>{option}</option>)}
+                  </select>
+                </label>
+                <label>下次跟进
+                  <input
+                    type="datetime-local"
+                    value={leadDraft.followUpAt}
+                    onChange={(event) => setLeadDraft({ ...leadDraft, followUpAt: event.target.value })}
+                  />
+                </label>
+                <label>备注
+                  <textarea value={leadDraft.note} onChange={(event) => setLeadDraft({ ...leadDraft, note: event.target.value })} />
+                </label>
+              </article>
+            </section>
+            <section className="grid two">
+              <article className="panel">
+                <div className="panel-title">
+                  <h3>可发送话术</h3>
+                  <button className="secondary" onClick={() => copyText(outreachMessage, '话术', 'outreach-message')}><Copy size={16} />复制</button>
+                </div>
+                <p className="muted">选中触点或填写线索后，这里会自动生成一段可直接私聊的话。</p>
+                <textarea id="outreach-message" className="message-box" readOnly value={outreachMessage} />
+              </article>
+              <article className="panel">
+                <div className="panel-title">
+                  <h3>演示材料摘要</h3>
+                  <button className="secondary" onClick={() => copyText(demoBrief, '演示材料', 'demo-brief')}><Copy size={16} />复制</button>
+                </div>
+                <p className="muted">用于给潜在客户说明系统交付什么，不讲复杂技术。</p>
+                <textarea id="demo-brief" className="message-box" readOnly value={demoBrief} />
+              </article>
+            </section>
+            <article className="panel">
+              <div className="panel-title">
+                <h3>异议回复话术</h3>
+                <button className="secondary" onClick={() => copyText(objectionReply, '异议回复', 'objection-reply')}><Copy size={16} />复制</button>
+              </div>
+              <p className="muted">根据当前线索的异议类型生成，适合真实沟通后继续跟进。</p>
+              <textarea id="objection-reply" className="message-box compact-message" readOnly value={objectionReply} />
+            </article>
+            {copyStatus && <p className="status-text">{copyStatus}</p>}
+            <article className="panel">
+              <h3>线索记录</h3>
+              {revenueLeads.length === 0 ? (
+                <div className="empty">
+                  <MessageSquare size={28} />
+                  <p>还没有线索。今天先记录 5 个可沟通对象，不等系统完美再开始验证。</p>
+                </div>
+              ) : (
+                <div className="lead-list">
+                  {revenueLeads.map((lead) => (
+                    <div className="lead-row" key={lead.id}>
+                      <div>
+                        <strong>{lead.name}</strong>
+                        <span>{lead.channel || '未填写渠道'} / {lead.offer}</span>
+                      </div>
+                      <span>{lead.status}</span>
+                      <span>¥{lead.amount}</span>
+                      <p>
+                        {lead.reply || lead.objection || lead.nextAction || lead.need || '待补下一步'}
+                        {lead.followUpAt ? ` / 下次跟进：${lead.followUpAt.replace('T', ' ')}` : ''}
+                      </p>
+                      <div className="lead-actions">
+                        <button className="secondary" onClick={() => updateRevenueLead(lead.id, { status: '已联系' })}>已联系</button>
+                        <button className="secondary" onClick={() => updateRevenueLead(lead.id, { status: '强意向' })}>强意向</button>
+                        <button className="secondary" onClick={() => deleteRevenueLead(lead.id)}><Trash2 size={16} />删除</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </article>
+          </section>
+        )}
+
+        {screen === 'settings' && (
+          <section className="settings-stack">
+            <article className="panel narrow">
+              <h2>模型连接设置</h2>
+              <p className="muted">这里只给管理员使用。主流程不展示模型复杂度，API Key 不保存到浏览器。</p>
+              <label>供应商
+                <input value="OpenAI-compatible" readOnly />
+              </label>
+              <label>Base URL
+                <input
+                  value={modelConfig.baseUrl}
+                  onChange={(event) => setModelConfig({ ...modelConfig, baseUrl: event.target.value })}
+                  placeholder="可留空，优先读取 .env.local"
+                />
+              </label>
+              <label>API Key
+                <input
+                  type="password"
+                  value={modelConfig.apiKey}
+                  onChange={(event) => setModelConfig({ ...modelConfig, apiKey: event.target.value })}
+                  placeholder="可留空，优先读取 .env.local"
+                />
+              </label>
+              <label>默认模型
+                <input
+                  value={modelConfig.model}
+                  onChange={(event) => setModelConfig({ ...modelConfig, model: event.target.value })}
+                  placeholder="可留空，优先读取 .env.local"
+                />
+              </label>
+              <button className="primary" onClick={testModelConnection}><CheckCircle2 size={18} />测试连接</button>
+              <p className="status-text">{modelStatus}</p>
+            </article>
+
+            <article className="panel narrow">
+              <div className="panel-title">
+                <div>
+                  <p className="eyebrow">模型替换闸门</p>
+                  <h2>3 条生成质量准入测试</h2>
+                </div>
+                <button className="primary" onClick={runModelQualityGate}><RefreshCw size={18} />运行测试</button>
+              </div>
+              <p className="muted">任何模型都先跑同一批样例。真实模型生成失败、结构不完整或质量低于阈值，都不要拿去对外演示。</p>
+              <div className="quality-case-list">
+                {modelQualityCases.map((testCase) => (
+                  <div className="quality-case" key={testCase.name}>
+                    <strong>{testCase.name}</strong>
+                    <span>{testCase.focus}</span>
+                    <p>{testCase.input.idea}</p>
+                  </div>
+                ))}
+              </div>
+              <p className="status-text">{modelQualityStatus}</p>
+              {modelQualityResults.length > 0 && (
+                <div className="gate-results">
+                  {modelQualityResults.map((result) => (
+                    <div className={`gate-result ${result.passed ? 'pass' : 'fail'}`} key={result.caseName}>
+                      <div>
+                        <strong>{result.caseName}</strong>
+                        <span>{result.source} / {result.score}/50</span>
+                      </div>
+                      <p>{result.title}</p>
+                      <small>{result.message}</small>
+                      {result.warnings.length > 0 && (
+                        <ul>
+                          {result.warnings.map((warning) => <li key={warning}>{warning}</li>)}
+                        </ul>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </article>
+          </section>
+        )}
+      </main>
+    </div>
+  );
+}
+
+const root = createRoot(document.getElementById('root')!);
+root.render(<App />);
