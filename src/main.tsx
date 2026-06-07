@@ -172,6 +172,120 @@ const defaultInput: CreationInput = {
   idea: ''
 };
 
+const firstDemoShowcaseProject: Project = {
+  id: 'showcase-2026-06-07-ai-automation-project-rescue',
+  input: {
+    goal: '故事短视频',
+    platform: '抖音',
+    genre: '职场复仇',
+    idea: '程序员被甩锅项目失败，最后用 AI 自动化脚本找出关键数据被人故意隐藏，救回项目也救回自己'
+  },
+  profile: {
+    accountName: 'AIShortvideo 演示账号',
+    targetAudience: '想做内容副业但缺脚本和分镜的人',
+    contentStyle: '强钩子、短句口语化、冲突清楚、结尾留悬念',
+    monetizationGoal: '先用演示案例验证 29 元生成服务和 99 元诊断'
+  },
+  generated: {
+    hook: '项目上线失败，老板让我背锅，可真正被改掉的不是代码，而是数据统计口径，你会怎么查？',
+    script: `昨天下午，张总把我叫到办公室。
+
+他把上线报告摔到桌上，说：项目失败，你要负全责。
+
+我当时真的懵了。功能是按时上线的，接口也全都通过了，为什么核心指标会突然掉到谷底？
+
+我回到工位，先没有解释，而是打开系统日志和数据报表。
+
+很快我发现一个奇怪的地方：关键指标不是被清零，而是统计口径被改了。
+
+原来报表只统计工作日白天的数据，晚上和周末的真实转化全被排除掉了。
+
+这不是技术事故，这是有人动了规则。
+
+我用 AI 写了一个自动化脚本，把最近三个月的报表配置、提交记录和权限变更全部扫了一遍。
+
+十分钟后，结果出来了。
+
+统计口径被改动的时间，刚好是在上线前一天晚上。
+
+操作账号来自业务组，而那个组最近正准备把二期预算交给外包团队。
+
+如果这个项目被判失败，内部团队就会被换掉，预算也会重新分配。
+
+我拿着证据去找张总。
+
+这次我没有争辩，只给他看三张图：原始数据、被改后的口径、AI 脚本跑出的变更记录。
+
+会议室安静了很久。
+
+最后张总只说了一句：先把真实数据恢复，项目重新评估。
+
+当天晚上，我用脚本修复了报表，项目指标恢复正常。
+
+我以为事情到这里就结束了。
+
+但整理最后一份日志时，我发现还有一个更早的权限变更记录。
+
+那个账号，不属于业务组，也不属于技术组。
+
+下一集，我才知道，真正想让项目失败的人，比我想象中更近。`,
+    storyboard: [
+      { scene: '办公室被甩锅', voiceover: '张总把上线报告摔到桌上，说项目失败要我负责。', visual: '会议室，报告被推到桌前，主角沉默。', subtitle: '项目失败，程序员被要求背锅' },
+      { scene: '回到工位查日志', voiceover: '我没有解释，而是打开系统日志和数据报表。', visual: '深夜工位，屏幕上日志快速滚动。', subtitle: '先别解释，先查证据' },
+      { scene: '发现统计口径异常', voiceover: '关键指标不是被清零，而是统计口径被改了。', visual: '报表筛选条件被放大，显示只统计工作日白天。', subtitle: '真正被改掉的是统计口径' },
+      { scene: 'AI 自动化脚本', voiceover: '我用 AI 写脚本，把报表配置和权限变更扫了一遍。', visual: 'AI 工具生成脚本，终端运行，结果输出。', subtitle: 'AI 脚本十分钟扫完三个月记录' },
+      { scene: '找到动机', voiceover: '改动来自业务组，而二期预算正准备交给外包团队。', visual: '项目预算表、外包合同草稿、权限记录交叉展示。', subtitle: '项目失败，预算就会重新分配' },
+      { scene: '会议室反击', voiceover: '我只给张总看三张图：原始数据、改后口径、变更记录。', visual: '投影上三张图并排出现，会议室安静。', subtitle: '不争辩，只摆证据' },
+      { scene: '项目恢复', voiceover: '数据恢复后，项目指标重新正常。', visual: '看板曲线回升，主角松一口气。', subtitle: '项目被重新评估' },
+      { scene: '悬念结尾', voiceover: '更早的权限变更记录，来自一个不属于任何项目组的账号。', visual: '屏幕停在陌生账号上，背景音突然降下来。', subtitle: '真正动手的人，还没出现' }
+    ],
+    subtitles: [
+      '项目失败，程序员被要求背锅',
+      '先别解释，先查证据',
+      '真正被改掉的是统计口径',
+      'AI 脚本十分钟扫完三个月记录',
+      '项目失败，预算就会重新分配',
+      '不争辩，只摆证据',
+      '项目被重新评估',
+      '真正动手的人，还没出现'
+    ],
+    titleOptions: [
+      '项目失败被甩锅？我用 AI 脚本找出真正问题',
+      '程序员被甩锅后，用 AI 查出项目失败真相',
+      '一个脚本，让被甩锅的程序员翻了盘',
+      '项目失败不是技术问题，而是数据口径被人动了手脚'
+    ],
+    selectedTitle: '项目失败被甩锅？我用 AI 脚本找出真正问题',
+    coverCopyOptions: [
+      '项目失败？先查统计口径',
+      '一个 AI 脚本，查出甩锅真相',
+      '不是代码错了，是数据口径被改了',
+      '程序员反击：不争辩，只摆证据'
+    ],
+    selectedCoverCopy: '项目失败？先查统计口径',
+    publishCopy: '这是 AIShortvideo 的一条系统演示案例：从一句“程序员被甩锅”的想法，生成钩子、脚本、分镜、字幕、封面文案和发布文案。它不承诺爆款，只展示系统如何把一个普通技术冲突变成可编辑、可质检、可交付的短视频脚本包。',
+    score: {
+      hookStrength: 4,
+      emotionalDensity: 4,
+      conflictClarity: 5,
+      informationGain: 5,
+      conversationalStyle: 4,
+      visualExecutability: 4,
+      platformFit: 4,
+      samenessRisk: 4,
+      copyrightRisk: 5,
+      aiTraceRisk: 4,
+      recommendations: [
+        '对外沟通时说明这是系统演示案例，不承诺播放量或收入。',
+        '发布前可以再补一个真实代码/报表截图式细节，降低短剧感。',
+        '客户如果是非技术人，可把“统计口径”解释成“报表规则被人改过”。'
+      ]
+    }
+  },
+  isShowcase: true,
+  createdAt: '2026-06-07T00:00:00.000Z'
+};
+
 const modelQualityCases: ModelQualityCase[] = [
   {
     name: '职场逆袭',
@@ -696,6 +810,8 @@ ${showcaseProject.generated.hook}
 
 这个系统不是只给 Prompt，而是把一次短视频故事内容生产拆成可操作流程：输入想法、生成内容包、人工编辑、发布前质检、导出、发布记录、复盘和线索收入验证。
 
+边界说明：这是系统能力演示，不承诺爆款、播放量、成交或收入。
+
 ## 可报价版本
 
 - 0 元演示：看系统生成过程，换反馈。
@@ -915,6 +1031,26 @@ function App() {
     const nextProject = { ...targetProject, isShowcase: true };
     setProject(nextProject);
     localStorage.setItem(lastProjectKey, JSON.stringify(nextProject));
+  }
+
+  function importFirstDemoShowcase() {
+    const nextProject = {
+      ...firstDemoShowcaseProject,
+      createdAt: new Date().toISOString()
+    };
+    const nextProjects = [
+      nextProject,
+      ...projects
+        .filter((item) => item.id !== nextProject.id)
+        .map((item) => ({ ...item, isShowcase: false }))
+    ];
+
+    setProjects(nextProjects);
+    setProject(nextProject);
+    setPublishRecord(defaultPublishRecord(nextProject.input.platform));
+    localStorage.setItem(projectsKey, JSON.stringify(nextProjects));
+    localStorage.setItem(lastProjectKey, JSON.stringify(nextProject));
+    setScreen('cases');
   }
 
   function rewriteHook() {
@@ -1398,7 +1534,10 @@ function App() {
                 <p className="eyebrow">案例库</p>
                 <h2>已生成内容包</h2>
               </div>
-              <button className="primary" onClick={() => setScreen('wizard')}><Wand2 size={18} />生成新案例</button>
+              <div className="header-actions">
+                <button className="secondary" onClick={importFirstDemoShowcase}><Sparkles size={18} />导入首个演示案例</button>
+                <button className="primary" onClick={() => setScreen('wizard')}><Wand2 size={18} />生成新案例</button>
+              </div>
             </header>
             {projects.length === 0 ? (
               <article className="panel empty">

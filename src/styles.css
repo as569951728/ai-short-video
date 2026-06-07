@@ -271,6 +271,13 @@ nav button.active {
   gap: 16px;
 }
 
+.header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
 h2,
 h3 {
   margin: 0;
