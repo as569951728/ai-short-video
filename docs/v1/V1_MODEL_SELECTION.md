@@ -147,7 +147,36 @@ AI_STORY_MODEL=<OpenAI 平台当前可调用的高质量模型名>
 4. 如果不通过，再试 Gemini OpenAI-compatible 模型或 OpenAI 高质量模型。
 5. 如果仍不通过，再考虑调整提示词、JSON schema 或引入专门 adapter。
 
-## 5. 信息来源
+## 5. 当前实测结果
+
+日期：2026-06-07
+
+使用 DeepSeek API key 实测 `/models`，当前可调用模型：
+
+- `deepseek-v4-flash`
+- `deepseek-v4-pro`
+
+实测结论：
+
+- `deepseek-v4-pro` 连接测试通过，但 3 条准入测试里有 2 条触发 30 秒生成超时，暂不适合作为 V1 默认生成模型。
+- `deepseek-v4-flash` 生成速度稳定。修正提示词后，3 条模型质量准入测试全部通过。
+- 当前 V1 默认推荐使用 `deepseek-v4-flash`。
+- `deepseek-v4-pro` 可后续作为高质量二次改写、复杂案例或更长超时配置下的候选模型。
+
+当前本地推荐配置：
+
+```env
+AI_PROVIDER_BASE_URL=https://api.deepseek.com
+AI_STORY_MODEL=deepseek-v4-flash
+```
+
+Kimi Code 判断：
+
+- Kimi Code 更偏代码/Agent 工具，不建议作为故事短视频内容生成的第一默认模型。
+- 如果后续有 Moonshot/Kimi Platform 的内容生成 API key，可以按同样流程跑 3 条准入测试。
+- 只有 Kimi 通过 3/3 准入，且内容质量明显优于 DeepSeek，才考虑切换默认模型。
+
+## 6. 信息来源
 
 - DeepSeek API：OpenAI/Anthropic compatible，Base URL 和 V4 Flash / V4 Pro 模型信息来自官方 API 文档。
 - Gemini API：模型列表、OpenAI compatibility 和 Base URL 来自 Google AI 官方文档。
