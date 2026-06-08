@@ -307,6 +307,7 @@ V1 系统可用的定义：
 - 首个 100 元运营方案：`docs/ops/2026-06-06-first-100-rmb-ops-plan.md`
 - 首个 100 元销售验证包：`docs/ops/2026-06-06-first-100-rmb-sales-kit.md`
 - 无熟人启动验证方案：`docs/ops/2026-06-08-no-warm-contacts-validation.md`
+- V1 工具与软件服务使用阶段：`docs/ops/V1_TOOLING_AND_SERVICE_PHASES.md`
 - 首个演示案例候选：`docs/ops/2026-06-07-first-demo-candidates.md`
 - 首个正式演示案例：`docs/ops/2026-06-07-first-demo-showcase.md`
 - V1 方向一致性复盘：`docs/ops/V1_ALIGNMENT_RETROSPECTIVE.md`
