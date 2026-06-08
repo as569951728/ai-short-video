@@ -368,26 +368,26 @@ const revenueOffers = [
 ];
 
 const touchpointSeeds: TouchpointSeed[] = [
-  { name: '正在做抖音故事号的朋友', channel: '私聊', need: '缺稳定脚本和分镜，更新压力大', nextAction: '发 0 元演示，索要一句话选题' },
-  { name: '想做副业账号的技术同事', channel: '私聊', need: '有技术能力但不知道发什么内容', nextAction: '展示程序员逆袭故事样稿' },
-  { name: '小红书副业内容群', channel: '社群', need: '需要低成本内容选题和脚本', nextAction: '发系统生成前后对比' },
-  { name: 'AI 工具交流群', channel: '社群', need: '关心 AI 工作流和可替换模型', nextAction: '邀请体验系统诊断' },
-  { name: '小说作者或网文群', channel: '社群', need: '想把小说片段改成短视频脚本', nextAction: '提供小说转短视频演示' },
-  { name: '短剧剪辑从业者', channel: '私聊', need: '需要故事钩子和分镜拆解', nextAction: '报价 29 元生成一条素材包' },
-  { name: '本地创业者社群', channel: '社群', need: '需要低成本宣传内容', nextAction: '问是否愿意用真实业务试一条' },
-  { name: '公众号写作者', channel: '私聊', need: '想把文章改成视频口播', nextAction: '演示文章核心转故事脚本' },
-  { name: '视频号运营者', channel: '私聊', need: '需要更稳的内容结构和复盘', nextAction: '报价 99 元诊断' },
-  { name: '做课程或知识付费的人', channel: '私聊', need: '需要短视频引流脚本', nextAction: '给 3 个内容方向' },
-  { name: '个人 IP 训练营学员', channel: '社群', need: '不知道如何把经历讲成故事', nextAction: '发故事短视频样稿' },
-  { name: '职场内容账号', channel: '平台私信', need: '需要职场冲突和反转故事', nextAction: '发 29 元生成服务' },
-  { name: '情感故事账号', channel: '平台私信', need: '需要情绪拉扯和结尾悬念', nextAction: '发情感故事样稿' },
-  { name: 'AI 副业博主', channel: '平台私信', need: '需要可展示 AI 系统案例', nextAction: '邀请看 V1 演示' },
-  { name: '剪映模板作者', channel: '平台私信', need: '缺脚本和标题素材', nextAction: '问是否需要批量脚本包' },
-  { name: '大学生副业群', channel: '社群', need: '想低成本试内容变现', nextAction: '发 0 元演示入口' },
-  { name: '本地商家老板', channel: '私聊', need: '不会写短视频故事文案', nextAction: '用真实店铺生成一条' },
-  { name: 'AI 编程学习者', channel: '社群', need: '想看 AI 产品如何落地赚钱', nextAction: '演示系统并收集反馈' },
-  { name: '自由职业者', channel: '私聊', need: '想提高内容生产效率', nextAction: '报价 99 元诊断' },
-  { name: '内容代运营小团队', channel: '私聊', need: '需要稳定产出脚本和复盘', nextAction: '谈 100 元以上试点定金' }
+  { name: '小红书“副业/自媒体新手”笔记评论区', channel: '公开评论', need: '很多人想做账号但不知道发什么', nextAction: '先公开留言求反馈，再私信愿意交流的人' },
+  { name: '抖音“AI 工具/副业/自媒体”创作者评论区', channel: '公开评论', need: '关注 AI 工具和内容变现，可能愿意看演示', nextAction: '评论演示案例价值，邀请对方给一句话想法' },
+  { name: '视频号“职场故事/程序员副业”评论区', channel: '公开评论', need: '对职场故事和技术人内容有兴趣', nextAction: '用程序员演示案例发起反馈请求' },
+  { name: 'B站“AI 工具实战”视频评论区', channel: '公开评论', need: '用户愿意讨论 AI 工具落地，不一定会立刻付费', nextAction: '问是否愿意看一次从想法到脚本包的演示' },
+  { name: '即刻/知识星球/飞书群里的 AI 工具讨论', channel: '社群互动', need: '人群更懂工具价值，适合验证系统诊断', nextAction: '先发复盘问题，不直接发广告' },
+  { name: '微信群“AI 学习/副业/自媒体”公开讨论', channel: '社群互动', need: '有内容生产焦虑，但信任需要慢慢建立', nextAction: '先贡献演示案例截图或摘要，询问反馈' },
+  { name: '小红书“小说推文/故事号”账号主页', channel: '平台私信', need: '需要稳定故事钩子、分镜和标题', nextAction: '发 0 元演示邀请，强调不承诺爆款' },
+  { name: '抖音“职场故事号”账号主页', channel: '平台私信', need: '需要职场冲突和反转故事素材', nextAction: '用程序员演示案例询问是否愿意试一条' },
+  { name: '视频号“情感故事/职场故事”账号主页', channel: '平台私信', need: '需要口播脚本和可复用故事结构', nextAction: '发演示材料摘要，询问是否需要 29 元生成一条' },
+  { name: 'B站“剪映/短视频剪辑教程”评论区', channel: '公开评论', need: '会剪辑但可能缺脚本和标题素材', nextAction: '问剪辑前最缺的是脚本、分镜还是标题' },
+  { name: '小红书“做账号第 N 天”博主', channel: '平台私信', need: '新手账号常卡在选题和持续更新', nextAction: '邀请用一个真实账号方向换 0 元演示' },
+  { name: '抖音“普通人做副业”博主评论区', channel: '公开评论', need: '副业人群多，但付费意愿需要筛选', nextAction: '只筛选愿意提供具体账号方向的人' },
+  { name: '公众号“AI 工具/自媒体运营”文章留言区', channel: '公开留言', need: '读者有工具兴趣，也可能需要系统诊断', nextAction: '留言提供演示案例，等待主动回复' },
+  { name: '知乎“如何开始做短视频账号”回答区', channel: '公开回答/评论', need: '问题导向强，适合验证痛点', nextAction: '用案例回答，不硬广，邀请私信拿演示材料' },
+  { name: '掘金/稀土“AI 编程副业”文章评论区', channel: '公开评论', need: '技术人想看 AI 产品如何落地', nextAction: '发系统落地复盘，邀请看演示案例' },
+  { name: '豆瓣/贴吧“写作/网文/短剧”讨论区', channel: '公开互动', need: '有故事改编需求，但转化可能慢', nextAction: '只做反馈收集，不急着报价' },
+  { name: '剪映模板作者主页', channel: '平台私信', need: '有剪辑能力，可能缺脚本和标题素材', nextAction: '问是否需要一条脚本包做模板测试' },
+  { name: '小型内容代运营团队公开主页', channel: '平台私信', need: '需要批量脚本和交付稳定性', nextAction: '发 99 元诊断或 100 元试点定金选项' },
+  { name: '本地商家短视频账号评论区', channel: '公开评论', need: '不会写故事型宣传文案', nextAction: '只挑正在更新但文案弱的账号沟通' },
+  { name: 'AI 产品内测/独立开发者社区', channel: '社群互动', need: '愿意评价产品，但未必是付费客户', nextAction: '请求产品可用性反馈，不把它当成交主力' }
 ];
 
 const defaultRevenueLead: Omit<RevenueLead, 'id' | 'createdAt'> = {
