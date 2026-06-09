@@ -1463,6 +1463,52 @@ ${leads.map((lead, index) => `${index + 1}. ${lead.name}
 - 明确不需要就标记无效，不再消耗时间。`;
 }
 
+function buildRevenueDeliveryChecklist(leads: RevenueLead[]) {
+  const deliveryLeads = leads.filter((lead) => lead.status === '已付款' || lead.status === '强意向');
+
+  if (deliveryLeads.length === 0) {
+    return `# 成交交付清单
+
+当前还没有强意向或已付款线索。
+
+下一步：继续推进样片、报价和收款前确认单。`;
+  }
+
+  return `# 成交交付清单
+
+目标：对强意向和已付款线索，只交付明确承诺过的素材包，并拿到验收反馈。
+
+${deliveryLeads.map((lead, index) => `${index + 1}. ${lead.name}
+   状态：${lead.status}
+   报价：${lead.offer}
+   金额：¥${lead.amount || (lead.offer.includes('99') ? 99 : lead.offer.includes('100') ? 100 : 29)}
+   需求：${lead.need || '未记录'}
+   平台位置：${lead.sourceUrl || lead.channel || '未记录'}
+   收款时间：${formatLeadTime(lead.paidAt)}
+
+   必交付：
+   - 标题候选
+   - 钩子
+   - 故事脚本
+   - 分镜
+   - 字幕
+   - 封面文案
+   - 发布文案
+   - 发布前质检建议
+
+   不包含：
+   - 不承诺爆款、播放量、涨粉或成交
+   - 不代发平台
+   - 不做复杂剪辑精修
+   - 不使用未授权素材
+
+   验收追问：
+   - 是否能直接进入发布或剪辑准备？
+   - 哪个模块最有用？
+   - 哪里不像你想要的方向？
+   - 是否愿意继续 29/99/100 元版本？`).join('\n\n')}`;
+}
+
 function buildRevenueValidationPlanText(steps: RevenueValidationStep[], paidRevenue: number) {
   const currentStep = steps.find((step) => !step.done) ?? steps[steps.length - 1];
 
@@ -1691,6 +1737,7 @@ function App() {
   const revenueActionQueue = useMemo(() => buildRevenueActionQueue(revenueLeads), [revenueLeads]);
   const revenueActionQueueText = useMemo(() => buildRevenueActionQueueText(revenueActionQueue), [revenueActionQueue]);
   const followUpPlan = useMemo(() => buildFollowUpPlan(dueFollowUpLeads), [dueFollowUpLeads]);
+  const deliveryChecklist = useMemo(() => buildRevenueDeliveryChecklist(revenueLeads), [revenueLeads]);
   const todayContactPlan = useMemo(() => buildTodayContactPlan(todayContactLeads, showcaseProject), [todayContactLeads, showcaseProject]);
   const revenueValidationSteps: RevenueValidationStep[] = [
     {
@@ -3119,6 +3166,17 @@ function App() {
               </div>
               <p className="muted">收款并交付后发送，用来拿真实反馈、复购意向和产品修正依据。</p>
               <textarea id="delivery-feedback-message" className="message-box compact-message" readOnly value={deliveryFeedbackMessage} />
+            </article>
+            <article className="panel">
+              <div className="panel-title">
+                <h3>成交交付清单</h3>
+                <div className="lead-actions">
+                  <button className="secondary" onClick={() => copyText(deliveryChecklist, '交付清单', 'delivery-checklist')}><Copy size={16} />复制</button>
+                  <button className="secondary" onClick={() => downloadTextFile('aishortvideo-delivery-checklist.md', deliveryChecklist)}><Download size={16} />下载</button>
+                </div>
+              </div>
+              <p className="muted">只针对强意向和已付款线索，明确交付物、边界和验收问题。</p>
+              <textarea id="delivery-checklist" className="message-box compact-message" readOnly value={deliveryChecklist} />
             </article>
             <article className="panel">
               <div className="panel-title">
