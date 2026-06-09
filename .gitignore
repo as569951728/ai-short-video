@@ -5,3 +5,7 @@ dist/
 tsconfig.tsbuildinfo
 .runtime/
 .superpowers/
+outputs/*
+!outputs/demo-2026-06-09-v2/
+!outputs/demo-2026-06-09-v2/**
+scripts/create-demo-video.mjs

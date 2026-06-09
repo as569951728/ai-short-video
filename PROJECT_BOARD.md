@@ -159,6 +159,10 @@ V1 系统可用的定义：
 - [x] 将收入验证从“默认有熟人联系人”调整为“无熟人启动”。
 - [x] 收入页 20 个触点清单改为公开评论区、公开主页和半公开社群触点。
 - [x] 写入无熟人启动验证方案：`docs/ops/2026-06-08-no-warm-contacts-validation.md`。
+- [x] 增加自动成片 MVP 前置能力：导出 9:16 视频计划、镜头时长、SRT 字幕和 FFmpeg 渲染草稿。
+- [x] 新增 Swift 原生样片生成脚本，用于在当前 `ffmpeg` 环境不可用时生成可展示 MP4。
+- [x] 生成小说配套剧情可视化样片：`outputs/demo-2026-06-09-v2/demo-video.mp4`。
+- [x] 写入自动成片 MVP 文档：`docs/v1/V1_VIDEO_EXPORT_MVP.md`。
 
 ## 进行中
 
@@ -317,6 +321,7 @@ V1 系统可用的定义：
 - V1 模型网关：`docs/v1/V1_MODEL_GATEWAY.md`
 - V1 模型质量准入：`docs/v1/V1_MODEL_QUALITY_GATE.md`
 - V1 真实模型选择：`docs/v1/V1_MODEL_SELECTION.md`
+- V1 自动成片 MVP：`docs/v1/V1_VIDEO_EXPORT_MVP.md`
 - V1 产品实现节奏：`docs/v1/V1_PRODUCT_IMPLEMENTATION_RHYTHM.md`
 - V1 质检评分卡：`docs/v1/V1_QUALITY_SCORECARD.md`
 - V1 14 天收入验证：`docs/v1/V1_14_DAY_REVENUE_VALIDATION.md`

@@ -434,6 +434,15 @@ pre.script-block {
   line-height: 1.55;
 }
 
+.video-plan {
+  display: grid;
+  gap: 16px;
+}
+
+.video-row {
+  grid-template-columns: minmax(180px, 1fr) 110px minmax(180px, 1fr) minmax(220px, 1.4fr);
+}
+
 .message-box {
   min-height: 300px;
   margin-top: 12px;

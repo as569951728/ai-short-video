@@ -283,6 +283,88 @@ function validateGeneratedPackage(generated) {
   return '';
 }
 
+function toSrtTime(totalSeconds) {
+  const safeSeconds = Math.max(0, totalSeconds);
+  const hours = Math.floor(safeSeconds / 3600);
+  const minutes = Math.floor((safeSeconds % 3600) / 60);
+  const seconds = Math.floor(safeSeconds % 60);
+  const milliseconds = Math.round((safeSeconds - Math.floor(safeSeconds)) * 1000);
+
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')},${String(milliseconds).padStart(3, '0')}`;
+}
+
+function buildSrt(segments) {
+  return segments
+    .map((segment, index) => `${index + 1}
+${toSrtTime(segment.start)} --> ${toSrtTime(segment.end)}
+${segment.subtitle}
+`)
+    .join('\n');
+}
+
+function estimateSegmentDuration(row) {
+  const textLength = `${row.voiceover || ''}${row.subtitle || ''}`.replace(/\s/g, '').length;
+  return Math.min(8, Math.max(3.5, Math.round((textLength / 7) * 10) / 10));
+}
+
+function buildVideoPlan(requestBody) {
+  const project = requestBody?.project;
+  const generated = project?.generated;
+  if (!project || !generated || !Array.isArray(generated.storyboard)) {
+    return {
+      ok: false,
+      status: 'bad_project',
+      message: '缺少可导出的视频项目数据。'
+    };
+  }
+
+  let cursor = 0;
+  const segments = generated.storyboard.map((row, index) => {
+    const duration = estimateSegmentDuration(row);
+    const start = cursor;
+    const end = Math.round((cursor + duration) * 10) / 10;
+    cursor = end;
+
+    return {
+      index: index + 1,
+      start,
+      end,
+      duration,
+      scene: row.scene || `镜头 ${index + 1}`,
+      voiceover: row.voiceover || row.subtitle || '',
+      visual: row.visual || '使用可商用背景素材或简单文字画面。',
+      subtitle: row.subtitle || row.voiceover || ''
+    };
+  });
+
+  const totalDuration = segments.length > 0 ? segments[segments.length - 1].end : 0;
+  const srt = buildSrt(segments);
+  const ffmpegDraft = [
+    '# 下一步可用 FFmpeg/Remotion 渲染此计划。',
+    '# V1 当前先导出稳定结构，不自动使用未经确认的素材。',
+    `# 标题：${generated.selectedTitle}`,
+    `# 预计时长：${totalDuration.toFixed(1)} 秒`,
+    'ffmpeg -loop 1 -i cover.png -i voiceover.wav -vf "subtitles=subtitles.srt:force_style=\'Fontsize=18\'" -shortest output.mp4'
+  ].join('\n');
+
+  return {
+    ok: true,
+    status: 'planned',
+    message: '已生成自动成片 MVP 计划。当前计划适合后续 Remotion + FFmpeg 渲染。',
+    plan: {
+      title: generated.selectedTitle,
+      coverCopy: generated.selectedCoverCopy,
+      totalDuration,
+      aspectRatio: '9:16',
+      resolution: '1080x1920',
+      segments,
+      srt,
+      ffmpegDraft,
+      renderRoute: 'V1 推荐先用 Remotion + FFmpeg 做本地自动成片，不依赖剪映/Canva API。'
+    }
+  };
+}
+
 async function generateStoryPackage(requestBody) {
   const config = getConfig(requestBody?.modelConfig);
   const missing = [];
@@ -433,6 +515,21 @@ const server = createServer(async (request, response) => {
       const body = await readBody(request);
       const result = await generateStoryPackage(body);
       sendJson(response, 200, result);
+    } catch (error) {
+      sendJson(response, 400, {
+        ok: false,
+        status: 'bad_request',
+        message: error.message
+      });
+    }
+    return;
+  }
+
+  if (request.method === 'POST' && request.url === '/api/export/video-plan') {
+    try {
+      const body = await readBody(request);
+      const result = buildVideoPlan(body);
+      sendJson(response, result.ok ? 200 : 400, result);
     } catch (error) {
       sendJson(response, 400, {
         ok: false,

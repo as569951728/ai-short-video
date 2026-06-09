@@ -161,6 +161,29 @@ interface Project {
   createdAt: string;
 }
 
+interface VideoPlanSegment {
+  index: number;
+  start: number;
+  end: number;
+  duration: number;
+  scene: string;
+  voiceover: string;
+  visual: string;
+  subtitle: string;
+}
+
+interface VideoPlan {
+  title: string;
+  coverCopy: string;
+  totalDuration: number;
+  aspectRatio: string;
+  resolution: string;
+  segments: VideoPlanSegment[];
+  srt: string;
+  ffmpegDraft: string;
+  renderRoute: string;
+}
+
 const platforms: Platform[] = ['抖音', '视频号', '小红书', 'B站'];
 const genres: Genre[] = ['都市逆袭', '悬疑反转', '情感故事', '职场复仇', 'AI 科幻'];
 const goals: Goal[] = ['故事短视频', '小说转短视频', '故事草稿'];
@@ -749,6 +772,16 @@ ${generated.score.recommendations.map((item) => `- ${item}`).join('\n')}
 `;
 }
 
+function downloadTextFile(filename: string, content: string) {
+  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
 function buildOutreachMessage(lead: Omit<RevenueLead, 'id' | 'createdAt'>, showcaseProject: Project | null) {
   const targetName = lead.name.trim() || '你好';
   const offer = lead.offer || '29 元系统生成服务';
@@ -882,6 +915,8 @@ function App() {
   const [profileStatus, setProfileStatus] = useState('');
   const [generationStatus, setGenerationStatus] = useState('');
   const [copyStatus, setCopyStatus] = useState('');
+  const [videoPlanStatus, setVideoPlanStatus] = useState('');
+  const [videoPlan, setVideoPlan] = useState<VideoPlan | null>(null);
   const [profile, setProfile] = useState<AccountProfile>(readStoredProfile);
   const [revenueLeads, setRevenueLeads] = useState<RevenueLead[]>(readRevenueLeads);
   const [leadDraft, setLeadDraft] = useState(defaultRevenueLead);
@@ -1087,6 +1122,29 @@ function App() {
       setModelStatus(result.ok ? result.message : `${result.message}${result.detail ? ` ${result.detail}` : ''}`);
     } catch {
       setModelStatus('本地 API 服务未启动。请先运行 npm run api。');
+    }
+  }
+
+  async function requestVideoPlan() {
+    if (!project) return;
+    setVideoPlanStatus('正在生成自动成片计划...');
+    setVideoPlan(null);
+
+    try {
+      const response = await fetch('http://127.0.0.1:8787/api/export/video-plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project })
+      });
+      const result = await response.json();
+      if (result.ok && result.plan) {
+        setVideoPlan(result.plan as VideoPlan);
+        setVideoPlanStatus(result.message);
+        return;
+      }
+      setVideoPlanStatus(result.message || '自动成片计划生成失败。');
+    } catch {
+      setVideoPlanStatus('本地 API 服务未启动。请先运行 npm run api。');
     }
   }
 
@@ -1458,17 +1516,58 @@ function App() {
         )}
 
         {screen === 'export' && project && (
-          <section className="panel">
-            <header className="section-header">
-              <div>
-                <p className="eyebrow">导出内容包</p>
-                <h2>可复制到剪辑和发布流程</h2>
-              </div>
-              <button className="primary" onClick={() => navigator.clipboard.writeText(markdown)}><ClipboardList size={18} />复制 Markdown</button>
-            </header>
-            <textarea className="export-box" readOnly value={markdown} />
-            <button className="primary" onClick={() => setScreen('publish')}><Save size={18} />发布后记录数据</button>
-          </section>
+          <div className="workspace">
+            <section className="panel">
+              <header className="section-header">
+                <div>
+                  <p className="eyebrow">导出内容包</p>
+                  <h2>可复制到剪辑和发布流程</h2>
+                </div>
+                <div className="header-actions">
+                  <button className="secondary" onClick={() => downloadTextFile('aishortvideo-content-package.md', markdown)}><Download size={18} />下载 Markdown</button>
+                  <button className="primary" onClick={() => navigator.clipboard.writeText(markdown)}><ClipboardList size={18} />复制 Markdown</button>
+                </div>
+              </header>
+              <textarea className="export-box" readOnly value={markdown} />
+              <button className="primary" onClick={() => setScreen('publish')}><Save size={18} />发布后记录数据</button>
+            </section>
+
+            <section className="panel">
+              <header className="section-header">
+                <div>
+                  <p className="eyebrow">自动成片 MVP</p>
+                  <h2>生成 Remotion + FFmpeg 前置计划</h2>
+                </div>
+                <button className="primary" onClick={requestVideoPlan}><Play size={18} />生成成片计划</button>
+              </header>
+              <p className="lead">这一步先导出 9:16 视频结构、镜头时长、字幕 SRT 和渲染草稿，不依赖剪映/Canva API。</p>
+              {videoPlanStatus && <p className="status-text">{videoPlanStatus}</p>}
+              {videoPlan && (
+                <div className="video-plan">
+                  <div className="grid three compact">
+                    <article className="panel metric"><span>比例</span><strong>{videoPlan.aspectRatio}</strong></article>
+                    <article className="panel metric"><span>分辨率</span><strong>{videoPlan.resolution}</strong></article>
+                    <article className="panel metric"><span>预计时长</span><strong>{videoPlan.totalDuration.toFixed(1)}s</strong></article>
+                  </div>
+                  <div className="header-actions">
+                    <button className="secondary" onClick={() => downloadTextFile('subtitles.srt', videoPlan.srt)}><Download size={18} />下载 SRT</button>
+                    <button className="secondary" onClick={() => downloadTextFile('ffmpeg-draft.sh', videoPlan.ffmpegDraft)}><Download size={18} />下载渲染草稿</button>
+                    <button className="secondary" onClick={() => navigator.clipboard.writeText(videoPlan.srt)}><Copy size={18} />复制字幕</button>
+                  </div>
+                  <div className="table-list">
+                    {videoPlan.segments.map((segment) => (
+                      <article className="table-row video-row" key={segment.index}>
+                        <strong>{segment.index}. {segment.scene}</strong>
+                        <span>{segment.start.toFixed(1)}s - {segment.end.toFixed(1)}s</span>
+                        <span>{segment.subtitle}</span>
+                        <span>{segment.visual}</span>
+                      </article>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </section>
+          </div>
         )}
 
         {screen === 'publish' && project && (
