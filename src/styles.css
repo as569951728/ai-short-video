@@ -510,6 +510,21 @@ pre.script-block {
   background: #111827;
 }
 
+.visual-outreach-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 180px;
+  gap: 18px;
+  align-items: center;
+}
+
+.mini-video-preview {
+  width: 100%;
+  aspect-ratio: 9 / 16;
+  border: 1px solid #dfe6e2;
+  border-radius: 8px;
+  background: #111827;
+}
+
 .touchpoint-actions,
 .lead-actions {
   display: flex;
@@ -723,6 +738,10 @@ pre.script-block {
   }
 
   .demo-video-card {
+    grid-template-columns: 1fr;
+  }
+
+  .visual-outreach-card {
     grid-template-columns: 1fr;
   }
 

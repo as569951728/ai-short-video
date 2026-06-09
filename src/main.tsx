@@ -347,8 +347,10 @@ const projectsKey = 'aishortvideo:projects';
 const profileKey = 'aishortvideo:account-profile';
 const revenueLeadsKey = 'aishortvideo:revenue-leads';
 const modelQualityResultsKey = 'aishortvideo:model-quality-results';
+const visualDemoTitle = '《凌晨三点的撤回消息》';
 const visualDemoVideoUrl = new URL('../outputs/demo-2026-06-09-v2/demo-video.mp4', import.meta.url).href;
 const visualDemoNovelUrl = new URL('../outputs/demo-2026-06-09-v2/novel.md', import.meta.url).href;
+const visualDemoAssetNote = '样片文件在案例库可直接播放，也可下载后作为附件发送给对方。';
 
 const defaultProfile: AccountProfile = {
   accountName: '',
@@ -413,6 +415,14 @@ const touchpointSeeds: TouchpointSeed[] = [
   { name: '小型内容代运营团队公开主页', channel: '平台私信', need: '需要批量脚本和交付稳定性', nextAction: '发 99 元诊断或 100 元试点定金选项' },
   { name: '本地商家短视频账号评论区', channel: '公开评论', need: '不会写故事型宣传文案', nextAction: '只挑正在更新但文案弱的账号沟通' },
   { name: 'AI 产品内测/独立开发者社区', channel: '社群互动', need: '愿意评价产品，但未必是付费客户', nextAction: '请求产品可用性反馈，不把它当成交主力' }
+];
+
+const visualDemoTouchpointSeeds: TouchpointSeed[] = [
+  { name: 'B站“剪映/短视频剪辑教程”评论区', channel: '公开评论', need: '会剪辑但可能缺故事脚本、分镜和标题素材', nextAction: '请求对方看 28 秒剧情可视化样片，判断是否能减少剪辑前准备时间' },
+  { name: '剪映模板作者主页', channel: '平台私信', need: '有剪辑能力，可能缺稳定脚本和故事素材', nextAction: '发样片许可请求，询问是否愿意用一条脚本包做模板测试' },
+  { name: '小红书“小说推文/故事号”账号主页', channel: '平台私信', need: '需要故事钩子、分镜、字幕和封面文案', nextAction: '发 0 元样片演示邀请，强调不承诺爆款' },
+  { name: '小红书“做账号第 N 天”博主', channel: '平台私信', need: '新手账号常卡在选题、脚本和持续更新', nextAction: '邀请对方用一个真实账号方向换 0 元演示' },
+  { name: 'B站“AI 工具实战”视频评论区', channel: '公开评论', need: '愿意评价 AI 工具落地价值，适合产品反馈', nextAction: '请对方从产品角度判断样片是否有付费价值' }
 ];
 
 const defaultRevenueLead: Omit<RevenueLead, 'id' | 'createdAt'> = {
@@ -805,6 +815,28 @@ ${caseLine}
 你可以直接给我一个账号方向，或者一句话想法，我用系统给你跑一版。`;
 }
 
+function buildVisualDemoOutreachMessage(lead: Omit<RevenueLead, 'id' | 'createdAt'>) {
+  const targetName = lead.name.trim() || '你好';
+  const needLine = lead.need.trim()
+    ? `我看你的场景可能是：${lead.need.trim()}。`
+    : '我想先请你判断：这种“先把小说、分镜、字幕、视频雏形整理好”的能力，对内容新手是否有用。';
+
+  return `${targetName}，我在做一个 AI 小说/短视频生成系统，现在有一条 28 秒剧情可视化样片：${visualDemoTitle}。
+
+${needLine}
+
+这条样片不是精修大片，重点是验证系统能不能把一段原创小说，整理成：小说正文、分镜、字幕、基础竖屏视频。
+
+${visualDemoAssetNote}
+
+如果你愿意看，我想请你只反馈 3 点：
+1. 这个样片是否能让你看懂故事？
+2. 如果你做内容，前期最缺的是故事、分镜、字幕，还是封面标题？
+3. 如果按你的账号方向生成 1 条完整素材包，29 元试一条，你会不会考虑？
+
+我不承诺爆款，也不承诺播放量，只想验证它能不能减少内容准备时间。`;
+}
+
 function buildDemoBrief(showcaseProject: Project | null) {
   if (!showcaseProject) {
     return `# AIShortvideo 演示材料
@@ -853,6 +885,35 @@ ${showcaseProject.generated.hook}
 - 29 元系统生成服务：交付 1 条完整素材包。
 - 99 元系统诊断：给 3 个方向、1 条样稿和建议。
 - 100 元以上试点定金：连续试 3 到 5 条内容，记录发布反馈。`;
+}
+
+function buildVisualDemoBrief() {
+  return `# 剧情可视化样片演示材料
+
+样片标题：${visualDemoTitle}
+样片位置：案例库可直接播放，也可下载视频后发给对方。
+小说文本：案例库可打开小说原文。
+
+## 当前样片证明什么
+
+- 系统能从原创小说整理出分镜。
+- 系统能生成字幕和基础竖屏视频。
+- 系统能把“只会写想法”的用户推进到“可展示视频雏形”。
+
+## 当前样片不证明什么
+
+- 不证明能爆款。
+- 不证明能自动发布。
+- 不证明视频已经达到商业精修质量。
+- 不证明客户一定会付费。
+
+## 这一轮要验证什么
+
+- 对方是否愿意看样片。
+- 对方是否能看懂故事。
+- 对方是否认为脚本/分镜/字幕能减少内容准备时间。
+- 对方是否愿意给一句话想法做 0 元演示。
+- 对方是否愿意试 29 元单条素材包，或 100 元以上试点。`;
 }
 
 function buildTodayContactPlan(todayLeads: RevenueLead[], showcaseProject: Project | null) {
@@ -934,7 +995,9 @@ function App() {
     [projects]
   );
   const outreachMessage = useMemo(() => buildOutreachMessage(leadDraft, showcaseProject), [leadDraft, showcaseProject]);
+  const visualDemoOutreachMessage = useMemo(() => buildVisualDemoOutreachMessage(leadDraft), [leadDraft]);
   const demoBrief = useMemo(() => buildDemoBrief(showcaseProject), [showcaseProject]);
+  const visualDemoBrief = useMemo(buildVisualDemoBrief, []);
   const objectionReply = useMemo(() => buildObjectionReply(leadDraft, showcaseProject), [leadDraft, showcaseProject]);
   const paidRevenue = revenueLeads.reduce((sum, lead) => sum + (lead.status === '已付款' ? lead.amount : 0), 0);
   const strongSignalCount = revenueLeads.filter((lead) => lead.status === '强意向' || lead.status === '已付款').length;
@@ -1303,6 +1366,31 @@ function App() {
     setRevenueLeads(nextLeads);
     localStorage.setItem(revenueLeadsKey, JSON.stringify(nextLeads));
     setCopyStatus(`已生成 ${newLeads.length} 个今日待联系对象。`);
+  }
+
+  function generateVisualDemoLeads() {
+    const existingKeys = new Set(revenueLeads.map((lead) => `${lead.channel}-${lead.name}`));
+    const seedsToAdd = visualDemoTouchpointSeeds.filter((seed) => !existingKeys.has(`${seed.channel}-${seed.name}`));
+
+    if (seedsToAdd.length === 0) {
+      setCopyStatus('剧情样片触达对象已经全部加入线索记录。');
+      return;
+    }
+
+    const newLeads: RevenueLead[] = seedsToAdd.map((seed) => ({
+      ...defaultRevenueLead,
+      name: seed.name,
+      channel: seed.channel,
+      need: seed.need,
+      offer: seed.channel === '社群互动' ? '100 元以上试点定金' : '29 元系统生成服务',
+      nextAction: seed.nextAction,
+      id: crypto.randomUUID(),
+      createdAt: new Date().toISOString()
+    }));
+    const nextLeads = [...newLeads, ...revenueLeads];
+    setRevenueLeads(nextLeads);
+    localStorage.setItem(revenueLeadsKey, JSON.stringify(nextLeads));
+    setCopyStatus(`已加入 ${newLeads.length} 个剧情样片触达对象。`);
   }
 
   async function copyText(value: string, label: string, elementId: string) {
@@ -1738,6 +1826,38 @@ function App() {
               <article className="panel metric"><span>访谈记录</span><strong>{interviewCount}/10</strong></article>
               <article className="panel metric"><span>触点清单</span><strong>{touchpointSeeds.length}/20</strong></article>
               <article className="panel metric"><span>今日待联系</span><strong>{todayContactCount}</strong></article>
+            </div>
+            <article className="panel visual-outreach-card">
+              <div>
+                <p className="eyebrow">剧情样片触达</p>
+                <h3>用《凌晨三点的撤回消息》验证付费信号</h3>
+                <p className="muted">当前不要继续打磨视频，先拿 28 秒样片联系 5 个真实对象，至少发出 1 次报价。</p>
+                <div className="touchpoint-actions">
+                  <button className="primary" onClick={generateVisualDemoLeads}><MessageSquare size={16} />加入 5 个样片触达对象</button>
+                  <button className="secondary" onClick={() => copyText(visualDemoOutreachMessage, '样片话术', 'visual-demo-outreach-message')}><Copy size={16} />复制样片话术</button>
+                  <button className="secondary" onClick={() => copyText(visualDemoBrief, '样片材料', 'visual-demo-brief')}><ClipboardList size={16} />复制样片材料</button>
+                  <a className="secondary" href={visualDemoVideoUrl} target="_blank" rel="noreferrer"><Play size={16} />打开样片</a>
+                </div>
+              </div>
+              <video className="mini-video-preview" src={visualDemoVideoUrl} controls playsInline preload="metadata" />
+            </article>
+            <div className="grid two">
+              <article className="panel">
+                <div className="panel-title">
+                  <h3>剧情样片话术</h3>
+                  <button className="secondary" onClick={() => copyText(visualDemoOutreachMessage, '样片话术', 'visual-demo-outreach-message')}><Copy size={16} />复制</button>
+                </div>
+                <p className="muted">适合发给剪辑教程、故事号、AI 工具讨论对象。</p>
+                <textarea id="visual-demo-outreach-message" className="message-box compact-message" readOnly value={visualDemoOutreachMessage} />
+              </article>
+              <article className="panel">
+                <div className="panel-title">
+                  <h3>剧情样片材料</h3>
+                  <button className="secondary" onClick={() => copyText(visualDemoBrief, '样片材料', 'visual-demo-brief')}><Copy size={16} />复制</button>
+                </div>
+                <p className="muted">用于说明样片证明什么、不证明什么，避免过度承诺。</p>
+                <textarea id="visual-demo-brief" className="message-box compact-message" readOnly value={visualDemoBrief} />
+              </article>
             </div>
             <article className="panel">
               <div className="panel-title">
