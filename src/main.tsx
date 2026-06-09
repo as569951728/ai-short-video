@@ -909,6 +909,102 @@ ${generated.score.recommendations.map((item) => `- ${item}`).join('\n')}
 - 如果内容使用 AI 生成或合成，请按平台规则添加必要标识。`;
 }
 
+function buildVideoAssetManifest(project: Project, plan: VideoPlan) {
+  return JSON.stringify({
+    title: plan.title,
+    sourceProjectId: project.id,
+    platform: project.input.platform,
+    genre: project.input.genre,
+    aspectRatio: plan.aspectRatio,
+    resolution: plan.resolution,
+    totalDuration: plan.totalDuration,
+    requiredAssets: [
+      { name: 'cover.png', type: 'image', purpose: '封面或静态背景', status: '需要人工选择或生成' },
+      { name: 'voiceover.wav', type: 'audio', purpose: '旁白配音', status: '需要 TTS 或真人录制' },
+      { name: 'subtitles.srt', type: 'subtitle', purpose: '字幕', status: '系统已生成，可下载' },
+      { name: 'shot-list.md', type: 'document', purpose: '剪辑镜头表', status: '系统已生成，可下载' }
+    ],
+    segments: plan.segments.map((segment) => ({
+      index: segment.index,
+      start: segment.start,
+      end: segment.end,
+      duration: segment.duration,
+      scene: segment.scene,
+      visual: segment.visual,
+      voiceover: segment.voiceover,
+      subtitle: segment.subtitle
+    })),
+    constraints: [
+      '9:16 竖屏优先',
+      '不使用未授权素材',
+      '可用纯文字、色块、可商用图片或后续 AI 生图替代镜头画面',
+      '当前计划不承诺自动发布或爆款'
+    ]
+  }, null, 2);
+}
+
+function buildVideoShotListMarkdown(project: Project, plan: VideoPlan) {
+  return `# ${plan.title} 自动成片镜头表
+
+项目：${project.input.platform} / ${project.input.genre}
+比例：${plan.aspectRatio}
+分辨率：${plan.resolution}
+预计时长：${plan.totalDuration.toFixed(1)} 秒
+
+## 镜头清单
+
+${plan.segments.map((segment) => `### ${segment.index}. ${segment.scene}
+
+- 时间：${segment.start.toFixed(1)}s - ${segment.end.toFixed(1)}s
+- 时长：${segment.duration.toFixed(1)}s
+- 画面：${segment.visual}
+- 旁白：${segment.voiceover}
+- 字幕：${segment.subtitle}`).join('\n\n')}
+
+## 剪辑注意
+
+- 先保证故事看懂，再追求画面精修。
+- 字幕必须和旁白一致。
+- 使用可商用素材，不使用未授权影视、音乐、图片或真实人物肖像。
+- 如果使用 AI 生成或合成内容，请按平台规则添加必要标识。`;
+}
+
+function buildVideoRenderHandoffMarkdown(project: Project, plan: VideoPlan) {
+  return `# 自动成片渲染交接说明
+
+## 当前状态
+
+- 内容包已生成。
+- 视频计划已生成。
+- SRT 字幕可下载。
+- FFmpeg 草稿可下载。
+- 当前仍需补充封面背景和旁白音频。
+
+## 推荐执行顺序
+
+1. 下载 \`shot-list.md\`，确认镜头是否能看懂。
+2. 下载 \`subtitles.srt\`，导入剪辑软件或后续 Remotion 渲染。
+3. 使用 TTS 或真人录制生成 \`voiceover.wav\`。
+4. 准备 \`cover.png\` 或每个镜头的可商用背景图。
+5. 使用 \`ffmpeg-draft.sh\` 作为渲染草稿，不直接承诺一键成片质量。
+6. 导出 9:16 MP4 后，再回到收入页发送客户样片预览包。
+
+## 交付边界
+
+- 当前系统交付自动成片计划、字幕、镜头表和渲染草稿。
+- 不承诺自动发布。
+- 不承诺爆款、播放量、涨粉或收入。
+- 不使用未授权素材。
+
+## 项目信息
+
+- 标题：${plan.title}
+- 平台：${project.input.platform}
+- 题材：${project.input.genre}
+- 预计时长：${plan.totalDuration.toFixed(1)} 秒
+- 渲染路线：${plan.renderRoute}`;
+}
+
 function downloadTextFile(filename: string, content: string) {
   const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
   const url = URL.createObjectURL(blob);
@@ -2570,8 +2666,12 @@ function App() {
                   </div>
                   <div className="header-actions">
                     <button className="secondary" onClick={() => downloadTextFile('subtitles.srt', videoPlan.srt)}><Download size={18} />下载 SRT</button>
+                    <button className="secondary" onClick={() => downloadTextFile('shot-list.md', buildVideoShotListMarkdown(project, videoPlan))}><Download size={18} />下载镜头表</button>
+                    <button className="secondary" onClick={() => downloadTextFile('video-asset-manifest.json', buildVideoAssetManifest(project, videoPlan))}><Download size={18} />下载资产清单</button>
+                    <button className="secondary" onClick={() => downloadTextFile('render-handoff.md', buildVideoRenderHandoffMarkdown(project, videoPlan))}><Download size={18} />下载渲染交接</button>
                     <button className="secondary" onClick={() => downloadTextFile('ffmpeg-draft.sh', videoPlan.ffmpegDraft)}><Download size={18} />下载渲染草稿</button>
                     <button className="secondary" onClick={() => navigator.clipboard.writeText(videoPlan.srt)}><Copy size={18} />复制字幕</button>
+                    <button className="secondary" onClick={() => navigator.clipboard.writeText(buildVideoRenderHandoffMarkdown(project, videoPlan))}><Copy size={18} />复制交接说明</button>
                   </div>
                   <div className="table-list">
                     {videoPlan.segments.map((segment) => (

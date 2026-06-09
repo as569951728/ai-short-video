@@ -71,9 +71,15 @@ function getConfig(overrides = {}) {
   };
 }
 
-function sendJson(response, statusCode, payload) {
+function resolveAllowedOrigin(request) {
+  const origin = request.headers.origin || '';
+  if (/^http:\/\/(127\.0\.0\.1|localhost):\d+$/.test(origin)) return origin;
+  return 'http://127.0.0.1:5173';
+}
+
+function sendJson(request, response, statusCode, payload) {
   response.writeHead(statusCode, {
-    'Access-Control-Allow-Origin': 'http://127.0.0.1:5173',
+    'Access-Control-Allow-Origin': resolveAllowedOrigin(request),
     'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
     'Content-Type': 'application/json; charset=utf-8'
@@ -486,12 +492,12 @@ async function generateStoryPackage(requestBody) {
 
 const server = createServer(async (request, response) => {
   if (request.method === 'OPTIONS') {
-    sendJson(response, 200, { ok: true });
+    sendJson(request, response, 200, { ok: true });
     return;
   }
 
   if (request.method === 'GET' && request.url === '/api/health') {
-    sendJson(response, 200, { ok: true, service: 'AIShortvideo local API' });
+    sendJson(request, response, 200, { ok: true, service: 'AIShortvideo local API' });
     return;
   }
 
@@ -499,9 +505,9 @@ const server = createServer(async (request, response) => {
     try {
       const body = await readBody(request);
       const result = await testModelConnection(body);
-      sendJson(response, 200, result);
+      sendJson(request, response, 200, result);
     } catch (error) {
-      sendJson(response, 400, {
+      sendJson(request, response, 400, {
         ok: false,
         status: 'bad_request',
         message: error.message
@@ -514,9 +520,9 @@ const server = createServer(async (request, response) => {
     try {
       const body = await readBody(request);
       const result = await generateStoryPackage(body);
-      sendJson(response, 200, result);
+      sendJson(request, response, 200, result);
     } catch (error) {
-      sendJson(response, 400, {
+      sendJson(request, response, 400, {
         ok: false,
         status: 'bad_request',
         message: error.message
@@ -529,9 +535,9 @@ const server = createServer(async (request, response) => {
     try {
       const body = await readBody(request);
       const result = buildVideoPlan(body);
-      sendJson(response, result.ok ? 200 : 400, result);
+      sendJson(request, response, result.ok ? 200 : 400, result);
     } catch (error) {
-      sendJson(response, 400, {
+      sendJson(request, response, 400, {
         ok: false,
         status: 'bad_request',
         message: error.message
@@ -540,7 +546,7 @@ const server = createServer(async (request, response) => {
     return;
   }
 
-  sendJson(response, 404, {
+  sendJson(request, response, 404, {
     ok: false,
     status: 'not_found',
     message: 'API route not found'
