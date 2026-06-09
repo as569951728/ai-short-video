@@ -967,6 +967,90 @@ function buildQuoteMessage(lead: Omit<RevenueLead, 'id' | 'createdAt'>) {
   return `${targetName}，如果你觉得刚才的样片方向有参考价值，可以先按 29 元试一条真实内容。我会按你的账号方向交付 1 条完整素材包：标题、钩子、故事脚本、分镜、字幕、封面文案和发布文案。不承诺爆款，只验证能不能减少你前期构思和脚本准备时间。`;
 }
 
+function buildPaymentConfirmation(lead: Omit<RevenueLead, 'id' | 'createdAt'>) {
+  const targetName = lead.name.trim() || '你好';
+  const offer = lead.offer || '29 元系统生成服务';
+  const amount = Number(lead.amount) || (offer.includes('99') ? 99 : offer.includes('100') ? 100 : offer.includes('0') ? 0 : 29);
+  const need = lead.need.trim() || '你提供一个账号方向或一句话想法';
+
+  if (offer.includes('99')) {
+    return `${targetName}，确认一下这次 99 元系统诊断的交付边界：
+
+你需要提供：${need}。
+
+我交付：
+1. 3 个可测试的内容方向；
+2. 其中 1 个方向的完整样稿；
+3. 标题、钩子、脚本、分镜、字幕、封面文案、发布文案；
+4. 一份发布前质检和下一步建议。
+
+不包含：
+- 不承诺爆款、播放量、涨粉或成交；
+- 不代发平台；
+- 不做复杂剪辑精修；
+- 不使用未授权素材。
+
+金额：¥${amount}。
+如果确认，我收到款后开始做，完成后把素材包发你。`;
+  }
+
+  if (offer.includes('100')) {
+    return `${targetName}，确认一下这次 100 元以上试点的交付边界：
+
+你需要提供：${need}。
+
+我交付：
+1. 连续 3 到 5 条故事/短视频素材包；
+2. 每条包含标题、钩子、脚本、分镜、字幕、封面文案、发布文案；
+3. 每条附发布前质检建议；
+4. 根据你的反馈做小范围调整。
+
+不包含：
+- 不承诺爆款、播放量、涨粉或收入；
+- 不做平台代运营；
+- 不负责广告投放；
+- 不使用未授权素材。
+
+试点定金：¥${amount} 起。
+目标是验证系统能否稳定减少内容准备时间。`;
+  }
+
+  if (offer.includes('0')) {
+    return `${targetName}，确认一下 0 元演示边界：
+
+你提供：${need}。
+
+我交付：
+1. 1 条系统生成素材包演示；
+2. 标题、钩子、脚本、分镜、字幕、封面文案、发布文案；
+3. 你只需要反馈哪里有用、哪里不像你想要的。
+
+不包含：
+- 不承诺爆款、播放量或收入；
+- 不做连续多条免费生成；
+- 不做复杂剪辑精修。`;
+  }
+
+  return `${targetName}，确认一下这次 29 元单条生成服务的交付边界：
+
+你需要提供：${need}。
+
+我交付：
+1. 1 条完整故事/短视频素材包；
+2. 标题、钩子、故事脚本；
+3. 分镜、字幕、封面文案、发布文案；
+4. 发布前质检建议。
+
+不包含：
+- 不承诺爆款、播放量、涨粉或成交；
+- 不代发平台；
+- 不做复杂剪辑精修；
+- 不使用未授权素材。
+
+金额：¥${amount}。
+如果确认，我收到款后开始做，完成后把素材包发你。`;
+}
+
 function buildRevenueReport(leads: RevenueLead[]) {
   const paidRevenue = leads.reduce((sum, lead) => sum + (lead.status === '已付款' ? lead.amount : 0), 0);
   const contacted = leads.filter((lead) => ['已联系', '已发样片', '已报价', '已体验', '强意向', '已付款'].includes(lead.status)).length;
@@ -1085,6 +1169,7 @@ function App() {
   const demoBrief = useMemo(() => buildDemoBrief(showcaseProject), [showcaseProject]);
   const visualDemoBrief = useMemo(buildVisualDemoBrief, []);
   const quoteMessage = useMemo(() => buildQuoteMessage(leadDraft), [leadDraft]);
+  const paymentConfirmation = useMemo(() => buildPaymentConfirmation(leadDraft), [leadDraft]);
   const objectionReply = useMemo(() => buildObjectionReply(leadDraft, showcaseProject), [leadDraft, showcaseProject]);
   const revenueReport = useMemo(() => buildRevenueReport(revenueLeads), [revenueLeads]);
   const paidRevenue = revenueLeads.reduce((sum, lead) => sum + (lead.status === '已付款' ? lead.amount : 0), 0);
@@ -2156,6 +2241,14 @@ function App() {
               </div>
               <p className="muted">只有对方愿意看样片、愿意给方向或问价格时，再复制这段报价。</p>
               <textarea id="quote-message" className="message-box compact-message" readOnly value={quoteMessage} />
+            </article>
+            <article className="panel">
+              <div className="panel-title">
+                <h3>收款前确认单</h3>
+                <button className="secondary" onClick={() => copyText(paymentConfirmation, '收款确认单', 'payment-confirmation')}><Copy size={16} />复制</button>
+              </div>
+              <p className="muted">对方接受报价后发送，先讲清交付边界，再收款。</p>
+              <textarea id="payment-confirmation" className="message-box compact-message" readOnly value={paymentConfirmation} />
             </article>
             <article className="panel">
               <div className="panel-title">
