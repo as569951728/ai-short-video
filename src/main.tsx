@@ -1068,6 +1068,7 @@ function App() {
   const [revenueLeads, setRevenueLeads] = useState<RevenueLead[]>(readRevenueLeads);
   const [revenueFilter, setRevenueFilter] = useState<RevenueStatus | '全部' | '待处理'>('全部');
   const [leadDraft, setLeadDraft] = useState(defaultRevenueLead);
+  const [editingLeadId, setEditingLeadId] = useState<string | null>(null);
   const [modelConfig, setModelConfig] = useState({
     baseUrl: '',
     apiKey: '',
@@ -1380,6 +1381,25 @@ function App() {
     const name = leadDraft.name.trim();
     if (!name) return;
 
+    if (editingLeadId) {
+      const nextLeads = revenueLeads.map((lead) => (
+        lead.id === editingLeadId
+          ? {
+              ...lead,
+              ...leadDraft,
+              name,
+              amount: Number(leadDraft.amount) || 0
+            }
+          : lead
+      ));
+      setRevenueLeads(nextLeads);
+      localStorage.setItem(revenueLeadsKey, JSON.stringify(nextLeads));
+      setLeadDraft(defaultRevenueLead);
+      setEditingLeadId(null);
+      setCopyStatus('线索已更新。');
+      return;
+    }
+
     const nextLead: RevenueLead = {
       ...leadDraft,
       name,
@@ -1397,6 +1417,23 @@ function App() {
     const nextLeads = revenueLeads.filter((lead) => lead.id !== id);
     setRevenueLeads(nextLeads);
     localStorage.setItem(revenueLeadsKey, JSON.stringify(nextLeads));
+    if (editingLeadId === id) {
+      setLeadDraft(defaultRevenueLead);
+      setEditingLeadId(null);
+    }
+  }
+
+  function editRevenueLead(lead: RevenueLead) {
+    const { id, createdAt, ...draft } = lead;
+    setLeadDraft(draft);
+    setEditingLeadId(id);
+    setCopyStatus(`正在编辑：${lead.name}`);
+  }
+
+  function cancelLeadEditing() {
+    setLeadDraft(defaultRevenueLead);
+    setEditingLeadId(null);
+    setCopyStatus('已取消编辑。');
   }
 
   function updateRevenueLead(id: string, partial: Partial<RevenueLead>) {
@@ -1918,7 +1955,7 @@ function App() {
               <div className="header-actions">
                 <button className="secondary" onClick={() => copyText(revenueReport, '收入复盘', 'revenue-report')}><Copy size={18} />复制复盘</button>
                 <button className="secondary" onClick={() => downloadTextFile('aishortvideo-revenue-report.md', revenueReport)}><Download size={18} />下载复盘</button>
-                <button className="primary" onClick={saveRevenueLead}><Save size={18} />保存线索</button>
+                <button className="primary" onClick={saveRevenueLead}><Save size={18} />{editingLeadId ? '更新线索' : '保存线索'}</button>
               </div>
             </header>
             <div className="grid three">
@@ -2008,7 +2045,10 @@ function App() {
             </article>
             <section className="grid two">
               <article className="panel">
-                <h3>新增线索</h3>
+                <div className="panel-title">
+                  <h3>{editingLeadId ? '编辑线索' : '新增线索'}</h3>
+                  {editingLeadId && <button className="secondary" onClick={cancelLeadEditing}>取消编辑</button>}
+                </div>
                 <label>客户或账号
                   <input
                     value={leadDraft.name}
@@ -2175,6 +2215,7 @@ function App() {
                         <button className="secondary" onClick={() => updateRevenueLead(lead.id, { status: '已报价' })}>已报价</button>
                         <button className="secondary" onClick={() => updateRevenueLead(lead.id, { status: '强意向' })}>强意向</button>
                         <button className="secondary" onClick={() => updateRevenueLead(lead.id, { status: '已付款', amount: lead.amount || 29 })}>已付款</button>
+                        <button className="secondary" onClick={() => editRevenueLead(lead)}>编辑</button>
                         <button className="secondary" onClick={() => deleteRevenueLead(lead.id)}><Trash2 size={16} />删除</button>
                       </div>
                     </div>
