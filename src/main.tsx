@@ -1314,6 +1314,7 @@ function buildRevenueReport(leads: RevenueLead[]) {
   const sampleSent = leads.filter((lead) => ['已发样片', '已报价', '已体验', '强意向', '已付款'].includes(lead.status)).length;
   const quoted = leads.filter((lead) => ['已报价', '强意向', '已付款'].includes(lead.status)).length;
   const replied = leads.filter((lead) => Boolean(lead.reply?.trim())).length;
+  const dueFollowUps = leads.filter((lead) => isDueFollowUpLead(lead)).length;
 
   return `# AIShortvideo 收入验证复盘
 
@@ -1326,6 +1327,7 @@ function buildRevenueReport(leads: RevenueLead[]) {
 - 已发样片：${sampleSent}
 - 已报价：${quoted}
 - 真实回复：${replied}
+- 待跟进：${dueFollowUps}
 - 强信号：${leads.filter((lead) => lead.status === '强意向' || lead.status === '已付款').length}
 - 已收款：¥${paidRevenue}
 
@@ -1425,6 +1427,40 @@ ${queue.map((lead, index) => `${index + 1}. ${lead.name}
    报价：${lead.offer}
    建议：${inferLeadNextStep(lead)}
    备注：${lead.nextAction || lead.reply || lead.need || '待补充'}`).join('\n\n')}`;
+}
+
+function isDueFollowUpLead(lead: RevenueLead, now = new Date()) {
+  if (!lead.followUpAt || lead.status === '已付款' || lead.status === '无效') return false;
+  const followUpAt = new Date(lead.followUpAt).getTime();
+  return Number.isFinite(followUpAt) && followUpAt <= now.getTime();
+}
+
+function buildFollowUpPlan(leads: RevenueLead[]) {
+  if (leads.length === 0) {
+    return `# 今日待跟进清单
+
+当前没有到期跟进线索。
+
+下一步：优先处理新手执行模式里的当前主动作。`;
+  }
+
+  return `# 今日待跟进清单
+
+目标：先处理到期跟进，不让已联系、已发样片和已报价线索冷掉。
+
+${leads.map((lead, index) => `${index + 1}. ${lead.name}
+   状态：${lead.status}
+   渠道：${lead.channel || '未填写'}
+   跟进时间：${formatLeadTime(lead.followUpAt)}
+   上次发送：${formatLeadTime(lead.sentAt)}
+   客户回复：${lead.reply || '未记录'}
+   建议：${inferLeadNextStep(lead)}`).join('\n\n')}
+
+执行规则：
+- 已联系但没看样片：先问是否方便看 28 秒样片。
+- 已发样片但没回复：只追 3 个反馈问题。
+- 已报价但没确认：只确认是否接受 29/99/100 元版本。
+- 明确不需要就标记无效，不再消耗时间。`;
 }
 
 function buildRevenueValidationPlanText(steps: RevenueValidationStep[], paidRevenue: number) {
@@ -1605,7 +1641,7 @@ function App() {
   const [videoPlan, setVideoPlan] = useState<VideoPlan | null>(null);
   const [profile, setProfile] = useState<AccountProfile>(readStoredProfile);
   const [revenueLeads, setRevenueLeads] = useState<RevenueLead[]>(readRevenueLeads);
-  const [revenueFilter, setRevenueFilter] = useState<RevenueStatus | '全部' | '待处理'>('全部');
+  const [revenueFilter, setRevenueFilter] = useState<RevenueStatus | '全部' | '待处理' | '待跟进'>('全部');
   const [leadDraft, setLeadDraft] = useState(defaultRevenueLead);
   const [editingLeadId, setEditingLeadId] = useState<string | null>(null);
   const [modelConfig, setModelConfig] = useState({
@@ -1642,15 +1678,19 @@ function App() {
   const sampleSentCount = revenueLeads.filter((lead) => ['已发样片', '已报价', '已体验', '强意向', '已付款'].includes(lead.status)).length;
   const quotedCount = revenueLeads.filter((lead) => ['已报价', '强意向', '已付款'].includes(lead.status)).length;
   const replyCount = revenueLeads.filter((lead) => Boolean(lead.reply?.trim())).length;
+  const dueFollowUpLeads = revenueLeads.filter((lead) => isDueFollowUpLead(lead));
+  const dueFollowUpCount = dueFollowUpLeads.length;
   const filteredRevenueLeads = revenueLeads.filter((lead) => {
     if (revenueFilter === '全部') return true;
     if (revenueFilter === '待处理') {
       return lead.status === '待联系' || lead.status === '已联系' || lead.status === '已发样片' || lead.status === '已报价';
     }
+    if (revenueFilter === '待跟进') return isDueFollowUpLead(lead);
     return lead.status === revenueFilter;
   });
   const revenueActionQueue = useMemo(() => buildRevenueActionQueue(revenueLeads), [revenueLeads]);
   const revenueActionQueueText = useMemo(() => buildRevenueActionQueueText(revenueActionQueue), [revenueActionQueue]);
+  const followUpPlan = useMemo(() => buildFollowUpPlan(dueFollowUpLeads), [dueFollowUpLeads]);
   const todayContactPlan = useMemo(() => buildTodayContactPlan(todayContactLeads, showcaseProject), [todayContactLeads, showcaseProject]);
   const revenueValidationSteps: RevenueValidationStep[] = [
     {
@@ -2676,6 +2716,7 @@ function App() {
               <article className="panel metric"><span>真实回复</span><strong>{replyCount}</strong></article>
               <article className="panel metric"><span>访谈记录</span><strong>{interviewCount}/10</strong></article>
               <article className="panel metric"><span>今日待联系</span><strong>{todayContactCount}</strong></article>
+              <article className="panel metric"><span>待跟进</span><strong>{dueFollowUpCount}</strong></article>
             </div>
             <article className="panel novice-mode-panel">
               <div className="panel-title">
@@ -2695,6 +2736,39 @@ function App() {
                   )}
                 </div>
               </div>
+            </article>
+            <article className="panel">
+              <div className="panel-title">
+                <div>
+                  <h3>今日待跟进</h3>
+                  <p className="muted">自动汇总已到跟进时间、但尚未付款或作废的线索。</p>
+                </div>
+                <div className="lead-actions">
+                  <button className="secondary" onClick={() => setRevenueFilter('待跟进')}><ClipboardList size={16} />查看待跟进</button>
+                  <button className="secondary" onClick={() => copyText(followUpPlan, '跟进清单', 'follow-up-plan')}><Copy size={16} />复制清单</button>
+                </div>
+              </div>
+              {dueFollowUpLeads.length === 0 ? (
+                <div className="empty compact-empty">
+                  <CheckCircle2 size={28} />
+                  <p>当前没有到期跟进线索。继续按新手执行模式推进下一步。</p>
+                </div>
+              ) : (
+                <div className="action-queue">
+                  {dueFollowUpLeads.slice(0, 5).map((lead, index) => (
+                    <div className="queue-row" key={lead.id}>
+                      <span>{index + 1}</span>
+                      <div>
+                        <strong>{lead.name}</strong>
+                        <small>{lead.status} / 跟进：{formatLeadTime(lead.followUpAt)}</small>
+                      </div>
+                      <p>{inferLeadNextStep(lead)}</p>
+                      <button className="secondary" onClick={() => editRevenueLead(lead)}>处理</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <textarea id="follow-up-plan" className="sr-only-copy" readOnly value={followUpPlan} />
             </article>
             <article className="panel">
               <div className="panel-title">
@@ -3062,7 +3136,7 @@ function App() {
               <div className="panel-title">
                 <h3>线索记录</h3>
                 <div className="lead-actions">
-                  {(['全部', '待处理', ...revenueStatuses] as const).map((status) => (
+                  {(['全部', '待处理', '待跟进', ...revenueStatuses] as const).map((status) => (
                     <button
                       className={revenueFilter === status ? 'primary' : 'secondary'}
                       key={status}
