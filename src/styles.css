@@ -495,6 +495,21 @@ pre.script-block {
   gap: 8px;
 }
 
+.demo-video-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 320px);
+  gap: 18px;
+  align-items: center;
+}
+
+.demo-video-preview {
+  width: 100%;
+  aspect-ratio: 9 / 16;
+  border: 1px solid #dfe6e2;
+  border-radius: 8px;
+  background: #111827;
+}
+
 .touchpoint-actions,
 .lead-actions {
   display: flex;
@@ -705,6 +720,10 @@ pre.script-block {
   .case-item {
     grid-template-columns: 1fr;
     align-items: stretch;
+  }
+
+  .demo-video-card {
+    grid-template-columns: 1fr;
   }
 
   .case-actions {

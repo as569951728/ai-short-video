@@ -347,6 +347,8 @@ const projectsKey = 'aishortvideo:projects';
 const profileKey = 'aishortvideo:account-profile';
 const revenueLeadsKey = 'aishortvideo:revenue-leads';
 const modelQualityResultsKey = 'aishortvideo:model-quality-results';
+const visualDemoVideoUrl = new URL('../outputs/demo-2026-06-09-v2/demo-video.mp4', import.meta.url).href;
+const visualDemoNovelUrl = new URL('../outputs/demo-2026-06-09-v2/novel.md', import.meta.url).href;
 
 const defaultProfile: AccountProfile = {
   accountName: '',
@@ -1638,6 +1640,18 @@ function App() {
                 <button className="primary" onClick={() => setScreen('wizard')}><Wand2 size={18} />生成新案例</button>
               </div>
             </header>
+            <article className="panel demo-video-card">
+              <div>
+                <p className="eyebrow">剧情可视化样片</p>
+                <h3>《凌晨三点的撤回消息》</h3>
+                <p className="muted">原创悬疑小说，已生成 28 秒竖屏 MP4、分镜和 SRT 字幕。</p>
+                <div className="header-actions">
+                  <a className="secondary" href={visualDemoNovelUrl} target="_blank" rel="noreferrer"><FileText size={16} />打开小说</a>
+                  <a className="secondary" href={visualDemoVideoUrl} download><Download size={16} />下载视频</a>
+                </div>
+              </div>
+              <video className="demo-video-preview" src={visualDemoVideoUrl} controls playsInline preload="metadata" />
+            </article>
             {projects.length === 0 ? (
               <article className="panel empty">
                 <FolderOpen size={28} />
