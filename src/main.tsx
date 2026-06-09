@@ -103,10 +103,17 @@ interface AccountProfile {
 
 type RevenueStatus = '待联系' | '已联系' | '已发样片' | '已报价' | '已体验' | '强意向' | '已付款' | '无效';
 
+interface RevenueStatusHistoryItem {
+  status: RevenueStatus;
+  at: string;
+  note: string;
+}
+
 interface RevenueLead {
   id: string;
   name: string;
   channel: string;
+  sourceUrl?: string;
   need: string;
   offer: string;
   status: RevenueStatus;
@@ -115,8 +122,12 @@ interface RevenueLead {
   reply?: string;
   objection?: string;
   followUpAt?: string;
+  sentAt?: string;
+  repliedAt?: string;
+  paidAt?: string;
   deliveryNote?: string;
   validationSignal?: string;
+  statusHistory?: RevenueStatusHistoryItem[];
   note: string;
   createdAt: string;
 }
@@ -454,6 +465,7 @@ const visualDemoTouchpointSeeds: TouchpointSeed[] = [
 const defaultRevenueLead: Omit<RevenueLead, 'id' | 'createdAt'> = {
   name: '',
   channel: '',
+  sourceUrl: '',
   need: '',
   offer: '29 元系统生成服务',
   status: '待联系',
@@ -462,8 +474,12 @@ const defaultRevenueLead: Omit<RevenueLead, 'id' | 'createdAt'> = {
   reply: '',
   objection: '',
   followUpAt: '',
+  sentAt: '',
+  repliedAt: '',
+  paidAt: '',
   deliveryNote: '',
   validationSignal: '',
+  statusHistory: [],
   note: ''
 };
 
@@ -902,6 +918,53 @@ function downloadTextFile(filename: string, content: string) {
   URL.revokeObjectURL(url);
 }
 
+function toDatetimeInputValue(value?: string) {
+  return value ? value.slice(0, 16) : '';
+}
+
+function fromDatetimeInputValue(value?: string) {
+  return value ? new Date(value).toISOString() : '';
+}
+
+function formatLeadTime(value?: string) {
+  return value ? value.replace('T', ' ').slice(0, 16) : '未记录';
+}
+
+function appendLeadHistory(lead: RevenueLead, status: RevenueStatus, note: string, at = new Date().toISOString()) {
+  const history = lead.statusHistory ?? [];
+  const last = history[history.length - 1];
+  if (last?.status === status && last.note === note) return history;
+  return [...history, { status, at, note }];
+}
+
+function buildSuggestedFollowUpAt(status: RevenueStatus, at = new Date().toISOString()) {
+  const date = new Date(at);
+  if (status === '已报价' || status === '强意向') {
+    date.setHours(date.getHours() + 48);
+    return date.toISOString();
+  }
+  if (status === '已联系' || status === '已发样片' || status === '已体验') {
+    date.setHours(date.getHours() + 24);
+    return date.toISOString();
+  }
+  return '';
+}
+
+function normalizeLeadEvidence(lead: RevenueLead): RevenueLead {
+  const now = new Date().toISOString();
+  const hasReply = Boolean(lead.reply?.trim());
+  const sentAt = lead.sentAt || (['已联系', '已发样片', '已报价', '已体验', '强意向', '已付款'].includes(lead.status) ? now : '');
+  const repliedAt = lead.repliedAt || (hasReply ? now : '');
+  const paidAt = lead.paidAt || (lead.status === '已付款' ? now : '');
+  return {
+    ...lead,
+    sentAt,
+    repliedAt,
+    paidAt,
+    statusHistory: lead.statusHistory ?? []
+  };
+}
+
 function buildOutreachMessage(lead: Omit<RevenueLead, 'id' | 'createdAt'>, showcaseProject: Project | null) {
   const targetName = lead.name.trim() || '你好';
   const offer = lead.offer || '29 元系统生成服务';
@@ -1258,6 +1321,7 @@ function buildRevenueReport(leads: RevenueLead[]) {
 
 ${leads.length === 0 ? '暂无线索。' : leads.map((lead, index) => `${index + 1}. ${lead.name}
    渠道：${lead.channel || '未填写'}
+   平台链接：${lead.sourceUrl || '未记录'}
    状态：${lead.status}
    报价：${lead.offer}
    金额：¥${lead.amount}
@@ -1265,10 +1329,14 @@ ${leads.length === 0 ? '暂无线索。' : leads.map((lead, index) => `${index +
    回复：${lead.reply || '未记录'}
    异议：${lead.objection || '未记录'}
    系统建议：${inferLeadNextStep(lead)}
+   首次发送：${formatLeadTime(lead.sentAt)}
+   首次回复：${formatLeadTime(lead.repliedAt)}
+   收款时间：${formatLeadTime(lead.paidAt)}
    交付记录：${lead.deliveryNote || '未记录'}
    验证信号：${lead.validationSignal || '未记录'}
    下一步：${lead.nextAction || '未记录'}
-   跟进时间：${lead.followUpAt ? lead.followUpAt.replace('T', ' ') : '未设置'}`).join('\n\n')}
+   跟进时间：${formatLeadTime(lead.followUpAt)}
+   状态历史：${lead.statusHistory?.length ? lead.statusHistory.map((item) => `${formatLeadTime(item.at)} ${item.status} ${item.note}`).join('；') : '未记录'}`).join('\n\n')}
 
 ## 纠偏判断
 
@@ -1906,16 +1974,20 @@ function App() {
     if (!name) return;
 
     if (editingLeadId) {
-      const nextLeads = revenueLeads.map((lead) => (
-        lead.id === editingLeadId
-          ? {
+      const nextLeads = revenueLeads.map((lead) => {
+        if (lead.id !== editingLeadId) return lead;
+        const statusChanged = lead.status !== leadDraft.status;
+        return normalizeLeadEvidence({
               ...lead,
               ...leadDraft,
               name,
-              amount: Number(leadDraft.amount) || 0
-            }
-          : lead
-      ));
+              amount: Number(leadDraft.amount) || 0,
+              followUpAt: leadDraft.followUpAt || (statusChanged ? buildSuggestedFollowUpAt(leadDraft.status) : lead.followUpAt),
+              statusHistory: statusChanged
+                ? appendLeadHistory(lead, leadDraft.status, '手动更新线索状态')
+                : (leadDraft.statusHistory ?? lead.statusHistory ?? [])
+            });
+      });
       setRevenueLeads(nextLeads);
       localStorage.setItem(revenueLeadsKey, JSON.stringify(nextLeads));
       setLeadDraft(defaultRevenueLead);
@@ -1931,7 +2003,13 @@ function App() {
       id: crypto.randomUUID(),
       createdAt: new Date().toISOString()
     };
-    const nextLeads = [nextLead, ...revenueLeads];
+    const savedLead = normalizeLeadEvidence({
+      ...nextLead,
+      statusHistory: nextLead.status !== '待联系'
+        ? appendLeadHistory(nextLead, nextLead.status, '创建线索时设置状态', nextLead.createdAt)
+        : []
+    });
+    const nextLeads = [savedLead, ...revenueLeads];
     setRevenueLeads(nextLeads);
     localStorage.setItem(revenueLeadsKey, JSON.stringify(nextLeads));
     setLeadDraft(defaultRevenueLead);
@@ -1980,9 +2058,29 @@ function App() {
   }
 
   function updateRevenueLead(id: string, partial: Partial<RevenueLead>) {
-    const nextLeads = revenueLeads.map((lead) => (
-      lead.id === id ? { ...lead, ...partial } : lead
-    ));
+    const timestamp = new Date().toISOString();
+    const nextLeads = revenueLeads.map((lead) => {
+      if (lead.id !== id) return lead;
+
+      const statusChanged = Boolean(partial.status && partial.status !== lead.status);
+      const nextStatus = partial.status ?? lead.status;
+      const hasNewReply = Boolean(partial.reply?.trim()) && !lead.repliedAt;
+      const nextLead = normalizeLeadEvidence({
+        ...lead,
+        ...partial,
+        sentAt: partial.sentAt
+          ?? lead.sentAt
+          ?? (['已联系', '已发样片', '已报价', '已体验', '强意向', '已付款'].includes(nextStatus) ? timestamp : ''),
+        repliedAt: partial.repliedAt ?? lead.repliedAt ?? (hasNewReply ? timestamp : ''),
+        paidAt: partial.paidAt ?? lead.paidAt ?? (nextStatus === '已付款' ? timestamp : ''),
+        followUpAt: partial.followUpAt ?? lead.followUpAt ?? (statusChanged ? buildSuggestedFollowUpAt(nextStatus, timestamp) : ''),
+        statusHistory: statusChanged
+          ? appendLeadHistory(lead, nextStatus, `快捷更新为「${nextStatus}」`, timestamp)
+          : (partial.statusHistory ?? lead.statusHistory ?? [])
+      });
+
+      return nextLead;
+    });
     setRevenueLeads(nextLeads);
     localStorage.setItem(revenueLeadsKey, JSON.stringify(nextLeads));
   }
@@ -2645,7 +2743,7 @@ function App() {
                       <span>{index + 1}</span>
                       <div>
                         <strong>{lead.name}</strong>
-                        <small>{lead.status} / {lead.channel || '未填写渠道'} / {lead.offer}</small>
+                        <small>{lead.status} / {lead.channel || '未填写渠道'} / {formatLeadTime(lead.sentAt)}</small>
                       </div>
                       <p>{inferLeadNextStep(lead)}</p>
                       <button className="secondary" onClick={() => editRevenueLead(lead)}>处理</button>
@@ -2751,6 +2849,13 @@ function App() {
                     placeholder="例如：朋友圈、小红书、微信群"
                   />
                 </label>
+                <label>平台链接或位置
+                  <input
+                    value={leadDraft.sourceUrl || ''}
+                    onChange={(event) => setLeadDraft({ ...leadDraft, sourceUrl: event.target.value })}
+                    placeholder="例如：评论区链接 / 账号主页 / 群名"
+                  />
+                </label>
                 <label>需求
                   <textarea
                     value={leadDraft.need || ''}
@@ -2802,8 +2907,29 @@ function App() {
                 <label>下次跟进
                   <input
                     type="datetime-local"
-                    value={leadDraft.followUpAt || ''}
-                    onChange={(event) => setLeadDraft({ ...leadDraft, followUpAt: event.target.value })}
+                    value={toDatetimeInputValue(leadDraft.followUpAt)}
+                    onChange={(event) => setLeadDraft({ ...leadDraft, followUpAt: fromDatetimeInputValue(event.target.value) })}
+                  />
+                </label>
+                <label>首次发送
+                  <input
+                    type="datetime-local"
+                    value={toDatetimeInputValue(leadDraft.sentAt)}
+                    onChange={(event) => setLeadDraft({ ...leadDraft, sentAt: fromDatetimeInputValue(event.target.value) })}
+                  />
+                </label>
+                <label>首次回复
+                  <input
+                    type="datetime-local"
+                    value={toDatetimeInputValue(leadDraft.repliedAt)}
+                    onChange={(event) => setLeadDraft({ ...leadDraft, repliedAt: fromDatetimeInputValue(event.target.value) })}
+                  />
+                </label>
+                <label>收款时间
+                  <input
+                    type="datetime-local"
+                    value={toDatetimeInputValue(leadDraft.paidAt)}
+                    onChange={(event) => setLeadDraft({ ...leadDraft, paidAt: fromDatetimeInputValue(event.target.value) })}
                   />
                 </label>
                 <label>交付记录
@@ -2823,6 +2949,14 @@ function App() {
                 <label>备注
                   <textarea value={leadDraft.note || ''} onChange={(event) => setLeadDraft({ ...leadDraft, note: event.target.value })} />
                 </label>
+                {Boolean(leadDraft.statusHistory?.length) && (
+                  <div className="status-history">
+                    <strong>状态历史</strong>
+                    {(leadDraft.statusHistory ?? []).map((item) => (
+                      <span key={`${item.status}-${item.at}`}>{formatLeadTime(item.at)} / {item.status} / {item.note}</span>
+                    ))}
+                  </div>
+                )}
               </article>
             </section>
             <article className="panel">
@@ -2934,8 +3068,12 @@ function App() {
                       <span>¥{lead.amount}</span>
                       <p>
                         {lead.reply || lead.objection || lead.nextAction || lead.need || '待补下一步'}
-                        {lead.followUpAt ? ` / 下次跟进：${lead.followUpAt.replace('T', ' ')}` : ''}
+                        {lead.followUpAt ? ` / 下次跟进：${formatLeadTime(lead.followUpAt)}` : ''}
                         {lead.validationSignal ? ` / 信号：${lead.validationSignal}` : ''}
+                      </p>
+                      <p className="lead-evidence">
+                        {lead.sourceUrl ? `位置：${lead.sourceUrl} / ` : ''}
+                        发送：{formatLeadTime(lead.sentAt)} / 回复：{formatLeadTime(lead.repliedAt)} / 收款：{formatLeadTime(lead.paidAt)}
                       </p>
                       <p className="lead-advice">{inferLeadNextStep(lead)}</p>
                       <div className="lead-actions">

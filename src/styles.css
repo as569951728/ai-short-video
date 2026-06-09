@@ -656,8 +656,41 @@ pre.script-block {
 }
 
 .lead-row .lead-advice {
+  grid-column: 1 / -1;
   color: #1f7a6d;
   font-weight: 800;
+}
+
+.lead-row .lead-evidence {
+  grid-column: 1 / -1;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #f3f7f5;
+  color: #52646d;
+  font-size: 13px;
+}
+
+.lead-row .lead-actions {
+  grid-column: 1 / -1;
+}
+
+.status-history {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 10px;
+  border-radius: 8px;
+  background: #f3f7f5;
+  color: #52646d;
+  font-size: 13px;
+}
+
+.status-history strong {
+  color: #12222c;
+}
+
+.status-history span {
+  line-height: 1.45;
 }
 
 .validation-steps {
