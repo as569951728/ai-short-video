@@ -1143,6 +1143,55 @@ function buildPaymentConfirmation(lead: Omit<RevenueLead, 'id' | 'createdAt'>) {
 如果确认，我收到款后开始做，完成后把素材包发你。`;
 }
 
+function buildDeliveryFeedbackMessage(lead: Omit<RevenueLead, 'id' | 'createdAt'>) {
+  const targetName = lead.name.trim() || '你好';
+  const offer = lead.offer || '29 元系统生成服务';
+
+  return `${targetName}，这次「${offer}」的素材包我已经按约定整理好了。
+
+你收到后不用写长反馈，只需要回我 4 个点：
+
+1. 这条内容能不能直接进入发布或剪辑准备？
+2. 最有用的是标题、钩子、脚本、分镜、字幕，还是发布文案？
+3. 哪一处最不像你想要的方向？
+4. 如果继续做下一条，你愿意按 29 元单条、99 元诊断，还是 100 元以上试点继续？
+
+我会把你的反馈记录进系统，只修真正影响交付和成交的问题。`;
+}
+
+function buildLeadStageMessage(lead: Omit<RevenueLead, 'id' | 'createdAt'>, showcaseProject: Project | null) {
+  const targetName = lead.name.trim() || '你好';
+
+  if (lead.status === '待联系') return buildOutreachMessage(lead, showcaseProject);
+  if (lead.status === '已联系') return buildVisualDemoOutreachMessage(lead);
+
+  if (lead.status === '已发样片') {
+    return `${targetName}，刚才那条剧情样片你看完后，麻烦只帮我判断 3 件事：
+
+1. 故事是否能看懂？
+2. 如果你做内容，最缺的是故事、分镜、字幕，还是标题？
+3. 如果按你的账号方向生成 1 条完整素材包，29 元试一条，你会不会考虑？
+
+如果你不考虑也没关系，我主要想确认这个系统解决的是不是你的真实痛点。`;
+  }
+
+  if (lead.status === '已体验') {
+    return `${targetName}，你已经看过系统演示了，我想确认下一步是否值得继续：
+
+如果你只是想再看看，可以给我一个真实账号方向，我做 0 元演示。
+如果你想拿到一条可交付素材包，可以先从 29 元单条开始。
+如果你想判断账号方向，可以做 99 元系统诊断。
+
+我不承诺爆款，只验证它能不能减少你准备内容的时间。`;
+  }
+
+  if (lead.status === '已报价' || lead.status === '强意向') return buildPaymentConfirmation(lead);
+  if (lead.status === '已付款') return buildDeliveryFeedbackMessage(lead);
+  if (lead.status === '无效') return '这条线索已标记无效，不继续跟进。请把精力放到下一条真实线索。';
+
+  return buildOutreachMessage(lead, showcaseProject);
+}
+
 function buildRevenueReport(leads: RevenueLead[]) {
   const paidRevenue = leads.reduce((sum, lead) => sum + (lead.status === '已付款' ? lead.amount : 0), 0);
   const contacted = leads.filter((lead) => ['已联系', '已发样片', '已报价', '已体验', '强意向', '已付款'].includes(lead.status)).length;
@@ -1333,6 +1382,8 @@ function App() {
   const visualDemoBrief = useMemo(buildVisualDemoBrief, []);
   const quoteMessage = useMemo(() => buildQuoteMessage(leadDraft), [leadDraft]);
   const paymentConfirmation = useMemo(() => buildPaymentConfirmation(leadDraft), [leadDraft]);
+  const deliveryFeedbackMessage = useMemo(() => buildDeliveryFeedbackMessage(leadDraft), [leadDraft]);
+  const leadStageMessage = useMemo(() => buildLeadStageMessage(leadDraft, showcaseProject), [leadDraft, showcaseProject]);
   const objectionReply = useMemo(() => buildObjectionReply(leadDraft, showcaseProject), [leadDraft, showcaseProject]);
   const revenueReport = useMemo(() => buildRevenueReport(revenueLeads), [revenueLeads]);
   const paidRevenue = revenueLeads.reduce((sum, lead) => sum + (lead.status === '已付款' ? lead.amount : 0), 0);
@@ -2519,6 +2570,16 @@ function App() {
                 </label>
               </article>
             </section>
+            <article className="panel">
+              <div className="panel-title">
+                <div>
+                  <h3>按状态推荐下一句</h3>
+                  <p className="muted">系统根据当前线索状态自动选择开场、样片、追问、收款确认或交付反馈。</p>
+                </div>
+                <button className="secondary" onClick={() => copyText(leadStageMessage, '推荐话术', 'lead-stage-message')}><Copy size={16} />复制</button>
+              </div>
+              <textarea id="lead-stage-message" className="message-box compact-message" readOnly value={leadStageMessage} />
+            </article>
             <section className="grid two">
               <article className="panel">
                 <div className="panel-title">
@@ -2560,6 +2621,14 @@ function App() {
               </div>
               <p className="muted">对方接受报价后发送，先讲清交付边界，再收款。</p>
               <textarea id="payment-confirmation" className="message-box compact-message" readOnly value={paymentConfirmation} />
+            </article>
+            <article className="panel">
+              <div className="panel-title">
+                <h3>交付后追问</h3>
+                <button className="secondary" onClick={() => copyText(deliveryFeedbackMessage, '交付追问', 'delivery-feedback-message')}><Copy size={16} />复制</button>
+              </div>
+              <p className="muted">收款并交付后发送，用来拿真实反馈、复购意向和产品修正依据。</p>
+              <textarea id="delivery-feedback-message" className="message-box compact-message" readOnly value={deliveryFeedbackMessage} />
             </article>
             <article className="panel">
               <div className="panel-title">
