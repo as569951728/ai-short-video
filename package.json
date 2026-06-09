@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "api": "node server/index.mjs",
+    "demo:preview-package": "node scripts/package-client-preview.mjs",
     "demo:video": "swift scripts/create-demo-video.swift",
     "dev": "vite --host 127.0.0.1",
     "build": "tsc -b && vite build",

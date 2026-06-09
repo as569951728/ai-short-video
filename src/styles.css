@@ -463,6 +463,15 @@ pre.script-block {
   background: #f7fcfa;
 }
 
+.warning-panel {
+  border-color: #efc3b4;
+  background: #fff8f5;
+}
+
+.warning-panel .status-text {
+  color: #8a3b22;
+}
+
 .action-tag {
   display: inline-grid;
   place-items: center;

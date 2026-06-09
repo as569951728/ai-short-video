@@ -132,6 +132,11 @@ interface RevenueLead {
   createdAt: string;
 }
 
+interface RevenueEvidenceIssue {
+  lead: RevenueLead;
+  missing: string[];
+}
+
 interface TouchpointSeed {
   name: string;
   channel: string;
@@ -384,6 +389,7 @@ const projectsKey = 'aishortvideo:projects';
 const profileKey = 'aishortvideo:account-profile';
 const revenueLeadsKey = 'aishortvideo:revenue-leads';
 const modelQualityResultsKey = 'aishortvideo:model-quality-results';
+const publicPreviewUrlKey = 'aishortvideo:public-preview-url';
 const visualDemoTitle = '《凌晨三点的撤回消息》';
 const visualDemoVideoUrl = new URL('../outputs/demo-2026-06-09-v2/demo-video.mp4', import.meta.url).href;
 const visualDemoNovelUrl = new URL('../outputs/demo-2026-06-09-v2/novel.md', import.meta.url).href;
@@ -518,6 +524,10 @@ function readModelQualityResults() {
   } catch {
     return [];
   }
+}
+
+function readPublicPreviewUrl() {
+  return localStorage.getItem(publicPreviewUrlKey) || '';
 }
 
 function readStoredProjects() {
@@ -1205,15 +1215,67 @@ function buildVisualDemoBrief() {
 - 对方是否愿意试 29 元单条素材包，或 100 元以上试点。`;
 }
 
-function buildVisualDemoPreviewMessage() {
-  return `这是 AIShortvideo 的 28 秒剧情样片预览：${visualDemoPreviewUrl}
+function isLocalPreviewUrl(url: string) {
+  return /^http:\/\/(127\.0\.0\.1|localhost):\d+/.test(url);
+}
+
+function buildVisualDemoPreviewMessage(previewUrl: string) {
+  const localWarning = isLocalPreviewUrl(previewUrl)
+    ? '\n\n注意：当前还是本地预览链接，只适合自己检查。正式发给客户前，请先把样片页托管成公开链接。'
+    : '';
+
+  return `这是 AIShortvideo 的 28 秒剧情样片预览：${previewUrl}
 
 你主要看 3 点：
 1. 这个样片是否能让你看懂故事？
 2. 如果你做内容，前期最缺的是故事、分镜、字幕，还是标题？
 3. 如果按你的账号方向生成 1 条完整素材包，29 元试一条，你会不会考虑？
 
-边界：不承诺爆款、播放量、涨粉或成交；当前只验证它能不能减少内容准备时间。`;
+边界：不承诺爆款、播放量、涨粉或成交；当前只验证它能不能减少内容准备时间。${localWarning}`;
+}
+
+function buildPreviewHostingChecklist(publicPreviewUrl: string) {
+  const currentUrl = publicPreviewUrl.trim() || visualDemoPreviewUrl;
+  const status = publicPreviewUrl.trim()
+    ? '已填写公开预览链接，发送前仍要手动打开检查视频是否能播放。'
+    : '当前只有本地预览链接，不能直接发给客户。';
+
+  return `# 客户样片预览托管清单
+
+当前预览链接：${currentUrl}
+状态：${status}
+
+## 需要一起托管的文件
+
+- outputs/demo-2026-06-09-v2/client-preview.html
+- outputs/demo-2026-06-09-v2/demo-video.mp4
+- outputs/demo-2026-06-09-v2/novel.md
+
+## 本地打包命令
+
+1. 运行 \`npm run demo:preview-package\`。
+2. 上传 \`outputs/client-preview-package/\` 目录里的全部文件。
+
+## 推荐托管方式
+
+1. Vercel 静态站点。
+2. GitHub Pages。
+3. 对象存储或网盘公开目录。
+
+## 检查步骤
+
+1. 打开公开链接。
+2. 确认视频能播放。
+3. 确认小说链接能打开。
+4. 确认页面有 0/29/99/100+ 报价边界。
+5. 回到收入页，把公开链接填入“公开预览链接”。
+6. 再复制“客户样片预览包”发给对方。
+
+## 不要做
+
+- 不要把 127.0.0.1 或 localhost 链接发给客户。
+- 不要承诺播放量、涨粉、成交或收入。
+- 不要使用未授权素材。`;
 }
 
 function buildTodayContactPlan(todayLeads: RevenueLead[], showcaseProject: Project | null) {
@@ -1404,13 +1466,61 @@ function buildLeadStageMessage(lead: Omit<RevenueLead, 'id' | 'createdAt'>, show
   return buildOutreachMessage(lead, showcaseProject);
 }
 
+function isContactedLeadStatus(status: RevenueStatus) {
+  return ['已联系', '已发样片', '已报价', '已体验', '强意向', '已付款'].includes(status);
+}
+
+function findRevenueEvidenceIssues(leads: RevenueLead[]): RevenueEvidenceIssue[] {
+  return leads
+    .filter((lead) => lead.status !== '待联系' && lead.status !== '无效')
+    .map((lead) => {
+      const missing = [];
+
+      if (isContactedLeadStatus(lead.status) && !lead.sourceUrl?.trim()) missing.push('平台链接或位置');
+      if (isContactedLeadStatus(lead.status) && !lead.sentAt) missing.push('首次发送时间');
+      if (lead.reply?.trim() && !lead.repliedAt) missing.push('首次回复时间');
+      if (lead.status === '已付款' && !lead.paidAt) missing.push('收款时间');
+
+      return { lead, missing };
+    })
+    .filter((item) => item.missing.length > 0);
+}
+
+function buildRevenueEvidenceAudit(leads: RevenueLead[]) {
+  const issues = findRevenueEvidenceIssues(leads);
+
+  if (issues.length === 0) {
+    return `# 触达证据体检
+
+当前没有发现触达证据缺口。
+
+继续要求每条真实触达都记录平台链接或位置、首次发送时间、首次回复时间和收款时间。`;
+  }
+
+  return `# 触达证据体检
+
+当前有 ${issues.length} 条线索缺少关键触达证据。
+
+${issues.slice(0, 12).map((issue, index) => `${index + 1}. ${issue.lead.name}
+   状态：${issue.lead.status}
+   渠道：${issue.lead.channel || '未填写'}
+   缺少：${issue.missing.join('、')}
+   下一步：编辑线索，补齐真实平台位置、发送/回复/收款时间。`).join('\n\n')}
+
+执行原则：
+- 没有平台位置的触达，不计入高可信验证。
+- 没有首次发送时间的状态推进，只能当作待核实记录。
+- 有回复但没有回复时间，会影响后续跟进节奏判断。`;
+}
+
 function buildRevenueReport(leads: RevenueLead[]) {
   const paidRevenue = leads.reduce((sum, lead) => sum + (lead.status === '已付款' ? lead.amount : 0), 0);
-  const contacted = leads.filter((lead) => ['已联系', '已发样片', '已报价', '已体验', '强意向', '已付款'].includes(lead.status)).length;
+  const contacted = leads.filter((lead) => isContactedLeadStatus(lead.status)).length;
   const sampleSent = leads.filter((lead) => ['已发样片', '已报价', '已体验', '强意向', '已付款'].includes(lead.status)).length;
   const quoted = leads.filter((lead) => ['已报价', '强意向', '已付款'].includes(lead.status)).length;
   const replied = leads.filter((lead) => Boolean(lead.reply?.trim())).length;
   const dueFollowUps = leads.filter((lead) => isDueFollowUpLead(lead)).length;
+  const evidenceIssues = findRevenueEvidenceIssues(leads).length;
 
   return `# AIShortvideo 收入验证复盘
 
@@ -1424,6 +1534,7 @@ function buildRevenueReport(leads: RevenueLead[]) {
 - 已报价：${quoted}
 - 真实回复：${replied}
 - 待跟进：${dueFollowUps}
+- 触达证据缺口：${evidenceIssues}
 - 强信号：${leads.filter((lead) => lead.status === '强意向' || lead.status === '已付款').length}
 - 已收款：¥${paidRevenue}
 
@@ -1636,7 +1747,9 @@ function buildRevenueNoviceAction(
   leads: RevenueLead[],
   actionLead: RevenueLead | null,
   paidRevenue: number,
-  showcaseProject: Project | null
+  showcaseProject: Project | null,
+  previewUrlIsLocal: boolean,
+  previewHostingChecklist: string
 ): RevenueNoviceAction {
   if (leads.length < 5) {
     const message = buildShortPermissionCommentMessage(defaultRevenueLead);
@@ -1684,6 +1797,18 @@ function buildRevenueNoviceAction(
   }
 
   if (actionLead.status === '已联系') {
+    if (previewUrlIsLocal) {
+      return {
+        tag: '发送前必做',
+        title: '先托管客户样片预览页',
+        detail: '当前预览页还是本地链接，客户打不开。先复制托管清单，拿到公开 URL 后再发样片。',
+        primaryLabel: '复制托管清单',
+        primaryAction: 'copy-message',
+        lead: actionLead,
+        message: previewHostingChecklist
+      };
+    }
+
     return {
       tag: '现在只做这一步',
       title: `发送样片：${actionLead.name}`,
@@ -1794,6 +1919,7 @@ function App() {
   const [revenueFilter, setRevenueFilter] = useState<RevenueStatus | '全部' | '待处理' | '待跟进'>('全部');
   const [leadDraft, setLeadDraft] = useState(defaultRevenueLead);
   const [editingLeadId, setEditingLeadId] = useState<string | null>(null);
+  const [publicPreviewUrl, setPublicPreviewUrl] = useState(readPublicPreviewUrl);
   const revenueBackupInputRef = useRef<HTMLInputElement | null>(null);
   const [modelConfig, setModelConfig] = useState({
     baseUrl: '',
@@ -1813,7 +1939,10 @@ function App() {
   const visualDemoOutreachMessage = useMemo(() => buildVisualDemoOutreachMessage(leadDraft), [leadDraft]);
   const demoBrief = useMemo(() => buildDemoBrief(showcaseProject), [showcaseProject]);
   const visualDemoBrief = useMemo(buildVisualDemoBrief, []);
-  const visualDemoPreviewMessage = useMemo(buildVisualDemoPreviewMessage, []);
+  const resolvedPreviewUrl = publicPreviewUrl.trim() || visualDemoPreviewUrl;
+  const previewUrlIsLocal = isLocalPreviewUrl(resolvedPreviewUrl);
+  const visualDemoPreviewMessage = useMemo(() => buildVisualDemoPreviewMessage(resolvedPreviewUrl), [resolvedPreviewUrl]);
+  const previewHostingChecklist = useMemo(() => buildPreviewHostingChecklist(publicPreviewUrl), [publicPreviewUrl]);
   const quoteMessage = useMemo(() => buildQuoteMessage(leadDraft), [leadDraft]);
   const paymentConfirmation = useMemo(() => buildPaymentConfirmation(leadDraft), [leadDraft]);
   const deliveryFeedbackMessage = useMemo(() => buildDeliveryFeedbackMessage(leadDraft), [leadDraft]);
@@ -1832,6 +1961,8 @@ function App() {
   const replyCount = revenueLeads.filter((lead) => Boolean(lead.reply?.trim())).length;
   const dueFollowUpLeads = revenueLeads.filter((lead) => isDueFollowUpLead(lead));
   const dueFollowUpCount = dueFollowUpLeads.length;
+  const revenueEvidenceIssues = useMemo(() => findRevenueEvidenceIssues(revenueLeads), [revenueLeads]);
+  const revenueEvidenceIssueCount = revenueEvidenceIssues.length;
   const filteredRevenueLeads = revenueLeads.filter((lead) => {
     if (revenueFilter === '全部') return true;
     if (revenueFilter === '待处理') {
@@ -1844,6 +1975,7 @@ function App() {
   const revenueActionQueueText = useMemo(() => buildRevenueActionQueueText(revenueActionQueue), [revenueActionQueue]);
   const followUpPlan = useMemo(() => buildFollowUpPlan(dueFollowUpLeads), [dueFollowUpLeads]);
   const deliveryChecklist = useMemo(() => buildRevenueDeliveryChecklist(revenueLeads), [revenueLeads]);
+  const revenueEvidenceAudit = useMemo(() => buildRevenueEvidenceAudit(revenueLeads), [revenueLeads]);
   const todayContactPlan = useMemo(() => buildTodayContactPlan(todayContactLeads, showcaseProject), [todayContactLeads, showcaseProject]);
   const revenueValidationSteps: RevenueValidationStep[] = [
     {
@@ -1885,8 +2017,8 @@ function App() {
   const currentRevenueValidationStep = revenueValidationSteps.find((step) => !step.done) ?? revenueValidationSteps[revenueValidationSteps.length - 1];
   const revenueValidationPlanText = buildRevenueValidationPlanText(revenueValidationSteps, paidRevenue);
   const revenueNoviceAction = useMemo(
-    () => buildRevenueNoviceAction(revenueLeads, revenueActionQueue[0] ?? null, paidRevenue, showcaseProject),
-    [revenueLeads, revenueActionQueue, paidRevenue, showcaseProject]
+    () => buildRevenueNoviceAction(revenueLeads, revenueActionQueue[0] ?? null, paidRevenue, showcaseProject, previewUrlIsLocal, previewHostingChecklist),
+    [revenueLeads, revenueActionQueue, paidRevenue, showcaseProject, previewUrlIsLocal, previewHostingChecklist]
   );
   const modelQualityPassed = modelQualityResults.length === modelQualityCases.length && modelQualityResults.every((result) => result.passed);
   const operatingSteps: OperatingStep[] = [
@@ -2173,6 +2305,13 @@ function App() {
   function saveProfile() {
     localStorage.setItem(profileKey, JSON.stringify(profile));
     setProfileStatus('账号画像已保存，后续生成会参考这些定位。');
+  }
+
+  function savePublicPreviewUrl() {
+    const normalizedUrl = publicPreviewUrl.trim();
+    localStorage.setItem(publicPreviewUrlKey, normalizedUrl);
+    setPublicPreviewUrl(normalizedUrl);
+    setCopyStatus(normalizedUrl ? '公开预览链接已保存，客户样片预览包会优先使用这个链接。' : '已清空公开预览链接，当前会回退到本地预览链接。');
   }
 
   function saveRevenueLead() {
@@ -2802,7 +2941,7 @@ function App() {
                 <h3>《凌晨三点的撤回消息》</h3>
                 <p className="muted">原创悬疑小说，已生成 28 秒竖屏 MP4、分镜和 SRT 字幕。</p>
                 <div className="header-actions">
-                  <a className="secondary" href={visualDemoPreviewUrl} target="_blank" rel="noreferrer"><Play size={16} />打开预览页</a>
+                  <a className="secondary" href={resolvedPreviewUrl} target="_blank" rel="noreferrer"><Play size={16} />打开预览页</a>
                   <a className="secondary" href={visualDemoNovelUrl} target="_blank" rel="noreferrer"><FileText size={16} />打开小说</a>
                   <a className="secondary" href={visualDemoVideoUrl} download><Download size={16} />下载视频</a>
                 </div>
@@ -2916,7 +3055,41 @@ function App() {
               <article className="panel metric"><span>访谈记录</span><strong>{interviewCount}/10</strong></article>
               <article className="panel metric"><span>今日待联系</span><strong>{todayContactCount}</strong></article>
               <article className="panel metric"><span>待跟进</span><strong>{dueFollowUpCount}</strong></article>
+              <article className={`panel metric ${revenueEvidenceIssueCount > 0 ? 'warning-panel' : ''}`}><span>证据缺口</span><strong>{revenueEvidenceIssueCount}</strong></article>
             </div>
+            <article className={`panel ${revenueEvidenceIssueCount > 0 ? 'warning-panel' : ''}`}>
+              <div className="panel-title">
+                <div>
+                  <h3>触达证据体检</h3>
+                  <p className="muted">{revenueEvidenceIssueCount > 0 ? '有线索已经推进状态，但缺少平台位置、发送时间、回复时间或收款时间。' : '当前触达记录的关键证据完整，继续保持真实记录。'}</p>
+                </div>
+                <div className="lead-actions">
+                  <button className="secondary" onClick={() => setRevenueFilter('待处理')}><ClipboardList size={16} />查看线索</button>
+                  <button className="secondary" onClick={() => copyText(revenueEvidenceAudit, '触达证据体检', 'revenue-evidence-audit')}><Copy size={16} />复制体检</button>
+                </div>
+              </div>
+              {revenueEvidenceIssues.length === 0 ? (
+                <div className="empty compact-empty">
+                  <CheckCircle2 size={28} />
+                  <p>没有发现证据缺口。继续要求每次触达都记录平台位置和时间。</p>
+                </div>
+              ) : (
+                <div className="action-queue">
+                  {revenueEvidenceIssues.slice(0, 5).map((issue, index) => (
+                    <div className="queue-row" key={issue.lead.id}>
+                      <span>{index + 1}</span>
+                      <div>
+                        <strong>{issue.lead.name}</strong>
+                        <small>{issue.lead.status} / {issue.lead.channel || '未填写渠道'}</small>
+                      </div>
+                      <p>缺少：{issue.missing.join('、')}</p>
+                      <button className="secondary" onClick={() => editRevenueLead(issue.lead)}>补证据</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <textarea id="revenue-evidence-audit" className="sr-only-copy" readOnly value={revenueEvidenceAudit} />
+            </article>
             <article className="panel novice-mode-panel">
               <div className="panel-title">
                 <div>
@@ -2935,6 +3108,27 @@ function App() {
                   )}
                 </div>
               </div>
+            </article>
+            <article className={`panel ${previewUrlIsLocal ? 'warning-panel' : ''}`}>
+              <div className="panel-title">
+                <div>
+                  <h3>公开预览链接</h3>
+                  <p className="muted">{previewUrlIsLocal ? '当前是本地链接，只能自己打开；正式触达前请填写公开链接。' : '客户样片预览包会优先使用这个公开链接。'}</p>
+                </div>
+                <div className="lead-actions">
+                  <button className="secondary" onClick={savePublicPreviewUrl}><Save size={16} />保存链接</button>
+                  <button className="secondary" onClick={() => copyText(previewHostingChecklist, '托管清单', 'preview-hosting-checklist')}><Copy size={16} />复制托管清单</button>
+                </div>
+              </div>
+              <label>可发给客户的预览页 URL
+                <input
+                  value={publicPreviewUrl}
+                  onChange={(event) => setPublicPreviewUrl(event.target.value)}
+                  placeholder={visualDemoPreviewUrl}
+                />
+              </label>
+              <p className="status-text">当前用于话术的链接：{resolvedPreviewUrl}</p>
+              <textarea id="preview-hosting-checklist" className="sr-only-copy" readOnly value={previewHostingChecklist} />
             </article>
             <article className="panel">
               <div className="panel-title">
@@ -3003,7 +3197,7 @@ function App() {
                   <button className="secondary" onClick={() => copyText(visualDemoPreviewMessage, '预览说明', 'visual-demo-preview-message')}><Copy size={16} />复制预览说明</button>
                   <button className="secondary" onClick={() => copyText(visualDemoOutreachMessage, '样片话术', 'visual-demo-outreach-message')}><Copy size={16} />复制样片话术</button>
                   <button className="secondary" onClick={() => copyText(visualDemoBrief, '样片材料', 'visual-demo-brief')}><ClipboardList size={16} />复制样片材料</button>
-                  <a className="secondary" href={visualDemoPreviewUrl} target="_blank" rel="noreferrer"><Play size={16} />打开预览页</a>
+                  <a className="secondary" href={resolvedPreviewUrl} target="_blank" rel="noreferrer"><Play size={16} />打开预览页</a>
                   <a className="secondary" href={visualDemoVideoUrl} target="_blank" rel="noreferrer"><Play size={16} />打开样片</a>
                 </div>
               </div>
@@ -3063,7 +3257,7 @@ function App() {
                 <h3>客户样片预览包</h3>
                 <div className="lead-actions">
                   <button className="secondary" onClick={() => copyText(visualDemoPreviewMessage, '预览说明', 'visual-demo-preview-message')}><Copy size={16} />复制说明</button>
-                  <a className="secondary" href={visualDemoPreviewUrl} target="_blank" rel="noreferrer"><Play size={16} />打开预览页</a>
+                  <a className="secondary" href={resolvedPreviewUrl} target="_blank" rel="noreferrer"><Play size={16} />打开预览页</a>
                 </div>
               </div>
               <p className="muted">对方愿意看样片后发送，比单独发长话术更容易建立信任。</p>
