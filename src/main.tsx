@@ -153,6 +153,14 @@ interface OperatingStep {
   targetScreen: Screen;
 }
 
+interface RevenueValidationStep {
+  phase: string;
+  label: string;
+  target: string;
+  done: boolean;
+  advice: string;
+}
+
 interface Project {
   id: string;
   input: CreationInput;
@@ -1249,6 +1257,25 @@ ${queue.map((lead, index) => `${index + 1}. ${lead.name}
    备注：${lead.nextAction || lead.reply || lead.need || '待补充'}`).join('\n\n')}`;
 }
 
+function buildRevenueValidationPlanText(steps: RevenueValidationStep[], paidRevenue: number) {
+  const currentStep = steps.find((step) => !step.done) ?? steps[steps.length - 1];
+
+  return `# 14 天 100 元验证节奏
+
+当前重点：${currentStep.label}
+当前收入：¥${paidRevenue}
+
+${steps.map((step) => `- ${step.done ? '[x]' : '[ ]'} ${step.phase}：${step.label}
+  目标：${step.target}
+  动作：${step.advice}`).join('\n\n')}
+
+纠偏规则：
+- 已联系不足 5 个，不继续扩功能。
+- 样片发出不足 3 个，不继续打磨视频。
+- 报价不足 1 次，不继续讨论 SaaS。
+- 有人付款或强意向，优先交付和复盘。`;
+}
+
 function buildObjectionReply(lead: Omit<RevenueLead, 'id' | 'createdAt'>, showcaseProject: Project | null) {
   const targetName = lead.name.trim() || '你';
   const caseLine = showcaseProject
@@ -1327,6 +1354,45 @@ function App() {
   const revenueActionQueue = useMemo(() => buildRevenueActionQueue(revenueLeads), [revenueLeads]);
   const revenueActionQueueText = useMemo(() => buildRevenueActionQueueText(revenueActionQueue), [revenueActionQueue]);
   const todayContactPlan = useMemo(() => buildTodayContactPlan(todayContactLeads, showcaseProject), [todayContactLeads, showcaseProject]);
+  const revenueValidationSteps: RevenueValidationStep[] = [
+    {
+      phase: '第 1-2 天',
+      label: '准备 5 个真实触达对象',
+      target: `线索 ${revenueLeads.length}/5，剧情样片已准备`,
+      done: revenueLeads.length >= 5,
+      advice: '加入 5 个样片触达对象，先别继续打磨模型和视频。'
+    },
+    {
+      phase: '第 3-5 天',
+      label: '完成 5 次真实联系',
+      target: `已联系 ${contactedCount}/5`,
+      done: contactedCount >= 5,
+      advice: '按下一步执行队列逐个发开场话术，发完立刻标记已联系。'
+    },
+    {
+      phase: '第 6-8 天',
+      label: '发出 3 个样片并拿 1 个回复',
+      target: `已发样片 ${sampleSentCount}/3，真实回复 ${replyCount}/1`,
+      done: sampleSentCount >= 3 && replyCount >= 1,
+      advice: '只给愿意看案例的人发样片，追问看懂了吗、哪里缺、是否愿意试一条。'
+    },
+    {
+      phase: '第 9-11 天',
+      label: '至少发出 1 次明确报价',
+      target: `已报价 ${quotedCount}/1`,
+      done: quotedCount >= 1,
+      advice: '有人问价格、愿意试或给方向时，发 29/99/100 元报价，不停留在免费反馈。'
+    },
+    {
+      phase: '第 12-14 天',
+      label: '完成收款或试点交付',
+      target: `已收款 ¥${paidRevenue}/100，强信号 ${strongSignalCount}`,
+      done: paidRevenue >= 100,
+      advice: '对强意向线索发收款前确认单，收款后用客户交付包完成交付并记录验证信号。'
+    }
+  ];
+  const currentRevenueValidationStep = revenueValidationSteps.find((step) => !step.done) ?? revenueValidationSteps[revenueValidationSteps.length - 1];
+  const revenueValidationPlanText = buildRevenueValidationPlanText(revenueValidationSteps, paidRevenue);
   const modelQualityPassed = modelQualityResults.length === modelQualityCases.length && modelQualityResults.every((result) => result.passed);
   const operatingSteps: OperatingStep[] = [
     {
@@ -2229,6 +2295,29 @@ function App() {
               <article className="panel metric"><span>访谈记录</span><strong>{interviewCount}/10</strong></article>
               <article className="panel metric"><span>今日待联系</span><strong>{todayContactCount}</strong></article>
             </div>
+            <article className="panel">
+              <div className="panel-title">
+                <div>
+                  <p className="eyebrow">14 天 100 元验证节奏</p>
+                  <h3>当前重点：{currentRevenueValidationStep.label}</h3>
+                  <p className="muted">{currentRevenueValidationStep.advice}</p>
+                </div>
+                <button className="secondary" onClick={() => copyText(revenueValidationPlanText, '14 天验证计划', 'revenue-validation-plan')}><Copy size={16} />复制计划</button>
+              </div>
+              <div className="validation-steps">
+                {revenueValidationSteps.map((step) => (
+                  <div className={`validation-step ${step.done ? 'done' : ''}`} key={step.phase}>
+                    <span>{step.done ? <CheckCircle2 size={18} /> : step.phase}</span>
+                    <div>
+                      <strong>{step.label}</strong>
+                      <small>{step.target}</small>
+                    </div>
+                    <p>{step.advice}</p>
+                  </div>
+                ))}
+              </div>
+              <textarea id="revenue-validation-plan" className="sr-only-copy" readOnly value={revenueValidationPlanText} />
+            </article>
             <article className="panel visual-outreach-card">
               <div>
                 <p className="eyebrow">剧情样片触达</p>

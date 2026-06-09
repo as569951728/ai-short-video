@@ -616,6 +616,58 @@ pre.script-block {
   font-weight: 800;
 }
 
+.validation-steps {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.validation-step {
+  display: grid;
+  grid-template-columns: minmax(86px, auto) minmax(180px, 0.8fr) minmax(220px, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid #e1e8e5;
+  border-radius: 8px;
+  background: #fbfcfa;
+}
+
+.validation-step.done {
+  border-color: #9ccfc3;
+  background: #f4fbf8;
+}
+
+.validation-step > span {
+  display: grid;
+  place-items: center;
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: 8px;
+  background: #edf4f1;
+  color: #1f7a6d;
+  font-size: 13px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.validation-step strong,
+.validation-step small {
+  display: block;
+}
+
+.validation-step small {
+  margin-top: 4px;
+  color: #667883;
+  font-size: 13px;
+}
+
+.validation-step p {
+  margin: 0;
+  color: #52646d;
+  line-height: 1.5;
+}
+
 .action-queue {
   display: grid;
   gap: 10px;
@@ -823,6 +875,11 @@ pre.script-block {
   }
 
   .queue-row {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .validation-step {
     grid-template-columns: 1fr;
     align-items: stretch;
   }
