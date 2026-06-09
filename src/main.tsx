@@ -1200,6 +1200,55 @@ function inferLeadNextStep(lead: RevenueLead) {
   return '下一步补充客户回复，再判断是否发样片或报价。';
 }
 
+function buildRevenueActionQueue(leads: RevenueLead[]) {
+  const priority: Record<RevenueStatus, number> = {
+    强意向: 0,
+    已报价: 1,
+    已发样片: 2,
+    已联系: 3,
+    待联系: 4,
+    已体验: 5,
+    已付款: 99,
+    无效: 99
+  };
+
+  return [...leads]
+    .filter((lead) => lead.status !== '已付款' && lead.status !== '无效')
+    .sort((a, b) => {
+      const priorityDiff = (priority[a.status] ?? 99) - (priority[b.status] ?? 99);
+      if (priorityDiff !== 0) return priorityDiff;
+
+      const followUpA = a.followUpAt || '9999-12-31T23:59';
+      const followUpB = b.followUpAt || '9999-12-31T23:59';
+      const followUpDiff = followUpA.localeCompare(followUpB);
+      if (followUpDiff !== 0) return followUpDiff;
+
+      return b.createdAt.localeCompare(a.createdAt);
+    })
+    .slice(0, 8);
+}
+
+function buildRevenueActionQueueText(queue: RevenueLead[]) {
+  if (queue.length === 0) {
+    return `# 下一步执行队列
+
+当前没有待处理线索。
+
+下一步：新增 5 个真实触达对象，先发剧情样片，再记录回复。`;
+  }
+
+  return `# 下一步执行队列
+
+目标：按顺序处理，不继续打磨功能，先推进真实触达、样片、报价和收款确认。
+
+${queue.map((lead, index) => `${index + 1}. ${lead.name}
+   状态：${lead.status}
+   渠道：${lead.channel || '未填写'}
+   报价：${lead.offer}
+   建议：${inferLeadNextStep(lead)}
+   备注：${lead.nextAction || lead.reply || lead.need || '待补充'}`).join('\n\n')}`;
+}
+
 function buildObjectionReply(lead: Omit<RevenueLead, 'id' | 'createdAt'>, showcaseProject: Project | null) {
   const targetName = lead.name.trim() || '你';
   const caseLine = showcaseProject
@@ -1275,6 +1324,8 @@ function App() {
     }
     return lead.status === revenueFilter;
   });
+  const revenueActionQueue = useMemo(() => buildRevenueActionQueue(revenueLeads), [revenueLeads]);
+  const revenueActionQueueText = useMemo(() => buildRevenueActionQueueText(revenueActionQueue), [revenueActionQueue]);
   const todayContactPlan = useMemo(() => buildTodayContactPlan(todayContactLeads, showcaseProject), [todayContactLeads, showcaseProject]);
   const modelQualityPassed = modelQualityResults.length === modelQualityCases.length && modelQualityResults.every((result) => result.passed);
   const operatingSteps: OperatingStep[] = [
@@ -1564,7 +1615,7 @@ function App() {
   }
 
   function saveRevenueLead() {
-    const name = leadDraft.name.trim();
+    const name = (leadDraft.name || '').trim();
     if (!name) return;
 
     if (editingLeadId) {
@@ -1611,7 +1662,11 @@ function App() {
 
   function editRevenueLead(lead: RevenueLead) {
     const { id, createdAt, ...draft } = lead;
-    setLeadDraft(draft);
+    setLeadDraft({
+      ...defaultRevenueLead,
+      ...draft,
+      amount: Number(draft.amount) || 0
+    });
     setEditingLeadId(id);
     setCopyStatus(`正在编辑：${lead.name}`);
   }
@@ -1623,7 +1678,10 @@ function App() {
   }
 
   function startCreationFromLead(lead: RevenueLead) {
-    const idea = lead.need.trim() || lead.reply?.trim() || lead.nextAction.trim() || '根据客户账号方向生成一条故事短视频素材包';
+    const idea = (lead.need || '').trim()
+      || lead.reply?.trim()
+      || (lead.nextAction || '').trim()
+      || '根据客户账号方向生成一条故事短视频素材包';
     setInput({
       goal: idea.includes('小说') ? '小说转短视频' : '故事短视频',
       platform: inferPlatformFromLead(lead),
@@ -2185,6 +2243,39 @@ function App() {
               </div>
               <video className="mini-video-preview" src={visualDemoVideoUrl} controls playsInline preload="metadata" />
             </article>
+            <article className="panel">
+              <div className="panel-title">
+                <div>
+                  <h3>下一步执行队列</h3>
+                  <p className="muted">优先处理最接近报价和收款的线索。</p>
+                </div>
+                <div className="lead-actions">
+                  <button className="secondary" onClick={() => setRevenueFilter('待处理')}><ClipboardList size={16} />查看待处理</button>
+                  <button className="secondary" onClick={() => copyText(revenueActionQueueText, '执行队列', 'revenue-action-queue')}><Copy size={16} />复制队列</button>
+                </div>
+              </div>
+              {revenueActionQueue.length === 0 ? (
+                <div className="empty compact-empty">
+                  <MessageSquare size={28} />
+                  <p>还没有待处理线索。先加入 5 个样片触达对象。</p>
+                </div>
+              ) : (
+                <div className="action-queue">
+                  {revenueActionQueue.map((lead, index) => (
+                    <div className="queue-row" key={lead.id}>
+                      <span>{index + 1}</span>
+                      <div>
+                        <strong>{lead.name}</strong>
+                        <small>{lead.status} / {lead.channel || '未填写渠道'} / {lead.offer}</small>
+                      </div>
+                      <p>{inferLeadNextStep(lead)}</p>
+                      <button className="secondary" onClick={() => editRevenueLead(lead)}>处理</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <textarea id="revenue-action-queue" className="sr-only-copy" readOnly value={revenueActionQueueText} />
+            </article>
             <div className="grid two">
               <article className="panel">
                 <div className="panel-title">
@@ -2253,21 +2344,21 @@ function App() {
                 </div>
                 <label>客户或账号
                   <input
-                    value={leadDraft.name}
+                    value={leadDraft.name || ''}
                     onChange={(event) => setLeadDraft({ ...leadDraft, name: event.target.value })}
                     placeholder="例如：某内容创业者 / 某社群朋友"
                   />
                 </label>
                 <label>来源渠道
                   <input
-                    value={leadDraft.channel}
+                    value={leadDraft.channel || ''}
                     onChange={(event) => setLeadDraft({ ...leadDraft, channel: event.target.value })}
                     placeholder="例如：朋友圈、小红书、微信群"
                   />
                 </label>
                 <label>需求
                   <textarea
-                    value={leadDraft.need}
+                    value={leadDraft.need || ''}
                     onChange={(event) => setLeadDraft({ ...leadDraft, need: event.target.value })}
                     placeholder="对方想解决什么内容生产问题"
                   />
@@ -2276,12 +2367,12 @@ function App() {
               <article className="panel">
                 <h3>成交跟进</h3>
                 <label>报价
-                  <select value={leadDraft.offer} onChange={(event) => setLeadDraft({ ...leadDraft, offer: event.target.value })}>
+                  <select value={leadDraft.offer || defaultRevenueLead.offer} onChange={(event) => setLeadDraft({ ...leadDraft, offer: event.target.value })}>
                     {revenueOffers.map((offer) => <option key={offer.name}>{offer.name}</option>)}
                   </select>
                 </label>
                 <label>状态
-                  <select value={leadDraft.status} onChange={(event) => setLeadDraft({ ...leadDraft, status: event.target.value as RevenueStatus })}>
+                  <select value={leadDraft.status || defaultRevenueLead.status} onChange={(event) => setLeadDraft({ ...leadDraft, status: event.target.value as RevenueStatus })}>
                     {revenueStatuses.map((status) => <option key={status}>{status}</option>)}
                   </select>
                 </label>
@@ -2289,26 +2380,26 @@ function App() {
                   <input
                     type="number"
                     min="0"
-                    value={leadDraft.amount}
+                    value={leadDraft.amount || 0}
                     onChange={(event) => setLeadDraft({ ...leadDraft, amount: Number(event.target.value) })}
                   />
                 </label>
                 <label>下一步
                   <input
-                    value={leadDraft.nextAction}
+                    value={leadDraft.nextAction || ''}
                     onChange={(event) => setLeadDraft({ ...leadDraft, nextAction: event.target.value })}
                     placeholder="例如：今晚发 1 条演示案例"
                   />
                 </label>
                 <label>客户回复
                   <textarea
-                    value={leadDraft.reply}
+                    value={leadDraft.reply || ''}
                     onChange={(event) => setLeadDraft({ ...leadDraft, reply: event.target.value })}
                     placeholder="记录对方真实反馈，不要脑补"
                   />
                 </label>
                 <label>异议类型
-                  <select value={leadDraft.objection} onChange={(event) => setLeadDraft({ ...leadDraft, objection: event.target.value })}>
+                  <select value={leadDraft.objection || ''} onChange={(event) => setLeadDraft({ ...leadDraft, objection: event.target.value })}>
                     <option value="">未选择</option>
                     {objectionOptions.map((option) => <option key={option}>{option}</option>)}
                   </select>
@@ -2316,26 +2407,26 @@ function App() {
                 <label>下次跟进
                   <input
                     type="datetime-local"
-                    value={leadDraft.followUpAt}
+                    value={leadDraft.followUpAt || ''}
                     onChange={(event) => setLeadDraft({ ...leadDraft, followUpAt: event.target.value })}
                   />
                 </label>
                 <label>交付记录
                   <textarea
-                    value={leadDraft.deliveryNote}
+                    value={leadDraft.deliveryNote || ''}
                     onChange={(event) => setLeadDraft({ ...leadDraft, deliveryNote: event.target.value })}
                     placeholder="例如：已交付 1 条素材包 / 已发视频样片 / 客户要求改标题"
                   />
                 </label>
                 <label>验证信号
                   <textarea
-                    value={leadDraft.validationSignal}
+                    value={leadDraft.validationSignal || ''}
                     onChange={(event) => setLeadDraft({ ...leadDraft, validationSignal: event.target.value })}
                     placeholder="例如：愿意付费 / 只想免费试 / 认为分镜最有价值 / 觉得视频不够真实"
                   />
                 </label>
                 <label>备注
-                  <textarea value={leadDraft.note} onChange={(event) => setLeadDraft({ ...leadDraft, note: event.target.value })} />
+                  <textarea value={leadDraft.note || ''} onChange={(event) => setLeadDraft({ ...leadDraft, note: event.target.value })} />
                 </label>
               </article>
             </section>
