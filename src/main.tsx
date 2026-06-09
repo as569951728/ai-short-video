@@ -115,6 +115,8 @@ interface RevenueLead {
   reply?: string;
   objection?: string;
   followUpAt?: string;
+  deliveryNote?: string;
+  validationSignal?: string;
   note: string;
   createdAt: string;
 }
@@ -436,6 +438,8 @@ const defaultRevenueLead: Omit<RevenueLead, 'id' | 'createdAt'> = {
   reply: '',
   objection: '',
   followUpAt: '',
+  deliveryNote: '',
+  validationSignal: '',
   note: ''
 };
 
@@ -1100,6 +1104,8 @@ ${leads.length === 0 ? '暂无线索。' : leads.map((lead, index) => `${index +
    回复：${lead.reply || '未记录'}
    异议：${lead.objection || '未记录'}
    系统建议：${inferLeadNextStep(lead)}
+   交付记录：${lead.deliveryNote || '未记录'}
+   验证信号：${lead.validationSignal || '未记录'}
    下一步：${lead.nextAction || '未记录'}
    跟进时间：${lead.followUpAt ? lead.followUpAt.replace('T', ' ') : '未设置'}`).join('\n\n')}
 
@@ -2232,6 +2238,20 @@ function App() {
                     onChange={(event) => setLeadDraft({ ...leadDraft, followUpAt: event.target.value })}
                   />
                 </label>
+                <label>交付记录
+                  <textarea
+                    value={leadDraft.deliveryNote}
+                    onChange={(event) => setLeadDraft({ ...leadDraft, deliveryNote: event.target.value })}
+                    placeholder="例如：已交付 1 条素材包 / 已发视频样片 / 客户要求改标题"
+                  />
+                </label>
+                <label>验证信号
+                  <textarea
+                    value={leadDraft.validationSignal}
+                    onChange={(event) => setLeadDraft({ ...leadDraft, validationSignal: event.target.value })}
+                    placeholder="例如：愿意付费 / 只想免费试 / 认为分镜最有价值 / 觉得视频不够真实"
+                  />
+                </label>
                 <label>备注
                   <textarea value={leadDraft.note} onChange={(event) => setLeadDraft({ ...leadDraft, note: event.target.value })} />
                 </label>
@@ -2329,6 +2349,7 @@ function App() {
                       <p>
                         {lead.reply || lead.objection || lead.nextAction || lead.need || '待补下一步'}
                         {lead.followUpAt ? ` / 下次跟进：${lead.followUpAt.replace('T', ' ')}` : ''}
+                        {lead.validationSignal ? ` / 信号：${lead.validationSignal}` : ''}
                       </p>
                       <p className="lead-advice">{inferLeadNextStep(lead)}</p>
                       <div className="lead-actions">
