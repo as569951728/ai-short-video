@@ -805,6 +805,69 @@ ${generated.score.recommendations.map((item) => `- ${item}`).join('\n')}
 `;
 }
 
+function buildClientDeliveryMarkdown(project: Project) {
+  const { input, generated } = project;
+  return `# ${generated.selectedTitle}
+
+## 交付说明
+
+这是 1 条故事类短视频素材包，供你继续剪辑、发布或二次修改。
+
+平台建议：${input.platform}
+题材：${input.genre}
+目标：${input.goal}
+
+## 标题
+
+${generated.selectedTitle}
+
+备选标题：
+${generated.titleOptions.map((title, index) => `${index + 1}. ${title}`).join('\n')}
+
+## 开头钩子
+
+${generated.hook}
+
+## 口播脚本
+
+${generated.script}
+
+## 分镜和画面建议
+
+${generated.storyboard
+    .map((row, index) => `${index + 1}. ${row.scene}
+- 旁白：${row.voiceover}
+- 画面：${row.visual}
+- 字幕：${row.subtitle}`)
+    .join('\n\n')}
+
+## 字幕
+
+${generated.subtitles.map((subtitle, index) => `${index + 1}. ${subtitle}`).join('\n')}
+
+## 封面文案
+
+${generated.selectedCoverCopy}
+
+备选封面文案：
+${generated.coverCopyOptions.map((copy, index) => `${index + 1}. ${copy}`).join('\n')}
+
+## 发布文案
+
+${generated.publishCopy}
+
+## 发布前建议
+
+${generated.score.recommendations.map((item) => `- ${item}`).join('\n')}
+
+## 边界说明
+
+- 本交付不承诺爆款、播放量、涨粉、成交或收入。
+- 发布前请自行检查平台规则。
+- 不要使用未授权音乐、影视素材、图片、声音或真实人物肖像。
+- 如果内容使用 AI 生成或合成，请按平台规则添加必要标识。`;
+}
+
 function downloadTextFile(filename: string, content: string) {
   const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
   const url = URL.createObjectURL(blob);
@@ -1183,6 +1246,7 @@ function App() {
   });
 
   const markdown = useMemo(() => (project ? buildMarkdown(project) : ''), [project]);
+  const clientDeliveryMarkdown = useMemo(() => (project ? buildClientDeliveryMarkdown(project) : ''), [project]);
   const showcaseProject = useMemo(
     () => projects.find((item) => item.isShowcase) ?? null,
     [projects]
@@ -1870,11 +1934,15 @@ function App() {
                 </div>
                 <div className="header-actions">
                   <button className="secondary" onClick={() => downloadTextFile('aishortvideo-content-package.md', markdown)}><Download size={18} />下载 Markdown</button>
+                  <button className="secondary" onClick={() => downloadTextFile('client-delivery-package.md', clientDeliveryMarkdown)}><Download size={18} />下载客户交付包</button>
                   <button className="primary" onClick={() => navigator.clipboard.writeText(markdown)}><ClipboardList size={18} />复制 Markdown</button>
                 </div>
               </header>
               <textarea className="export-box" readOnly value={markdown} />
-              <button className="primary" onClick={() => setScreen('publish')}><Save size={18} />发布后记录数据</button>
+              <div className="header-actions">
+                <button className="secondary" onClick={() => navigator.clipboard.writeText(clientDeliveryMarkdown)}><Copy size={18} />复制客户交付包</button>
+                <button className="primary" onClick={() => setScreen('publish')}><Save size={18} />发布后记录数据</button>
+              </div>
             </section>
 
             <section className="panel">
