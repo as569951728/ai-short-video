@@ -161,6 +161,22 @@ interface RevenueValidationStep {
   advice: string;
 }
 
+type RevenueNoviceActionType = 'add-leads' | 'copy-message' | 'copy-report';
+type RevenueNoviceSecondaryAction = 'copy-message' | 'mark-status' | 'edit-lead' | 'none';
+
+interface RevenueNoviceAction {
+  tag: string;
+  title: string;
+  detail: string;
+  primaryLabel: string;
+  primaryAction: RevenueNoviceActionType;
+  secondaryLabel?: string;
+  secondaryAction?: RevenueNoviceSecondaryAction;
+  message: string;
+  lead?: RevenueLead;
+  targetStatus?: RevenueStatus;
+}
+
 interface Project {
   id: string;
   input: CreationInput;
@@ -921,6 +937,13 @@ function buildPermissionCommentMessage(lead: Omit<RevenueLead, 'id' | 'createdAt
 如果方便，我可以发你样片链接或材料摘要；不方便也没关系，我不在评论区刷长广告。`;
 }
 
+function buildShortPermissionCommentMessage(lead: Omit<RevenueLead, 'id' | 'createdAt'>) {
+  const need = lead.need.trim();
+  if (/剪辑|分镜|字幕/.test(need)) return '我在验证 AI 剧情样片工具，能发你 28 秒样片，请你判断分镜/字幕有没有用吗？';
+  if (/故事|小说|账号|选题/.test(need)) return '我在验证 AI 故事短视频工具，能发你 28 秒样片，请你判断新手做内容有没有用吗？';
+  return '我在验证 AI 小说短视频工具，能发你 28 秒样片，请你反馈能不能看懂吗？';
+}
+
 function buildVisualDemoOutreachMessage(lead: Omit<RevenueLead, 'id' | 'createdAt'>) {
   const targetName = lead.name.trim() || '你好';
   const needLine = lead.need.trim()
@@ -1343,6 +1366,129 @@ ${steps.map((step) => `- ${step.done ? '[x]' : '[ ]'} ${step.phase}：${step.lab
 - 有人付款或强意向，优先交付和复盘。`;
 }
 
+function buildRevenueNoviceAction(
+  leads: RevenueLead[],
+  actionLead: RevenueLead | null,
+  paidRevenue: number,
+  showcaseProject: Project | null
+): RevenueNoviceAction {
+  if (leads.length < 5) {
+    const message = buildShortPermissionCommentMessage(defaultRevenueLead);
+    return {
+      tag: '第 1 步',
+      title: '先加入 5 个样片触达对象',
+      detail: '今天只做一件事：准备 5 个真实对象，不继续打磨功能。',
+      primaryLabel: '加入 5 个对象',
+      primaryAction: 'add-leads',
+      secondaryLabel: '复制短评论',
+      secondaryAction: 'copy-message',
+      message
+    };
+  }
+
+  if (!actionLead) {
+    return {
+      tag: paidRevenue >= 100 ? '已达标' : '下一步',
+      title: paidRevenue >= 100 ? '已达到 100 元验证目标' : '没有待处理线索',
+      detail: paidRevenue >= 100 ? '继续交付和记录反馈，不急着扩功能。' : '新增真实触达对象，或把无效线索替换成更接近内容生产痛点的人。',
+      primaryLabel: paidRevenue >= 100 ? '复制复盘' : '加入 5 个对象',
+      primaryAction: paidRevenue >= 100 ? 'copy-report' : 'add-leads',
+      message: paidRevenue >= 100 ? '已达成首个 100 元验证，请导出收入复盘并整理成交案例。' : buildShortPermissionCommentMessage(defaultRevenueLead)
+    };
+  }
+
+  const isPublicLead = isPublicTouchChannel(actionLead.channel || '');
+  const message = actionLead.status === '待联系' && isPublicLead
+    ? buildShortPermissionCommentMessage(actionLead)
+    : buildLeadStageMessage(actionLead, showcaseProject);
+
+  if (actionLead.status === '待联系') {
+    return {
+      tag: '现在只做这一步',
+      title: `联系：${actionLead.name}`,
+      detail: isPublicLead ? '公开评论区先发短许可，不要贴长广告。发出后点“我已发送”。' : '复制第一句私信，发出后点“我已发送”。',
+      primaryLabel: isPublicLead ? '复制短评论' : '复制第一句',
+      primaryAction: 'copy-message',
+      secondaryLabel: '我已发送',
+      secondaryAction: 'mark-status',
+      targetStatus: '已联系',
+      lead: actionLead,
+      message
+    };
+  }
+
+  if (actionLead.status === '已联系') {
+    return {
+      tag: '现在只做这一步',
+      title: `发送样片：${actionLead.name}`,
+      detail: '对方愿意继续后再发样片材料，发完点“已发样片”。',
+      primaryLabel: '复制样片话术',
+      primaryAction: 'copy-message',
+      secondaryLabel: '已发样片',
+      secondaryAction: 'mark-status',
+      targetStatus: '已发样片',
+      lead: actionLead,
+      message
+    };
+  }
+
+  if (actionLead.status === '已发样片') {
+    return {
+      tag: '现在只做这一步',
+      title: `追问反馈：${actionLead.name}`,
+      detail: '只问看懂了吗、哪里有用、是否愿意 29 元试一条。拿到回复后立刻记录。',
+      primaryLabel: '复制追问',
+      primaryAction: 'copy-message',
+      secondaryLabel: '记录回复',
+      secondaryAction: 'edit-lead',
+      lead: actionLead,
+      message
+    };
+  }
+
+  if (actionLead.status === '已报价' || actionLead.status === '强意向') {
+    return {
+      tag: '现在只做这一步',
+      title: `确认收款：${actionLead.name}`,
+      detail: '先发收款前确认单，明确交付边界和不承诺项。',
+      primaryLabel: '复制确认单',
+      primaryAction: 'copy-message',
+      secondaryLabel: '标记已付款',
+      secondaryAction: 'mark-status',
+      targetStatus: '已付款',
+      lead: actionLead,
+      message
+    };
+  }
+
+  if (actionLead.status === '已体验') {
+    return {
+      tag: '现在只做这一步',
+      title: `推进报价：${actionLead.name}`,
+      detail: '已经体验后不要只收反馈，给出 29/99/100 元下一步选择。',
+      primaryLabel: '复制报价选择',
+      primaryAction: 'copy-message',
+      secondaryLabel: '已报价',
+      secondaryAction: 'mark-status',
+      targetStatus: '已报价',
+      lead: actionLead,
+      message
+    };
+  }
+
+  return {
+    tag: '下一步',
+    title: `处理线索：${actionLead.name}`,
+    detail: inferLeadNextStep(actionLead),
+    primaryLabel: '复制推荐话术',
+    primaryAction: 'copy-message',
+    secondaryLabel: '编辑线索',
+    secondaryAction: 'edit-lead',
+    lead: actionLead,
+    message
+  };
+}
+
 function buildObjectionReply(lead: Omit<RevenueLead, 'id' | 'createdAt'>, showcaseProject: Project | null) {
   const targetName = lead.name.trim() || '你';
   const caseLine = showcaseProject
@@ -1396,6 +1542,7 @@ function App() {
   );
   const outreachMessage = useMemo(() => buildOutreachMessage(leadDraft, showcaseProject), [leadDraft, showcaseProject]);
   const permissionCommentMessage = useMemo(() => buildPermissionCommentMessage(leadDraft), [leadDraft]);
+  const shortPermissionCommentMessage = useMemo(() => buildShortPermissionCommentMessage(leadDraft), [leadDraft]);
   const visualDemoOutreachMessage = useMemo(() => buildVisualDemoOutreachMessage(leadDraft), [leadDraft]);
   const demoBrief = useMemo(() => buildDemoBrief(showcaseProject), [showcaseProject]);
   const visualDemoBrief = useMemo(buildVisualDemoBrief, []);
@@ -1463,6 +1610,10 @@ function App() {
   ];
   const currentRevenueValidationStep = revenueValidationSteps.find((step) => !step.done) ?? revenueValidationSteps[revenueValidationSteps.length - 1];
   const revenueValidationPlanText = buildRevenueValidationPlanText(revenueValidationSteps, paidRevenue);
+  const revenueNoviceAction = useMemo(
+    () => buildRevenueNoviceAction(revenueLeads, revenueActionQueue[0] ?? null, paidRevenue, showcaseProject),
+    [revenueLeads, revenueActionQueue, paidRevenue, showcaseProject]
+  );
   const modelQualityPassed = modelQualityResults.length === modelQualityCases.length && modelQualityResults.every((result) => result.passed);
   const operatingSteps: OperatingStep[] = [
     {
@@ -1935,6 +2086,55 @@ function App() {
     }
   }
 
+  async function runRevenueNovicePrimaryAction() {
+    if (revenueNoviceAction.primaryAction === 'add-leads') {
+      generateVisualDemoLeads();
+      return;
+    }
+
+    if (revenueNoviceAction.primaryAction === 'copy-report') {
+      await copyText(revenueReport, '收入复盘', 'revenue-report');
+      return;
+    }
+
+    await copyText(revenueNoviceAction.message, '新手执行话术', 'novice-action-message');
+    if (revenueNoviceAction.lead) {
+      editRevenueLead(revenueNoviceAction.lead);
+    }
+  }
+
+  async function runRevenueNoviceSecondaryAction() {
+    if (revenueNoviceAction.secondaryAction === 'copy-message') {
+      await copyText(revenueNoviceAction.message, '新手执行话术', 'novice-action-message');
+      return;
+    }
+
+    if (revenueNoviceAction.secondaryAction === 'edit-lead' && revenueNoviceAction.lead) {
+      editRevenueLead(revenueNoviceAction.lead);
+      return;
+    }
+
+    if (
+      revenueNoviceAction.secondaryAction === 'mark-status'
+      && revenueNoviceAction.lead
+      && revenueNoviceAction.targetStatus
+    ) {
+      const nextLead = {
+        ...revenueNoviceAction.lead,
+        status: revenueNoviceAction.targetStatus,
+        amount: revenueNoviceAction.targetStatus === '已付款'
+          ? revenueNoviceAction.lead.amount || 29
+          : revenueNoviceAction.lead.amount
+      };
+      updateRevenueLead(revenueNoviceAction.lead.id, {
+        status: revenueNoviceAction.targetStatus,
+        amount: nextLead.amount,
+        nextAction: inferLeadNextStep(nextLead)
+      });
+      setCopyStatus(`${revenueNoviceAction.lead.name} 已更新为「${revenueNoviceAction.targetStatus}」。`);
+    }
+  }
+
   return (
     <div className="app">
       <aside className="sidebar">
@@ -2365,6 +2565,25 @@ function App() {
               <article className="panel metric"><span>访谈记录</span><strong>{interviewCount}/10</strong></article>
               <article className="panel metric"><span>今日待联系</span><strong>{todayContactCount}</strong></article>
             </div>
+            <article className="panel novice-mode-panel">
+              <div className="panel-title">
+                <div>
+                  <p className="eyebrow">新手执行模式</p>
+                  <h3>{revenueNoviceAction.title}</h3>
+                  <p className="muted">{revenueNoviceAction.detail}</p>
+                </div>
+                <span className="action-tag">{revenueNoviceAction.tag}</span>
+              </div>
+              <div className="novice-action-layout">
+                <textarea id="novice-action-message" className="message-box compact-message" readOnly value={revenueNoviceAction.message} />
+                <div className="novice-action-buttons">
+                  <button className="primary" onClick={runRevenueNovicePrimaryAction}><MessageSquare size={18} />{revenueNoviceAction.primaryLabel}</button>
+                  {revenueNoviceAction.secondaryLabel && revenueNoviceAction.secondaryAction !== 'none' && (
+                    <button className="secondary" onClick={runRevenueNoviceSecondaryAction}><CheckCircle2 size={18} />{revenueNoviceAction.secondaryLabel}</button>
+                  )}
+                </div>
+              </div>
+            </article>
             <article className="panel">
               <div className="panel-title">
                 <div>
@@ -2395,7 +2614,7 @@ function App() {
                 <p className="muted">当前不要继续打磨视频，先拿 28 秒样片联系 5 个真实对象，至少发出 1 次报价。</p>
                 <div className="touchpoint-actions">
                   <button className="primary" onClick={generateVisualDemoLeads}><MessageSquare size={16} />加入 5 个样片触达对象</button>
-                  <button className="secondary" onClick={() => copyText(permissionCommentMessage, '公开评论话术', 'permission-comment-message')}><Copy size={16} />复制公开评论</button>
+                  <button className="secondary" onClick={() => copyText(shortPermissionCommentMessage, '短评论话术', 'short-permission-comment-message')}><Copy size={16} />复制短评论</button>
                   <button className="secondary" onClick={() => copyText(visualDemoOutreachMessage, '样片话术', 'visual-demo-outreach-message')}><Copy size={16} />复制样片话术</button>
                   <button className="secondary" onClick={() => copyText(visualDemoBrief, '样片材料', 'visual-demo-brief')}><ClipboardList size={16} />复制样片材料</button>
                   <a className="secondary" href={visualDemoVideoUrl} target="_blank" rel="noreferrer"><Play size={16} />打开样片</a>
@@ -2439,10 +2658,18 @@ function App() {
             <article className="panel">
               <div className="panel-title">
                 <h3>公开评论许可话术</h3>
-                <button className="secondary" onClick={() => copyText(permissionCommentMessage, '公开评论话术', 'permission-comment-message')}><Copy size={16} />复制</button>
+                <div className="lead-actions">
+                  <button className="secondary" onClick={() => copyText(shortPermissionCommentMessage, '短评论话术', 'short-permission-comment-message')}><Copy size={16} />复制短句</button>
+                  <button className="secondary" onClick={() => copyText(permissionCommentMessage, '公开评论话术', 'permission-comment-message')}><Copy size={16} />复制完整</button>
+                </div>
               </div>
               <p className="muted">公开评论区先请求许可，不直接贴长广告；对方愿意后再发样片材料。</p>
-              <textarea id="permission-comment-message" className="message-box compact-message" readOnly value={permissionCommentMessage} />
+              <label>短句
+                <textarea id="short-permission-comment-message" className="message-box mini-message" readOnly value={shortPermissionCommentMessage} />
+              </label>
+              <label>完整许可
+                <textarea id="permission-comment-message" className="message-box compact-message" readOnly value={permissionCommentMessage} />
+              </label>
             </article>
             <div className="grid two">
               <article className="panel">

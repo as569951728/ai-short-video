@@ -454,6 +454,50 @@ pre.script-block {
   min-height: 220px;
 }
 
+.mini-message {
+  min-height: 96px;
+}
+
+.novice-mode-panel {
+  border-color: #9ccfc3;
+  background: #f7fcfa;
+}
+
+.action-tag {
+  display: inline-grid;
+  place-items: center;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 8px;
+  background: #1f7a6d;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.novice-action-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, auto);
+  gap: 14px;
+  align-items: start;
+  margin-top: 14px;
+}
+
+.novice-action-layout .message-box {
+  margin-top: 0;
+}
+
+.novice-action-buttons {
+  display: grid;
+  gap: 10px;
+}
+
+.novice-action-buttons button {
+  width: 100%;
+  justify-content: center;
+}
+
 .empty {
   display: grid;
   justify-items: center;
@@ -862,6 +906,10 @@ pre.script-block {
   }
 
   .visual-outreach-card {
+    grid-template-columns: 1fr;
+  }
+
+  .novice-action-layout {
     grid-template-columns: 1fr;
   }
 
