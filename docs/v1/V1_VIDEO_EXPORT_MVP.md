@@ -42,6 +42,7 @@ V1 自动成片能力先解决一个问题：
 样片生成：
 
 - 新增 Swift 原生样片脚本：`scripts/create-demo-video.swift`。
+- 新增样片生成命令：`npm run demo:video`。
 - 当前样片目录：`outputs/demo-2026-06-09-v2/`。
 - 样片包含原创小说、分镜、SRT 字幕和 720x1280 MP4。
 
@@ -112,4 +113,5 @@ V1 自动成片能力先解决一个问题：
 - 启动本地 API 后，请求 `/api/export/video-plan` 成功。
 - 接口返回 `ok=true`、`status=planned`、镜头数量和 SRT 字幕。
 - Swift 样片脚本成功生成 `outputs/demo-2026-06-09-v2/demo-video.mp4`。
+- `npm run demo:video` 可重复生成样片。
 - 样片规格：28 秒，720x1280，MP4。

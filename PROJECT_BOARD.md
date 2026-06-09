@@ -161,6 +161,7 @@ V1 系统可用的定义：
 - [x] 写入无熟人启动验证方案：`docs/ops/2026-06-08-no-warm-contacts-validation.md`。
 - [x] 增加自动成片 MVP 前置能力：导出 9:16 视频计划、镜头时长、SRT 字幕和 FFmpeg 渲染草稿。
 - [x] 新增 Swift 原生样片生成脚本，用于在当前 `ffmpeg` 环境不可用时生成可展示 MP4。
+- [x] 新增样片生成命令：`npm run demo:video`。
 - [x] 生成小说配套剧情可视化样片：`outputs/demo-2026-06-09-v2/demo-video.mp4`。
 - [x] 案例库增加剧情可视化样片展示，可直接播放小说配套视频并打开小说文本。
 - [x] 写入自动成片 MVP 文档：`docs/v1/V1_VIDEO_EXPORT_MVP.md`。

@@ -8,4 +8,5 @@ tsconfig.tsbuildinfo
 outputs/*
 !outputs/demo-2026-06-09-v2/
 !outputs/demo-2026-06-09-v2/**
+outputs/demo-2026-06-09-v2/*.png
 scripts/create-demo-video.mjs
