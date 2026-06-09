@@ -618,6 +618,23 @@ function inferStoryElements(idea: string, genre: Genre) {
   };
 }
 
+function inferPlatformFromLead(lead: Pick<RevenueLead, 'channel' | 'name'>): Platform {
+  const text = `${lead.channel} ${lead.name}`;
+  if (text.includes('小红书')) return '小红书';
+  if (text.includes('B站')) return 'B站';
+  if (text.includes('视频号')) return '视频号';
+  return '抖音';
+}
+
+function inferGenreFromLead(lead: Pick<RevenueLead, 'need' | 'name'>): Genre {
+  const text = `${lead.need} ${lead.name}`;
+  if (/悬疑|反转|小说|推文/.test(text)) return '悬疑反转';
+  if (/情感|家庭|关系/.test(text)) return '情感故事';
+  if (/职场|程序员|项目|AI|工具/.test(text)) return '职场复仇';
+  if (/科幻|未来/.test(text)) return 'AI 科幻';
+  return '都市逆袭';
+}
+
 function generatePackage(input: CreationInput, profile?: AccountProfile): GeneratedPackage {
   const idea = input.idea.trim() || '一个普通人突然抓住一次翻盘机会';
   const compactIdea = shortText(idea);
@@ -1521,6 +1538,18 @@ function App() {
     setCopyStatus('已取消编辑。');
   }
 
+  function startCreationFromLead(lead: RevenueLead) {
+    const idea = lead.need.trim() || lead.reply?.trim() || lead.nextAction.trim() || '根据客户账号方向生成一条故事短视频素材包';
+    setInput({
+      goal: idea.includes('小说') ? '小说转短视频' : '故事短视频',
+      platform: inferPlatformFromLead(lead),
+      genre: inferGenreFromLead(lead),
+      idea
+    });
+    setScreen('wizard');
+    setCopyStatus(`已把 ${lead.name} 的需求带入创作向导。`);
+  }
+
   function updateRevenueLead(id: string, partial: Partial<RevenueLead>) {
     const nextLeads = revenueLeads.map((lead) => (
       lead.id === id ? { ...lead, ...partial } : lead
@@ -2309,6 +2338,7 @@ function App() {
                         <button className="secondary" onClick={() => updateRevenueLead(lead.id, { status: '强意向' })}>强意向</button>
                         <button className="secondary" onClick={() => updateRevenueLead(lead.id, { status: '已付款', amount: lead.amount || 29 })}>已付款</button>
                         <button className="secondary" onClick={() => editRevenueLead(lead)}>编辑</button>
+                        <button className="secondary" onClick={() => startCreationFromLead(lead)}><Wand2 size={16} />用需求生成</button>
                         <button className="secondary" onClick={() => deleteRevenueLead(lead.id)}><Trash2 size={16} />删除</button>
                       </div>
                     </div>
