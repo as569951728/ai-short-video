@@ -195,6 +195,7 @@ V1 系统可用的定义：
 - [x] 收入页增加成交交付清单，面向强意向和已付款线索明确交付物、边界和验收问题。
 - [x] 自动成片 MVP 增加镜头表、资产清单和渲染交接说明导出。
 - [x] 本地 API CORS 改为支持当前 localhost/127.0.0.1 动态端口，避免 52715 调用 8787 被误判为 API 未启动。
+- [x] 收入页增加收入线索备份下载和 JSON 恢复，避免浏览器缓存清理导致验证数据丢失。
 - [x] 写入自动成片 MVP 文档：`docs/v1/V1_VIDEO_EXPORT_MVP.md`。
 - [x] 写入剧情可视化样片触达执行包：`docs/ops/2026-06-09-visual-demo-outreach-pack.md`。
 - [x] 写入首个 100 元执行 SOP：`docs/ops/2026-06-10-first-100-execution-sop.md`。

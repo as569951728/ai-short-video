@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   ArrowLeft,
@@ -1457,6 +1457,14 @@ ${leads.length === 0 ? '暂无线索。' : leads.map((lead, index) => `${index +
 - 如果有人愿意付费或试点：只修影响成交/交付的问题。`;
 }
 
+function buildRevenueBackup(leads: RevenueLead[]) {
+  return JSON.stringify({
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    revenueLeads: leads
+  }, null, 2);
+}
+
 function inferLeadNextStep(lead: RevenueLead) {
   const text = `${lead.reply || ''} ${lead.objection || ''} ${lead.need || ''}`;
 
@@ -1786,6 +1794,7 @@ function App() {
   const [revenueFilter, setRevenueFilter] = useState<RevenueStatus | '全部' | '待处理' | '待跟进'>('全部');
   const [leadDraft, setLeadDraft] = useState(defaultRevenueLead);
   const [editingLeadId, setEditingLeadId] = useState<string | null>(null);
+  const revenueBackupInputRef = useRef<HTMLInputElement | null>(null);
   const [modelConfig, setModelConfig] = useState({
     baseUrl: '',
     apiKey: '',
@@ -1811,6 +1820,7 @@ function App() {
   const leadStageMessage = useMemo(() => buildLeadStageMessage(leadDraft, showcaseProject), [leadDraft, showcaseProject]);
   const objectionReply = useMemo(() => buildObjectionReply(leadDraft, showcaseProject), [leadDraft, showcaseProject]);
   const revenueReport = useMemo(() => buildRevenueReport(revenueLeads), [revenueLeads]);
+  const revenueBackup = useMemo(() => buildRevenueBackup(revenueLeads), [revenueLeads]);
   const paidRevenue = revenueLeads.reduce((sum, lead) => sum + (lead.status === '已付款' ? lead.amount : 0), 0);
   const strongSignalCount = revenueLeads.filter((lead) => lead.status === '强意向' || lead.status === '已付款').length;
   const interviewCount = revenueLeads.filter((lead) => lead.status !== '待联系' && lead.status !== '无效').length;
@@ -2279,6 +2289,35 @@ function App() {
     });
     setRevenueLeads(nextLeads);
     localStorage.setItem(revenueLeadsKey, JSON.stringify(nextLeads));
+  }
+
+  function restoreRevenueBackupFromFile(file: File) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(String(reader.result || '{}'));
+        if (!Array.isArray(parsed.revenueLeads)) {
+          setCopyStatus('备份文件格式不正确，未找到 revenueLeads。');
+          return;
+        }
+
+        const restoredLeads = parsed.revenueLeads.map((lead: RevenueLead) => normalizeLeadEvidence({
+          ...defaultRevenueLead,
+          ...lead,
+          id: lead.id || crypto.randomUUID(),
+          createdAt: lead.createdAt || new Date().toISOString()
+        }));
+        setRevenueLeads(restoredLeads);
+        localStorage.setItem(revenueLeadsKey, JSON.stringify(restoredLeads));
+        setRevenueFilter('全部');
+        setEditingLeadId(null);
+        setLeadDraft(defaultRevenueLead);
+        setCopyStatus(`已恢复 ${restoredLeads.length} 条收入线索备份。`);
+      } catch {
+        setCopyStatus('备份文件解析失败，请确认是系统导出的 JSON。');
+      }
+    };
+    reader.readAsText(file);
   }
 
   function useTouchpoint(seed: TouchpointSeed) {
@@ -2850,7 +2889,20 @@ function App() {
               <div className="header-actions">
                 <button className="secondary" onClick={() => copyText(revenueReport, '收入复盘', 'revenue-report')}><Copy size={18} />复制复盘</button>
                 <button className="secondary" onClick={() => downloadTextFile('aishortvideo-revenue-report.md', revenueReport)}><Download size={18} />下载复盘</button>
+                <button className="secondary" onClick={() => downloadTextFile('aishortvideo-revenue-backup.json', revenueBackup)}><Download size={18} />下载备份</button>
+                <button className="secondary" onClick={() => revenueBackupInputRef.current?.click()}><FolderOpen size={18} />导入备份</button>
                 <button className="primary" onClick={saveRevenueLead}><Save size={18} />{editingLeadId ? '更新线索' : '保存线索'}</button>
+                <input
+                  ref={revenueBackupInputRef}
+                  className="sr-only-copy"
+                  type="file"
+                  accept="application/json"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) restoreRevenueBackupFromFile(file);
+                    event.target.value = '';
+                  }}
+                />
               </div>
             </header>
             <div className="grid three">
