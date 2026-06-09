@@ -137,6 +137,11 @@ interface RevenueEvidenceIssue {
   missing: string[];
 }
 
+interface RevenueQuoteOpportunity {
+  lead: RevenueLead;
+  reason: string;
+}
+
 interface TouchpointSeed {
   name: string;
   channel: string;
@@ -1513,6 +1518,54 @@ ${issues.slice(0, 12).map((issue, index) => `${index + 1}. ${issue.lead.name}
 - 有回复但没有回复时间，会影响后续跟进节奏判断。`;
 }
 
+function inferQuoteOpportunityReason(lead: RevenueLead) {
+  if (!['已联系', '已发样片', '已体验'].includes(lead.status)) return '';
+
+  const text = `${lead.reply || ''} ${lead.need || ''} ${lead.nextAction || ''} ${lead.validationSignal || ''}`;
+
+  if (/多少钱|价格|收费|报价|怎么卖|费用/.test(text)) return '对方已经问到价格或收费方式。';
+  if (/想试|试试|可以试|愿意试|下单|付款|付费|来一条/.test(text)) return '对方表达了试一条或付费尝试的意愿。';
+  if (/给我生成|帮我生成|账号方向|一句话|内容方向|素材包/.test(text)) return '对方已经给出方向或素材包需求。';
+  if (lead.status === '已体验' && !lead.offer.includes('0')) return '对方已经体验过，不应继续停留在免费反馈。';
+  if (lead.status === '已发样片' && Boolean(lead.reply?.trim())) return '对方看过样片并给了反馈，可以尝试给 29 元下一步。';
+
+  return '';
+}
+
+function findQuoteOpportunities(leads: RevenueLead[]): RevenueQuoteOpportunity[] {
+  return leads
+    .map((lead) => ({ lead, reason: inferQuoteOpportunityReason(lead) }))
+    .filter((item) => Boolean(item.reason));
+}
+
+function buildQuoteOpportunityPlan(leads: RevenueLead[]) {
+  const opportunities = findQuoteOpportunities(leads);
+
+  if (opportunities.length === 0) {
+    return `# 报价机会提醒
+
+当前没有明显报价机会。
+
+下一步：继续发样片、追问反馈，等对方问价格、愿意试或给出账号方向后再报价。`;
+  }
+
+  return `# 报价机会提醒
+
+当前有 ${opportunities.length} 条线索应该优先报价，不要继续免费聊。
+
+${opportunities.slice(0, 12).map((item, index) => `${index + 1}. ${item.lead.name}
+   状态：${item.lead.status}
+   渠道：${item.lead.channel || '未填写'}
+   推荐报价：${item.lead.offer || defaultRevenueLead.offer}
+   触发原因：${item.reason}
+   下一步：复制报价话术，发出后把状态标为“已报价”。`).join('\n\n')}
+
+执行原则：
+- 有报价机会时，目标不是继续解释系统，而是给 29/99/100 元下一步选择。
+- 发出报价后必须记录时间、客户回复和下次跟进。
+- 对方拒绝也有价值，记录拒绝原因后换下一条线索。`;
+}
+
 function buildRevenueReport(leads: RevenueLead[]) {
   const paidRevenue = leads.reduce((sum, lead) => sum + (lead.status === '已付款' ? lead.amount : 0), 0);
   const contacted = leads.filter((lead) => isContactedLeadStatus(lead.status)).length;
@@ -1521,6 +1574,7 @@ function buildRevenueReport(leads: RevenueLead[]) {
   const replied = leads.filter((lead) => Boolean(lead.reply?.trim())).length;
   const dueFollowUps = leads.filter((lead) => isDueFollowUpLead(lead)).length;
   const evidenceIssues = findRevenueEvidenceIssues(leads).length;
+  const quoteOpportunities = findQuoteOpportunities(leads).length;
 
   return `# AIShortvideo 收入验证复盘
 
@@ -1535,6 +1589,7 @@ function buildRevenueReport(leads: RevenueLead[]) {
 - 真实回复：${replied}
 - 待跟进：${dueFollowUps}
 - 触达证据缺口：${evidenceIssues}
+- 报价机会：${quoteOpportunities}
 - 强信号：${leads.filter((lead) => lead.status === '强意向' || lead.status === '已付款').length}
 - 已收款：¥${paidRevenue}
 
@@ -1780,6 +1835,22 @@ function buildRevenueNoviceAction(
   const message = actionLead.status === '待联系' && isPublicLead
     ? buildShortPermissionCommentMessage(actionLead)
     : buildLeadStageMessage(actionLead, showcaseProject);
+  const quoteOpportunityReason = inferQuoteOpportunityReason(actionLead);
+
+  if (quoteOpportunityReason) {
+    return {
+      tag: '离收款最近',
+      title: `发出报价：${actionLead.name}`,
+      detail: `${quoteOpportunityReason} 现在不要继续免费聊，发出报价后标记“已报价”。`,
+      primaryLabel: '复制报价',
+      primaryAction: 'copy-message',
+      secondaryLabel: '已报价',
+      secondaryAction: 'mark-status',
+      targetStatus: '已报价',
+      lead: actionLead,
+      message: buildQuoteMessage(actionLead)
+    };
+  }
 
   if (actionLead.status === '待联系') {
     return {
@@ -1963,6 +2034,8 @@ function App() {
   const dueFollowUpCount = dueFollowUpLeads.length;
   const revenueEvidenceIssues = useMemo(() => findRevenueEvidenceIssues(revenueLeads), [revenueLeads]);
   const revenueEvidenceIssueCount = revenueEvidenceIssues.length;
+  const quoteOpportunities = useMemo(() => findQuoteOpportunities(revenueLeads), [revenueLeads]);
+  const quoteOpportunityCount = quoteOpportunities.length;
   const filteredRevenueLeads = revenueLeads.filter((lead) => {
     if (revenueFilter === '全部') return true;
     if (revenueFilter === '待处理') {
@@ -1976,6 +2049,7 @@ function App() {
   const followUpPlan = useMemo(() => buildFollowUpPlan(dueFollowUpLeads), [dueFollowUpLeads]);
   const deliveryChecklist = useMemo(() => buildRevenueDeliveryChecklist(revenueLeads), [revenueLeads]);
   const revenueEvidenceAudit = useMemo(() => buildRevenueEvidenceAudit(revenueLeads), [revenueLeads]);
+  const quoteOpportunityPlan = useMemo(() => buildQuoteOpportunityPlan(revenueLeads), [revenueLeads]);
   const todayContactPlan = useMemo(() => buildTodayContactPlan(todayContactLeads, showcaseProject), [todayContactLeads, showcaseProject]);
   const revenueValidationSteps: RevenueValidationStep[] = [
     {
@@ -3056,6 +3130,7 @@ function App() {
               <article className="panel metric"><span>今日待联系</span><strong>{todayContactCount}</strong></article>
               <article className="panel metric"><span>待跟进</span><strong>{dueFollowUpCount}</strong></article>
               <article className={`panel metric ${revenueEvidenceIssueCount > 0 ? 'warning-panel' : ''}`}><span>证据缺口</span><strong>{revenueEvidenceIssueCount}</strong></article>
+              <article className={`panel metric ${quoteOpportunityCount > 0 ? 'warning-panel' : ''}`}><span>报价机会</span><strong>{quoteOpportunityCount}</strong></article>
             </div>
             <article className={`panel ${revenueEvidenceIssueCount > 0 ? 'warning-panel' : ''}`}>
               <div className="panel-title">
@@ -3089,6 +3164,39 @@ function App() {
                 </div>
               )}
               <textarea id="revenue-evidence-audit" className="sr-only-copy" readOnly value={revenueEvidenceAudit} />
+            </article>
+            <article className={`panel ${quoteOpportunityCount > 0 ? 'warning-panel' : ''}`}>
+              <div className="panel-title">
+                <div>
+                  <h3>报价机会提醒</h3>
+                  <p className="muted">{quoteOpportunityCount > 0 ? '有线索已经出现价格、试用、账号方向或体验信号，应该推进报价。' : '当前没有明显报价机会，先继续样片触达和反馈追问。'}</p>
+                </div>
+                <div className="lead-actions">
+                  <button className="secondary" onClick={() => setRevenueFilter('待处理')}><ClipboardList size={16} />查看线索</button>
+                  <button className="secondary" onClick={() => copyText(quoteOpportunityPlan, '报价机会', 'quote-opportunity-plan')}><Copy size={16} />复制提醒</button>
+                </div>
+              </div>
+              {quoteOpportunities.length === 0 ? (
+                <div className="empty compact-empty">
+                  <MessageSquare size={28} />
+                  <p>还没有报价机会。先让对方看样片，或追问 3 个反馈问题。</p>
+                </div>
+              ) : (
+                <div className="action-queue">
+                  {quoteOpportunities.slice(0, 5).map((item, index) => (
+                    <div className="queue-row" key={item.lead.id}>
+                      <span>{index + 1}</span>
+                      <div>
+                        <strong>{item.lead.name}</strong>
+                        <small>{item.lead.status} / {item.lead.offer || defaultRevenueLead.offer}</small>
+                      </div>
+                      <p>{item.reason}</p>
+                      <button className="secondary" onClick={() => editRevenueLead(item.lead)}>去报价</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <textarea id="quote-opportunity-plan" className="sr-only-copy" readOnly value={quoteOpportunityPlan} />
             </article>
             <article className="panel novice-mode-panel">
               <div className="panel-title">
