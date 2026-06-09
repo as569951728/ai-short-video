@@ -1221,7 +1221,14 @@ function buildVisualDemoBrief() {
 }
 
 function isLocalPreviewUrl(url: string) {
-  return /^http:\/\/(127\.0\.0\.1|localhost):\d+/.test(url);
+  return /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?/i.test(url.trim());
+}
+
+function normalizePublicPreviewUrlInput(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `https://${trimmed}`;
 }
 
 function buildVisualDemoPreviewMessage(previewUrl: string) {
@@ -1240,8 +1247,9 @@ function buildVisualDemoPreviewMessage(previewUrl: string) {
 }
 
 function buildPreviewHostingChecklist(publicPreviewUrl: string) {
-  const currentUrl = publicPreviewUrl.trim() || visualDemoPreviewUrl;
-  const status = publicPreviewUrl.trim()
+  const normalizedPublicUrl = normalizePublicPreviewUrlInput(publicPreviewUrl);
+  const currentUrl = normalizedPublicUrl || visualDemoPreviewUrl;
+  const status = normalizedPublicUrl
     ? '已填写公开预览链接，发送前仍要手动打开检查视频是否能播放。'
     : '当前只有本地预览链接，不能直接发给客户。';
 
@@ -2010,7 +2018,7 @@ function App() {
   const visualDemoOutreachMessage = useMemo(() => buildVisualDemoOutreachMessage(leadDraft), [leadDraft]);
   const demoBrief = useMemo(() => buildDemoBrief(showcaseProject), [showcaseProject]);
   const visualDemoBrief = useMemo(buildVisualDemoBrief, []);
-  const resolvedPreviewUrl = publicPreviewUrl.trim() || visualDemoPreviewUrl;
+  const resolvedPreviewUrl = normalizePublicPreviewUrlInput(publicPreviewUrl) || visualDemoPreviewUrl;
   const previewUrlIsLocal = isLocalPreviewUrl(resolvedPreviewUrl);
   const visualDemoPreviewMessage = useMemo(() => buildVisualDemoPreviewMessage(resolvedPreviewUrl), [resolvedPreviewUrl]);
   const previewHostingChecklist = useMemo(() => buildPreviewHostingChecklist(publicPreviewUrl), [publicPreviewUrl]);
@@ -2427,7 +2435,7 @@ ${dueFollowUpCount > 0 ? `- 有 ${dueFollowUpCount} 条到期待跟进线索，�
   }
 
   function savePublicPreviewUrl() {
-    const normalizedUrl = publicPreviewUrl.trim();
+    const normalizedUrl = normalizePublicPreviewUrlInput(publicPreviewUrl);
     localStorage.setItem(publicPreviewUrlKey, normalizedUrl);
     setPublicPreviewUrl(normalizedUrl);
     setCopyStatus(normalizedUrl ? '公开预览链接已保存，客户样片预览包会优先使用这个链接。' : '已清空公开预览链接，当前会回退到本地预览链接。');

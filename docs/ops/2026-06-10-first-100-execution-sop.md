@@ -119,7 +119,8 @@
 - 先复制“托管清单”，运行 `npm run demo:preview-package` 生成 `outputs/client-preview-package/`。
 - 把 `outputs/client-preview-package/` 里的全部文件放到可公开访问的位置。
 - 手动打开公开链接，确认视频能播放、小说能打开、报价边界能看到。
-- 回到收入页填入公开链接并保存，再复制客户样片预览包。
+- 回到收入页填入公开链接并保存；如果只填域名路径，系统会自动补 `https://`。
+- 再复制客户样片预览包。
 
 预览包包含：
 
