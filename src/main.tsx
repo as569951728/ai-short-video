@@ -998,6 +998,7 @@ ${leads.length === 0 ? '暂无线索。' : leads.map((lead, index) => `${index +
    需求：${lead.need || '未记录'}
    回复：${lead.reply || '未记录'}
    异议：${lead.objection || '未记录'}
+   系统建议：${inferLeadNextStep(lead)}
    下一步：${lead.nextAction || '未记录'}
    跟进时间：${lead.followUpAt ? lead.followUpAt.replace('T', ' ') : '未设置'}`).join('\n\n')}
 
@@ -1008,6 +1009,25 @@ ${leads.length === 0 ? '暂无线索。' : leads.map((lead, index) => `${index +
 - 如果已报价 = 0：优先优化报价动作，不继续做模型能力。
 - 如果真实回复 = 0：优先换触达人群或开场话术。
 - 如果有人愿意付费或试点：只修影响成交/交付的问题。`;
+}
+
+function inferLeadNextStep(lead: RevenueLead) {
+  const text = `${lead.reply || ''} ${lead.objection || ''} ${lead.need || ''}`;
+
+  if (lead.status === '已付款') return '已完成付款，下一步是交付并记录对方使用反馈。';
+  if (lead.status === '无效') return '无效线索，不继续投入时间。';
+  if (/多少钱|价格|收费|报价|怎么卖|费用/.test(text)) return '对方开始问价格，下一步直接发报价话术，并把状态标为“已报价”。';
+  if (/可以|发来|看看|样片|案例|链接|视频/.test(text) && lead.status !== '已发样片') return '对方愿意看案例，下一步发送剧情样片，并把状态标为“已发样片”。';
+  if (/想试|试试|可以试|给我生成|账号方向|一句话/.test(text)) return '对方愿意试，下一步收集账号方向或一句话想法，优先报价 29 元单条或 0 元演示。';
+  if (/太贵|没预算|便宜/.test(text)) return '对方有价格异议，下一步降到 0 元演示或 29 元单条，不推 99 元诊断。';
+  if (/担心|没效果|播放|爆款|流量/.test(text)) return '对方担心效果，下一步强调不承诺爆款，只验证能否减少脚本和分镜准备时间。';
+  if (lead.status === '待联系') return '下一步先发开场话术，请求许可看 28 秒样片。';
+  if (lead.status === '已联系') return '下一步等待回复；如果对方愿意看案例，发送样片。';
+  if (lead.status === '已发样片') return '下一步追问 3 个反馈：看懂了吗、最缺什么、是否愿意 29 元试一条。';
+  if (lead.status === '已报价') return '下一步设定跟进时间，确认是否接受 29/99/100 元版本。';
+  if (lead.status === '强意向') return '下一步明确收款方式和交付边界。';
+
+  return '下一步补充客户回复，再判断是否发样片或报价。';
 }
 
 function buildObjectionReply(lead: Omit<RevenueLead, 'id' | 'createdAt'>, showcaseProject: Project | null) {
@@ -2148,6 +2168,7 @@ function App() {
                         {lead.reply || lead.objection || lead.nextAction || lead.need || '待补下一步'}
                         {lead.followUpAt ? ` / 下次跟进：${lead.followUpAt.replace('T', ' ')}` : ''}
                       </p>
+                      <p className="lead-advice">{inferLeadNextStep(lead)}</p>
                       <div className="lead-actions">
                         <button className="secondary" onClick={() => updateRevenueLead(lead.id, { status: '已联系' })}>已联系</button>
                         <button className="secondary" onClick={() => updateRevenueLead(lead.id, { status: '已发样片' })}>已发样片</button>
