@@ -907,6 +907,20 @@ ${caseLine}
 你可以直接给我一个账号方向，或者一句话想法，我用系统给你跑一版。`;
 }
 
+function isPublicTouchChannel(channel: string) {
+  return /公开|评论|留言|回答/.test(channel);
+}
+
+function buildPermissionCommentMessage(lead: Omit<RevenueLead, 'id' | 'createdAt'>) {
+  const need = lead.need.trim() || '内容选题、脚本、分镜和字幕准备';
+
+  return `我在验证一个 AI 小说/短视频生成工具，主要想解决「${need}」这类前期准备问题。
+
+我现在有一条 28 秒剧情样片，想找真实做内容的人看一下，只问 3 个反馈：能不能看懂、哪里有用、是否值得 29 元试一条。
+
+如果方便，我可以发你样片链接或材料摘要；不方便也没关系，我不在评论区刷长广告。`;
+}
+
 function buildVisualDemoOutreachMessage(lead: Omit<RevenueLead, 'id' | 'createdAt'>) {
   const targetName = lead.name.trim() || '你好';
   const needLine = lead.need.trim()
@@ -1162,7 +1176,11 @@ function buildDeliveryFeedbackMessage(lead: Omit<RevenueLead, 'id' | 'createdAt'
 function buildLeadStageMessage(lead: Omit<RevenueLead, 'id' | 'createdAt'>, showcaseProject: Project | null) {
   const targetName = lead.name.trim() || '你好';
 
-  if (lead.status === '待联系') return buildOutreachMessage(lead, showcaseProject);
+  if (lead.status === '待联系') {
+    return isPublicTouchChannel(lead.channel || '')
+      ? buildPermissionCommentMessage(lead)
+      : buildOutreachMessage(lead, showcaseProject);
+  }
   if (lead.status === '已联系') return buildVisualDemoOutreachMessage(lead);
 
   if (lead.status === '已发样片') {
@@ -1377,6 +1395,7 @@ function App() {
     [projects]
   );
   const outreachMessage = useMemo(() => buildOutreachMessage(leadDraft, showcaseProject), [leadDraft, showcaseProject]);
+  const permissionCommentMessage = useMemo(() => buildPermissionCommentMessage(leadDraft), [leadDraft]);
   const visualDemoOutreachMessage = useMemo(() => buildVisualDemoOutreachMessage(leadDraft), [leadDraft]);
   const demoBrief = useMemo(() => buildDemoBrief(showcaseProject), [showcaseProject]);
   const visualDemoBrief = useMemo(buildVisualDemoBrief, []);
@@ -2376,6 +2395,7 @@ function App() {
                 <p className="muted">当前不要继续打磨视频，先拿 28 秒样片联系 5 个真实对象，至少发出 1 次报价。</p>
                 <div className="touchpoint-actions">
                   <button className="primary" onClick={generateVisualDemoLeads}><MessageSquare size={16} />加入 5 个样片触达对象</button>
+                  <button className="secondary" onClick={() => copyText(permissionCommentMessage, '公开评论话术', 'permission-comment-message')}><Copy size={16} />复制公开评论</button>
                   <button className="secondary" onClick={() => copyText(visualDemoOutreachMessage, '样片话术', 'visual-demo-outreach-message')}><Copy size={16} />复制样片话术</button>
                   <button className="secondary" onClick={() => copyText(visualDemoBrief, '样片材料', 'visual-demo-brief')}><ClipboardList size={16} />复制样片材料</button>
                   <a className="secondary" href={visualDemoVideoUrl} target="_blank" rel="noreferrer"><Play size={16} />打开样片</a>
@@ -2415,6 +2435,14 @@ function App() {
                 </div>
               )}
               <textarea id="revenue-action-queue" className="sr-only-copy" readOnly value={revenueActionQueueText} />
+            </article>
+            <article className="panel">
+              <div className="panel-title">
+                <h3>公开评论许可话术</h3>
+                <button className="secondary" onClick={() => copyText(permissionCommentMessage, '公开评论话术', 'permission-comment-message')}><Copy size={16} />复制</button>
+              </div>
+              <p className="muted">公开评论区先请求许可，不直接贴长广告；对方愿意后再发样片材料。</p>
+              <textarea id="permission-comment-message" className="message-box compact-message" readOnly value={permissionCommentMessage} />
             </article>
             <div className="grid two">
               <article className="panel">
