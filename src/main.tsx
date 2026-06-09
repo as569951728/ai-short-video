@@ -1046,6 +1046,7 @@ function App() {
   const [videoPlan, setVideoPlan] = useState<VideoPlan | null>(null);
   const [profile, setProfile] = useState<AccountProfile>(readStoredProfile);
   const [revenueLeads, setRevenueLeads] = useState<RevenueLead[]>(readRevenueLeads);
+  const [revenueFilter, setRevenueFilter] = useState<RevenueStatus | '全部' | '待处理'>('全部');
   const [leadDraft, setLeadDraft] = useState(defaultRevenueLead);
   const [modelConfig, setModelConfig] = useState({
     baseUrl: '',
@@ -1074,6 +1075,13 @@ function App() {
   const sampleSentCount = revenueLeads.filter((lead) => ['已发样片', '已报价', '已体验', '强意向', '已付款'].includes(lead.status)).length;
   const quotedCount = revenueLeads.filter((lead) => ['已报价', '强意向', '已付款'].includes(lead.status)).length;
   const replyCount = revenueLeads.filter((lead) => Boolean(lead.reply?.trim())).length;
+  const filteredRevenueLeads = revenueLeads.filter((lead) => {
+    if (revenueFilter === '全部') return true;
+    if (revenueFilter === '待处理') {
+      return lead.status === '待联系' || lead.status === '已联系' || lead.status === '已发样片' || lead.status === '已报价';
+    }
+    return lead.status === revenueFilter;
+  });
   const todayContactPlan = useMemo(() => buildTodayContactPlan(todayContactLeads, showcaseProject), [todayContactLeads, showcaseProject]);
   const modelQualityPassed = modelQualityResults.length === modelQualityCases.length && modelQualityResults.every((result) => result.passed);
   const operatingSteps: OperatingStep[] = [
@@ -2102,15 +2110,33 @@ function App() {
             </article>
             {copyStatus && <p className="status-text">{copyStatus}</p>}
             <article className="panel">
-              <h3>线索记录</h3>
+              <div className="panel-title">
+                <h3>线索记录</h3>
+                <div className="lead-actions">
+                  {(['全部', '待处理', ...revenueStatuses] as const).map((status) => (
+                    <button
+                      className={revenueFilter === status ? 'primary' : 'secondary'}
+                      key={status}
+                      onClick={() => setRevenueFilter(status)}
+                    >
+                      {status}
+                    </button>
+                  ))}
+                </div>
+              </div>
               {revenueLeads.length === 0 ? (
                 <div className="empty">
                   <MessageSquare size={28} />
                   <p>还没有线索。今天先记录 5 个可沟通对象，不等系统完美再开始验证。</p>
                 </div>
+              ) : filteredRevenueLeads.length === 0 ? (
+                <div className="empty">
+                  <MessageSquare size={28} />
+                  <p>当前筛选下没有线索。</p>
+                </div>
               ) : (
                 <div className="lead-list">
-                  {revenueLeads.map((lead) => (
+                  {filteredRevenueLeads.map((lead) => (
                     <div className="lead-row" key={lead.id}>
                       <div>
                         <strong>{lead.name}</strong>
