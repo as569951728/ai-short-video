@@ -1314,6 +1314,20 @@ function App() {
       targetScreen: 'revenue'
     },
     {
+      label: '发出 3 个剧情样片',
+      why: '样片没发出去，就无法判断视频雏形是否能打动真实对象。',
+      done: sampleSentCount >= 3,
+      actionLabel: '去发样片',
+      targetScreen: 'revenue'
+    },
+    {
+      label: '至少发出 1 次报价',
+      why: '没有报价动作，就无法验证 29/99/100 元是否有人愿意付。',
+      done: quotedCount >= 1,
+      actionLabel: '去报价',
+      targetScreen: 'revenue'
+    },
+    {
       label: '完成 10 个访谈记录',
       why: '没有访谈数据，就不知道系统到底解决谁的痛点。',
       done: interviewCount >= 10,
