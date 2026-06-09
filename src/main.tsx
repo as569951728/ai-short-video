@@ -2094,6 +2094,51 @@ function App() {
     () => buildRevenueNoviceAction(revenueLeads, revenueActionQueue[0] ?? null, paidRevenue, showcaseProject, previewUrlIsLocal, previewHostingChecklist),
     [revenueLeads, revenueActionQueue, paidRevenue, showcaseProject, previewUrlIsLocal, previewHostingChecklist]
   );
+  const dailyExecutionBrief = useMemo(() => `# 今日 30 分钟执行单
+
+目标：只推进能接近首个 100 元的动作，不扩功能。
+
+## 当前数字
+
+- 收入：¥${paidRevenue}/100
+- 已联系：${contactedCount}/5
+- 已发样片：${sampleSentCount}/3
+- 已报价：${quotedCount}/1
+- 报价机会：${quoteOpportunityCount}
+- 触达证据缺口：${revenueEvidenceIssueCount}
+- 今日待跟进：${dueFollowUpCount}
+
+## 现在只做这一步
+
+${revenueNoviceAction.title}
+
+动作：${revenueNoviceAction.primaryLabel}
+说明：${revenueNoviceAction.detail}
+
+## 纠偏提醒
+
+${previewUrlIsLocal ? '- 当前样片预览仍是本地链接，发样片前先运行 `npm run demo:preview-package` 并填写公开 URL。' : '- 公开预览链接已填写，发送前仍要手动打开检查视频能否播放。'}
+${quoteOpportunityCount > 0 ? `- 有 ${quoteOpportunityCount} 条报价机会，优先报价，不继续免费答疑。` : '- 暂无报价机会，继续发样片或追问反馈。'}
+${revenueEvidenceIssueCount > 0 ? `- 有 ${revenueEvidenceIssueCount} 条触达证据缺口，补平台位置或时间后再复盘数据。` : '- 当前没有触达证据缺口。'}
+${dueFollowUpCount > 0 ? `- 有 ${dueFollowUpCount} 条到期待跟进线索，先处理跟进。` : '- 当前没有到期待跟进线索。'}
+
+## 今日结束前必须留下
+
+- 至少 1 条真实平台位置或链接。
+- 每次发送后的状态和发送时间。
+- 有回复就记录客户原话。
+- 有报价就标记“已报价”并设置下次跟进。
+- 每天结束复制“收入验证复盘”。`, [
+    paidRevenue,
+    contactedCount,
+    sampleSentCount,
+    quotedCount,
+    quoteOpportunityCount,
+    revenueEvidenceIssueCount,
+    dueFollowUpCount,
+    revenueNoviceAction,
+    previewUrlIsLocal
+  ]);
   const modelQualityPassed = modelQualityResults.length === modelQualityCases.length && modelQualityResults.every((result) => result.passed);
   const operatingSteps: OperatingStep[] = [
     {
@@ -3132,6 +3177,16 @@ function App() {
               <article className={`panel metric ${revenueEvidenceIssueCount > 0 ? 'warning-panel' : ''}`}><span>证据缺口</span><strong>{revenueEvidenceIssueCount}</strong></article>
               <article className={`panel metric ${quoteOpportunityCount > 0 ? 'warning-panel' : ''}`}><span>报价机会</span><strong>{quoteOpportunityCount}</strong></article>
             </div>
+            <article className="panel">
+              <div className="panel-title">
+                <div>
+                  <h3>今日 30 分钟执行单</h3>
+                  <p className="muted">每天打开收入页后，先按这份清单执行，不临时扩功能。</p>
+                </div>
+                <button className="secondary" onClick={() => copyText(dailyExecutionBrief, '今日执行单', 'daily-execution-brief')}><Copy size={16} />复制执行单</button>
+              </div>
+              <textarea id="daily-execution-brief" className="message-box compact-message" readOnly value={dailyExecutionBrief} />
+            </article>
             <article className={`panel ${revenueEvidenceIssueCount > 0 ? 'warning-panel' : ''}`}>
               <div className="panel-title">
                 <div>
