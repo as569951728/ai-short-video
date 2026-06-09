@@ -387,6 +387,7 @@ const modelQualityResultsKey = 'aishortvideo:model-quality-results';
 const visualDemoTitle = '《凌晨三点的撤回消息》';
 const visualDemoVideoUrl = new URL('../outputs/demo-2026-06-09-v2/demo-video.mp4', import.meta.url).href;
 const visualDemoNovelUrl = new URL('../outputs/demo-2026-06-09-v2/novel.md', import.meta.url).href;
+const visualDemoPreviewUrl = new URL('../outputs/demo-2026-06-09-v2/client-preview.html', import.meta.url).href;
 const visualDemoAssetNote = '样片文件在案例库可直接播放，也可下载后作为附件发送给对方。';
 
 const defaultProfile: AccountProfile = {
@@ -1108,6 +1109,17 @@ function buildVisualDemoBrief() {
 - 对方是否愿意试 29 元单条素材包，或 100 元以上试点。`;
 }
 
+function buildVisualDemoPreviewMessage() {
+  return `这是 AIShortvideo 的 28 秒剧情样片预览：${visualDemoPreviewUrl}
+
+你主要看 3 点：
+1. 这个样片是否能让你看懂故事？
+2. 如果你做内容，前期最缺的是故事、分镜、字幕，还是标题？
+3. 如果按你的账号方向生成 1 条完整素材包，29 元试一条，你会不会考虑？
+
+边界：不承诺爆款、播放量、涨粉或成交；当前只验证它能不能减少内容准备时间。`;
+}
+
 function buildTodayContactPlan(todayLeads: RevenueLead[], showcaseProject: Project | null) {
   if (todayLeads.length === 0) {
     return `# 今日联系清单
@@ -1614,6 +1626,7 @@ function App() {
   const visualDemoOutreachMessage = useMemo(() => buildVisualDemoOutreachMessage(leadDraft), [leadDraft]);
   const demoBrief = useMemo(() => buildDemoBrief(showcaseProject), [showcaseProject]);
   const visualDemoBrief = useMemo(buildVisualDemoBrief, []);
+  const visualDemoPreviewMessage = useMemo(buildVisualDemoPreviewMessage, []);
   const quoteMessage = useMemo(() => buildQuoteMessage(leadDraft), [leadDraft]);
   const paymentConfirmation = useMemo(() => buildPaymentConfirmation(leadDraft), [leadDraft]);
   const deliveryFeedbackMessage = useMemo(() => buildDeliveryFeedbackMessage(leadDraft), [leadDraft]);
@@ -2563,6 +2576,7 @@ function App() {
                 <h3>《凌晨三点的撤回消息》</h3>
                 <p className="muted">原创悬疑小说，已生成 28 秒竖屏 MP4、分镜和 SRT 字幕。</p>
                 <div className="header-actions">
+                  <a className="secondary" href={visualDemoPreviewUrl} target="_blank" rel="noreferrer"><Play size={16} />打开预览页</a>
                   <a className="secondary" href={visualDemoNovelUrl} target="_blank" rel="noreferrer"><FileText size={16} />打开小说</a>
                   <a className="secondary" href={visualDemoVideoUrl} download><Download size={16} />下载视频</a>
                 </div>
@@ -2713,8 +2727,10 @@ function App() {
                 <div className="touchpoint-actions">
                   <button className="primary" onClick={generateVisualDemoLeads}><MessageSquare size={16} />加入 5 个样片触达对象</button>
                   <button className="secondary" onClick={() => copyText(shortPermissionCommentMessage, '短评论话术', 'short-permission-comment-message')}><Copy size={16} />复制短评论</button>
+                  <button className="secondary" onClick={() => copyText(visualDemoPreviewMessage, '预览说明', 'visual-demo-preview-message')}><Copy size={16} />复制预览说明</button>
                   <button className="secondary" onClick={() => copyText(visualDemoOutreachMessage, '样片话术', 'visual-demo-outreach-message')}><Copy size={16} />复制样片话术</button>
                   <button className="secondary" onClick={() => copyText(visualDemoBrief, '样片材料', 'visual-demo-brief')}><ClipboardList size={16} />复制样片材料</button>
+                  <a className="secondary" href={visualDemoPreviewUrl} target="_blank" rel="noreferrer"><Play size={16} />打开预览页</a>
                   <a className="secondary" href={visualDemoVideoUrl} target="_blank" rel="noreferrer"><Play size={16} />打开样片</a>
                 </div>
               </div>
@@ -2768,6 +2784,17 @@ function App() {
               <label>完整许可
                 <textarea id="permission-comment-message" className="message-box compact-message" readOnly value={permissionCommentMessage} />
               </label>
+            </article>
+            <article className="panel">
+              <div className="panel-title">
+                <h3>客户样片预览包</h3>
+                <div className="lead-actions">
+                  <button className="secondary" onClick={() => copyText(visualDemoPreviewMessage, '预览说明', 'visual-demo-preview-message')}><Copy size={16} />复制说明</button>
+                  <a className="secondary" href={visualDemoPreviewUrl} target="_blank" rel="noreferrer"><Play size={16} />打开预览页</a>
+                </div>
+              </div>
+              <p className="muted">对方愿意看样片后发送，比单独发长话术更容易建立信任。</p>
+              <textarea id="visual-demo-preview-message" className="message-box compact-message" readOnly value={visualDemoPreviewMessage} />
             </article>
             <div className="grid two">
               <article className="panel">

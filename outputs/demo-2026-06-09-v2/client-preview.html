@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>凌晨三点的撤回消息 - AIShortvideo 样片预览</title>
+    <style>
+      :root {
+        color: #13242d;
+        background: #f6f8f5;
+        font-family: Inter, "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+      }
+
+      main {
+        width: min(1120px, calc(100vw - 32px));
+        margin: 0 auto;
+        padding: 28px 0 40px;
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 0.9fr) minmax(280px, 420px);
+        gap: 24px;
+        align-items: center;
+        min-height: 82vh;
+      }
+
+      .eyebrow {
+        margin: 0 0 10px;
+        color: #1f7a6d;
+        font-size: 13px;
+        font-weight: 800;
+        letter-spacing: 0;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin-top: 0;
+      }
+
+      h1 {
+        margin-bottom: 14px;
+        font-size: clamp(36px, 5vw, 64px);
+        line-height: 1.05;
+        letter-spacing: 0;
+      }
+
+      p {
+        color: #52646d;
+        line-height: 1.7;
+      }
+
+      video {
+        width: 100%;
+        aspect-ratio: 9 / 16;
+        border-radius: 8px;
+        background: #111820;
+        box-shadow: 0 18px 48px rgba(14, 33, 42, 0.18);
+      }
+
+      .actions,
+      .grid,
+      .offer-grid {
+        display: grid;
+        gap: 12px;
+      }
+
+      .actions {
+        grid-template-columns: repeat(2, minmax(0, max-content));
+        margin-top: 22px;
+      }
+
+      a,
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 42px;
+        padding: 0 16px;
+        border-radius: 8px;
+        border: 1px solid #cfdcd7;
+        color: #13242d;
+        text-decoration: none;
+        font-weight: 800;
+      }
+
+      a.primary {
+        border-color: #1f7a6d;
+        background: #1f7a6d;
+        color: #fff;
+      }
+
+      section {
+        padding: 26px 0;
+      }
+
+      .grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .panel {
+        min-height: 150px;
+        padding: 18px;
+        border: 1px solid #dbe5e0;
+        border-radius: 8px;
+        background: #fff;
+      }
+
+      .panel strong {
+        display: block;
+        margin-bottom: 8px;
+        color: #13242d;
+      }
+
+      ul {
+        margin: 0;
+        padding-left: 20px;
+        color: #52646d;
+        line-height: 1.7;
+      }
+
+      .offer-grid {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+
+      .price {
+        color: #1f7a6d;
+        font-size: 24px;
+        font-weight: 900;
+      }
+
+      .footer-note {
+        border-top: 1px solid #dbe5e0;
+        padding-top: 18px;
+        color: #667883;
+        font-size: 14px;
+      }
+
+      @media (max-width: 820px) {
+        main {
+          width: min(100vw - 24px, 620px);
+          padding-top: 18px;
+        }
+
+        .hero,
+        .grid,
+        .offer-grid,
+        .actions {
+          grid-template-columns: 1fr;
+        }
+
+        .hero {
+          min-height: auto;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="hero">
+        <div>
+          <p class="eyebrow">AIShortvideo 样片预览</p>
+          <h1>凌晨三点的撤回消息</h1>
+          <p>这不是精修商业片，而是一条用于验证的 28 秒剧情样片：系统把原创小说整理成故事、分镜、字幕和基础竖屏视频，目标是判断它能否减少内容创作前期准备时间。</p>
+          <div class="actions">
+            <a class="primary" href="./demo-video.mp4">打开视频</a>
+            <a href="./novel.md">阅读小说</a>
+          </div>
+        </div>
+        <video src="./demo-video.mp4" controls playsinline preload="metadata"></video>
+      </section>
+
+      <section>
+        <h2>这条样片证明什么</h2>
+        <div class="grid">
+          <div class="panel">
+            <strong>能整理故事</strong>
+            <p>从原创悬疑小说提炼出可短视频化的钩子、情绪和反转线索。</p>
+          </div>
+          <div class="panel">
+            <strong>能生成分镜和字幕</strong>
+            <p>把故事拆成镜头、旁白和字幕，降低剪辑前的准备成本。</p>
+          </div>
+          <div class="panel">
+            <strong>能交付素材包</strong>
+            <p>后续可按账号方向输出标题、脚本、分镜、字幕、封面文案和发布文案。</p>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>请只反馈 3 件事</h2>
+        <ul>
+          <li>这个 28 秒样片是否能让你看懂故事？</li>
+          <li>如果你做内容，最缺的是故事、分镜、字幕，还是标题？</li>
+          <li>如果按你的账号方向生成 1 条完整素材包，29 元试一条，你会不会考虑？</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>可选合作方式</h2>
+        <div class="offer-grid">
+          <div class="panel">
+            <strong>0 元演示</strong>
+            <div class="price">¥0</div>
+            <p>给一句话想法，换一版系统演示和真实反馈。</p>
+          </div>
+          <div class="panel">
+            <strong>单条素材包</strong>
+            <div class="price">¥29</div>
+            <p>生成 1 条完整故事短视频素材包。</p>
+          </div>
+          <div class="panel">
+            <strong>系统诊断</strong>
+            <div class="price">¥99</div>
+            <p>输出 3 个方向、1 条样稿和发布前质检建议。</p>
+          </div>
+          <div class="panel">
+            <strong>小范围试点</strong>
+            <div class="price">¥100+</div>
+            <p>连续生成 3 到 5 条素材包，验证稳定交付。</p>
+          </div>
+        </div>
+      </section>
+
+      <p class="footer-note">边界说明：不承诺爆款、播放量、涨粉、成交或收入；不代发平台；不使用未授权素材。当前目标只是验证系统能否减少内容准备时间。</p>
+    </main>
+  </body>
+</html>
