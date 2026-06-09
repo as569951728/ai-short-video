@@ -101,7 +101,7 @@ interface AccountProfile {
   monetizationGoal: string;
 }
 
-type RevenueStatus = '待联系' | '已联系' | '已体验' | '强意向' | '已付款' | '无效';
+type RevenueStatus = '待联系' | '已联系' | '已发样片' | '已报价' | '已体验' | '强意向' | '已付款' | '无效';
 
 interface RevenueLead {
   id: string;
@@ -359,7 +359,7 @@ const defaultProfile: AccountProfile = {
   monetizationGoal: '先验证内容数据，再做系统诊断或试点'
 };
 
-const revenueStatuses: RevenueStatus[] = ['待联系', '已联系', '已体验', '强意向', '已付款', '无效'];
+const revenueStatuses: RevenueStatus[] = ['待联系', '已联系', '已发样片', '已报价', '已体验', '强意向', '已付款', '无效'];
 
 const objectionOptions = [
   '暂时不需要',
@@ -942,8 +942,72 @@ ${todayLeads.map((lead, index) => `${index + 1}. ${lead.name}
 
 执行规则：
 - 发出后立刻把状态标为“已联系”。
-- 对方愿意继续看样稿，标为“强意向”。
+- 发出样片后标为“已发样片”。
+- 发出 29/99/100 元报价后标为“已报价”。
+- 对方明确愿意继续试，标为“强意向”。
 - 不用等系统更完美，先验证真实反馈。`;
+}
+
+function buildQuoteMessage(lead: Omit<RevenueLead, 'id' | 'createdAt'>) {
+  const targetName = lead.name.trim() || '你好';
+  const offer = lead.offer || '29 元系统生成服务';
+
+  if (offer.includes('99')) {
+    return `${targetName}，如果你想更系统地判断账号方向，我这边可以做一次 99 元系统诊断：给你 3 个内容方向，选 1 个方向生成完整样稿，再附一份发布前质检和下一步建议。这个不承诺爆款，只帮你判断账号内容生产哪里最卡。`;
+  }
+
+  if (offer.includes('100')) {
+    return `${targetName}，如果你想连续验证，我建议先用 100 元以上试点定金做 3 到 5 条素材包。每条都包含故事/脚本、分镜、字幕、封面文案和发布文案，我们只看它是否能稳定减少内容准备时间。`;
+  }
+
+  if (offer.includes('0')) {
+    return `${targetName}，可以先 0 元演示。你给我一个账号方向或一句话想法，我用系统跑一版素材包，你只需要反馈：能不能看懂、哪里不像你要的、是否值得继续试。`;
+  }
+
+  return `${targetName}，如果你觉得刚才的样片方向有参考价值，可以先按 29 元试一条真实内容。我会按你的账号方向交付 1 条完整素材包：标题、钩子、故事脚本、分镜、字幕、封面文案和发布文案。不承诺爆款，只验证能不能减少你前期构思和脚本准备时间。`;
+}
+
+function buildRevenueReport(leads: RevenueLead[]) {
+  const paidRevenue = leads.reduce((sum, lead) => sum + (lead.status === '已付款' ? lead.amount : 0), 0);
+  const contacted = leads.filter((lead) => ['已联系', '已发样片', '已报价', '已体验', '强意向', '已付款'].includes(lead.status)).length;
+  const sampleSent = leads.filter((lead) => ['已发样片', '已报价', '已体验', '强意向', '已付款'].includes(lead.status)).length;
+  const quoted = leads.filter((lead) => ['已报价', '强意向', '已付款'].includes(lead.status)).length;
+  const replied = leads.filter((lead) => Boolean(lead.reply?.trim())).length;
+
+  return `# AIShortvideo 收入验证复盘
+
+导出时间：${new Date().toLocaleString()}
+
+## 漏斗
+
+- 线索数：${leads.length}
+- 已联系：${contacted}
+- 已发样片：${sampleSent}
+- 已报价：${quoted}
+- 真实回复：${replied}
+- 强信号：${leads.filter((lead) => lead.status === '强意向' || lead.status === '已付款').length}
+- 已收款：¥${paidRevenue}
+
+## 线索明细
+
+${leads.length === 0 ? '暂无线索。' : leads.map((lead, index) => `${index + 1}. ${lead.name}
+   渠道：${lead.channel || '未填写'}
+   状态：${lead.status}
+   报价：${lead.offer}
+   金额：¥${lead.amount}
+   需求：${lead.need || '未记录'}
+   回复：${lead.reply || '未记录'}
+   异议：${lead.objection || '未记录'}
+   下一步：${lead.nextAction || '未记录'}
+   跟进时间：${lead.followUpAt ? lead.followUpAt.replace('T', ' ') : '未设置'}`).join('\n\n')}
+
+## 纠偏判断
+
+- 如果已联系 < 5：先继续触达，不继续做功能。
+- 如果已发样片 < 3：先把样片发出去，不继续打磨视频。
+- 如果已报价 = 0：优先优化报价动作，不继续做模型能力。
+- 如果真实回复 = 0：优先换触达人群或开场话术。
+- 如果有人愿意付费或试点：只修影响成交/交付的问题。`;
 }
 
 function buildObjectionReply(lead: Omit<RevenueLead, 'id' | 'createdAt'>, showcaseProject: Project | null) {
@@ -998,12 +1062,18 @@ function App() {
   const visualDemoOutreachMessage = useMemo(() => buildVisualDemoOutreachMessage(leadDraft), [leadDraft]);
   const demoBrief = useMemo(() => buildDemoBrief(showcaseProject), [showcaseProject]);
   const visualDemoBrief = useMemo(buildVisualDemoBrief, []);
+  const quoteMessage = useMemo(() => buildQuoteMessage(leadDraft), [leadDraft]);
   const objectionReply = useMemo(() => buildObjectionReply(leadDraft, showcaseProject), [leadDraft, showcaseProject]);
+  const revenueReport = useMemo(() => buildRevenueReport(revenueLeads), [revenueLeads]);
   const paidRevenue = revenueLeads.reduce((sum, lead) => sum + (lead.status === '已付款' ? lead.amount : 0), 0);
   const strongSignalCount = revenueLeads.filter((lead) => lead.status === '强意向' || lead.status === '已付款').length;
   const interviewCount = revenueLeads.filter((lead) => lead.status !== '待联系' && lead.status !== '无效').length;
   const todayContactLeads = revenueLeads.filter((lead) => lead.status === '待联系');
   const todayContactCount = todayContactLeads.length;
+  const contactedCount = revenueLeads.filter((lead) => ['已联系', '已发样片', '已报价', '已体验', '强意向', '已付款'].includes(lead.status)).length;
+  const sampleSentCount = revenueLeads.filter((lead) => ['已发样片', '已报价', '已体验', '强意向', '已付款'].includes(lead.status)).length;
+  const quotedCount = revenueLeads.filter((lead) => ['已报价', '强意向', '已付款'].includes(lead.status)).length;
+  const replyCount = revenueLeads.filter((lead) => Boolean(lead.reply?.trim())).length;
   const todayContactPlan = useMemo(() => buildTodayContactPlan(todayContactLeads, showcaseProject), [todayContactLeads, showcaseProject]);
   const modelQualityPassed = modelQualityResults.length === modelQualityCases.length && modelQualityResults.every((result) => result.passed);
   const operatingSteps: OperatingStep[] = [
@@ -1817,14 +1887,21 @@ function App() {
                 <p className="eyebrow">首个 100 元验证</p>
                 <h2>用系统产出案例，再换真实付费信号</h2>
               </div>
-              <button className="primary" onClick={saveRevenueLead}><Save size={18} />保存线索</button>
+              <div className="header-actions">
+                <button className="secondary" onClick={() => copyText(revenueReport, '收入复盘', 'revenue-report')}><Copy size={18} />复制复盘</button>
+                <button className="secondary" onClick={() => downloadTextFile('aishortvideo-revenue-report.md', revenueReport)}><Download size={18} />下载复盘</button>
+                <button className="primary" onClick={saveRevenueLead}><Save size={18} />保存线索</button>
+              </div>
             </header>
             <div className="grid three">
               <article className="panel metric"><span>已收款</span><strong>¥{paidRevenue}</strong></article>
               <article className="panel metric"><span>线索</span><strong>{revenueLeads.length}</strong></article>
               <article className="panel metric"><span>强信号</span><strong>{strongSignalCount}</strong></article>
+              <article className="panel metric"><span>已联系</span><strong>{contactedCount}</strong></article>
+              <article className="panel metric"><span>已发样片</span><strong>{sampleSentCount}</strong></article>
+              <article className="panel metric"><span>已报价</span><strong>{quotedCount}</strong></article>
+              <article className="panel metric"><span>真实回复</span><strong>{replyCount}</strong></article>
               <article className="panel metric"><span>访谈记录</span><strong>{interviewCount}/10</strong></article>
-              <article className="panel metric"><span>触点清单</span><strong>{touchpointSeeds.length}/20</strong></article>
               <article className="panel metric"><span>今日待联系</span><strong>{todayContactCount}</strong></article>
             </div>
             <article className="panel visual-outreach-card">
@@ -2004,6 +2081,25 @@ function App() {
               <p className="muted">根据当前线索的异议类型生成，适合真实沟通后继续跟进。</p>
               <textarea id="objection-reply" className="message-box compact-message" readOnly value={objectionReply} />
             </article>
+            <article className="panel">
+              <div className="panel-title">
+                <h3>报价话术</h3>
+                <button className="secondary" onClick={() => copyText(quoteMessage, '报价话术', 'quote-message')}><Copy size={16} />复制</button>
+              </div>
+              <p className="muted">只有对方愿意看样片、愿意给方向或问价格时，再复制这段报价。</p>
+              <textarea id="quote-message" className="message-box compact-message" readOnly value={quoteMessage} />
+            </article>
+            <article className="panel">
+              <div className="panel-title">
+                <h3>收入验证复盘</h3>
+                <div className="lead-actions">
+                  <button className="secondary" onClick={() => copyText(revenueReport, '收入复盘', 'revenue-report')}><Copy size={16} />复制</button>
+                  <button className="secondary" onClick={() => downloadTextFile('aishortvideo-revenue-report.md', revenueReport)}><Download size={16} />下载</button>
+                </div>
+              </div>
+              <p className="muted">每天触达结束后导出一次，判断下一步该修话术、人群、报价还是产品。</p>
+              <textarea id="revenue-report" className="message-box compact-message" readOnly value={revenueReport} />
+            </article>
             {copyStatus && <p className="status-text">{copyStatus}</p>}
             <article className="panel">
               <h3>线索记录</h3>
@@ -2028,7 +2124,10 @@ function App() {
                       </p>
                       <div className="lead-actions">
                         <button className="secondary" onClick={() => updateRevenueLead(lead.id, { status: '已联系' })}>已联系</button>
+                        <button className="secondary" onClick={() => updateRevenueLead(lead.id, { status: '已发样片' })}>已发样片</button>
+                        <button className="secondary" onClick={() => updateRevenueLead(lead.id, { status: '已报价' })}>已报价</button>
                         <button className="secondary" onClick={() => updateRevenueLead(lead.id, { status: '强意向' })}>强意向</button>
+                        <button className="secondary" onClick={() => updateRevenueLead(lead.id, { status: '已付款', amount: lead.amount || 29 })}>已付款</button>
                         <button className="secondary" onClick={() => deleteRevenueLead(lead.id)}><Trash2 size={16} />删除</button>
                       </div>
                     </div>
