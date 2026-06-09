@@ -183,6 +183,7 @@ V1 系统可用的定义：
 - [x] 收入页增加公开评论许可话术，公开评论/留言渠道先请求许可，避免无熟人启动变成硬广。
 - [x] 写入自动成片 MVP 文档：`docs/v1/V1_VIDEO_EXPORT_MVP.md`。
 - [x] 写入剧情可视化样片触达执行包：`docs/ops/2026-06-09-visual-demo-outreach-pack.md`。
+- [x] 写入首个 100 元执行 SOP：`docs/ops/2026-06-10-first-100-execution-sop.md`。
 
 ## 进行中
 
