@@ -1,5 +1,7 @@
 # AIShortvideo V1 Validation Implementation Plan
 
+> 2026-06-10 状态更新：本文是早期 V1 生成闭环实现计划，当前主链路已经基本落地。最新执行目标已调整为“普通用户 + 趋势/需求输入 + 自营账号播放变现 + 14 天 10 元/30 天 100 元”。后续研发以 `docs/superpowers/plans/2026-06-10-playback-trend-implementation-plan.md` 为准。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the first usable validation slice for AI story short-video content creation, while preserving the complete long-term product blueprint.
@@ -810,4 +812,3 @@ Create and review the six V1 planning artifacts:
 4. `docs/v1/V1_MODEL_GATEWAY.md`
 5. `docs/v1/V1_QUALITY_SCORECARD.md`
 6. `docs/v1/V1_4_WEEK_VALIDATION.md`
-
