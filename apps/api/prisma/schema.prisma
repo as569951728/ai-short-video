@@ -1,0 +1,744 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+enum NovelLifecycleStatus {
+  ACTIVE   @map("active")
+  PAUSED   @map("paused")
+  ARCHIVED @map("archived")
+  DELETED  @map("deleted")
+
+  @@map("novel_lifecycle_status")
+}
+
+enum NovelCreationStage {
+  DRAFT              @map("draft")
+  DIRECTION          @map("direction")
+  SETTING            @map("setting")
+  OUTLINE            @map("outline")
+  CHAPTER_PLAN       @map("chapter_plan")
+  TRIAL              @map("trial")
+  BODY               @map("body")
+  FULL_REVIEW        @map("full_review")
+  COMPLETION_CONFIRM @map("completion_confirm")
+  VIDEO_READY        @map("video_ready")
+
+  @@map("novel_creation_stage")
+}
+
+enum StageStatus {
+  NOT_STARTED  @map("not_started")
+  PROCESSING   @map("processing")
+  WAITING_USER @map("waiting_user")
+  BLOCKED      @map("blocked")
+  FAILED       @map("failed")
+  COMPLETED    @map("completed")
+
+  @@map("stage_status")
+}
+
+enum TaskStatus {
+  QUEUED               @map("queued")
+  PROCESSING           @map("processing")
+  WAITING_CONFIRMATION @map("waiting_confirmation")
+  COMPLETED            @map("completed")
+  FAILED               @map("failed")
+  CANCELLED            @map("cancelled")
+
+  @@map("task_status")
+}
+
+enum VersionStatus {
+  CANDIDATE  @map("candidate")
+  CURRENT    @map("current")
+  HISTORICAL @map("historical")
+  DISCARDED  @map("discarded")
+  STALE      @map("stale")
+
+  @@map("version_status")
+}
+
+enum StaleLevel {
+  NONE        @map("none")
+  SOFT_STALE  @map("soft_stale")
+  HARD_STALE  @map("hard_stale")
+  RISK_STALE  @map("risk_stale")
+
+  @@map("stale_level")
+}
+
+enum RiskLevel {
+  NONE     @map("none")
+  LOW      @map("low")
+  MEDIUM   @map("medium")
+  HIGH     @map("high")
+  BLOCKING @map("blocking")
+
+  @@map("risk_level")
+}
+
+enum ImpactLevel {
+  NONE   @map("none")
+  MINOR  @map("minor")
+  MEDIUM @map("medium")
+  SEVERE @map("severe")
+
+  @@map("impact_level")
+}
+
+model Tenant {
+  id        String    @id @default(cuid()) @db.VarChar(32)
+  name      String    @db.VarChar(100)
+  slug      String    @unique @db.VarChar(80)
+  isDefault Boolean   @default(false) @map("is_default")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+  metadata  Json?
+
+  @@map("tenant")
+}
+
+model User {
+  id          String    @id @default(cuid()) @db.VarChar(32)
+  tenantId    String    @map("tenant_id") @db.VarChar(32)
+  displayName String    @map("display_name") @db.VarChar(100)
+  email       String    @db.VarChar(160)
+  role        String    @default("owner") @db.VarChar(50)
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  deletedAt   DateTime? @map("deleted_at")
+  metadata    Json?
+
+  @@unique([tenantId, email])
+  @@index([tenantId, role])
+  @@map("app_user")
+}
+
+model HotspotReport {
+  id               String    @id @default(cuid()) @db.VarChar(32)
+  tenantId         String    @map("tenant_id") @db.VarChar(32)
+  title            String    @db.VarChar(200)
+  source           String    @default("manual") @db.VarChar(50)
+  opportunityJson  Json?     @map("opportunity_json")
+  riskTagsJson     Json?     @map("risk_tags_json")
+  createdBy        String?   @map("created_by") @db.VarChar(32)
+  updatedBy        String?   @map("updated_by") @db.VarChar(32)
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+  deletedAt        DateTime? @map("deleted_at")
+  metadata         Json?
+
+  @@index([tenantId, createdAt])
+  @@map("hotspot_report")
+}
+
+model PolicyProfileVersion {
+  id          String        @id @default(cuid()) @db.VarChar(32)
+  tenantId    String        @map("tenant_id") @db.VarChar(32)
+  key         String        @db.VarChar(120)
+  versionNo   Int           @map("version_no")
+  status      VersionStatus @default(CANDIDATE)
+  summary     String        @db.Text
+  configJson  Json          @map("config_json")
+  createdBy   String?       @map("created_by") @db.VarChar(32)
+  updatedBy   String?       @map("updated_by") @db.VarChar(32)
+  createdAt   DateTime      @default(now()) @map("created_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
+  deletedAt   DateTime?     @map("deleted_at")
+  metadata    Json?
+
+  @@unique([tenantId, key, versionNo])
+  @@index([tenantId, key, status])
+  @@map("policy_profile_version")
+}
+
+model PromptTemplateVersion {
+  id               String        @id @default(cuid()) @db.VarChar(32)
+  tenantId         String        @map("tenant_id") @db.VarChar(32)
+  templateKey      String        @map("template_key") @db.VarChar(120)
+  versionNo        Int           @map("version_no")
+  status           VersionStatus @default(CANDIDATE)
+  summary          String        @db.Text
+  inputSchemaJson  Json?         @map("input_schema_json")
+  outputSchemaJson Json?         @map("output_schema_json")
+  createdBy        String?       @map("created_by") @db.VarChar(32)
+  updatedBy        String?       @map("updated_by") @db.VarChar(32)
+  createdAt        DateTime      @default(now()) @map("created_at")
+  updatedAt        DateTime      @updatedAt @map("updated_at")
+  deletedAt        DateTime?     @map("deleted_at")
+  metadata         Json?
+
+  @@unique([tenantId, templateKey, versionNo])
+  @@index([tenantId, templateKey, status])
+  @@map("prompt_template_version")
+}
+
+model ModelProvider {
+  id            String    @id @default(cuid()) @db.VarChar(32)
+  tenantId      String    @map("tenant_id") @db.VarChar(32)
+  providerKey   String    @map("provider_key") @db.VarChar(80)
+  providerType  String    @map("provider_type") @db.VarChar(50)
+  displayName   String    @map("display_name") @db.VarChar(120)
+  enabled       Boolean   @default(true)
+  configSummary String    @map("config_summary") @db.Text
+  createdBy     String?   @map("created_by") @db.VarChar(32)
+  updatedBy     String?   @map("updated_by") @db.VarChar(32)
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+  deletedAt     DateTime? @map("deleted_at")
+  metadata      Json?
+
+  @@unique([tenantId, providerKey])
+  @@index([tenantId, providerType, enabled])
+  @@map("model_provider")
+}
+
+model ModelConfig {
+  id                String    @id @default(cuid()) @db.VarChar(32)
+  tenantId          String    @map("tenant_id") @db.VarChar(32)
+  providerId        String    @map("provider_id") @db.VarChar(32)
+  modelKey          String    @map("model_key") @db.VarChar(120)
+  displayName       String    @map("display_name") @db.VarChar(120)
+  enabled           Boolean   @default(true)
+  usageScope        String    @map("usage_scope") @db.VarChar(80)
+  defaultParamsJson Json?     @map("default_params_json")
+  createdBy         String?   @map("created_by") @db.VarChar(32)
+  updatedBy         String?   @map("updated_by") @db.VarChar(32)
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+  deletedAt         DateTime? @map("deleted_at")
+  metadata          Json?
+
+  @@unique([tenantId, modelKey])
+  @@index([tenantId, providerId, enabled])
+  @@map("model_config")
+}
+
+model Novel {
+  id                               String              @id @default(cuid()) @db.VarChar(32)
+  tenantId                         String              @map("tenant_id") @db.VarChar(32)
+  ownerId                          String              @map("owner_id") @db.VarChar(32)
+  title                            String              @db.VarChar(200)
+  channel                          String              @default("novel") @db.VarChar(80)
+  genresJson                       Json?               @map("genres_json")
+  lifecycleStatus                  NovelLifecycleStatus @default(ACTIVE) @map("lifecycle_status")
+  creationStage                    NovelCreationStage   @default(DRAFT) @map("creation_stage")
+  stageStatus                      StageStatus          @default(NOT_STARTED) @map("stage_status")
+  currentDirectionVersionId        String?             @map("current_direction_version_id") @db.VarChar(32)
+  currentSettingVersionId          String?             @map("current_setting_version_id") @db.VarChar(32)
+  currentOutlineVersionId          String?             @map("current_outline_version_id") @db.VarChar(32)
+  currentStageOutlineVersionId     String?             @map("current_stage_outline_version_id") @db.VarChar(32)
+  currentChapterPlanVersionId      String?             @map("current_chapter_plan_version_id") @db.VarChar(32)
+  currentTrialRunId                String?             @map("current_trial_run_id") @db.VarChar(32)
+  currentFullReviewReportId        String?             @map("current_full_review_report_id") @db.VarChar(32)
+  currentFullReviewGateId          String?             @map("current_full_review_gate_id") @db.VarChar(32)
+  currentCompletionDecisionId      String?             @map("current_completion_decision_id") @db.VarChar(32)
+  currentVideoReadinessSnapshotId  String?             @map("current_video_readiness_snapshot_id") @db.VarChar(32)
+  policyProfileVersionId           String?             @map("policy_profile_version_id") @db.VarChar(32)
+  hotspotReportId                  String?             @map("hotspot_report_id") @db.VarChar(32)
+  chapterLimit                     Int                 @default(100) @map("chapter_limit")
+  chapterWordMin                   Int                 @default(1800) @map("chapter_word_min")
+  chapterWordMax                   Int                 @default(2600) @map("chapter_word_max")
+  summary                          String?             @db.Text
+  pauseReason                      String?             @map("pause_reason") @db.Text
+  archiveReason                    String?             @map("archive_reason") @db.Text
+  displayStatus                    String?             @map("display_status") @db.VarChar(80)
+  currentStep                      String?             @map("current_step") @db.VarChar(120)
+  completedStepsJson               Json?               @map("completed_steps_json")
+  recommendedActionSnapshot        Json?               @map("recommended_action_snapshot")
+  videoReferenceStatus             String?             @map("video_reference_status") @db.VarChar(80)
+  createdBy                        String?             @map("created_by") @db.VarChar(32)
+  updatedBy                        String?             @map("updated_by") @db.VarChar(32)
+  createdAt                        DateTime            @default(now()) @map("created_at")
+  updatedAt                        DateTime            @updatedAt @map("updated_at")
+  deletedAt                        DateTime?           @map("deleted_at")
+  metadata                         Json?
+
+  @@index([tenantId, ownerId, lifecycleStatus, updatedAt])
+  @@index([tenantId, creationStage, stageStatus, updatedAt])
+  @@map("novel")
+}
+
+model CreateNovelPreferences {
+  id                        String   @id @default(cuid()) @db.VarChar(32)
+  tenantId                  String   @map("tenant_id") @db.VarChar(32)
+  novelId                   String   @unique @map("novel_id") @db.VarChar(32)
+  hotspotReportId           String?  @map("hotspot_report_id") @db.VarChar(32)
+  hotspotOpportunityId      String?  @map("hotspot_opportunity_id") @db.VarChar(80)
+  appealPointsJson          Json?    @map("appeal_points_json")
+  genresJson                Json?    @map("genres_json")
+  openingState              String?  @map("opening_state") @db.Text
+  blockedElementsJson       Json?    @map("blocked_elements_json")
+  targetAudience            String?  @map("target_audience") @db.VarChar(120)
+  chapterLimit              Int      @default(100) @map("chapter_limit")
+  chapterWordMin            Int      @default(1800) @map("chapter_word_min")
+  chapterWordMax            Int      @default(2600) @map("chapter_word_max")
+  stageCount                Int?     @map("stage_count")
+  customIdea                String?  @map("custom_idea") @db.Text
+  style                     String?  @db.VarChar(120)
+  videoAdaptationPreference String?  @map("video_adaptation_preference") @db.VarChar(80)
+  createdBy                 String?  @map("created_by") @db.VarChar(32)
+  createdAt                 DateTime @default(now()) @map("created_at")
+  metadata                  Json?
+
+  @@index([tenantId, hotspotReportId])
+  @@map("create_novel_preferences")
+}
+
+model CreativeVersion {
+  id                     String        @id @default(cuid()) @db.VarChar(32)
+  tenantId               String        @map("tenant_id") @db.VarChar(32)
+  novelId                String        @map("novel_id") @db.VarChar(32)
+  objectType             String        @map("object_type") @db.VarChar(80)
+  objectId               String        @map("object_id") @db.VarChar(80)
+  versionNo              Int           @map("version_no")
+  status                 VersionStatus @default(CANDIDATE)
+  staleLevel             StaleLevel    @default(NONE) @map("stale_level")
+  sourceType             String?       @map("source_type") @db.VarChar(50)
+  sourceTaskId           String?       @map("source_task_id") @db.VarChar(32)
+  sourceVersionRefs      Json?         @map("source_version_refs")
+  changeReason           String?       @map("change_reason") @db.Text
+  contentJson            Json          @map("content_json")
+  summary                String?       @db.Text
+  score                  Decimal?      @db.Decimal(5, 2)
+  riskLevel              RiskLevel     @default(NONE) @map("risk_level")
+  reviewReportId         String?       @map("review_report_id") @db.VarChar(32)
+  promptTemplateVersionId String?      @map("prompt_template_version_id") @db.VarChar(32)
+  policyProfileVersionId String?       @map("policy_profile_version_id") @db.VarChar(32)
+  decisionRecordId       String?       @map("decision_record_id") @db.VarChar(32)
+  createdBy              String?       @map("created_by") @db.VarChar(32)
+  createdAt              DateTime      @default(now()) @map("created_at")
+  metadata               Json?
+
+  @@unique([tenantId, novelId, objectType, objectId, versionNo])
+  @@index([tenantId, novelId, objectType, objectId, status])
+  @@map("creative_version")
+}
+
+model NovelChapter {
+  id                          String      @id @default(cuid()) @db.VarChar(32)
+  tenantId                    String      @map("tenant_id") @db.VarChar(32)
+  novelId                     String      @map("novel_id") @db.VarChar(32)
+  chapterNo                   Int         @map("chapter_no")
+  stageIndex                  Int?        @map("stage_index")
+  title                       String      @db.VarChar(200)
+  wordTarget                  Int?        @map("word_target")
+  wordCount                   Int         @default(0) @map("word_count")
+  mainStatus                  String      @default("pending") @map("main_status") @db.VarChar(40)
+  statusNote                  String?     @map("status_note") @db.Text
+  impactLevel                 ImpactLevel @default(NONE) @map("impact_level")
+  currentFeatureCardVersionId String?     @map("current_feature_card_version_id") @db.VarChar(32)
+  currentContentVersionId     String?     @map("current_content_version_id") @db.VarChar(32)
+  currentReviewReportId       String?     @map("current_review_report_id") @db.VarChar(32)
+  lastGenerationTaskId        String?     @map("last_generation_task_id") @db.VarChar(32)
+  createdAt                   DateTime    @default(now()) @map("created_at")
+  updatedAt                   DateTime    @updatedAt @map("updated_at")
+  deletedAt                   DateTime?   @map("deleted_at")
+  metadata                    Json?
+
+  @@unique([tenantId, novelId, chapterNo])
+  @@index([tenantId, novelId, mainStatus, updatedAt])
+  @@map("novel_chapter")
+}
+
+model ChapterFeatureCard {
+  id                         String        @id @default(cuid()) @db.VarChar(32)
+  tenantId                   String        @map("tenant_id") @db.VarChar(32)
+  novelId                    String        @map("novel_id") @db.VarChar(32)
+  chapterId                  String        @map("chapter_id") @db.VarChar(32)
+  versionNo                  Int           @map("version_no")
+  status                     VersionStatus @default(CANDIDATE)
+  staleLevel                 StaleLevel    @default(NONE) @map("stale_level")
+  oneLineSummary             String?       @map("one_line_summary") @db.Text
+  coreTask                   String?       @map("core_task") @db.Text
+  mainConflict               String?       @map("main_conflict") @db.Text
+  appealPoint                String?       @map("appeal_point") @db.Text
+  emotionKeywordsJson        Json?         @map("emotion_keywords_json")
+  characterChangesJson       Json?         @map("character_changes_json")
+  relationshipChangesJson    Json?         @map("relationship_changes_json")
+  keyInformationJson         Json?         @map("key_information_json")
+  foreshadowingOperation     String?       @map("foreshadowing_operation") @db.Text
+  endingHook                 String?       @map("ending_hook") @db.Text
+  factsCannotChangeJson      Json?         @map("facts_cannot_change_json")
+  featuresToStrengthenJson   Json?         @map("features_to_strengthen_json")
+  sourceTaskId               String?       @map("source_task_id") @db.VarChar(32)
+  decisionRecordId           String?       @map("decision_record_id") @db.VarChar(32)
+  createdAt                  DateTime      @default(now()) @map("created_at")
+  metadata                   Json?
+
+  @@unique([tenantId, chapterId, versionNo])
+  @@index([tenantId, novelId, chapterId, status])
+  @@map("chapter_feature_card")
+}
+
+model ChapterContentVersion {
+  id                 String        @id @default(cuid()) @db.VarChar(32)
+  tenantId           String        @map("tenant_id") @db.VarChar(32)
+  novelId            String        @map("novel_id") @db.VarChar(32)
+  chapterId          String        @map("chapter_id") @db.VarChar(32)
+  versionNo          Int           @map("version_no")
+  status             VersionStatus @default(CANDIDATE)
+  staleLevel         StaleLevel    @default(NONE) @map("stale_level")
+  sourceType         String?       @map("source_type") @db.VarChar(50)
+  sourceTaskId       String?       @map("source_task_id") @db.VarChar(32)
+  sourceVersionRefs  Json?         @map("source_version_refs")
+  rewriteReason      String?       @map("rewrite_reason") @db.Text
+  content            String        @db.LongText
+  wordCount          Int           @default(0) @map("word_count")
+  summary            String?       @db.Text
+  reviewScore        Decimal?      @map("review_score") @db.Decimal(5, 2)
+  decisionRecordId   String?       @map("decision_record_id") @db.VarChar(32)
+  createdBy          String?       @map("created_by") @db.VarChar(32)
+  createdAt          DateTime      @default(now()) @map("created_at")
+  metadata           Json?
+
+  @@unique([tenantId, chapterId, versionNo])
+  @@index([tenantId, chapterId, status])
+  @@map("chapter_content_version")
+}
+
+model ReviewReport {
+  id                       String   @id @default(cuid()) @db.VarChar(32)
+  tenantId                 String   @map("tenant_id") @db.VarChar(32)
+  novelId                  String   @map("novel_id") @db.VarChar(32)
+  objectType               String   @map("object_type") @db.VarChar(80)
+  objectId                 String   @map("object_id") @db.VarChar(80)
+  objectVersionId          String?  @map("object_version_id") @db.VarChar(32)
+  reviewLevel              String   @map("review_level") @db.VarChar(80)
+  totalScore               Decimal? @map("total_score") @db.Decimal(5, 2)
+  subScoresJson            Json?    @map("sub_scores_json")
+  rating                   String?  @db.VarChar(50)
+  summary                  String?  @db.Text
+  strengthsJson            Json?    @map("strengths_json")
+  problemsJson             Json?    @map("problems_json")
+  suggestionsJson          Json?    @map("suggestions_json")
+  issueCardsJson           Json?    @map("issue_cards_json")
+  actionOptionsJson        Json?    @map("action_options_json")
+  recommendedAction        String?  @map("recommended_action") @db.VarChar(120)
+  allowNextStep            Boolean  @default(false) @map("allow_next_step")
+  blockingIssueCount       Int      @default(0) @map("blocking_issue_count")
+  resolvedStatus           String?  @map("resolved_status") @db.VarChar(50)
+  promptTemplateVersionId  String?  @map("prompt_template_version_id") @db.VarChar(32)
+  policyProfileVersionId   String?  @map("policy_profile_version_id") @db.VarChar(32)
+  sourceTaskId             String?  @map("source_task_id") @db.VarChar(32)
+  createdAt                DateTime @default(now()) @map("created_at")
+  metadata                 Json?
+
+  @@index([tenantId, novelId, objectType, objectId, createdAt])
+  @@map("review_report")
+}
+
+model GenerationTask {
+  id                       String     @id @default(cuid()) @db.VarChar(32)
+  tenantId                 String     @map("tenant_id") @db.VarChar(32)
+  novelId                  String?    @map("novel_id") @db.VarChar(32)
+  taskType                 String     @map("task_type") @db.VarChar(100)
+  objectType               String?    @map("object_type") @db.VarChar(80)
+  objectId                 String?    @map("object_id") @db.VarChar(80)
+  parentTaskId             String?    @map("parent_task_id") @db.VarChar(32)
+  batchId                  String?    @map("batch_id") @db.VarChar(80)
+  status                   TaskStatus @default(QUEUED)
+  statusNote               String?    @map("status_note") @db.Text
+  progress                 Int        @default(0)
+  currentStep              String?    @map("current_step") @db.VarChar(120)
+  triggerSource            String?    @map("trigger_source") @db.VarChar(80)
+  sourceVersionRefs        Json?      @map("source_version_refs")
+  conflictScope            String?    @map("conflict_scope") @db.VarChar(80)
+  conflictKey              String?    @map("conflict_key") @db.VarChar(160)
+  promptTemplateVersionId  String?    @map("prompt_template_version_id") @db.VarChar(32)
+  policyProfileVersionId   String?    @map("policy_profile_version_id") @db.VarChar(32)
+  inputSummary             String?    @map("input_summary") @db.Text
+  outputSummary            String?    @map("output_summary") @db.Text
+  inputUnits               Int?       @map("input_units")
+  outputUnits              Int?       @map("output_units")
+  estimatedCost            Decimal?   @map("estimated_cost") @db.Decimal(12, 4)
+  actualCost               Decimal?   @map("actual_cost") @db.Decimal(12, 4)
+  retryCount               Int        @default(0) @map("retry_count")
+  maxRetries               Int        @default(2) @map("max_retries")
+  failureCategory          String?    @map("failure_category") @db.VarChar(80)
+  errorCode                String?    @map("error_code") @db.VarChar(80)
+  errorMessage             String?    @map("error_message") @db.Text
+  retryOfTaskId            String?    @map("retry_of_task_id") @db.VarChar(32)
+  idempotencyToken         String?    @map("idempotency_token") @db.VarChar(120)
+  requestHash              String?    @map("request_hash") @db.VarChar(128)
+  resultObjectType         String?    @map("result_object_type") @db.VarChar(80)
+  resultObjectId           String?    @map("result_object_id") @db.VarChar(80)
+  resultVersionId          String?    @map("result_version_id") @db.VarChar(32)
+  userAcceptedResult       Boolean    @default(false) @map("user_accepted_result")
+  startedAt                DateTime?  @map("started_at")
+  finishedAt               DateTime?  @map("finished_at")
+  lastHeartbeatAt          DateTime?  @map("last_heartbeat_at")
+  cancelRequestedAt        DateTime?  @map("cancel_requested_at")
+  cancelReason             String?    @map("cancel_reason") @db.Text
+  createdBy                String?    @map("created_by") @db.VarChar(32)
+  createdAt                DateTime   @default(now()) @map("created_at")
+  updatedAt                DateTime   @updatedAt @map("updated_at")
+  metadata                 Json?
+
+  @@index([tenantId, status, createdAt])
+  @@index([tenantId, novelId, taskType, status])
+  @@index([tenantId, conflictScope, conflictKey, status])
+  @@unique([tenantId, idempotencyToken])
+  @@map("generation_task")
+}
+
+model GenerationTaskEvent {
+  id          String     @id @default(cuid()) @db.VarChar(32)
+  tenantId    String     @map("tenant_id") @db.VarChar(32)
+  taskId      String     @map("task_id") @db.VarChar(32)
+  status      TaskStatus
+  eventType   String     @map("event_type") @db.VarChar(80)
+  message     String?    @db.Text
+  progress    Int?
+  payloadJson Json?      @map("payload_json")
+  createdAt   DateTime   @default(now()) @map("created_at")
+
+  @@index([tenantId, taskId, createdAt])
+  @@map("generation_task_event")
+}
+
+model AssetDecisionRecord {
+  id                     String   @id @default(cuid()) @db.VarChar(32)
+  tenantId               String   @map("tenant_id") @db.VarChar(32)
+  novelId                String   @map("novel_id") @db.VarChar(32)
+  actionType             String   @map("action_type") @db.VarChar(80)
+  objectType             String   @map("object_type") @db.VarChar(80)
+  objectId               String   @map("object_id") @db.VarChar(80)
+  candidateVersionId     String?  @map("candidate_version_id") @db.VarChar(32)
+  currentVersionIdBefore String?  @map("current_version_id_before") @db.VarChar(32)
+  currentVersionIdAfter  String?  @map("current_version_id_after") @db.VarChar(32)
+  decisionReason         String?  @map("decision_reason") @db.Text
+  isForced               Boolean  @default(false) @map("is_forced")
+  riskSummary            String?  @map("risk_summary") @db.Text
+  impactSummary          String?  @map("impact_summary") @db.Text
+  pageVersionSnapshot    Json?    @map("page_version_snapshot")
+  sourceTaskId           String?  @map("source_task_id") @db.VarChar(32)
+  createdBy              String?  @map("created_by") @db.VarChar(32)
+  createdAt              DateTime @default(now()) @map("created_at")
+  metadata               Json?
+
+  @@index([tenantId, novelId, actionType, createdAt])
+  @@map("asset_decision_record")
+}
+
+model OperationLog {
+  id            String   @id @default(cuid()) @db.VarChar(32)
+  tenantId      String   @map("tenant_id") @db.VarChar(32)
+  userId        String?  @map("user_id") @db.VarChar(32)
+  novelId       String?  @map("novel_id") @db.VarChar(32)
+  action        String   @db.VarChar(100)
+  objectType    String?  @map("object_type") @db.VarChar(80)
+  objectId      String?  @map("object_id") @db.VarChar(80)
+  beforeSnapshot Json?   @map("before_snapshot")
+  afterSnapshot  Json?   @map("after_snapshot")
+  reason        String?  @db.Text
+  impactSummary String?  @map("impact_summary") @db.Text
+  sourceTaskId  String?  @map("source_task_id") @db.VarChar(32)
+  requestId     String?  @map("request_id") @db.VarChar(120)
+  ip            String?  @db.VarChar(80)
+  userAgent     String?  @map("user_agent") @db.VarChar(300)
+  createdAt     DateTime @default(now()) @map("created_at")
+  metadata      Json?
+
+  @@index([tenantId, novelId, action, createdAt])
+  @@map("operation_log")
+}
+
+model ImpactCase {
+  id                        String      @id @default(cuid()) @db.VarChar(32)
+  tenantId                  String      @map("tenant_id") @db.VarChar(32)
+  novelId                   String      @map("novel_id") @db.VarChar(32)
+  sourceObjectType          String      @map("source_object_type") @db.VarChar(80)
+  sourceObjectId            String      @map("source_object_id") @db.VarChar(80)
+  sourceOldVersionId        String?     @map("source_old_version_id") @db.VarChar(32)
+  sourceNewVersionId        String?     @map("source_new_version_id") @db.VarChar(32)
+  impactLevel               ImpactLevel @default(NONE) @map("impact_level")
+  status                    String      @default("open") @db.VarChar(40)
+  affectedChapterIdsJson    Json?       @map("affected_chapter_ids_json")
+  affectedVideoReferenceIdsJson Json?   @map("affected_video_reference_ids_json")
+  summary                   String?     @db.Text
+  suggestedActionsJson      Json?       @map("suggested_actions_json")
+  decisionRecordId          String?     @map("decision_record_id") @db.VarChar(32)
+  sourceTaskId              String?     @map("source_task_id") @db.VarChar(32)
+  createdAt                 DateTime    @default(now()) @map("created_at")
+  resolvedAt                DateTime?   @map("resolved_at")
+  metadata                  Json?
+
+  @@index([tenantId, novelId, impactLevel, status])
+  @@map("impact_case")
+}
+
+model LongTermMemory {
+  id                         String     @id @default(cuid()) @db.VarChar(32)
+  tenantId                   String     @map("tenant_id") @db.VarChar(32)
+  novelId                    String     @map("novel_id") @db.VarChar(32)
+  chapterId                  String?    @map("chapter_id") @db.VarChar(32)
+  sourceContentVersionId     String?    @map("source_content_version_id") @db.VarChar(32)
+  previousSummary            String?    @map("previous_summary") @db.Text
+  characterStatesJson        Json?      @map("character_states_json")
+  relationshipStatesJson     Json?      @map("relationship_states_json")
+  locationsJson              Json?      @map("locations_json")
+  organizationsJson          Json?      @map("organizations_json")
+  itemsJson                  Json?      @map("items_json")
+  plantedForeshadowingJson   Json?      @map("planted_foreshadowing_json")
+  resolvedForeshadowingJson  Json?      @map("resolved_foreshadowing_json")
+  unresolvedConflictsJson    Json?      @map("unresolved_conflicts_json")
+  newSettingsJson            Json?      @map("new_settings_json")
+  factsCannotContradictJson  Json?      @map("facts_cannot_contradict_json")
+  status                     VersionStatus @default(CURRENT)
+  staleLevel                 StaleLevel @default(NONE) @map("stale_level")
+  sourceTaskId               String?    @map("source_task_id") @db.VarChar(32)
+  createdAt                  DateTime   @default(now()) @map("created_at")
+  metadata                   Json?
+
+  @@index([tenantId, novelId, chapterId, status])
+  @@map("long_term_memory")
+}
+
+model TrialRun {
+  id                     String   @id @default(cuid()) @db.VarChar(32)
+  tenantId               String   @map("tenant_id") @db.VarChar(32)
+  novelId                String   @map("novel_id") @db.VarChar(32)
+  chapterPlanVersionId   String?  @map("chapter_plan_version_id") @db.VarChar(32)
+  trialChapterCount      Int      @map("trial_chapter_count")
+  status                 String   @default("created") @db.VarChar(50)
+  totalScore             Decimal? @map("total_score") @db.Decimal(5, 2)
+  trialResult            String?  @map("trial_result") @db.VarChar(80)
+  reviewReportId         String?  @map("review_report_id") @db.VarChar(32)
+  policyProfileVersionId String?  @map("policy_profile_version_id") @db.VarChar(32)
+  sourceTaskId           String?  @map("source_task_id") @db.VarChar(32)
+  confirmedAt            DateTime? @map("confirmed_at")
+  confirmedBy            String?  @map("confirmed_by") @db.VarChar(32)
+  forceReason            String?  @map("force_reason") @db.Text
+  createdAt              DateTime @default(now()) @map("created_at")
+  updatedAt              DateTime @updatedAt @map("updated_at")
+  metadata               Json?
+
+  @@index([tenantId, novelId, status])
+  @@map("trial_run")
+}
+
+model TrialChapterResult {
+  id                   String   @id @default(cuid()) @db.VarChar(32)
+  tenantId             String   @map("tenant_id") @db.VarChar(32)
+  trialRunId           String   @map("trial_run_id") @db.VarChar(32)
+  chapterId            String   @map("chapter_id") @db.VarChar(32)
+  contentVersionId     String?  @map("content_version_id") @db.VarChar(32)
+  featureCardVersionId String?  @map("feature_card_version_id") @db.VarChar(32)
+  reviewReportId       String?  @map("review_report_id") @db.VarChar(32)
+  score                Decimal? @db.Decimal(5, 2)
+  status               String   @default("created") @db.VarChar(50)
+  createdAt            DateTime @default(now()) @map("created_at")
+  metadata             Json?
+
+  @@index([tenantId, trialRunId, status])
+  @@map("trial_chapter_result")
+}
+
+model FullReviewGate {
+  id                     String   @id @default(cuid()) @db.VarChar(32)
+  tenantId               String   @map("tenant_id") @db.VarChar(32)
+  novelId                String   @map("novel_id") @db.VarChar(32)
+  reviewReportId         String   @map("review_report_id") @db.VarChar(32)
+  gateResult             String   @map("gate_result") @db.VarChar(80)
+  allowCompletion        Boolean  @default(false) @map("allow_completion")
+  allowVideoReady        Boolean  @default(false) @map("allow_video_ready")
+  blockingIssueCount     Int      @default(0) @map("blocking_issue_count")
+  warningIssueCount      Int      @default(0) @map("warning_issue_count")
+  isStale                Boolean  @default(false) @map("is_stale")
+  staleReason            String?  @map("stale_reason") @db.Text
+  policyProfileVersionId String?  @map("policy_profile_version_id") @db.VarChar(32)
+  createdAt              DateTime @default(now()) @map("created_at")
+  metadata               Json?
+
+  @@index([tenantId, novelId, isStale, createdAt])
+  @@map("full_review_gate")
+}
+
+model CompletionDecisionRecord {
+  id                String   @id @default(cuid()) @db.VarChar(32)
+  tenantId          String   @map("tenant_id") @db.VarChar(32)
+  novelId           String   @map("novel_id") @db.VarChar(32)
+  reviewReportId    String?  @map("review_report_id") @db.VarChar(32)
+  fullReviewGateId  String?  @map("full_review_gate_id") @db.VarChar(32)
+  decision          String   @db.VarChar(80)
+  decisionReason    String?  @map("decision_reason") @db.Text
+  isForced          Boolean  @default(false) @map("is_forced")
+  score             Decimal? @db.Decimal(5, 2)
+  riskSummary       String?  @map("risk_summary") @db.Text
+  createdBy         String?  @map("created_by") @db.VarChar(32)
+  createdAt         DateTime @default(now()) @map("created_at")
+  metadata          Json?
+
+  @@index([tenantId, novelId, createdAt])
+  @@map("completion_decision_record")
+}
+
+model VideoReadinessSnapshot {
+  id                         String   @id @default(cuid()) @db.VarChar(32)
+  tenantId                   String   @map("tenant_id") @db.VarChar(32)
+  novelId                    String   @map("novel_id") @db.VarChar(32)
+  fullReviewGateId           String?  @map("full_review_gate_id") @db.VarChar(32)
+  completionDecisionId       String?  @map("completion_decision_id") @db.VarChar(32)
+  status                     String   @default("candidate") @db.VarChar(50)
+  checkItemsJson             Json?    @map("check_items_json")
+  chapterCount               Int      @default(0) @map("chapter_count")
+  totalWordCount             Int      @default(0) @map("total_word_count")
+  estimatedAudioMinutes      Decimal? @map("estimated_audio_minutes") @db.Decimal(8, 2)
+  riskSummary                String?  @map("risk_summary") @db.Text
+  referableChapterIdsJson    Json?    @map("referable_chapter_ids_json")
+  referableChapterVersionIdsJson Json? @map("referable_chapter_version_ids_json")
+  firstVideoSuggestionJson   Json?    @map("first_video_suggestion_json")
+  createdBy                  String?  @map("created_by") @db.VarChar(32)
+  createdAt                  DateTime @default(now()) @map("created_at")
+  metadata                   Json?
+
+  @@index([tenantId, novelId, status, createdAt])
+  @@map("video_readiness_snapshot")
+}
+
+model VideoReference {
+  id                         String   @id @default(cuid()) @db.VarChar(32)
+  tenantId                   String   @map("tenant_id") @db.VarChar(32)
+  videoProjectId             String   @map("video_project_id") @db.VarChar(32)
+  novelId                    String   @map("novel_id") @db.VarChar(32)
+  videoReadinessSnapshotId   String   @map("video_readiness_snapshot_id") @db.VarChar(32)
+  chapterIdsJson             Json?    @map("chapter_ids_json")
+  chapterContentVersionIdsJson Json?  @map("chapter_content_version_ids_json")
+  reviewReportId             String?  @map("review_report_id") @db.VarChar(32)
+  riskSummary                String?  @map("risk_summary") @db.Text
+  status                     String   @default("normal") @db.VarChar(50)
+  createdAt                  DateTime @default(now()) @map("created_at")
+  metadata                   Json?
+
+  @@index([tenantId, novelId, status])
+  @@index([tenantId, videoProjectId])
+  @@map("video_reference")
+}
+
+model VideoReferenceIssue {
+  id                       String      @id @default(cuid()) @db.VarChar(32)
+  tenantId                 String      @map("tenant_id") @db.VarChar(32)
+  videoProjectId           String      @map("video_project_id") @db.VarChar(32)
+  videoReferenceId         String      @map("video_reference_id") @db.VarChar(32)
+  novelId                  String      @map("novel_id") @db.VarChar(32)
+  issueLevel               ImpactLevel @default(MINOR) @map("issue_level")
+  issueReason              String      @map("issue_reason") @db.Text
+  affectedChapterIdsJson   Json?       @map("affected_chapter_ids_json")
+  sourceChangeObjectType   String?     @map("source_change_object_type") @db.VarChar(80)
+  sourceChangeObjectId     String?     @map("source_change_object_id") @db.VarChar(80)
+  status                   String      @default("open") @db.VarChar(50)
+  createdAt                DateTime    @default(now()) @map("created_at")
+  resolvedAt               DateTime?   @map("resolved_at")
+  metadata                 Json?
+
+  @@index([tenantId, novelId, issueLevel, status])
+  @@index([tenantId, videoReferenceId, status])
+  @@map("video_reference_issue")
+}

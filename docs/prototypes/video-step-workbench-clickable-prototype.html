@@ -1,0 +1,2213 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>视频模块步骤式工作台原型</title>
+    <style>
+      :root {
+        --bg: #eef3f8;
+        --surface: #ffffff;
+        --surface-soft: #f8fbff;
+        --line: #dce5ef;
+        --line-strong: #c8d6e5;
+        --text: #1f2d3d;
+        --muted: #6f7f90;
+        --blue: #2f8cff;
+        --blue-soft: #e8f3ff;
+        --green: #258f5b;
+        --green-soft: #e8f7ef;
+        --amber: #c7771d;
+        --amber-soft: #fff3df;
+        --red: #cf4444;
+        --red-soft: #fff0f0;
+        --purple: #6f5bd6;
+        --purple-soft: #f1eeff;
+        --shadow: 0 16px 42px rgba(33, 55, 82, 0.11);
+        --radius: 8px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+        letter-spacing: 0;
+      }
+
+      button,
+      input,
+      textarea,
+      select {
+        font: inherit;
+      }
+
+      button {
+        cursor: pointer;
+      }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.56;
+      }
+
+      .topbar {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+        height: 68px;
+        padding: 0 28px;
+        background: rgba(255, 255, 255, 0.94);
+        border-bottom: 1px solid var(--line);
+        backdrop-filter: blur(12px);
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-width: 260px;
+      }
+
+      .brand-mark {
+        width: 8px;
+        height: 34px;
+        border-radius: 999px;
+        background: var(--blue);
+      }
+
+      .brand-title {
+        display: grid;
+        gap: 3px;
+      }
+
+      .brand-title strong {
+        font-size: 19px;
+        line-height: 1.2;
+      }
+
+      .brand-title span {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .top-actions,
+      .action-row,
+      .tag-row,
+      .status-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .btn {
+        min-height: 34px;
+        padding: 0 14px;
+        border: 1px solid var(--line-strong);
+        border-radius: 6px;
+        background: #fff;
+        color: #34465a;
+        transition:
+          background 0.16s ease,
+          border-color 0.16s ease,
+          color 0.16s ease,
+          transform 0.16s ease;
+      }
+
+      .btn:hover:not(:disabled) {
+        border-color: var(--blue);
+        color: var(--blue);
+        background: #f8fbff;
+      }
+
+      .btn:active:not(:disabled) {
+        transform: translateY(1px);
+      }
+
+      .btn.primary {
+        border-color: var(--blue);
+        background: var(--blue);
+        color: #fff;
+      }
+
+      .btn.primary:hover:not(:disabled) {
+        background: #1679ee;
+        color: #fff;
+      }
+
+      .btn.danger {
+        border-color: var(--red);
+        color: var(--red);
+      }
+
+      .btn.ghost {
+        border-color: transparent;
+        background: transparent;
+      }
+
+      .btn.full {
+        width: 100%;
+      }
+
+      .shell {
+        width: min(1440px, 100%);
+        margin: 0 auto;
+        padding: 22px 28px 96px;
+      }
+
+      .view {
+        display: none;
+      }
+
+      .view.active {
+        display: block;
+      }
+
+      .panel {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        box-shadow: 0 1px 2px rgba(20, 39, 63, 0.04);
+      }
+
+      .panel-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 18px;
+        padding: 20px 22px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .panel-head h1,
+      .panel-head h2,
+      .section-title h2,
+      .section-title h3 {
+        margin: 0;
+        line-height: 1.25;
+      }
+
+      .panel-head p,
+      .section-title p {
+        margin: 5px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .section-title {
+        margin: 22px 0 12px;
+      }
+
+      .summary-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+        margin: 14px 0 18px;
+      }
+
+      .metric {
+        padding: 15px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+      }
+
+      .metric span {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .metric strong {
+        display: block;
+        margin-top: 8px;
+        font-size: 24px;
+        line-height: 1;
+      }
+
+      .stepper {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 10px;
+        margin: 14px 0 18px;
+      }
+
+      .stepper.eight {
+        grid-template-columns: repeat(8, minmax(0, 1fr));
+      }
+
+      .step {
+        position: relative;
+        min-height: 74px;
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--surface);
+        text-align: left;
+      }
+
+      .step.active {
+        border-color: var(--blue);
+        background: var(--blue-soft);
+        box-shadow: inset 0 0 0 1px var(--blue);
+      }
+
+      .step.done {
+        border-color: #abd9c1;
+        background: var(--green-soft);
+      }
+
+      .step.blocked {
+        border-color: #efb4b4;
+        background: var(--red-soft);
+      }
+
+      .step.future {
+        color: var(--muted);
+        background: #f6f8fb;
+      }
+
+      .step.locked {
+        color: var(--muted);
+        background: #f6f8fb;
+        border-style: dashed;
+      }
+
+      .step.passive {
+        cursor: default;
+      }
+
+      .step small {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .step strong {
+        display: block;
+        margin-top: 6px;
+        font-size: 14px;
+      }
+
+      .filters {
+        display: grid;
+        grid-template-columns: 1.4fr repeat(4, minmax(130px, 1fr)) auto;
+        gap: 10px;
+        padding: 14px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        margin-bottom: 14px;
+      }
+
+      input,
+      select,
+      textarea {
+        width: 100%;
+        min-height: 36px;
+        border: 1px solid var(--line-strong);
+        border-radius: 6px;
+        padding: 0 10px;
+        background: #fff;
+        color: var(--text);
+      }
+
+      textarea {
+        min-height: 104px;
+        padding: 10px;
+        resize: vertical;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      .table-wrap {
+        overflow-x: auto;
+        border-radius: var(--radius);
+      }
+
+      th,
+      td {
+        padding: 14px 12px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        vertical-align: top;
+        font-size: 13px;
+      }
+
+      th {
+        color: var(--muted);
+        font-weight: 700;
+        background: #fbfcfe;
+      }
+
+      tr:hover td {
+        background: #fbfdff;
+      }
+
+      .video-name {
+        display: grid;
+        gap: 4px;
+      }
+
+      .video-name strong {
+        font-size: 14px;
+      }
+
+      .video-name span {
+        color: var(--muted);
+      }
+
+      .tag {
+        display: inline-flex;
+        align-items: center;
+        min-height: 24px;
+        padding: 0 8px;
+        border-radius: 999px;
+        border: 1px solid transparent;
+        font-size: 12px;
+        white-space: nowrap;
+      }
+
+      .tag.blue {
+        color: #1f66bf;
+        border-color: #b8d5ff;
+        background: var(--blue-soft);
+      }
+
+      .tag.green {
+        color: var(--green);
+        border-color: #b9dfca;
+        background: var(--green-soft);
+      }
+
+      .tag.amber {
+        color: var(--amber);
+        border-color: #f0c98d;
+        background: var(--amber-soft);
+      }
+
+      .tag.red {
+        color: var(--red);
+        border-color: #f0bbbb;
+        background: var(--red-soft);
+      }
+
+      .tag.gray {
+        color: var(--muted);
+        border-color: var(--line-strong);
+        background: #f4f6f8;
+      }
+
+      .muted {
+        color: var(--muted);
+      }
+
+      .danger-text {
+        color: var(--red);
+      }
+
+      .two-col {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 320px;
+        gap: 16px;
+      }
+
+      .workbench-grid {
+        display: grid;
+        grid-template-columns: 300px minmax(0, 1fr) 310px;
+        gap: 16px;
+      }
+
+      .card {
+        padding: 16px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--surface);
+      }
+
+      .card + .card {
+        margin-top: 12px;
+      }
+
+      .card h3 {
+        margin: 0 0 10px;
+        font-size: 16px;
+      }
+
+      .card p {
+        margin: 0 0 10px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .notice {
+        margin: 14px 0;
+        padding: 14px 16px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--surface);
+      }
+
+      .notice.blocking {
+        border-color: #efb4b4;
+        background: var(--red-soft);
+        color: #8f2525;
+      }
+
+      .notice.success {
+        border-color: #abd9c1;
+        background: var(--green-soft);
+        color: var(--green);
+      }
+
+      .mini-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .mini-item {
+        padding: 11px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: var(--surface-soft);
+      }
+
+      .mini-item strong {
+        display: block;
+        margin-bottom: 4px;
+        font-size: 13px;
+      }
+
+      .task {
+        display: grid;
+        gap: 8px;
+      }
+
+      .progress {
+        height: 8px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: #e7edf4;
+      }
+
+      .progress span {
+        display: block;
+        height: 100%;
+        width: var(--value, 42%);
+        background: var(--blue);
+      }
+
+      .progress.failed span {
+        background: var(--red);
+      }
+
+      .progress.canceled span {
+        background: var(--amber);
+      }
+
+      .workspace-panel {
+        min-height: 520px;
+      }
+
+      .workspace-content {
+        display: none;
+        padding: 18px;
+      }
+
+      .workspace-content.active {
+        display: block;
+      }
+
+      .sub-steps {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 8px;
+        margin-bottom: 16px;
+      }
+
+      .sub-step {
+        padding: 10px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: #fff;
+        font-size: 12px;
+      }
+
+      .sub-step.active {
+        border-color: var(--blue);
+        background: var(--blue-soft);
+        color: #1f66bf;
+        font-weight: 700;
+      }
+
+      .candidate-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .candidate {
+        padding: 14px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: #fff;
+      }
+
+      .candidate.selected {
+        border-color: var(--blue);
+        background: var(--blue-soft);
+      }
+
+      .video-preview {
+        display: grid;
+        grid-template-columns: 220px minmax(0, 1fr);
+        gap: 18px;
+        align-items: stretch;
+      }
+
+      .phone-frame {
+        aspect-ratio: 9 / 16;
+        border-radius: 22px;
+        border: 10px solid #1f2937;
+        overflow: hidden;
+        background:
+          linear-gradient(rgba(0, 0, 0, 0.06), rgba(0, 0, 0, 0.42)),
+          linear-gradient(160deg, #b9d7e8, #f4d6a2 48%, #2d4763);
+        display: flex;
+        align-items: flex-end;
+        padding: 16px;
+        color: #fff;
+        box-shadow: var(--shadow);
+      }
+
+      .caption {
+        width: 100%;
+        padding: 10px;
+        border-radius: 8px;
+        background: rgba(0, 0, 0, 0.54);
+        text-align: center;
+        font-weight: 700;
+        line-height: 1.35;
+      }
+
+      .check-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .check {
+        padding: 10px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: var(--surface-soft);
+      }
+
+      .drawer {
+        position: fixed;
+        inset: 0;
+        z-index: 40;
+        display: none;
+        justify-content: flex-end;
+        background: rgba(22, 33, 51, 0.36);
+      }
+
+      .drawer.active {
+        display: flex;
+      }
+
+      .drawer-panel {
+        width: min(560px, 100%);
+        height: 100%;
+        overflow: auto;
+        background: #fff;
+        box-shadow: var(--shadow);
+      }
+
+      .drawer-head {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 20px;
+        border-bottom: 1px solid var(--line);
+        background: #fff;
+      }
+
+      .drawer-body {
+        padding: 18px 20px 28px;
+      }
+
+      .modal {
+        position: fixed;
+        inset: 0;
+        z-index: 50;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        background: rgba(22, 33, 51, 0.42);
+      }
+
+      .modal.active {
+        display: flex;
+      }
+
+      .modal-panel {
+        width: min(980px, 100%);
+        max-height: min(760px, 92vh);
+        overflow: auto;
+        background: #fff;
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+      }
+
+      .wizard-body {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 300px;
+        gap: 16px;
+        padding: 18px;
+      }
+
+      .wizard-steps {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 8px;
+        margin-bottom: 16px;
+      }
+
+      .hidden {
+        display: none !important;
+      }
+
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
+
+      @media (max-width: 1080px) {
+        .summary-grid,
+        .stepper,
+        .stepper.eight,
+        .filters,
+        .workbench-grid,
+        .two-col,
+        .wizard-body,
+        .video-preview {
+          grid-template-columns: 1fr;
+        }
+
+        .topbar {
+          height: auto;
+          align-items: flex-start;
+          flex-direction: column;
+          padding: 14px 18px;
+        }
+
+        .shell {
+          padding: 18px;
+        }
+
+        .table-wrap table {
+          min-width: 920px;
+        }
+      }
+
+      @media (max-width: 720px) {
+        .candidate-grid,
+        .sub-steps,
+        .wizard-steps,
+        .check-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark"></div>
+        <div class="brand-title">
+          <strong>视频模块步骤式工作台</strong>
+          <span>引用承接、生成调试、预览确认、导出</span>
+        </div>
+      </div>
+      <div class="top-actions">
+        <button class="btn" data-view="list">视频列表</button>
+        <button class="btn primary" data-view="workbench">生成工作台</button>
+      </div>
+    </header>
+
+    <main class="shell">
+      <section id="listView" class="view active">
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h1>视频列表</h1>
+              <p>列表只负责承接引用快照和处理异常；引用正常后再进入视频详情工作台。</p>
+            </div>
+            <div class="action-row">
+              <button class="btn" data-open="referenceDrawer">查看引用异常</button>
+              <button class="btn primary" data-open="createModal">新建视频项目</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="summary-grid">
+          <div class="metric">
+            <span>视频项目</span>
+            <strong>12</strong>
+          </div>
+          <div class="metric">
+            <span>引用正常</span>
+            <strong>8</strong>
+          </div>
+          <div class="metric">
+            <span>需关注</span>
+            <strong>3</strong>
+          </div>
+          <div class="metric">
+            <span>阻塞异常</span>
+            <strong class="danger-text">1</strong>
+          </div>
+        </div>
+
+        <div class="stepper">
+          <div class="step done passive">
+            <small>1</small>
+            <strong>小说已待视频化</strong>
+          </div>
+          <div class="step done passive">
+            <small>2</small>
+            <strong>创建视频项目</strong>
+          </div>
+          <div class="step done passive">
+            <small>3</small>
+            <strong>保存引用快照</strong>
+          </div>
+          <div class="step active passive">
+            <small>4</small>
+            <strong>引用状态检查</strong>
+          </div>
+          <div class="step future passive">
+            <small>5</small>
+            <strong>进入生成工作台</strong>
+          </div>
+        </div>
+
+        <div class="filters">
+          <input value="化学大秦" aria-label="视频项目名称" />
+          <select aria-label="引用状态">
+            <option>引用状态：全部</option>
+            <option>normal</option>
+            <option>warning</option>
+            <option>blocking</option>
+          </select>
+          <select aria-label="项目生命周期">
+            <option>生命周期：active</option>
+            <option>stopped</option>
+            <option>archived</option>
+          </select>
+          <select aria-label="生产状态">
+            <option>生产状态：全部</option>
+            <option>未开始</option>
+            <option>待进入详情</option>
+            <option>生成锁定</option>
+          </select>
+          <select aria-label="更新时间">
+            <option>近 7 天更新</option>
+            <option>近 30 天更新</option>
+          </select>
+          <button id="filterBtn" class="btn">筛选</button>
+        </div>
+
+        <div id="listNotice" class="notice success hidden" aria-live="polite"></div>
+
+        <div class="panel table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>视频项目</th>
+                <th>引用小说</th>
+                <th>引用章节</th>
+                <th>引用状态</th>
+                <th>生产状态</th>
+                <th>当前推荐动作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+                  <div class="video-name">
+                    <strong>化学大秦：首条测试</strong>
+                    <span>首条测试 · 9:16 · 创建于今天</span>
+                  </div>
+                </td>
+                <td>化学大秦<br /><span class="muted">video_ready</span></td>
+                <td>第 1-3 章<br /><span class="muted">3 个章节快照</span></td>
+                <td><span class="tag green">normal</span></td>
+                <td><span class="tag blue">待生成</span></td>
+                <td>
+                  <button class="btn primary" data-open="snapshotDrawer">查看引用快照</button>
+                  <button class="btn" data-view="workbench">进入详情</button>
+                </td>
+              </tr>
+              <tr>
+                <td>
+                  <div class="video-name">
+                    <strong>寒门算法：试投版</strong>
+                    <span>章节范围 · 最近重检失败</span>
+                  </div>
+                </td>
+                <td>寒门算法<br /><span class="muted">video_ready</span></td>
+                <td>第 4-6 章<br /><span class="muted">2 个章节被修改</span></td>
+                <td><span class="tag red">blocking</span></td>
+                <td><span class="tag gray">生成锁定</span></td>
+                <td>
+                  <button class="btn danger" data-open="referenceDrawer">处理异常</button>
+                  <div class="muted">第 5 章正文已清空</div>
+                </td>
+              </tr>
+              <tr>
+                <td>
+                  <div class="video-name">
+                    <strong>长安夜雨：视觉测试</strong>
+                    <span>首条测试 · 已渲染</span>
+                  </div>
+                </td>
+                <td>长安夜雨<br /><span class="muted">video_ready</span></td>
+                <td>第 1-2 章</td>
+                <td><span class="tag amber">warning</span></td>
+                <td><span class="tag amber">待进入详情</span></td>
+                <td>
+                  <button class="btn" data-open="snapshotDrawer">查看引用快照</button>
+                  <button class="btn" data-view="workbench">进入详情</button>
+                  <div class="muted">详情页处理预览确认</div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="workbenchView" class="view">
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h1>化学大秦：首条测试</h1>
+              <p>引用第 1-3 章，当前推荐动作：<strong id="recommendText">生成旁白候选</strong></p>
+              <div class="tag-row" style="margin-top: 10px">
+                <span id="referenceStatusTag" class="tag green">引用正常</span>
+                <span class="tag blue">简单循环背景模式</span>
+                <span class="tag gray">导出不发布</span>
+              </div>
+            </div>
+            <div class="action-row">
+              <button class="btn" data-view="list">回视频列表</button>
+              <button class="btn danger" id="simulateBlocking">模拟引用变 blocking</button>
+              <button id="primaryAction" class="btn primary">生成旁白候选</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="blockingBanner" class="notice blocking hidden">
+          <strong>引用状态已变为 blocking。</strong>
+          当前不能生成、渲染、确认当前视频或导出。请先处理引用异常，或回小说重新修复后重检。
+          <div class="action-row" style="margin-top: 10px">
+            <button class="btn danger" data-open="referenceDrawer">处理异常</button>
+            <button class="btn" id="restoreReference">模拟重检恢复 normal</button>
+          </div>
+        </div>
+
+        <div class="stepper eight" id="p9Stepper">
+          <button class="step done" data-step="reference"><small>1</small><strong>引用检查</strong></button>
+          <button class="step active" data-step="narration"><small>2</small><strong>旁白稿</strong></button>
+          <button class="step" data-step="voice"><small>3</small><strong>配音</strong></button>
+          <button class="step" data-step="subtitle"><small>4</small><strong>字幕</strong></button>
+          <button class="step" data-step="visual"><small>5</small><strong>视觉方案</strong></button>
+          <button class="step" data-step="render"><small>6</small><strong>渲染</strong></button>
+          <button class="step" data-step="preview"><small>7</small><strong>预览确认</strong></button>
+          <button class="step future" data-step="export"><small>8</small><strong>导出</strong></button>
+        </div>
+
+        <div class="workbench-grid">
+          <aside>
+            <div class="card">
+              <h3>引用快照</h3>
+              <p>来自《化学大秦》待视频化快照 v3。</p>
+              <div class="mini-list">
+                <div class="mini-item"><strong>章节范围</strong><span class="muted">第 1-3 章</span></div>
+                <div class="mini-item"><strong>引用状态</strong><span id="leftReferenceStatus" class="tag green">normal</span></div>
+                <div class="mini-item"><strong>首条建议</strong><span class="muted">炼盐、黑火药惊世、商战高光</span></div>
+              </div>
+              <div class="action-row" style="margin-top: 12px">
+                <button class="btn full" data-open="snapshotDrawer">查看完整引用快照</button>
+              </div>
+            </div>
+            <div class="card">
+              <h3>默认视频片段</h3>
+              <p>预计 58-72 秒，9:16 竖屏。</p>
+              <div class="tag-row">
+                <span class="tag blue">首条测试</span>
+                <span class="tag amber">强钩子</span>
+              </div>
+            </div>
+          </aside>
+
+          <section class="panel workspace-panel">
+            <div id="reference" class="workspace-content">
+              <div class="sub-steps">
+                <div class="sub-step active">来源</div>
+                <div class="sub-step">章节版本</div>
+                <div class="sub-step">视频建议</div>
+                <div class="sub-step">状态检查</div>
+              </div>
+              <div class="card">
+                <h3>引用检查通过</h3>
+                <p>本次生成前已重检引用快照，未发现 blocking 异常。</p>
+                <div class="check-grid">
+                  <div class="check"><strong>小说状态</strong><br /><span class="tag green">video_ready</span></div>
+                  <div class="check"><strong>章节正文</strong><br /><span class="tag green">正式版本</span></div>
+                  <div class="check"><strong>内容风险</strong><br /><span class="tag amber">低风险</span></div>
+                  <div class="check"><strong>生成门禁</strong><br /><span class="tag green">可继续</span></div>
+                </div>
+              </div>
+            </div>
+
+            <div id="narration" class="workspace-content active">
+              <div class="sub-steps">
+                <div class="sub-step active">生成候选</div>
+                <div class="sub-step">编辑优化</div>
+                <div class="sub-step">节奏检查</div>
+                <div class="sub-step">确认旁白</div>
+              </div>
+              <div class="notice success">
+                当前已有 2 个旁白候选。你可以编辑文案、切换候选，再确认旁白；确认后才会解锁配音。
+              </div>
+              <div class="candidate-grid">
+                <article class="candidate selected" data-candidate="A">
+                  <div class="tag-row">
+                    <span class="tag blue">候选 A</span>
+                    <span class="tag green">推荐</span>
+                  </div>
+                  <h3>现代化学落入大秦</h3>
+                  <p>开头以苦役场景切入，用炼盐失败反转接黑火药惊世，适合首条验证。</p>
+                  <textarea>他醒来时，脚下不是实验室的瓷砖，而是秦朝盐场滚烫的泥水。别人以为他只是苦役，他却在灰烬里看见了一条改变天下的路。</textarea>
+                </article>
+                <article class="candidate" data-candidate="B">
+                  <div class="tag-row">
+                    <span class="tag gray">候选 B</span>
+                    <span class="tag amber">节奏偏慢</span>
+                  </div>
+                  <h3>从盐场到商会</h3>
+                  <p>更偏商战和工业升级，适合第二版。</p>
+                  <textarea>秦朝没有现代工厂，但他知道，最先改变命运的不是刀剑，而是一小撮盐和一炉火。</textarea>
+                </article>
+              </div>
+              <div class="action-row" style="margin: 14px 18px 0">
+                <button id="confirmNarration" class="btn primary" disabled>确认旁白稿</button>
+                <span id="narrationHint" class="muted">先生成或选择候选，再确认旁白；未确认前不能生成配音。</span>
+              </div>
+            </div>
+
+            <div id="voice" class="workspace-content">
+              <div class="sub-steps">
+                <div class="sub-step active">声音参数</div>
+                <div class="sub-step">生成配音</div>
+                <div class="sub-step">试听检查</div>
+                <div class="sub-step">确认配音</div>
+              </div>
+              <div class="card">
+                <h3>配音设置</h3>
+                <div class="check-grid">
+                  <div class="check"><strong>音色</strong><br />男声 · 沉稳叙事</div>
+                  <div class="check"><strong>语速</strong><br />1.05x</div>
+                  <div class="check"><strong>情绪</strong><br />压迫感到反转</div>
+                  <div class="check"><strong>预计时长</strong><br />64 秒</div>
+                </div>
+                <div class="action-row" style="margin-top: 14px">
+                  <button class="btn primary" data-complete="voice">生成配音</button>
+                  <button id="listenVoice" class="btn" disabled>试听当前配音</button>
+                  <button id="confirmVoice" class="btn primary" disabled>试听后确认配音</button>
+                  <button class="btn" data-feedback="已播放上个配音版本，可对比音色和语速。">试听上个版本</button>
+                </div>
+              </div>
+            </div>
+
+            <div id="subtitle" class="workspace-content">
+              <div class="sub-steps">
+                <div class="sub-step active">生成字幕</div>
+                <div class="sub-step">编辑断句</div>
+                <div class="sub-step">检查时间轴</div>
+                <div class="sub-step">确认字幕</div>
+              </div>
+              <div class="card">
+                <h3>字幕预览</h3>
+                <div class="mini-list">
+                  <div class="mini-item"><strong>00:00-00:03</strong>他醒来时，脚下不是实验室，而是秦朝盐场。</div>
+                  <div class="mini-item"><strong>00:04-00:08</strong>别人以为他只是苦役，他却在灰烬里看见机会。</div>
+                  <div class="mini-item"><strong>00:09-00:13</strong>一炉火，一撮盐，能不能撬动整个大秦？</div>
+                </div>
+                <div class="action-row" style="margin-top: 14px">
+                  <button class="btn" data-feedback="已生成首屏字幕优化建议：第一句缩短 4 个字，钩子更靠前。">优化首屏字幕</button>
+                  <button class="btn primary" data-complete="subtitle">确认字幕</button>
+                </div>
+              </div>
+            </div>
+
+            <div id="visual" class="workspace-content">
+              <div class="sub-steps">
+                <div class="sub-step active">生成模式</div>
+                <div class="sub-step">背景素材</div>
+                <div class="sub-step">字幕样式</div>
+                <div class="sub-step">确认视觉</div>
+              </div>
+              <div class="card">
+                <h3>视觉方案</h3>
+                <div class="check-grid">
+                  <div class="check"><strong>模式</strong><br />简单循环背景</div>
+                  <div class="check"><strong>素材</strong><br />古代盐场烟火氛围视频</div>
+                  <div class="check"><strong>比例</strong><br />9:16 · 1080x1920</div>
+                  <div class="check"><strong>字幕</strong><br />底部安全区 · 白字描边</div>
+                </div>
+                <div class="action-row" style="margin-top: 14px">
+                  <button class="btn" data-feedback="已打开背景素材建议：盐场烟火、商会夜谈、古代工坊三类可选。">更换背景</button>
+                  <button class="btn primary" data-complete="visual">确认视觉方案</button>
+                </div>
+              </div>
+            </div>
+
+            <div id="render" class="workspace-content">
+              <div class="sub-steps">
+                <div class="sub-step active">渲染前检查</div>
+                <div class="sub-step">发起渲染</div>
+                <div class="sub-step">查看进度</div>
+                <div class="sub-step">渲染完成</div>
+              </div>
+              <div class="card">
+                <h3>渲染前检查</h3>
+                <div class="check-grid">
+                  <div class="check"><strong>引用</strong><br /><span id="renderGateReference" class="tag green">normal</span></div>
+                  <div class="check"><strong>旁白</strong><br /><span id="renderGateNarration" class="tag red">待确认</span></div>
+                  <div class="check"><strong>配音</strong><br /><span id="renderGateVoice" class="tag red">待确认</span></div>
+                  <div class="check"><strong>字幕与视觉</strong><br /><span id="renderGateSubtitleVisual" class="tag red">待确认</span></div>
+                </div>
+                <div class="action-row" style="margin-top: 14px">
+                  <button class="btn primary" data-complete="render">开始渲染</button>
+                </div>
+              </div>
+            </div>
+
+            <div id="preview" class="workspace-content">
+              <div class="video-preview">
+                <div class="phone-frame">
+                  <div class="caption">一炉火，一撮盐，能不能撬动整个大秦？</div>
+                </div>
+                <div class="card">
+                  <h3>预览评审</h3>
+                  <div class="check-grid">
+                    <div class="check"><strong>前三秒钩子</strong><br /><span class="tag green">强</span></div>
+                    <div class="check"><strong>声音自然度</strong><br /><span class="tag amber">语速略快</span></div>
+                    <div class="check"><strong>字幕清晰度</strong><br /><span class="tag green">安全区内</span></div>
+                    <div class="check"><strong>视频时长</strong><br /><span class="tag green">64 秒</span></div>
+                    <div class="check"><strong>音频可听</strong><br /><span class="tag green">通过</span></div>
+                    <div class="check"><strong>字幕同步</strong><br /><span class="tag green">通过</span></div>
+                    <div class="check"><strong>素材来源</strong><br /><span class="tag amber">内置素材</span></div>
+                    <div class="check"><strong>导出门禁</strong><br /><span id="previewGate" class="tag green">可确认</span></div>
+                  </div>
+                  <div class="action-row" style="margin-top: 14px">
+                    <button class="btn danger" data-open="rejectDrawer">标记不满意</button>
+                    <button class="btn primary" id="confirmVideo">确认当前视频</button>
+                  </div>
+                  <div class="mini-list" style="margin-top: 14px">
+                    <div class="mini-item"><strong>本次渲染使用版本</strong><span class="muted">narration_artifact_A · voice_artifact_v2 · subtitle_artifact_v2 · visual_artifact_v2</span></div>
+                    <div class="mini-item"><strong>任务幂等</strong><span class="muted">actionType=render_video · requestHash=render_8f21</span></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div id="export" class="workspace-content">
+              <div class="card">
+                <h3>导出文件</h3>
+                <p id="exportHint">当前视频已确认，可导出。导出不会自动发布到平台。</p>
+                <div class="check-grid">
+                  <div class="check"><strong>视频版本</strong><br />VideoRender v4</div>
+                  <div class="check"><strong>previewStatus</strong><br /><span class="tag green">confirmed_exportable</span></div>
+                  <div class="check"><strong>renderId</strong><br />render_0004</div>
+                  <div class="check"><strong>VideoExport</strong><br />export_0001 -> render_0004</div>
+                  <div class="check"><strong>格式</strong><br />mp4</div>
+                  <div class="check"><strong>分辨率</strong><br />1080x1920</div>
+                  <div class="check"><strong>idempotencyToken</strong><br />export_video_0001</div>
+                  <div class="check"><strong>引用状态</strong><br /><span class="tag green">normal</span></div>
+                </div>
+                <div class="action-row" style="margin-top: 14px">
+                  <button class="btn primary" id="exportVideo">导出文件，不发布</button>
+                  <button class="btn" data-view="list">回视频列表</button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <aside>
+            <div class="card task">
+              <h3>当前任务</h3>
+              <p id="taskText">暂无运行中任务。长任务会显示进度、失败原因、重试和取消入口。</p>
+              <div id="taskMeta" class="muted">状态：idle · 无运行中任务</div>
+              <div id="taskProgress" class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <span id="progressBar" style="--value: 0%"></span>
+              </div>
+              <div class="action-row">
+                <button id="taskDetailBtn" class="btn" disabled>任务详情</button>
+                <button id="cancelTaskBtn" class="btn" disabled>取消</button>
+                <button id="retryTaskBtn" class="btn danger hidden">重试</button>
+                <button id="simulateFailBtn" class="btn">模拟失败态</button>
+              </div>
+            </div>
+            <div class="card">
+              <h3>版本和依赖</h3>
+              <div class="mini-list">
+                <div class="mini-item"><strong>VideoReference</strong><span id="referenceVersionStatus" class="muted">v3 · normal</span></div>
+                <div class="mini-item"><strong>VideoArtifact · narration</strong><span id="narrationVersionStatus" class="muted">candidate A · 待确认</span></div>
+                <div class="mini-item"><strong>VideoArtifact · voice</strong><span id="voiceVersionStatus" class="muted">未生成</span></div>
+                <div class="mini-item"><strong>VideoArtifact · subtitle / visual</strong><span id="subtitleVisualVersionStatus" class="muted">未开始</span></div>
+                <div class="mini-item"><strong>VideoRender / VideoExport</strong><span id="renderVersionStatus" class="muted">未开始</span></div>
+              </div>
+            </div>
+            <div class="card">
+              <h3>P10+ 后续能力</h3>
+              <p>发布记录、数据回填、短视频系列和运营复盘暂时灰态，不进入 P9 主流程。</p>
+              <div class="tag-row">
+                <span class="tag gray">发布记录</span>
+                <span class="tag gray">数据回填</span>
+                <span class="tag gray">运营复盘</span>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </section>
+    </main>
+
+    <div id="createModal" class="modal" role="dialog" aria-modal="true">
+      <div class="modal-panel">
+        <div class="drawer-head">
+          <div>
+            <h2>创建视频项目</h2>
+            <p>这里只保存引用快照，不会开始生成视频。</p>
+          </div>
+          <button class="btn ghost" data-close="createModal">关闭</button>
+        </div>
+        <div class="wizard-body">
+          <section>
+            <div class="wizard-steps">
+              <div class="sub-step active">选择小说</div>
+              <div class="sub-step">确认范围</div>
+              <div class="sub-step">创建前检查</div>
+              <div class="sub-step">创建完成</div>
+            </div>
+            <div class="card">
+              <h3>选择小说和引用范围</h3>
+              <div class="check-grid">
+                <div class="check"><strong>引用小说</strong><br />化学大秦 · video_ready</div>
+                <div class="check"><strong>视频类型</strong><br />首条测试</div>
+                <div class="check"><strong>章节范围</strong><br />第 1-3 章</div>
+                <div class="check"><strong>重复项目</strong><br /><span class="tag amber">已有同范围项目</span></div>
+              </div>
+              <label style="display: block; margin-top: 14px">
+                <span class="muted">如仍创建独立项目，填写原因</span>
+                <textarea id="createReason" placeholder="例如：测试不同视觉方向或不同投放策略"></textarea>
+              </label>
+              <div class="action-row" style="margin-top: 14px">
+                <button class="btn" data-close="createModal" data-view="workbench">查看已有项目</button>
+                <button id="saveReferenceSnapshot" class="btn primary" disabled data-close="createModal">填写原因后保存引用快照</button>
+              </div>
+            </div>
+          </section>
+          <aside class="card">
+            <h3>创建前检查</h3>
+            <div class="mini-list">
+              <div class="mini-item"><strong>小说状态</strong><span class="tag green">通过</span></div>
+              <div class="mini-item"><strong>章节正文</strong><span class="tag green">通过</span></div>
+              <div class="mini-item"><strong>引用风险</strong><span class="tag amber">需关注</span></div>
+              <div class="mini-item"><strong>幂等保护</strong><span class="tag green">idempotencyToken</span></div>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </div>
+
+    <div id="referenceDrawer" class="drawer">
+      <div class="drawer-panel">
+        <div class="drawer-head">
+          <div>
+            <h2>引用异常处理</h2>
+            <p>blocking 不能靠填写原因继续，必须处理到 normal/resolved。</p>
+          </div>
+          <button class="btn ghost" data-close="referenceDrawer">关闭</button>
+        </div>
+        <div class="drawer-body">
+          <div class="stepper" style="grid-template-columns: repeat(4, minmax(0, 1fr))">
+            <div class="step active passive"><small>1</small><strong>查看异常</strong></div>
+            <div class="step passive"><small>2</small><strong>判断影响</strong></div>
+            <div class="step passive"><small>3</small><strong>选择处理</strong></div>
+            <div class="step passive"><small>4</small><strong>处理结果</strong></div>
+          </div>
+          <div class="card">
+            <h3 id="referenceIssueTitle">寒门算法：第 5 章正式正文已清空</h3>
+            <p id="referenceIssueDesc">该变化会阻塞后续生成、渲染、确认当前视频和导出。</p>
+            <div class="check-grid">
+              <div class="check"><strong>异常等级</strong><br /><span class="tag red">blocking</span></div>
+              <div class="check"><strong>影响范围</strong><br /><span id="referenceIssueScope">寒门算法：试投版</span></div>
+              <div class="check"><strong>当前动作</strong><br />返回小说处理</div>
+              <div class="check"><strong>是否可忽略</strong><br /><span class="tag red">不可忽略</span></div>
+            </div>
+            <div class="action-row" style="margin-top: 14px">
+              <button class="btn primary" data-issue-action="novel">回小说详情处理</button>
+              <button class="btn" data-issue-action="range">重新选择引用范围</button>
+              <button class="btn danger" data-issue-action="stop">停止项目</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="snapshotDrawer" class="drawer">
+      <div class="drawer-panel">
+        <div class="drawer-head">
+          <div>
+            <h2>完整引用快照</h2>
+            <p>生成视频只读取这份快照，小说后续改动会触发 warning/blocking 重检。</p>
+          </div>
+          <button class="btn ghost" data-close="snapshotDrawer">关闭</button>
+        </div>
+        <div class="drawer-body">
+          <div class="card">
+            <h3>VideoReference v3</h3>
+            <div class="check-grid">
+              <div class="check"><strong>sourceNovelId</strong><br />novel_000001</div>
+              <div class="check"><strong>sourceChapterIds</strong><br />chapter_001, chapter_002, chapter_003</div>
+              <div class="check"><strong>sourceVersionRefs</strong><br />正式正文 v7 / v5 / v4</div>
+              <div class="check"><strong>referenceStatus</strong><br /><span id="snapshotReferenceStatus" class="tag green">normal</span></div>
+              <div class="check"><strong>videoSuggestion</strong><br />首条测试 · 强钩子 · 58-72 秒</div>
+              <div class="check"><strong>idempotencyToken</strong><br />ref_create_20260618_001</div>
+            </div>
+          </div>
+          <div class="card">
+            <h3>VideoReferenceChapterSnapshot</h3>
+            <div class="mini-list">
+              <div class="mini-item">
+                <strong>第 1 章 · chapter_001</strong>
+                <span class="muted">contentVersionId=v7 · contentHash=8fa21c · featureCardVersionId=fc_11 · riskSnapshot=low</span>
+              </div>
+              <div class="mini-item">
+                <strong>第 2 章 · chapter_002</strong>
+                <span class="muted">contentVersionId=v5 · contentHash=2bd90a · featureCardVersionId=fc_12 · riskSnapshot=low</span>
+              </div>
+              <div class="mini-item">
+                <strong>第 3 章 · chapter_003</strong>
+                <span class="muted">contentVersionId=v4 · contentHash=c192ef · featureCardVersionId=fc_13 · riskSnapshot=warning</span>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <h3>引用内容摘要</h3>
+            <p>化学教授穿越到秦朝盐场，从炼盐失败反转到黑火药惊世，最后落到商战高光。该摘要用于旁白、分镜和预览评审，不能替代正式章节版本。</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="lockDrawer" class="drawer">
+      <div class="drawer-panel">
+        <div class="drawer-head">
+          <div>
+            <h2>暂不可进入该步骤</h2>
+            <p id="lockReason">请先完成前置确认。</p>
+          </div>
+          <button class="btn ghost" data-close="lockDrawer">关闭</button>
+        </div>
+        <div class="drawer-body">
+          <div class="card">
+            <h3>下一步建议</h3>
+            <p id="lockSuggestion">回到当前推荐步骤完成确认后再继续。</p>
+            <div class="action-row">
+              <button class="btn primary" data-close="lockDrawer">知道了</button>
+              <button class="btn" data-close="lockDrawer" data-focus-current="true">回当前步骤</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="rejectDrawer" class="drawer">
+      <div class="drawer-panel">
+        <div class="drawer-head">
+          <div>
+            <h2>标记不满意</h2>
+            <p>选择原因后，系统会告诉你该回到哪一步修改。</p>
+          </div>
+          <button class="btn ghost" data-close="rejectDrawer">关闭</button>
+        </div>
+        <div class="drawer-body">
+          <div class="mini-list">
+            <button class="mini-item" data-return-step="narration">
+              <strong>开头不吸引人</strong>
+              <span class="muted">返回旁白稿，配音、字幕和渲染会过期。</span>
+            </button>
+            <button class="mini-item" data-return-step="voice">
+              <strong>声音不合适</strong>
+              <span class="muted">返回配音，字幕和渲染会过期。</span>
+            </button>
+            <button class="mini-item" data-return-step="subtitle">
+              <strong>字幕断句或错字</strong>
+              <span class="muted">返回字幕，渲染会过期。</span>
+            </button>
+            <button class="mini-item" data-return-step="visual">
+              <strong>背景素材不合适</strong>
+              <span class="muted">返回视觉方案，渲染会过期。</span>
+            </button>
+            <button class="mini-item" data-return-step="narration">
+              <strong>旁白太长或节奏拖沓</strong>
+              <span class="muted">返回旁白稿，重新压缩开头和节奏。</span>
+            </button>
+            <button class="mini-item" data-return-step="subtitle">
+              <strong>字幕不同步</strong>
+              <span class="muted">返回字幕，重新检查时间轴。</span>
+            </button>
+            <button class="mini-item" data-return-step="render">
+              <strong>视频黑屏、无声或渲染异常</strong>
+              <span class="muted">返回渲染，保留上游资产并重新渲染。</span>
+            </button>
+          </div>
+          <label style="display: block; margin-top: 14px">
+            <span class="muted">补充说明，可选</span>
+            <textarea id="rejectReasonText" placeholder="例如：前三秒不够刺激，声音太平，或者字幕和声音差半秒。"></textarea>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <div id="confirmImpactDrawer" class="drawer">
+      <div class="drawer-panel">
+        <div class="drawer-head">
+          <div>
+            <h2 id="confirmImpactTitle">确认高风险操作</h2>
+            <p id="confirmImpactDesc">该操作会影响当前视频资产。</p>
+          </div>
+          <button class="btn ghost" data-close="confirmImpactDrawer">关闭</button>
+        </div>
+        <div class="drawer-body">
+          <div class="card">
+            <h3>影响范围</h3>
+            <p id="confirmImpactScope">下游资产会过期，当前渲染不能继续导出。</p>
+            <label id="stopReasonField" class="hidden" style="display: block; margin-bottom: 14px">
+              <span class="muted">停止原因</span>
+              <textarea id="stopReasonText" placeholder="例如：引用小说需要重写，当前视频项目不再继续。"></textarea>
+            </label>
+            <div class="action-row">
+              <button class="btn" data-close="confirmImpactDrawer">取消</button>
+              <button id="confirmImpactAction" class="btn danger">确认执行</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="taskDetailDrawer" class="drawer">
+      <div class="drawer-panel">
+        <div class="drawer-head">
+          <div>
+            <h2>任务详情</h2>
+            <p>用于长任务排查、取消和重试。</p>
+          </div>
+          <button class="btn ghost" data-close="taskDetailDrawer">关闭</button>
+        </div>
+        <div class="drawer-body">
+          <div class="card">
+            <h3 id="taskDetailTitle">暂无任务</h3>
+            <div class="mini-list">
+              <div class="mini-item"><strong>阶段</strong><span id="taskDetailStage" class="muted">idle</span></div>
+              <div class="mini-item"><strong>幂等键</strong><span id="taskDetailKey" class="muted">-</span></div>
+              <div class="mini-item"><strong>失败原因</strong><span id="taskDetailError" class="muted">无</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const views = {
+        list: document.getElementById("listView"),
+        workbench: document.getElementById("workbenchView"),
+      };
+
+      const stepOrder = [
+        "reference",
+        "narration",
+        "voice",
+        "subtitle",
+        "visual",
+        "render",
+        "preview",
+        "export",
+      ];
+
+      const labels = {
+        reference: "引用检查",
+        narration: "旁白稿",
+        voice: "配音",
+        subtitle: "字幕",
+        visual: "视觉方案",
+        render: "渲染",
+        preview: "预览确认",
+        export: "导出文件，不发布",
+      };
+
+      const primaryLabels = {
+        reference: "进入旁白稿",
+        narrationGenerate: "生成旁白候选",
+        narrationConfirm: "确认旁白稿",
+        narrationNext: "进入配音",
+        voiceGenerate: "生成配音",
+        voiceConfirm: "确认配音",
+        voiceNext: "进入字幕",
+        subtitle: "确认字幕",
+        visual: "确认视觉方案",
+        render: "开始渲染",
+        preview: "确认当前视频",
+        export: "导出文件，不发布",
+      };
+
+      const state = {
+        currentStep: "narration",
+        referenceOk: true,
+        blocking: false,
+        narrationCandidate: true,
+        selectedCandidate: "A",
+        narrationConfirmed: false,
+        voiceGenerated: false,
+        voiceListened: false,
+        voiceConfirmed: false,
+        subtitleConfirmed: false,
+        visualConfirmed: false,
+        renderReady: false,
+        videoConfirmed: false,
+        rejected: false,
+        taskRunning: false,
+        taskStatus: "idle",
+        taskLabel: "",
+        taskStage: "idle",
+        taskKey: "-",
+        taskError: "无",
+        taskProgress: 0,
+        pendingImpact: null,
+      };
+
+      let activeTimer = null;
+      let lastTask = null;
+
+      function $(id) {
+        return document.getElementById(id);
+      }
+
+      function switchView(name) {
+        Object.values(views).forEach((view) => view.classList.remove("active"));
+        views[name].classList.add("active");
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }
+
+      function tag(el, color, text) {
+        el.className = "tag " + color;
+        el.textContent = text;
+      }
+
+      function setListNotice(text, type = "success") {
+        const notice = $("listNotice");
+        notice.textContent = text;
+        notice.className = "notice " + type;
+      }
+
+      function openLayer(id) {
+        if (id === "referenceDrawer") syncReferenceIssueDrawer();
+        $(id).classList.add("active");
+        const closeButton = $(id).querySelector("[data-close]");
+        if (closeButton) closeButton.focus({ preventScroll: true });
+      }
+
+      function closeLayer(id) {
+        $(id).classList.remove("active");
+      }
+
+      function canEnter(step) {
+        if (state.blocking && step !== "reference") return false;
+        if (step === "reference" || step === "narration") return state.referenceOk;
+        if (step === "voice") return state.narrationConfirmed;
+        if (step === "subtitle") return state.voiceConfirmed;
+        if (step === "visual") return state.subtitleConfirmed;
+        if (step === "render") return state.visualConfirmed;
+        if (step === "preview") return state.renderReady;
+        if (step === "export") return state.videoConfirmed && !state.rejected;
+        return false;
+      }
+
+      function lockReason(step) {
+        if (state.blocking) {
+          return {
+            reason: "引用状态为 blocking，当前不能生成、渲染、确认当前视频或导出。",
+            suggestion: "先处理引用异常，或回小说修复后重检到 normal/resolved。历史已确认视频会保留，但当前导出门禁锁定。",
+          };
+        }
+        const reasons = {
+          voice: ["需先确认旁白稿。", "回到旁白稿步骤，确认候选文案后再配音。"],
+          subtitle: ["需先确认配音。", "回到配音步骤，生成配音并试听确认。"],
+          visual: ["需先确认字幕。", "回到字幕步骤，确认字幕内容和时间轴。"],
+          render: ["需先确认视觉方案。", "回到视觉方案步骤，确认背景、比例和字幕样式。"],
+          preview: ["需先完成渲染。", "回到渲染步骤，完成视频渲染后再预览。"],
+          export: ["需先确认当前视频。", "在预览确认步骤点击确认当前视频后，才能导出文件。"],
+        };
+        const item = reasons[step] || ["请先完成前置步骤。", "回到当前推荐步骤完成确认后再继续。"];
+        return { reason: item[0], suggestion: item[1] };
+      }
+
+      function showLock(step) {
+        const info = lockReason(step);
+        $("lockReason").textContent = info.reason;
+        $("lockSuggestion").textContent = info.suggestion;
+        openLayer("lockDrawer");
+      }
+
+      function syncReferenceIssueDrawer() {
+        if (views.workbench.classList.contains("active") && state.blocking) {
+          $("referenceIssueTitle").textContent = "化学大秦：引用快照已变为 blocking";
+          $("referenceIssueDesc").textContent = "第 1-3 章中至少一个 sourceVersionRef 与当前正式版本不一致，当前视频项目的生成、确认和导出门禁已锁定。";
+          $("referenceIssueScope").textContent = "化学大秦：首条测试 · 第 1-3 章";
+          return;
+        }
+        $("referenceIssueTitle").textContent = "寒门算法：第 5 章正式正文已清空";
+        $("referenceIssueDesc").textContent = "该变化会阻塞后续生成、渲染、确认当前视频和导出。";
+        $("referenceIssueScope").textContent = "寒门算法：试投版";
+      }
+
+      function setStep(step) {
+        if (!canEnter(step)) {
+          showLock(step);
+          return false;
+        }
+        state.currentStep = step;
+        document.querySelectorAll(".workspace-content").forEach((item) => {
+          item.classList.toggle("active", item.id === step);
+        });
+        updateUI();
+        return true;
+      }
+
+      function stepDone(step) {
+        return {
+          reference: state.referenceOk && !state.blocking,
+          narration: state.narrationConfirmed,
+          voice: state.voiceConfirmed,
+          subtitle: state.subtitleConfirmed,
+          visual: state.visualConfirmed,
+          render: state.renderReady,
+          preview: state.videoConfirmed && !state.rejected,
+          export: false,
+        }[step];
+      }
+
+      function recommendedLabel() {
+        if (state.blocking) return "处理引用异常";
+        if (!state.narrationCandidate) return primaryLabels.narrationGenerate;
+        if (!state.narrationConfirmed) return primaryLabels.narrationConfirm;
+        return primaryLabelForStep(state.currentStep);
+      }
+
+      function primaryLabelForStep(step) {
+        if (step === "narration") {
+          if (!state.narrationCandidate) return primaryLabels.narrationGenerate;
+          if (!state.narrationConfirmed) return primaryLabels.narrationConfirm;
+          return primaryLabels.narrationNext;
+        }
+        if (step === "voice") {
+          if (!state.voiceGenerated) return primaryLabels.voiceGenerate;
+          if (!state.voiceConfirmed) return primaryLabels.voiceConfirm;
+          return primaryLabels.voiceNext;
+        }
+        return primaryLabels[step] || labels[step];
+      }
+
+      function updateTaskUI() {
+        $("taskText").textContent =
+          state.taskStatus === "idle"
+            ? "暂无运行中任务。长任务会显示进度、失败原因、重试和取消入口。"
+            : state.taskLabel;
+        $("taskMeta").textContent =
+          "状态：" + state.taskStatus + " · 阶段：" + state.taskStage + " · 幂等键：" + state.taskKey;
+        $("progressBar").style.setProperty("--value", state.taskProgress + "%");
+        $("taskProgress").setAttribute("aria-valuenow", String(state.taskProgress));
+        $("taskProgress").classList.toggle("failed", state.taskStatus === "failed");
+        $("taskProgress").classList.toggle("canceled", state.taskStatus === "canceled");
+        $("taskDetailBtn").disabled = state.taskStatus === "idle";
+        $("cancelTaskBtn").disabled = state.taskStatus !== "running";
+        $("retryTaskBtn").classList.toggle("hidden", state.taskStatus !== "failed");
+        $("taskDetailTitle").textContent = state.taskLabel || "暂无任务";
+        $("taskDetailStage").textContent = state.taskStage;
+        $("taskDetailKey").textContent = state.taskKey;
+        $("taskDetailError").textContent = state.taskError;
+      }
+
+      function updateUI() {
+        const currentIndex = stepOrder.indexOf(state.currentStep);
+
+        document.querySelectorAll("#p9Stepper .step").forEach((item) => {
+          const itemStep = item.dataset.step;
+          const itemIndex = stepOrder.indexOf(itemStep);
+          const locked = !canEnter(itemStep);
+          item.classList.toggle("active", itemStep === state.currentStep);
+          item.classList.toggle("done", stepDone(itemStep));
+          item.classList.toggle("locked", locked);
+          item.classList.toggle("future", !stepDone(itemStep) && itemIndex > currentIndex && !locked);
+          item.classList.toggle("blocked", state.blocking && itemStep !== "reference");
+          item.setAttribute("aria-disabled", String(locked));
+          if (itemStep === state.currentStep) item.setAttribute("aria-current", "step");
+          else item.removeAttribute("aria-current");
+        });
+
+        const primaryAction = $("primaryAction");
+        primaryAction.textContent = primaryLabelForStep(state.currentStep);
+        primaryAction.disabled = state.taskRunning || state.blocking || !canEnter(state.currentStep);
+        $("recommendText").textContent = recommendedLabel();
+
+        $("blockingBanner").classList.toggle("hidden", !state.blocking);
+        tag($("referenceStatusTag"), state.blocking ? "red" : "green", state.blocking ? "引用 blocking" : "引用正常");
+        tag($("leftReferenceStatus"), state.blocking ? "red" : "green", state.blocking ? "blocking" : "normal");
+        tag($("snapshotReferenceStatus"), state.blocking ? "red" : "green", state.blocking ? "blocking" : "normal");
+        $("referenceVersionStatus").textContent = state.blocking ? "v3 · blocking · 当前门禁锁定" : "v3 · normal";
+
+        document.querySelectorAll(".candidate").forEach((item) => {
+          item.classList.toggle("selected", item.dataset.candidate === state.selectedCandidate);
+        });
+
+        $("confirmNarration").disabled = !state.narrationCandidate || state.narrationConfirmed || state.taskRunning;
+        $("narrationHint").textContent = state.narrationConfirmed
+          ? "旁白已确认，后续修改会使配音、字幕、视觉和渲染过期。"
+          : "候选 " + state.selectedCandidate + " 待确认；确认后才会解锁配音。";
+
+        $("listenVoice").disabled = !state.voiceGenerated || state.taskRunning;
+        $("confirmVoice").disabled = !state.voiceGenerated || !state.voiceListened || state.voiceConfirmed || state.taskRunning;
+
+        $("narrationVersionStatus").textContent = state.narrationConfirmed
+          ? "candidate " + state.selectedCandidate + " · confirmed"
+          : "candidate " + state.selectedCandidate + " · pending_confirm";
+        $("voiceVersionStatus").textContent = state.voiceConfirmed
+          ? "voice_artifact_v2 · confirmed"
+          : state.voiceGenerated
+            ? state.voiceListened
+              ? "voice_artifact_v2 · listened · pending_confirm"
+              : "voice_artifact_v2 · pending_listen_confirm"
+            : "未生成";
+        $("subtitleVisualVersionStatus").textContent =
+          state.visualConfirmed ? "subtitle_artifact_v2 / visual_artifact_v2 · confirmed" : state.subtitleConfirmed ? "subtitle_artifact_v2 confirmed · visual 待确认" : "未开始";
+        $("renderVersionStatus").textContent = state.blocking && state.videoConfirmed
+          ? "VideoRender v4 · confirmed_exportable · 当前引用 blocking，导出锁定"
+          : state.rejected
+            ? "VideoRender v4 · rejected_pending_revision · 导出锁定"
+            : state.videoConfirmed
+              ? "VideoRender v4 · confirmed_exportable"
+              : state.renderReady
+                ? "VideoRender v4 · 待预览确认"
+                : "未开始";
+
+        tag($("renderGateReference"), state.blocking ? "red" : "green", state.blocking ? "blocking" : "normal");
+        tag($("renderGateNarration"), state.narrationConfirmed ? "green" : "red", state.narrationConfirmed ? "已确认" : "待确认");
+        tag($("renderGateVoice"), state.voiceConfirmed ? "green" : "red", state.voiceConfirmed ? "已确认" : state.voiceGenerated ? "待试听确认" : "待生成");
+        tag(
+          $("renderGateSubtitleVisual"),
+          state.subtitleConfirmed && state.visualConfirmed ? "green" : "red",
+          state.subtitleConfirmed && state.visualConfirmed ? "已确认" : "待确认",
+        );
+        tag(
+          $("previewGate"),
+          state.blocking ? "red" : state.videoConfirmed && !state.rejected ? "green" : "amber",
+          state.blocking ? "引用 blocking，导出锁定" : state.videoConfirmed && !state.rejected ? "可导出" : "待确认",
+        );
+
+        document.querySelectorAll("[data-complete]").forEach((button) => {
+          button.disabled = state.taskRunning || state.blocking || !canEnter(button.dataset.complete);
+        });
+        updateTaskUI();
+      }
+
+      function invalidateFrom(step) {
+        if (step === "narration") state.narrationConfirmed = false;
+        if (step === "narration" || step === "voice") {
+          state.voiceGenerated = false;
+          state.voiceListened = false;
+          state.voiceConfirmed = false;
+        }
+        if (["narration", "voice", "subtitle"].includes(step)) state.subtitleConfirmed = false;
+        if (["narration", "voice", "subtitle", "visual"].includes(step)) state.visualConfirmed = false;
+        state.renderReady = false;
+        state.videoConfirmed = false;
+      }
+
+      function startTask(label, key) {
+        state.taskRunning = true;
+        state.taskStatus = "running";
+        state.taskLabel = label + "进行中：正在排队、调用生成能力并写入新版本。";
+        state.taskStage = "queued";
+        state.taskKey = key;
+        state.taskError = "无";
+        state.taskProgress = 12;
+        updateUI();
+      }
+
+      function finishTask(label, onDone) {
+        state.taskRunning = false;
+        state.taskStatus = "succeeded";
+        state.taskLabel = label + "已完成，已生成新版本。";
+        state.taskStage = "succeeded";
+        state.taskProgress = 100;
+        onDone();
+        updateUI();
+      }
+
+      function failTask(reason) {
+        if (activeTimer) clearInterval(activeTimer);
+        activeTimer = null;
+        state.taskRunning = false;
+        state.taskStatus = "failed";
+        state.taskStage = "failed";
+        state.taskError = reason;
+        state.taskLabel = "任务失败：" + reason + "。你可以查看详情后重试。";
+        state.taskProgress = Math.max(state.taskProgress, 48);
+        updateUI();
+      }
+
+      function cancelTask() {
+        if (!state.taskRunning) return;
+        if (activeTimer) clearInterval(activeTimer);
+        activeTimer = null;
+        state.taskRunning = false;
+        state.taskStatus = "canceled";
+        state.taskStage = "canceled_by_user";
+        state.taskLabel = "任务已取消，没有写入新版本。";
+        state.taskProgress = Math.max(state.taskProgress, 24);
+        updateUI();
+      }
+
+      function taskStepFromKey(key) {
+        if (key.startsWith("render")) return "render";
+        if (key.startsWith("voice")) return "voice";
+        if (key.startsWith("narration")) return "narration";
+        return state.currentStep;
+      }
+
+      function simulateTask(label, key, onDone) {
+        const taskStep = taskStepFromKey(key);
+        if (state.blocking || !canEnter(taskStep)) {
+          showLock(taskStep);
+          return;
+        }
+        if (state.taskRunning) {
+          state.taskLabel = "已有任务运行中，不能重复触发同类任务。";
+          updateUI();
+          return;
+        }
+        lastTask = { label, key, onDone };
+        let value = 12;
+        startTask(label, key);
+        activeTimer = setInterval(() => {
+          value += 22;
+          state.taskProgress = Math.min(value, 100);
+          state.taskStage = value < 40 ? "queued" : value < 80 ? "generating" : "writing_version";
+          if (value >= 100) {
+            clearInterval(activeTimer);
+            activeTimer = null;
+            finishTask(label, onDone);
+            return;
+          }
+          updateUI();
+        }, 220);
+      }
+
+      function completeCurrentAction() {
+        const step = state.currentStep;
+        if (!canEnter(step) || state.taskRunning) {
+          showLock(step);
+          return;
+        }
+        if (step === "reference") {
+          setStep("narration");
+          return;
+        }
+        if (step === "narration") {
+          if (!state.narrationCandidate) {
+            simulateTask("生成旁白候选", "narration_generate_0001", () => {
+              state.narrationCandidate = true;
+              state.taskLabel = "旁白候选已生成。请编辑或确认候选 " + state.selectedCandidate + " 后再进入配音。";
+            });
+            return;
+          }
+          if (!state.narrationConfirmed) {
+            state.narrationConfirmed = true;
+            state.rejected = false;
+            state.taskStatus = "succeeded";
+            state.taskLabel = "旁白稿已确认。后续修改会使下游资产过期。";
+            setStep("voice");
+            return;
+          }
+          setStep("voice");
+          return;
+        }
+        if (step === "voice") {
+          if (!state.voiceGenerated) {
+            simulateTask("生成配音", "voice_generate_0002", () => {
+              state.voiceGenerated = true;
+              state.voiceListened = false;
+              state.taskLabel = "配音已生成。请试听后确认，确认后才会进入字幕。";
+            });
+            return;
+          }
+          if (!state.voiceListened) {
+            state.taskStatus = "succeeded";
+            state.taskLabel = "请先试听当前配音，再确认进入字幕。";
+            updateUI();
+            return;
+          }
+          if (!state.voiceConfirmed) {
+            state.voiceConfirmed = true;
+            state.taskStatus = "succeeded";
+            state.taskLabel = "配音已确认。";
+            setStep("subtitle");
+            return;
+          }
+          setStep("subtitle");
+          return;
+        }
+        if (step === "subtitle") {
+          state.subtitleConfirmed = true;
+          state.taskStatus = "succeeded";
+          state.taskLabel = "字幕已确认。";
+          setStep("visual");
+          return;
+        }
+        if (step === "visual") {
+          state.visualConfirmed = true;
+          state.taskStatus = "succeeded";
+          state.taskLabel = "视觉方案已确认。";
+          setStep("render");
+          return;
+        }
+        if (step === "render") {
+          simulateTask("渲染视频", "render_video_0004", () => {
+            state.renderReady = true;
+            setStep("preview");
+          });
+          return;
+        }
+        if (step === "preview") {
+          state.videoConfirmed = true;
+          state.rejected = false;
+          state.taskStatus = "succeeded";
+          state.taskLabel = "当前视频已确认，导出门禁已打开。";
+          setStep("export");
+          return;
+        }
+        if (step === "export") $("exportVideo").click();
+      }
+
+      function returnForRevision(step) {
+        state.rejected = true;
+        invalidateFrom(step);
+        closeLayer("rejectDrawer");
+        closeLayer("confirmImpactDrawer");
+        state.taskStatus = "succeeded";
+        state.taskLabel = "已记录不满意原因。VideoRender v4 标记为 rejected_pending_revision，导出已锁定。";
+        setStep(step);
+        updateUI();
+      }
+
+      function prepareImpact(type, options = {}) {
+        state.pendingImpact = { type, ...options };
+        if (type === "return") {
+          $("confirmImpactTitle").textContent = "确认退回修改";
+          $("confirmImpactDesc").textContent = "该操作会记录不满意原因，并让当前渲染进入 rejected_pending_revision。";
+          $("confirmImpactScope").textContent = "返回 " + labels[options.step] + " 后，下游资产会过期，当前视频不能继续导出。";
+        }
+        if (type === "candidateChange") {
+          $("confirmImpactTitle").textContent = "确认切换旁白候选";
+          $("confirmImpactDesc").textContent = "你已经确认过旁白。切换候选会让配音、字幕、视觉和渲染全部过期。";
+          $("confirmImpactScope").textContent = "确认后将选中候选 " + options.candidate + "，旁白回到待确认状态，后续资产需要重新生成。";
+        }
+        if (type === "stop") {
+          $("confirmImpactTitle").textContent = "确认停止视频项目";
+          $("confirmImpactDesc").textContent = "停止后当前视频项目不会继续生成或导出。";
+          $("confirmImpactScope").textContent = "项目生命周期会变为 stopped，后续需要新建项目或恢复后才能继续。";
+        }
+        $("stopReasonField").classList.toggle("hidden", type !== "stop");
+        $("confirmImpactAction").disabled = type === "stop" && $("stopReasonText").value.trim().length < 4;
+        openLayer("confirmImpactDrawer");
+      }
+
+      document.addEventListener("click", (event) => {
+        const target = event.target.closest("button");
+        if (!target) return;
+
+        if (target.dataset.view) {
+          switchView(target.dataset.view);
+          if (target.dataset.view === "workbench") updateUI();
+        }
+
+        if (target.dataset.step) setStep(target.dataset.step);
+
+        if (target.dataset.open) {
+          if (target.dataset.open === "rejectDrawer" && !state.renderReady) showLock("preview");
+          else openLayer(target.dataset.open);
+        }
+        if (target.dataset.close) closeLayer(target.dataset.close);
+
+        if (target.dataset.feedback) {
+          state.taskStatus = "succeeded";
+          state.taskLabel = target.dataset.feedback;
+          updateUI();
+        }
+
+        if (target.dataset.complete) {
+          const step = target.dataset.complete;
+          if (state.taskRunning) {
+            state.taskLabel = "已有任务运行中，不能重复触发同类任务。";
+            updateUI();
+            return;
+          }
+          if (!canEnter(step)) {
+            showLock(step);
+            return;
+          }
+          if (step === "voice") {
+            simulateTask("生成配音", "voice_generate_0002", () => {
+              state.voiceGenerated = true;
+              state.voiceListened = false;
+              state.taskLabel = "配音已生成。请试听后确认，确认后才会进入字幕。";
+              updateUI();
+            });
+          }
+          if (step === "subtitle") {
+            state.subtitleConfirmed = true;
+            state.taskStatus = "succeeded";
+            state.taskLabel = "字幕已确认。";
+            setStep("visual");
+          }
+          if (step === "visual") {
+            state.visualConfirmed = true;
+            state.taskStatus = "succeeded";
+            state.taskLabel = "视觉方案已确认。";
+            setStep("render");
+          }
+          if (step === "render") {
+            simulateTask("渲染视频", "render_video_0004", () => {
+              state.renderReady = true;
+              setStep("preview");
+            });
+          }
+        }
+
+        if (target.dataset.returnStep) prepareImpact("return", { step: target.dataset.returnStep });
+
+        if (target.dataset.issueAction) {
+          if (target.dataset.issueAction === "stop") {
+            prepareImpact("stop");
+            return;
+          }
+          closeLayer("referenceDrawer");
+          setListNotice("已记录引用异常处理动作，等待小说修复或重新选择引用范围。", "success");
+          state.taskStatus = "succeeded";
+          state.taskLabel = "已记录引用异常处理动作。";
+          updateUI();
+        }
+      });
+
+      $("primaryAction").addEventListener("click", completeCurrentAction);
+      $("confirmNarration").addEventListener("click", () => {
+        if (!state.narrationCandidate) {
+          showLock("voice");
+          return;
+        }
+        state.narrationConfirmed = true;
+        state.taskStatus = "succeeded";
+        state.taskLabel = "旁白稿已确认。";
+        setStep("voice");
+      });
+
+      $("confirmVoice").addEventListener("click", () => {
+        if (!state.voiceGenerated) {
+          showLock("subtitle");
+          return;
+        }
+        if (!state.voiceListened) {
+          state.taskStatus = "succeeded";
+          state.taskLabel = "请先试听当前配音，再确认进入字幕。";
+          updateUI();
+          return;
+        }
+        state.voiceConfirmed = true;
+        state.taskStatus = "succeeded";
+        state.taskLabel = "配音已确认。";
+        setStep("subtitle");
+      });
+
+      $("listenVoice").addEventListener("click", () => {
+        if (!state.voiceGenerated) return;
+        state.voiceListened = true;
+        state.taskStatus = "succeeded";
+        state.taskLabel = "已试听当前配音 voice_artifact_v2，可以确认或重新生成。";
+        updateUI();
+      });
+
+      $("confirmVideo").addEventListener("click", () => {
+        if (!state.renderReady) {
+          showLock("preview");
+          return;
+        }
+        state.videoConfirmed = true;
+        state.rejected = false;
+        state.taskStatus = "succeeded";
+        state.taskLabel = "当前视频已确认，导出门禁已打开。";
+        setStep("export");
+      });
+
+      $("exportVideo").addEventListener("click", () => {
+        if (!canEnter("export")) {
+          showLock("export");
+          return;
+        }
+        $("exportHint").textContent =
+          "已创建导出记录 VideoExport v1。未创建发布记录，也未触发平台数据回填。下一步可以下载文件或回列表继续处理。";
+        state.taskStatus = "succeeded";
+        state.taskLabel = "导出文件已完成。发布和数据回填仍在 P10+ 灰态。";
+        updateUI();
+      });
+
+      $("simulateBlocking").addEventListener("click", () => {
+        state.blocking = true;
+        state.rejected = false;
+        setStep("reference");
+        state.taskStatus = "succeeded";
+        state.taskLabel = "引用状态变为 blocking，历史确认结果保留，但生成、确认和导出门禁全部锁定。";
+        updateUI();
+      });
+
+      $("restoreReference").addEventListener("click", () => {
+        state.blocking = false;
+        state.taskStatus = "succeeded";
+        state.taskLabel = "引用已重检恢复 normal，可以继续当前生成流程。";
+        setStep("reference");
+        updateUI();
+      });
+
+      $("createReason").addEventListener("input", (event) => {
+        const filled = event.target.value.trim().length >= 4;
+        $("saveReferenceSnapshot").disabled = !filled;
+        $("saveReferenceSnapshot").textContent = filled ? "保存引用快照" : "填写原因后保存引用快照";
+      });
+
+      $("saveReferenceSnapshot").addEventListener("click", () => {
+        setListNotice("已保存新的引用快照，创建结果可在列表查看；未开始生成视频。", "success");
+      });
+
+      $("filterBtn").addEventListener("click", () => {
+        setListNotice("筛选已应用：当前展示 3 个匹配的视频项目。", "success");
+      });
+
+      $("taskDetailBtn").addEventListener("click", () => openLayer("taskDetailDrawer"));
+      $("cancelTaskBtn").addEventListener("click", cancelTask);
+      $("retryTaskBtn").addEventListener("click", () => {
+        if (lastTask) simulateTask(lastTask.label, lastTask.key, lastTask.onDone);
+      });
+      $("simulateFailBtn").addEventListener("click", () => {
+        if (!lastTask) {
+          lastTask = {
+            label: "渲染视频",
+            key: "render_video_0004",
+            onDone: () => {
+              state.renderReady = true;
+              setStep("preview");
+            },
+          };
+        }
+        failTask("外部渲染服务超时，未写入新版本");
+      });
+
+      $("confirmImpactAction").addEventListener("click", () => {
+        if (!state.pendingImpact) return;
+        if (state.pendingImpact.type === "return") returnForRevision(state.pendingImpact.step);
+        if (state.pendingImpact.type === "stop") {
+          closeLayer("referenceDrawer");
+          closeLayer("confirmImpactDrawer");
+          setListNotice("视频项目已停止，后续生成链路关闭。", "success");
+          state.taskStatus = "succeeded";
+          state.taskLabel = "项目已标记停止，后续生成链路关闭。";
+          updateUI();
+        }
+        if (state.pendingImpact.type === "candidateChange") {
+          state.selectedCandidate = state.pendingImpact.candidate;
+          state.narrationConfirmed = false;
+          invalidateFrom("narration");
+          closeLayer("confirmImpactDrawer");
+          state.taskStatus = "succeeded";
+          state.taskLabel = "已切换旁白候选，下游资产已过期，请重新确认旁白。";
+          setStep("narration");
+        }
+        state.pendingImpact = null;
+      });
+
+      document.querySelectorAll(".candidate").forEach((candidate) => {
+        candidate.addEventListener("click", () => {
+          if (candidate.dataset.candidate === state.selectedCandidate) return;
+          if (state.narrationConfirmed) {
+            prepareImpact("candidateChange", { candidate: candidate.dataset.candidate });
+            return;
+          }
+          state.selectedCandidate = candidate.dataset.candidate;
+          updateUI();
+        });
+      });
+
+      $("stopReasonText").addEventListener("input", () => {
+        if (state.pendingImpact?.type === "stop") {
+          $("confirmImpactAction").disabled = $("stopReasonText").value.trim().length < 4;
+        }
+      });
+
+      document.addEventListener("keydown", (event) => {
+        if (event.key !== "Escape") return;
+        document.querySelectorAll(".drawer.active, .modal.active").forEach((layer) => layer.classList.remove("active"));
+      });
+
+      updateUI();
+    </script>
+  </body>
+</html>

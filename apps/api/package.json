@@ -1,0 +1,32 @@
+{
+  "name": "@ai-shortvideo/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "build": "prisma generate && tsc -p tsconfig.json",
+    "start": "node dist/main.js",
+    "typecheck": "prisma generate && tsc -p tsconfig.json --noEmit",
+    "test": "AI_PROVIDER_MODE=mock tsx --test src/**/*.test.ts prisma/**/*.test.ts",
+    "smoke:deepseek": "tsx src/modules/novels/deepseekLiveSmoke.ts",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:validate": "prisma validate",
+    "db:seed": "prisma generate && tsx prisma/seed.ts"
+  },
+  "dependencies": {
+    "@ai-shortvideo/shared": "file:../../packages/shared",
+    "@prisma/adapter-mariadb": "^7.8.0",
+    "@prisma/client": "^7.8.0",
+    "dotenv": "^17.4.2",
+    "fastify": "^5.8.5",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.3",
+    "prisma": "^7.8.0",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
+  }
+}

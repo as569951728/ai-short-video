@@ -1,0 +1,1704 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>化学大秦 - 小说概览与步骤详情原型</title>
+    <style>
+      :root {
+        --bg: #eef3f8;
+        --surface: #ffffff;
+        --surface-soft: #f7faff;
+        --line: #dce5ef;
+        --line-strong: #c8d6e5;
+        --text: #1f2d3d;
+        --muted: #6f7f90;
+        --blue: #2f8cff;
+        --blue-soft: #e8f3ff;
+        --green: #2f9e65;
+        --green-soft: #eaf8f0;
+        --amber: #d98921;
+        --amber-soft: #fff5e7;
+        --red: #d84a4a;
+        --red-soft: #fff0f0;
+        --shadow: 0 16px 42px rgba(33, 55, 82, 0.11);
+        --radius: 8px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+        letter-spacing: 0;
+      }
+
+      button,
+      input,
+      textarea,
+      select {
+        font: inherit;
+      }
+
+      button {
+        cursor: pointer;
+      }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.54;
+      }
+
+      .topbar {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+        height: 68px;
+        padding: 0 28px;
+        background: rgba(255, 255, 255, 0.94);
+        border-bottom: 1px solid var(--line);
+        backdrop-filter: blur(12px);
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-width: 260px;
+      }
+
+      .brand-mark {
+        width: 8px;
+        height: 34px;
+        border-radius: 999px;
+        background: var(--blue);
+      }
+
+      .brand-title {
+        display: grid;
+        gap: 3px;
+      }
+
+      .brand-title strong {
+        font-size: 19px;
+        line-height: 1.2;
+      }
+
+      .brand-title span {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .top-actions,
+      .action-row,
+      .status-row,
+      .tag-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .btn {
+        min-height: 34px;
+        padding: 0 14px;
+        border: 1px solid var(--line-strong);
+        border-radius: 6px;
+        background: #fff;
+        color: #34465a;
+        transition:
+          background 0.16s ease,
+          border-color 0.16s ease,
+          color 0.16s ease,
+          transform 0.16s ease;
+      }
+
+      .btn:hover:not(:disabled) {
+        border-color: var(--blue);
+        color: var(--blue);
+        background: #f8fbff;
+      }
+
+      .btn:active:not(:disabled) {
+        transform: translateY(1px);
+      }
+
+      .btn.primary {
+        border-color: var(--blue);
+        background: var(--blue);
+        color: #fff;
+      }
+
+      .btn.primary:hover:not(:disabled) {
+        background: #1679ee;
+        color: #fff;
+      }
+
+      .btn.ghost {
+        border-color: transparent;
+        background: transparent;
+      }
+
+      .btn.danger {
+        border-color: var(--red);
+        color: var(--red);
+      }
+
+      .shell {
+        width: min(1440px, 100%);
+        margin: 0 auto;
+        padding: 22px 28px 96px;
+      }
+
+      .panel {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        box-shadow: 0 1px 2px rgba(20, 39, 63, 0.04);
+      }
+
+      .panel-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 18px;
+        padding: 20px 22px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .panel-head h1,
+      .panel-head h2,
+      .panel-head h3,
+      .section-title h3,
+      .card h3,
+      .mini-card h3 {
+        margin: 0;
+        color: #223246;
+      }
+
+      .panel-head h1 {
+        font-size: 24px;
+      }
+
+      .panel-head h2 {
+        font-size: 20px;
+      }
+
+      .panel-head h3,
+      .section-title h3,
+      .card h3,
+      .mini-card h3 {
+        font-size: 16px;
+      }
+
+      .panel-head p,
+      .section-title p,
+      .card p,
+      .mini-card p,
+      .muted {
+        margin: 6px 0 0;
+        color: var(--muted);
+        line-height: 1.65;
+      }
+
+      .panel-body {
+        padding: 20px 22px 22px;
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        min-height: 24px;
+        padding: 0 8px;
+        border: 1px solid var(--line-strong);
+        border-radius: 5px;
+        background: #fff;
+        color: #526477;
+        font-size: 12px;
+        line-height: 1;
+        white-space: nowrap;
+      }
+
+      .badge.blue {
+        border-color: #acd2ff;
+        background: var(--blue-soft);
+        color: #1f6cc8;
+      }
+
+      .badge.green {
+        border-color: #b8e4c9;
+        background: var(--green-soft);
+        color: var(--green);
+      }
+
+      .badge.amber {
+        border-color: #f0c98e;
+        background: var(--amber-soft);
+        color: var(--amber);
+      }
+
+      .badge.red {
+        border-color: #f2b4b4;
+        background: var(--red-soft);
+        color: var(--red);
+      }
+
+      .overview-hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1.5fr) minmax(320px, 0.8fr);
+        gap: 18px;
+        margin-bottom: 18px;
+      }
+
+      .hero-main {
+        padding: 26px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+      }
+
+      .eyebrow {
+        margin: 0 0 8px;
+        color: var(--blue);
+        font-weight: 700;
+        font-size: 13px;
+      }
+
+      .hero-main h1 {
+        margin: 0;
+        font-size: 30px;
+        line-height: 1.25;
+      }
+
+      .hero-main p {
+        max-width: 780px;
+        margin: 10px 0 0;
+        color: var(--muted);
+        line-height: 1.75;
+      }
+
+      .hero-actions {
+        margin-top: 18px;
+      }
+
+      .summary-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .summary-card {
+        min-height: 92px;
+        padding: 16px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+      }
+
+      .summary-card span {
+        display: block;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .summary-card strong {
+        display: block;
+        margin-top: 8px;
+        font-size: 18px;
+      }
+
+      .stepper-panel {
+        margin-bottom: 18px;
+        padding: 18px 20px 16px;
+        overflow-x: auto;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+      }
+
+      .stepper {
+        display: grid;
+        grid-template-columns: repeat(8, minmax(132px, 1fr));
+        min-width: 1040px;
+      }
+
+      .step {
+        position: relative;
+        display: grid;
+        justify-items: center;
+        gap: 8px;
+        min-height: 92px;
+        padding: 0 8px;
+        border: 0;
+        background: transparent;
+        color: var(--muted);
+        text-align: center;
+      }
+
+      .step::before {
+        content: "";
+        position: absolute;
+        top: 21px;
+        left: 0;
+        right: 50%;
+        height: 3px;
+        background: var(--line-strong);
+      }
+
+      .step:first-child::before {
+        display: none;
+      }
+
+      .step::after {
+        content: "";
+        position: absolute;
+        top: 21px;
+        left: 50%;
+        right: 0;
+        height: 3px;
+        background: var(--line-strong);
+      }
+
+      .step:last-child::after {
+        display: none;
+      }
+
+      .step-token {
+        position: relative;
+        z-index: 1;
+        display: grid;
+        place-items: center;
+        width: 44px;
+        height: 44px;
+        border: 2px solid var(--line-strong);
+        border-radius: 50%;
+        background: #fff;
+        font-weight: 800;
+      }
+
+      .step-name {
+        display: block;
+        color: #34465a;
+        font-weight: 700;
+      }
+
+      .step-state {
+        font-size: 12px;
+      }
+
+      .step.done .step-token,
+      .step.done::before,
+      .step.done::after {
+        border-color: var(--green);
+        background: var(--green);
+        color: #fff;
+      }
+
+      .step.done::before,
+      .step.done::after {
+        background: var(--green);
+      }
+
+      .step.active .step-token {
+        border-color: var(--blue);
+        background: var(--blue);
+        color: #fff;
+        box-shadow: 0 0 0 5px var(--blue-soft);
+      }
+
+      .step.active .step-name,
+      .step.active .step-state {
+        color: var(--blue);
+      }
+
+      .step.ready .step-token {
+        border-color: #93c3ff;
+        background: var(--blue-soft);
+        color: #1f6cc8;
+      }
+
+      .step.issue .step-token {
+        border-color: var(--amber);
+        background: var(--amber-soft);
+        color: var(--amber);
+      }
+
+      .step.locked .step-token {
+        background: #f7f9fc;
+        color: #98a6b4;
+      }
+
+      .content-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 360px;
+        gap: 18px;
+      }
+
+      .stage-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(220px, 1fr));
+        gap: 14px;
+      }
+
+      .stage-card {
+        display: grid;
+        gap: 12px;
+        min-height: 220px;
+        padding: 17px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: #fff;
+        text-align: left;
+      }
+
+      .stage-card:hover {
+        border-color: var(--blue);
+        box-shadow: 0 8px 20px rgba(47, 140, 255, 0.09);
+      }
+
+      .stage-card.locked:hover {
+        border-color: var(--line);
+        box-shadow: none;
+      }
+
+      .stage-card h3 {
+        margin: 0;
+        font-size: 17px;
+      }
+
+      .stage-card p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.6;
+      }
+
+      .progress-line {
+        height: 7px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: #edf2f8;
+      }
+
+      .progress-line span {
+        display: block;
+        height: 100%;
+        width: var(--progress, 0%);
+        border-radius: inherit;
+        background: var(--blue);
+      }
+
+      .two-col {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 14px;
+      }
+
+      .card,
+      .mini-card,
+      .task-card {
+        padding: 16px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: #fff;
+      }
+
+      .card.soft,
+      .mini-card.soft {
+        background: var(--surface-soft);
+      }
+
+      .side-stack {
+        display: grid;
+        gap: 12px;
+      }
+
+      .section-title {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+
+      .detail-header {
+        margin-bottom: 18px;
+      }
+
+      .crumb-row {
+        margin-bottom: 10px;
+      }
+
+      .substep-panel {
+        margin-bottom: 18px;
+        padding: 15px 18px;
+        overflow-x: auto;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--surface);
+      }
+
+      .substepper {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(170px, 1fr));
+        min-width: 700px;
+        gap: 10px;
+      }
+
+      .substep {
+        display: grid;
+        gap: 8px;
+        min-height: 86px;
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: #fff;
+        text-align: left;
+      }
+
+      .substep.active {
+        border-color: var(--blue);
+        background: var(--blue-soft);
+      }
+
+      .substep.done {
+        border-color: #b8e4c9;
+        background: var(--green-soft);
+      }
+
+      .substep.locked {
+        background: #f7f9fc;
+        color: #8391a1;
+      }
+
+      .substep-title {
+        font-weight: 800;
+      }
+
+      .substep-meta {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .editor-grid {
+        display: grid;
+        gap: 12px;
+      }
+
+      label {
+        display: grid;
+        gap: 7px;
+        color: #415266;
+        font-weight: 700;
+      }
+
+      input,
+      textarea,
+      select {
+        width: 100%;
+        border: 1px solid var(--line-strong);
+        border-radius: 6px;
+        background: #fff;
+        color: var(--text);
+      }
+
+      input,
+      select {
+        min-height: 38px;
+        padding: 0 11px;
+      }
+
+      textarea {
+        min-height: 100px;
+        padding: 10px 11px;
+        resize: vertical;
+        line-height: 1.65;
+      }
+
+      .candidate-list {
+        display: grid;
+        gap: 12px;
+      }
+
+      .candidate-card {
+        padding: 16px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: #fff;
+      }
+
+      .candidate-card.recommended {
+        border-color: #8ec5ff;
+        background: #f4f9ff;
+      }
+
+      .candidate-meta {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 10px;
+      }
+
+      .candidate-meta h3 {
+        margin: 0 0 9px;
+      }
+
+      .check-list {
+        display: grid;
+        gap: 10px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .check-list li {
+        display: flex;
+        align-items: flex-start;
+        gap: 9px;
+        color: #3c4e63;
+        line-height: 1.55;
+      }
+
+      .check-mark {
+        display: grid;
+        flex: 0 0 auto;
+        place-items: center;
+        width: 18px;
+        height: 18px;
+        margin-top: 2px;
+        border-radius: 50%;
+        background: var(--green);
+        color: #fff;
+        font-size: 12px;
+        font-weight: 900;
+      }
+
+      .modal-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 50;
+        display: none;
+        background: rgba(12, 27, 43, 0.38);
+      }
+
+      .modal-backdrop.open {
+        display: block;
+      }
+
+      .modal,
+      .drawer {
+        position: fixed;
+        z-index: 60;
+        display: none;
+        background: #fff;
+        border: 1px solid var(--line);
+        box-shadow: var(--shadow);
+      }
+
+      .modal.open,
+      .drawer.open {
+        display: block;
+      }
+
+      .modal {
+        top: 50%;
+        left: 50%;
+        width: min(660px, calc(100vw - 32px));
+        max-height: min(760px, calc(100vh - 44px));
+        overflow: auto;
+        transform: translate(-50%, -50%);
+        border-radius: var(--radius);
+      }
+
+      .drawer {
+        top: 0;
+        right: 0;
+        width: min(480px, 100vw);
+        height: 100vh;
+        overflow: auto;
+      }
+
+      .modal-head,
+      .drawer-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 14px;
+        padding: 18px 20px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .modal-head h3,
+      .drawer-head h3 {
+        margin: 0;
+      }
+
+      .modal-body,
+      .drawer-body {
+        padding: 18px 20px 20px;
+      }
+
+      .bottom-bar {
+        position: fixed;
+        right: 0;
+        bottom: 0;
+        left: 0;
+        z-index: 15;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        min-height: 64px;
+        padding: 12px 28px;
+        border-top: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.96);
+        backdrop-filter: blur(12px);
+      }
+
+      .bottom-note {
+        color: var(--muted);
+        line-height: 1.5;
+      }
+
+      .toast {
+        position: fixed;
+        right: 24px;
+        bottom: 86px;
+        z-index: 90;
+        display: none;
+        max-width: 360px;
+        padding: 12px 14px;
+        border-radius: 7px;
+        background: #172435;
+        color: #fff;
+        box-shadow: var(--shadow);
+      }
+
+      .toast.open {
+        display: block;
+      }
+
+      @media (max-width: 1180px) {
+        .overview-hero,
+        .content-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .stage-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+
+      @media (max-width: 760px) {
+        .topbar,
+        .bottom-bar {
+          align-items: stretch;
+          flex-direction: column;
+          height: auto;
+        }
+
+        .topbar {
+          padding: 14px 16px;
+        }
+
+        .bottom-bar {
+          padding: 10px 16px;
+        }
+
+        .shell {
+          padding: 16px 14px 132px;
+        }
+
+        .summary-grid,
+        .two-col,
+        .stage-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .panel-head,
+        .section-title,
+        .candidate-meta {
+          flex-direction: column;
+          align-items: stretch;
+        }
+
+        .top-actions,
+        .action-row {
+          width: 100%;
+        }
+
+        .btn {
+          min-height: 38px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark"></div>
+        <div class="brand-title">
+          <strong id="topTitle">化学大秦</strong>
+          <span id="topSubtitle">小说创作概览</span>
+        </div>
+      </div>
+      <div class="top-actions">
+        <button class="btn" type="button" id="backOverview">返回概览</button>
+        <button class="btn" type="button" id="backList">返回小说列表</button>
+        <button class="btn" type="button" id="fullWorkbench">完整工作台</button>
+        <button class="btn primary" type="button" id="topPrimary">继续方向确认</button>
+      </div>
+    </header>
+
+    <div class="shell" id="app"></div>
+
+    <footer class="bottom-bar">
+      <div class="bottom-note" id="bottomNote">当前停在方向确认，建议先进入步骤详情处理候选、编辑和采用确认。</div>
+      <div class="action-row">
+        <button class="btn" type="button" id="prevAction">上一步</button>
+        <button class="btn" type="button" id="saveDraft">保存草稿</button>
+        <button class="btn primary" type="button" id="nextAction">继续处理</button>
+      </div>
+    </footer>
+
+    <div class="modal-backdrop" id="backdrop"></div>
+
+    <section class="modal" id="editModal" aria-modal="true" role="dialog">
+      <div class="modal-head">
+        <div>
+          <h3 id="editTitle">手动编辑草稿</h3>
+          <p class="bottom-note">保存后成为人工草稿，不会静默覆盖正式资产。</p>
+        </div>
+        <button class="btn ghost" type="button" data-close>关闭</button>
+      </div>
+      <div class="modal-body">
+        <div class="editor-grid">
+          <label>
+            标题
+            <input id="editName" value="化学大秦" />
+          </label>
+          <label>
+            核心内容
+            <textarea id="editContent">化学教授穿越秦朝，从苦役到商界巨擘，用现代化学知识掀起古代工业革命，在权力与资本的博弈中重塑天下。</textarea>
+          </label>
+          <label>
+            修改说明
+            <textarea id="editNote">强化前三秒钩子，降低历史争议和现代违和感，保留化学爽点。</textarea>
+          </label>
+        </div>
+        <div class="action-row" style="margin-top: 16px">
+          <button class="btn" type="button" data-close>取消</button>
+          <button class="btn primary" type="button" id="saveEdit">保存人工草稿</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="modal" id="aiModal" aria-modal="true" role="dialog">
+      <div class="modal-head">
+        <div>
+          <h3 id="aiTitle">AI 优化</h3>
+          <p class="bottom-note">优化结果会进入候选版本，需要再次确认后才会成为正式内容。</p>
+        </div>
+        <button class="btn ghost" type="button" data-close>关闭</button>
+      </div>
+      <div class="modal-body">
+        <div class="editor-grid">
+          <label>
+            优化目标
+            <select>
+              <option>质量优先</option>
+              <option>短视频转化优先</option>
+              <option>低风险稳妥优先</option>
+            </select>
+          </label>
+          <label>
+            具体要求
+            <textarea>保留主卖点，增强爽点节奏，并解释低分或风险判断依据。</textarea>
+          </label>
+        </div>
+        <div class="action-row" style="margin-top: 16px">
+          <button class="btn" type="button" data-close>取消</button>
+          <button class="btn primary" type="button" id="runAi">生成优化候选</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="modal" id="adoptModal" aria-modal="true" role="dialog">
+      <div class="modal-head">
+        <div>
+          <h3 id="adoptTitle">确认采用</h3>
+          <p class="bottom-note" id="adoptHint">采用后会成为当前步骤的正式资产。</p>
+        </div>
+        <button class="btn ghost" type="button" data-close>关闭</button>
+      </div>
+      <div class="modal-body">
+        <div class="editor-grid">
+          <label>
+            采用原因
+            <textarea id="adoptReason">评分高、卖点清晰，适合作为下一步输入。</textarea>
+          </label>
+        </div>
+        <div class="mini-card soft" style="margin-top: 14px">
+          <h3>影响范围</h3>
+          <p id="adoptImpact">采用后，下游生成会引用这个版本；后续修改需要重新检查影响。</p>
+        </div>
+        <div class="action-row" style="margin-top: 16px">
+          <button class="btn" type="button" data-close>取消</button>
+          <button class="btn primary" type="button" id="confirmAdopt">确认采用</button>
+        </div>
+      </div>
+    </section>
+
+    <aside class="drawer" id="taskDrawer" aria-label="任务详情">
+      <div class="drawer-head">
+        <div>
+          <h3>最近任务</h3>
+          <p class="bottom-note">用于查看 AI 生成、优化、失败与重试。</p>
+        </div>
+        <button class="btn ghost" type="button" data-close>关闭</button>
+      </div>
+      <div class="drawer-body">
+        <div class="side-stack">
+          <div class="task-card">
+            <div class="status-row">
+              <span class="badge blue">真实模型</span>
+              <span class="badge green">已完成</span>
+            </div>
+            <h3 style="margin: 10px 0 0">方向候选生成</h3>
+            <p class="muted">耗时 24.49 秒，生成 3 个候选并完成评分。</p>
+            <div class="progress-line" style="--progress: 100%; margin-top: 12px"><span></span></div>
+          </div>
+          <div class="mini-card">
+            <h3>事件</h3>
+            <ul class="check-list">
+              <li><span class="check-mark">✓</span><span>已创建任务并校验前置版本。</span></li>
+              <li><span class="check-mark">✓</span><span>模型生成完成，候选写入版本池。</span></li>
+              <li><span class="check-mark">✓</span><span>评分和风险证据已记录。</span></li>
+            </ul>
+          </div>
+          <div class="action-row">
+            <button class="btn" type="button" id="refreshTask">刷新</button>
+            <button class="btn" type="button" id="retryTask">重试</button>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+      const steps = [
+        {
+          key: "direction",
+          name: "方向确认",
+          state: "active",
+          status: "待采用",
+          score: "92",
+          risk: "低风险",
+          progress: 70,
+          desc: "确认题材卖点、目标读者、前三秒钩子和视频化表达。",
+          action: "进入方向详情，完成编辑优化和采用确认。",
+          gate: "采用一个正式方向后，小说设定才会解锁。",
+          main: "处理方向确认",
+          adoptTitle: "确认采用方向",
+          adoptHint: "采用后会成为正式方向，并作为小说设定输入。",
+          adoptImpact: "小说设定、大纲、章节目录和试写都会引用这个方向版本。后续改方向，需要重新检查下游内容。",
+          substeps: [
+            { name: "草稿输入", state: "done", hint: "已整理初始方向" },
+            { name: "候选生成", state: "done", hint: "3 个候选已生成" },
+            { name: "编辑优化", state: "active", hint: "可手动改或 AI 优化" },
+            { name: "采用确认", state: "ready", hint: "确认后解锁设定" }
+          ]
+        },
+        {
+          key: "setting",
+          name: "小说设定",
+          state: "locked",
+          status: "待解锁",
+          score: "-",
+          risk: "未评估",
+          progress: 0,
+          desc: "沉淀人物、世界观、爽点规则和安全边界。",
+          action: "方向采用后生成设定候选。",
+          gate: "需要先采用正式方向。",
+          main: "处理小说设定",
+          adoptTitle: "确认采用设定",
+          adoptHint: "采用后会成为全书设定事实源。",
+          adoptImpact: "大纲、章节目录和正文生成都会遵守这个设定版本。后续修改设定会触发下游影响检查。",
+          substeps: [
+            { name: "人物设定", state: "locked", hint: "主角/反派/关系" },
+            { name: "世界规则", state: "locked", hint: "时代/技术/限制" },
+            { name: "爽点禁忌", state: "locked", hint: "爽点与风险边界" },
+            { name: "采用确认", state: "locked", hint: "成为事实源" }
+          ]
+        },
+        {
+          key: "outline",
+          name: "大纲设计",
+          state: "locked",
+          status: "未开始",
+          score: "-",
+          risk: "未评估",
+          progress: 0,
+          desc: "规划全书主线、阶段目标、反转和节奏。",
+          action: "设定采用后生成全书与阶段大纲。",
+          gate: "需要先采用小说设定。",
+          main: "处理大纲设计",
+          adoptTitle: "确认采用大纲",
+          adoptHint: "采用后会成为章节目录规划输入。",
+          adoptImpact: "章节表、试写目标和批量正文都会按这个大纲推进。修改大纲会影响章节计划。",
+          substeps: [
+            { name: "全书主线", state: "locked", hint: "主线和终局" },
+            { name: "阶段大纲", state: "locked", hint: "阶段目标" },
+            { name: "节奏检查", state: "locked", hint: "爽点密度" },
+            { name: "采用确认", state: "locked", hint: "进入章节规划" }
+          ]
+        },
+        {
+          key: "chapterPlan",
+          name: "章节目录",
+          state: "locked",
+          status: "未开始",
+          score: "-",
+          risk: "未评估",
+          progress: 0,
+          desc: "确认章节标题、摘要、目标字数和每章钩子。",
+          action: "大纲采用后生成章节表。",
+          gate: "需要先采用全书大纲和阶段大纲。",
+          main: "处理章节目录",
+          adoptTitle: "确认采用章节目录",
+          adoptHint: "采用后会创建正式章节计划。",
+          adoptImpact: "试写与正文都会按照该章节计划生成。后续调整目录需要检查已生成章节影响。",
+          substeps: [
+            { name: "章节表", state: "locked", hint: "标题和顺序" },
+            { name: "单章摘要", state: "locked", hint: "目标与钩子" },
+            { name: "批量调整", state: "locked", hint: "字数与节奏" },
+            { name: "采用目录", state: "locked", hint: "进入试写" }
+          ]
+        },
+        {
+          key: "trial",
+          name: "试写调试",
+          state: "locked",
+          status: "未开始",
+          score: "-",
+          risk: "未评估",
+          progress: 0,
+          desc: "先试写 1-3 章，确认文风、爽点和可持续性。",
+          action: "章节目录采用后生成试写候选。",
+          gate: "需要先采用章节目录。",
+          main: "处理试写调试",
+          adoptTitle: "确认试写策略",
+          adoptHint: "确认后会形成批量正文策略快照。",
+          adoptImpact: "批量正文会引用试写策略快照。后续调整文风会影响正在生成或已生成章节。",
+          substeps: [
+            { name: "第 1 章候选", state: "locked", hint: "默认 3 个候选" },
+            { name: "2-3 章试写", state: "locked", hint: "连续性检查" },
+            { name: "试写总评", state: "locked", hint: "评分和证据" },
+            { name: "策略快照", state: "locked", hint: "进入批量正文" }
+          ]
+        },
+        {
+          key: "body",
+          name: "批量正文",
+          state: "locked",
+          status: "未开始",
+          score: "-",
+          risk: "未评估",
+          progress: 0,
+          desc: "按批次生成正文，处理失败章节、重写和影响评估。",
+          action: "试写通过后按批生成正文。",
+          gate: "需要先确认试写策略快照。",
+          main: "处理批量正文",
+          adoptTitle: "确认正文完成",
+          adoptHint: "确认后会进入全书质检。",
+          adoptImpact: "全书质检会基于当前正文版本执行。仍有阻塞章节时不应确认完成。",
+          substeps: [
+            { name: "批量生成", state: "locked", hint: "批次和进度" },
+            { name: "章节问题", state: "locked", hint: "失败/低分" },
+            { name: "重写影响", state: "locked", hint: "影响范围" },
+            { name: "批次确认", state: "locked", hint: "正文完成" }
+          ]
+        },
+        {
+          key: "fullReview",
+          name: "全书质检",
+          state: "locked",
+          status: "未开始",
+          score: "-",
+          risk: "未评估",
+          progress: 0,
+          desc: "检查全书质量、结构、风险和视频化准备度。",
+          action: "正文完成后发起全书质检。",
+          gate: "需要正文批量生成完成且无阻塞章节。",
+          main: "处理全书质检",
+          adoptTitle: "确认小说完成",
+          adoptHint: "确认后会进入待视频化检查。",
+          adoptImpact: "确认完成后，视频化检查会引用该小说版本。后续改正文需要重新确认。",
+          substeps: [
+            { name: "总评", state: "locked", hint: "综合分和风险" },
+            { name: "Top 问题", state: "locked", hint: "必须处理项" },
+            { name: "处理建议", state: "locked", hint: "重写或接受" },
+            { name: "完成确认", state: "locked", hint: "进入待视频化" }
+          ]
+        },
+        {
+          key: "videoReady",
+          name: "待视频化",
+          state: "locked",
+          status: "未开始",
+          score: "-",
+          risk: "未评估",
+          progress: 0,
+          desc: "形成视频引用快照和首条视频建议。",
+          action: "小说完成后确认进入视频模块。",
+          gate: "需要全书质检通过或接受风险。",
+          main: "处理待视频化",
+          adoptTitle: "确认待视频化",
+          adoptHint: "确认后视频模块可以引用稳定小说版本。",
+          adoptImpact: "视频列表和视频详情会引用该快照。后续小说修改需要做视频引用影响检查。",
+          substeps: [
+            { name: "检查清单", state: "locked", hint: "章节/风险/资产" },
+            { name: "视频建议", state: "locked", hint: "首条短视频方向" },
+            { name: "引用快照", state: "locked", hint: "冻结版本" },
+            { name: "去视频列表", state: "locked", hint: "进入视频模块" }
+          ]
+        }
+      ];
+
+      const overviewStats = [
+        ["当前阶段", "方向确认"],
+        ["质量", "方向评分 92"],
+        ["风险", "低风险，2 个提示"],
+        ["最近任务", "DeepSeek 生成完成"]
+      ];
+
+      let view = "overview";
+      let activeStepIndex = 0;
+      let activeSubIndex = 2;
+      let toastTimer = null;
+
+      const app = document.getElementById("app");
+      const toast = document.getElementById("toast");
+      const backdrop = document.getElementById("backdrop");
+
+      function currentStep() {
+        return steps[activeStepIndex];
+      }
+
+      function currentSubstep() {
+        return currentStep().substeps[activeSubIndex] || currentStep().substeps[0];
+      }
+
+      function stateText(state) {
+        return {
+          done: "已完成",
+          active: "当前处理",
+          ready: "待确认",
+          issue: "有问题",
+          locked: "待解锁"
+        }[state] || "未开始";
+      }
+
+      function badgeForState(state) {
+        if (state === "done") return "green";
+        if (state === "active") return "blue";
+        if (state === "ready" || state === "issue") return "amber";
+        return "";
+      }
+
+      function showToast(message) {
+        toast.textContent = message;
+        toast.classList.add("open");
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => toast.classList.remove("open"), 2600);
+      }
+
+      function openModal(id) {
+        syncModalText();
+        backdrop.classList.add("open");
+        document.getElementById(id).classList.add("open");
+      }
+
+      function closeAllOverlays() {
+        backdrop.classList.remove("open");
+        document.querySelectorAll(".modal.open, .drawer.open").forEach((node) => node.classList.remove("open"));
+      }
+
+      function openDrawer() {
+        backdrop.classList.add("open");
+        document.getElementById("taskDrawer").classList.add("open");
+      }
+
+      function syncModalText() {
+        const step = currentStep();
+        document.getElementById("editTitle").textContent = `手动编辑：${step.name}`;
+        document.getElementById("aiTitle").textContent = `AI 优化：${step.name}`;
+        document.getElementById("adoptTitle").textContent = step.adoptTitle;
+        document.getElementById("adoptHint").textContent = step.adoptHint;
+        document.getElementById("adoptReason").value = `当前${step.name}已具备进入下一环节的条件，建议采用并记录本次选择依据。`;
+        document.getElementById("adoptImpact").textContent = step.adoptImpact;
+        document.getElementById("confirmAdopt").textContent = step.adoptTitle;
+      }
+
+      function renderMajorStepper(compact = false) {
+        return `<section class="stepper-panel" aria-label="小说大步骤">
+          <div class="stepper">
+            ${steps
+              .map((step, index) => {
+                const active = index === activeStepIndex;
+                const classes = ["step", active ? "active" : step.state].join(" ");
+                return `<button class="${classes}" type="button" data-open-step="${index}" aria-current="${active ? "step" : "false"}">
+                  <span class="step-token">${index + 1}</span>
+                  <span class="step-name">${step.name}</span>
+                  <span class="step-state">${compact && step.state === "locked" ? step.gate : stateText(step.state)}</span>
+                </button>`;
+              })
+              .join("")}
+          </div>
+        </section>`;
+      }
+
+      function renderOverview() {
+        const step = currentStep();
+        view = "overview";
+        document.getElementById("topTitle").textContent = "化学大秦";
+        document.getElementById("topSubtitle").textContent = "小说创作概览";
+        document.getElementById("backOverview").style.display = "none";
+        document.getElementById("topPrimary").textContent = step.main;
+        document.getElementById("bottomNote").textContent = "概览页只看全局状态和下一步；进入步骤详情后处理编辑、候选、确认和异常。";
+        document.getElementById("prevAction").disabled = true;
+        document.getElementById("nextAction").textContent = step.main;
+        document.getElementById("nextAction").disabled = false;
+
+        app.innerHTML = `
+          <section class="overview-hero">
+            <div class="hero-main">
+              <p class="eyebrow">小说创作概览</p>
+              <h1>化学大秦</h1>
+              <p>当前停在方向确认。概览页保留大步骤、质量风险、最近任务和下一步建议；具体编辑、优化、采用确认进入步骤详情处理。</p>
+              <div class="hero-actions action-row">
+                <button class="btn primary" type="button" data-open-step="${activeStepIndex}">${step.main}</button>
+                <button class="btn" type="button" data-open-task>查看最近任务</button>
+              </div>
+            </div>
+            <div class="summary-grid">
+              ${overviewStats
+                .map(
+                  ([label, value]) => `<div class="summary-card">
+                    <span>${label}</span>
+                    <strong>${value}</strong>
+                  </div>`
+                )
+                .join("")}
+            </div>
+          </section>
+
+          ${renderMajorStepper()}
+
+          <section class="content-grid">
+            <div class="panel">
+              <div class="panel-head">
+                <div>
+                  <h2>创作流程</h2>
+                  <p>每个大步骤进入独立详情页，详情页内再用子步骤条提示该确认什么。</p>
+                </div>
+              </div>
+              <div class="panel-body">
+                <div class="stage-grid">
+                  ${steps
+                    .map(
+                      (item, index) => `<button class="stage-card ${item.state}" type="button" data-open-step="${index}">
+                        <div class="status-row">
+                          <span class="badge ${badgeForState(item.state)}">${stateText(item.state)}</span>
+                          <span class="badge">${item.status}</span>
+                        </div>
+                        <h3>${index + 1}. ${item.name}</h3>
+                        <p>${item.desc}</p>
+                        <div class="progress-line" style="--progress: ${item.progress}%"><span></span></div>
+                        <p><strong>下一步：</strong>${item.state === "locked" ? item.gate : item.action}</p>
+                      </button>`
+                    )
+                    .join("")}
+                </div>
+              </div>
+            </div>
+
+            <aside class="side-stack">
+              <section class="panel">
+                <div class="panel-head">
+                  <div>
+                    <h3>下一步建议</h3>
+                    <p>${step.action}</p>
+                  </div>
+                </div>
+                <div class="panel-body">
+                  <div class="side-stack">
+                    <div class="mini-card soft">
+                      <span class="badge blue">当前</span>
+                      <h3 style="margin-top: 10px">${step.name}</h3>
+                      <p>${step.gate}</p>
+                    </div>
+                    <div class="mini-card">
+                      <span class="badge amber">风险提示</span>
+                      <p>方向中有化学制盐和火药概念，后续设定需要避免真实危险细节。</p>
+                    </div>
+                    <div class="mini-card">
+                      <span class="badge">高级入口</span>
+                      <p>完整版本树、任务事件和排查信息仍放在完整工作台。</p>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </aside>
+          </section>
+        `;
+
+        bindDynamicActions();
+      }
+
+      function renderDetail() {
+        const step = currentStep();
+        const substep = currentSubstep();
+        view = "detail";
+        document.getElementById("topTitle").textContent = step.name;
+        document.getElementById("topSubtitle").textContent = `化学大秦 / ${substep.name}`;
+        document.getElementById("backOverview").style.display = "";
+        document.getElementById("topPrimary").textContent = step.state === "locked" ? "查看解锁条件" : step.main;
+        document.getElementById("bottomNote").textContent =
+          step.state === "locked" ? `${step.name}尚未解锁：${step.gate}` : `${step.name} / ${substep.name}：处理完成后再进入采用确认。`;
+        document.getElementById("prevAction").disabled = activeSubIndex === 0;
+        document.getElementById("nextAction").textContent = activeSubIndex === step.substeps.length - 1 ? step.adoptTitle : "下一个子步骤";
+        document.getElementById("nextAction").disabled = step.state === "locked";
+
+        app.innerHTML = `
+          <section class="detail-header panel">
+            <div class="panel-head">
+              <div>
+                <div class="crumb-row action-row">
+                  <button class="btn ghost" type="button" data-to-overview>小说概览</button>
+                  <span class="muted">/</span>
+                  <span class="badge ${badgeForState(step.state)}">${stateText(step.state)}</span>
+                  <span class="badge">${step.status}</span>
+                </div>
+                <h1>${step.name}</h1>
+                <p>${step.desc}</p>
+              </div>
+              <div class="action-row">
+                <button class="btn" type="button" data-open-task>任务详情</button>
+                <button class="btn ${step.state === "locked" ? "" : "primary"}" type="button" data-open-adopt ${step.state === "locked" ? "disabled" : ""}>${step.adoptTitle}</button>
+              </div>
+            </div>
+          </section>
+
+          ${renderMajorStepper(true)}
+          ${renderSubstepper(step)}
+
+          <section class="content-grid">
+            <div class="panel">
+              <div class="panel-head">
+                <div>
+                  <h2>${substep.name}</h2>
+                  <p>${substep.hint}</p>
+                </div>
+                <div class="status-row">
+                  <span class="badge ${badgeForState(substep.state)}">${stateText(substep.state)}</span>
+                  <span class="badge">评分 ${step.score}</span>
+                  <span class="badge ${step.risk === "低风险" ? "green" : step.risk === "未评估" ? "" : "amber"}">${step.risk}</span>
+                </div>
+              </div>
+              <div class="panel-body">
+                ${renderStepBody(step, activeSubIndex)}
+              </div>
+            </div>
+
+            <aside class="side-stack">
+              <div class="mini-card soft">
+                <h3>本步骤确认标准</h3>
+                <p>${step.gate}</p>
+              </div>
+              <div class="mini-card">
+                <h3>当前子步骤</h3>
+                <p>${substep.name}：${substep.hint}</p>
+              </div>
+              <div class="task-card">
+                <div class="status-row">
+                  <span class="badge blue">最近任务</span>
+                  <span class="badge green">已完成</span>
+                </div>
+                <p>方向候选生成完成，等待采用确认。</p>
+                <div class="progress-line" style="--progress: 100%; margin-top: 12px"><span></span></div>
+                <div class="action-row" style="margin-top: 12px">
+                  <button class="btn" type="button" data-open-task>查看详情</button>
+                </div>
+              </div>
+            </aside>
+          </section>
+        `;
+
+        bindDynamicActions();
+      }
+
+      function renderSubstepper(step) {
+        return `<section class="substep-panel" aria-label="${step.name}子步骤">
+          <div class="substepper">
+            ${step.substeps
+              .map(
+                (item, index) => `<button class="substep ${index === activeSubIndex ? "active" : item.state}" type="button" data-substep="${index}">
+                  <span class="substep-title">${index + 1}. ${item.name}</span>
+                  <span class="substep-meta">${item.hint}</span>
+                </button>`
+              )
+              .join("")}
+          </div>
+        </section>`;
+      }
+
+      function renderStepBody(step, subIndex) {
+        if (step.state === "locked") {
+          return `<div class="two-col">
+            <div class="card soft">
+              <h3>暂未解锁</h3>
+              <p>${step.gate}</p>
+              <div class="action-row" style="margin-top: 14px">
+                <button class="btn primary" type="button" data-to-overview>回到概览处理前置步骤</button>
+              </div>
+            </div>
+            <div class="card">
+              <h3>解锁后会处理</h3>
+              <ul class="check-list">
+                ${step.substeps.map((item) => `<li><span class="check-mark">✓</span><span>${item.name}：${item.hint}</span></li>`).join("")}
+              </ul>
+            </div>
+          </div>`;
+        }
+
+        if (step.key === "direction") return renderDirectionBody(subIndex);
+
+        return `<div class="two-col">
+          <div class="card">
+            <h3>${step.name}内容草稿</h3>
+            <div class="editor-grid" style="margin-top: 12px">
+              <label>核心摘要<textarea>这里承载“${step.name} / ${step.substeps[subIndex].name}”的正式草稿、候选或确认记录。</textarea></label>
+              <label>补充要求<textarea>可补充强化爽点、降低风险、调整节奏或修正人物动机。</textarea></label>
+            </div>
+            <div class="action-row" style="margin-top: 14px">
+              <button class="btn" type="button" data-open-edit>手动编辑</button>
+              <button class="btn" type="button" data-open-ai>AI 优化</button>
+              <button class="btn primary" type="button" data-open-adopt>${step.adoptTitle}</button>
+            </div>
+          </div>
+          <div class="card soft">
+            <h3>候选和证据</h3>
+            <p>评分、风险证据、用户选择原因和任务事件会在这里收口，保证后续复盘不会丢。</p>
+          </div>
+        </div>`;
+      }
+
+      function renderDirectionBody(subIndex) {
+        if (subIndex === 0) {
+          return `<div class="two-col">
+            <div class="card">
+              <h3>方向草稿</h3>
+              <div class="editor-grid" style="margin-top: 12px">
+                <label>方向标题<input value="化学大秦" /></label>
+                <label>一句话方向<textarea>化学教授穿越秦朝，从苦役到商界巨擘，用现代化学知识掀起古代工业革命，在权力与资本的博弈中重塑天下。</textarea></label>
+                <label>前三秒钩子<textarea>炼盐提纯、黑火药惊世、经商夺权，现代化学碾压先秦生产力。</textarea></label>
+              </div>
+              <div class="action-row" style="margin-top: 14px">
+                <button class="btn" type="button" data-open-edit>手动编辑</button>
+                <button class="btn" type="button" data-open-ai>AI 优化</button>
+              </div>
+            </div>
+            <div class="card soft">
+              <h3>草稿状态</h3>
+              <p>草稿可以人工编辑，也可以作为模型优化输入。只有采用确认后才会成为正式方向。</p>
+            </div>
+          </div>`;
+        }
+
+        if (subIndex === 1) {
+          return `<div class="candidate-list">
+            ${candidateCard("化学大秦", "92", "低风险", "化学教授穿越秦朝，用现代化学知识掀起古代工业革命。", true)}
+            ${candidateCard("方士工业局", "87", "低风险", "假方士用实验室思维改造秦朝军工体系，在朝堂与民间制造技术奇迹。", false)}
+            ${candidateCard("盐铁新王", "79", "中风险", "从盐场苦役起步，用提纯、制皂、染料和商路控制秦朝经济命脉。", false)}
+          </div>`;
+        }
+
+        if (subIndex === 2) {
+          return `<div class="two-col">
+            <div class="card">
+              <h3>编辑与优化</h3>
+              <div class="editor-grid" style="margin-top: 12px">
+                <label>人工修改意见<textarea>强化前三秒钩子，降低历史争议和现代违和感，保留化学爽点。</textarea></label>
+                <label>优化策略<select><option>质量优先</option><option>短视频转化优先</option><option>低风险稳妥优先</option></select></label>
+              </div>
+              <div class="action-row" style="margin-top: 14px">
+                <button class="btn" type="button" data-open-edit>保存人工草稿</button>
+                <button class="btn primary" type="button" data-open-ai>生成优化候选</button>
+              </div>
+            </div>
+            <div class="card soft">
+              <h3>优化后检查</h3>
+              <ul class="check-list">
+                <li><span class="check-mark">✓</span><span>保留主卖点和目标用户。</span></li>
+                <li><span class="check-mark">✓</span><span>补充风险证据和可接受原因。</span></li>
+                <li><span class="check-mark">✓</span><span>不覆盖已采用版本。</span></li>
+              </ul>
+            </div>
+          </div>`;
+        }
+
+        return `<div class="two-col">
+          <div class="card">
+            <h3>采用确认</h3>
+            <p>采用“化学大秦 v1”作为正式方向，并记录选择原因与影响范围。</p>
+            <div class="mini-card soft" style="margin-top: 12px">
+              <span class="badge green">建议采用</span>
+              <p>评分 92，低风险，题材融合度高，短视频开场表达清晰。</p>
+            </div>
+            <div class="action-row" style="margin-top: 14px">
+              <button class="btn" type="button" data-open-edit>再编辑</button>
+              <button class="btn primary" type="button" data-open-adopt>确认采用方向</button>
+            </div>
+          </div>
+          <div class="card">
+            <h3>采用后影响</h3>
+            <p>小说设定会立即解锁，并默认引用当前方向版本。之后若修改方向，需要重新检查设定、大纲和章节计划。</p>
+          </div>
+        </div>`;
+      }
+
+      function candidateCard(title, score, risk, summary, recommended) {
+        return `<article class="candidate-card ${recommended ? "recommended" : ""}">
+          <div class="candidate-meta">
+            <div>
+              <h3>${title}</h3>
+              <div class="tag-row">
+                <span class="badge blue">v1</span>
+                <span class="badge green">评分 ${score}</span>
+                <span class="badge ${risk === "中风险" ? "amber" : "green"}">${risk}</span>
+              </div>
+            </div>
+            ${recommended ? `<span class="badge green">AI 推荐</span>` : ""}
+          </div>
+          <p>${summary}</p>
+          <p><strong>前三秒钩子：</strong>炼盐提纯、火药惊世、经商夺权，现代知识打穿先秦生产力。</p>
+          <div class="action-row">
+            <button class="btn" type="button" data-open-edit>手动编辑</button>
+            <button class="btn" type="button" data-open-ai>AI 优化</button>
+            <button class="btn primary" type="button" data-open-adopt>采用</button>
+          </div>
+        </article>`;
+      }
+
+      function bindDynamicActions() {
+        document.querySelectorAll("[data-open-step]").forEach((button) => {
+          button.addEventListener("click", () => {
+            activeStepIndex = Number(button.dataset.openStep);
+            activeSubIndex = steps[activeStepIndex].state === "active" ? 2 : 0;
+            if (steps[activeStepIndex].state === "locked") {
+              showToast(`${steps[activeStepIndex].name}暂未解锁：${steps[activeStepIndex].gate}`);
+            }
+            renderDetail();
+          });
+        });
+
+        document.querySelectorAll("[data-substep]").forEach((button) => {
+          button.addEventListener("click", () => {
+            activeSubIndex = Number(button.dataset.substep);
+            renderDetail();
+          });
+        });
+
+        document.querySelectorAll("[data-to-overview]").forEach((button) => {
+          button.addEventListener("click", renderOverview);
+        });
+
+        document.querySelectorAll("[data-open-edit]").forEach((button) => button.addEventListener("click", () => openModal("editModal")));
+        document.querySelectorAll("[data-open-ai]").forEach((button) => button.addEventListener("click", () => openModal("aiModal")));
+        document.querySelectorAll("[data-open-adopt]").forEach((button) => button.addEventListener("click", () => openModal("adoptModal")));
+        document.querySelectorAll("[data-open-task]").forEach((button) => button.addEventListener("click", openDrawer));
+      }
+
+      document.getElementById("backOverview").addEventListener("click", renderOverview);
+      document.getElementById("topPrimary").addEventListener("click", () => {
+        if (view === "overview") renderDetail();
+        else if (currentStep().state === "locked") showToast(`${currentStep().name}暂未解锁：${currentStep().gate}`);
+        else openModal("adoptModal");
+      });
+      document.getElementById("backList").addEventListener("click", () => showToast("原型提示：这里会返回小说列表。"));
+      document.getElementById("fullWorkbench").addEventListener("click", () => showToast("原型提示：这里会打开完整工作台。"));
+      document.getElementById("saveDraft").addEventListener("click", () => showToast("草稿已保存为人工草稿，不覆盖正式版本。"));
+      document.getElementById("prevAction").addEventListener("click", () => {
+        if (view === "detail" && activeSubIndex > 0) {
+          activeSubIndex -= 1;
+          renderDetail();
+        }
+      });
+      document.getElementById("nextAction").addEventListener("click", () => {
+        if (view === "overview") {
+          renderDetail();
+          return;
+        }
+        if (currentStep().state === "locked") {
+          showToast(`${currentStep().name}暂未解锁：${currentStep().gate}`);
+          return;
+        }
+        if (activeSubIndex < currentStep().substeps.length - 1) {
+          activeSubIndex += 1;
+          renderDetail();
+        } else {
+          openModal("adoptModal");
+        }
+      });
+
+      document.querySelectorAll("[data-close]").forEach((button) => button.addEventListener("click", closeAllOverlays));
+      backdrop.addEventListener("click", closeAllOverlays);
+      document.getElementById("saveEdit").addEventListener("click", () => {
+        closeAllOverlays();
+        showToast("已保存人工草稿。");
+      });
+      document.getElementById("runAi").addEventListener("click", () => {
+        closeAllOverlays();
+        showToast("AI 优化任务已创建，结果会进入候选版本。");
+      });
+      document.getElementById("confirmAdopt").addEventListener("click", () => {
+        const step = currentStep();
+        if (step.state === "locked") {
+          showToast(`${step.name}暂未解锁：${step.gate}`);
+          closeAllOverlays();
+          return;
+        }
+        step.state = "done";
+        step.status = "已采用";
+        step.progress = 100;
+        step.substeps.forEach((item) => (item.state = "done"));
+        const next = steps[activeStepIndex + 1];
+        if (next && next.state === "locked") {
+          next.state = "ready";
+          next.status = "可操作";
+          next.progress = 12;
+          next.substeps[0].state = "active";
+        }
+        closeAllOverlays();
+        showToast(`${step.name}已确认，下一环节已解锁。`);
+        renderOverview();
+      });
+      document.getElementById("refreshTask").addEventListener("click", () => showToast("任务状态已刷新。"));
+      document.getElementById("retryTask").addEventListener("click", () => showToast("当前任务已完成，无需重试。"));
+
+      renderOverview();
+    </script>
+  </body>
+</html>
