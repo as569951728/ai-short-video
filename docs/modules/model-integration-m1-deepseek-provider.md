@@ -45,6 +45,7 @@ AI_PROVIDER_MODE=mock | deepseek
 DEEPSEEK_API_KEY=...
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-v4-pro
+DEEPSEEK_STRUCTURE_MODEL=deepseek-v4-pro
 DEEPSEEK_REASONER_MODEL=deepseek-v4-pro
 DEEPSEEK_TIMEOUT_MS=60000
 DEEPSEEK_MAX_RETRIES=1
@@ -54,7 +55,7 @@ DEEPSEEK_MAX_RETRIES=1
 
 - `AI_PROVIDER_MODE` 默认 `mock`。
 - `DEEPSEEK_API_KEY` 只从环境变量读取，不能入库、不能写日志、不能返回前端。
-- 模型名称允许通过环境变量覆盖，避免把供应商模型版本写死。
+- 模型名称允许通过环境变量覆盖，避免把供应商模型版本写死；结构任务可通过 `DEEPSEEK_STRUCTURE_MODEL` 单独切换到更快模型。
 - 2026-06-18 本地握手确认当前账号可见模型为 `deepseek-v4-flash`、`deepseek-v4-pro`；首期默认使用 `deepseek-v4-pro`，后续可将正文批量任务切到 `deepseek-v4-flash` 做成本优化。
 - 如果 `AI_PROVIDER_MODE=deepseek` 但没有 `DEEPSEEK_API_KEY`，服务启动可以成功，但实际调用应返回明确配置错误，不能静默用假数据伪装真实调用。
 
@@ -64,7 +65,8 @@ DEEPSEEK_MAX_RETRIES=1
 
 | 任务类别 | 首期默认模型 | 说明 |
 | --- | --- | --- |
-| 方向、设定、大纲、章节目录 | `DEEPSEEK_MODEL=deepseek-v4-pro` | 侧重中文创意、结构化 JSON 输出和成本控制 |
+| 方向 | `DEEPSEEK_MODEL=deepseek-v4-pro` | 侧重中文创意、候选比较和成本控制 |
+| 设定、大纲、章节目录 | `DEEPSEEK_STRUCTURE_MODEL`，缺省回落 `DEEPSEEK_MODEL` | 结构任务有独立路由和 `max_tokens` 上限，避免设定/大纲生成过长导致超时；验收提速时可切到 `deepseek-v4-flash` |
 | 第 1 章试写、2-3 章试写、批量正文、章节重写 | 首期 `deepseek-v4-pro`；后续批量正文可评估 `deepseek-v4-flash` | 正文调用量最大，先用高质量模型跑真实链路和质量调试，再优化成本 |
 | 单章审稿、全书审稿、影响评估 | `DEEPSEEK_REASONER_MODEL=deepseek-v4-pro`，缺省回落 `DEEPSEEK_MODEL` | 审稿和影响评估更重推理、批判和风险分级 |
 | 长篇记忆、摘要、伏笔台账 | 首期 `deepseek-v4-pro`；后续可评估 `deepseek-v4-flash` | 要求结构化、稳定、成本可控 |

@@ -36,21 +36,6 @@ export type Chapter = {
   videoReferenced: boolean
 }
 
-export type VideoProject = {
-  id: string
-  title: string
-  novelTitle: string
-  chapters: string
-  status: string
-  audioStatus: string
-  subtitleStatus: string
-  renderStatus: string
-  publishStatus: string
-  dataStatus: string
-  referenceStatus: string
-  action: RecommendedAction
-}
-
 export type TaskItem = {
   id: string
   name: string

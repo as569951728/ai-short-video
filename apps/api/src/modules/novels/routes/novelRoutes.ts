@@ -8,6 +8,8 @@ import type {
   ConfirmVideoReadinessRequest,
   ConfirmTrialRequest,
   CreateNovelDraftRequest,
+  EditDirectionCandidateRequest,
+  EditStructureAssetRequest,
   AdoptChapterContentVersionRequest,
   CreateImpactAssessmentRequest,
   ForcePassFullReviewRequest,
@@ -23,7 +25,8 @@ import type {
   ResolveFullReviewIssueRequest,
   ResolveImpactCaseRequest,
   RewriteChapterRequest,
-  StartFullReviewRequest
+  StartFullReviewRequest,
+  UpdateChapterWordTargetsRequest
 } from '@ai-shortvideo/shared';
 
 const querySchema = {
@@ -117,6 +120,68 @@ const idempotencyKeySchema = { type: 'string', minLength: 8, maxLength: 120, pat
 
 export async function registerNovelRoutes(app: FastifyInstance, options: NovelServiceOptions) {
   const novelService = new NovelService(options);
+  const devSeedNovelService = new NovelService({
+    repository: options.repository,
+    now: options.now
+  });
+
+  if (process.env.NODE_ENV !== 'production') {
+    app.post(
+      '/dev/novels/acceptance-seeds/outline',
+      {
+        schema: {
+          body: {
+            type: 'object',
+            properties: {
+              title: { type: 'string', minLength: 1, maxLength: 200 }
+            },
+            additionalProperties: false
+          },
+          response: {
+            201: responseEnvelopeSchema
+          }
+        }
+      },
+      async (request, reply) => {
+        const data = await createOutlineAcceptanceSeed(
+          devSeedNovelService,
+          request.body as { title?: string } | undefined,
+          createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        );
+
+        reply.status(201);
+        return sendOk(request, reply, data);
+      }
+    );
+
+    app.post(
+      '/dev/novels/acceptance-seeds/trial',
+      {
+        schema: {
+          body: {
+            type: 'object',
+            properties: {
+              title: { type: 'string', minLength: 1, maxLength: 200 }
+            },
+            additionalProperties: false
+          },
+          response: {
+            201: responseEnvelopeSchema
+          }
+        }
+      },
+      async (request, reply) => {
+        const data = await createTrialAcceptanceSeed(
+          devSeedNovelService,
+          request.body as { title?: string } | undefined,
+          createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        );
+
+        reply.status(201);
+        return sendOk(request, reply, data);
+      }
+    );
+  }
 
   app.post(
     '/novels/drafts',
@@ -128,6 +193,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
           properties: {
             title: { type: 'string', minLength: 1, maxLength: 200 },
             channel: { type: 'string', maxLength: 80 },
+            creationSourceType: { type: 'string', enum: ['system_recommendation', 'hotspot_reference', 'manual_idea'] },
             genres: { type: 'array', items: { type: 'string', maxLength: 80 }, maxItems: 12 },
             hotspotReportId: { type: ['string', 'null'], maxLength: 80 },
             hotspotOpportunityId: { type: ['string', 'null'], maxLength: 80 },
@@ -270,6 +336,54 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
   );
 
   app.post(
+    '/novels/:novelId/directions/:versionId/edit',
+    {
+      schema: {
+        params: directionVersionParamsSchema,
+        body: {
+          type: 'object',
+          required: ['title', 'logline', 'coreHook', 'audienceAppeal', 'videoPotential', 'sellingPoints', 'riskTags', 'recommendation', 'reason'],
+          properties: {
+            title: { type: 'string', minLength: 1, maxLength: 120 },
+            logline: { type: 'string', minLength: 1, maxLength: 300 },
+            coreHook: { type: 'string', minLength: 1, maxLength: 300 },
+            audienceAppeal: { type: 'string', minLength: 1, maxLength: 300 },
+            videoPotential: { type: 'string', minLength: 1, maxLength: 300 },
+            sellingPoints: {
+              type: 'array',
+              items: { type: 'string', minLength: 1, maxLength: 80 },
+              minItems: 1,
+              maxItems: 8
+            },
+            riskTags: {
+              type: 'array',
+              items: { type: 'string', minLength: 1, maxLength: 80 },
+              maxItems: 8
+            },
+            recommendation: { type: 'string', minLength: 1, maxLength: 300 },
+            reason: { type: 'string', minLength: 1, maxLength: 500 }
+          },
+          additionalProperties: false
+        },
+        response: {
+          200: responseEnvelopeSchema
+        }
+      }
+    },
+    async (request, reply) => {
+      const { novelId, versionId } = request.params as { novelId: string; versionId: string };
+      const data = await novelService.editDirectionCandidate(
+        novelId,
+        versionId,
+        request.body as EditDirectionCandidateRequest,
+        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+      );
+
+      return sendOk(request, reply, data);
+    }
+  );
+
+  app.post(
     '/novels/:novelId/directions/:versionId/adopt',
     {
       schema: {
@@ -334,6 +448,23 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
   );
 
   app.post(
+    '/novels/:novelId/settings/:versionId/edit',
+    createStructureEditRouteSchema(),
+    async (request, reply) => {
+      const { novelId, versionId } = request.params as { novelId: string; versionId: string };
+      const data = await novelService.editStructureAsset(
+        novelId,
+        'setting',
+        versionId,
+        request.body as EditStructureAssetRequest,
+        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+      );
+
+      return sendOk(request, reply, data);
+    }
+  );
+
+  app.post(
     '/novels/:novelId/outlines/generate',
     createStructureGenerateRouteSchema(),
     async (request, reply) => {
@@ -357,6 +488,23 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
         novelId,
         versionId,
         (request.body ?? {}) as AdoptStructureAssetRequest,
+        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+      );
+
+      return sendOk(request, reply, data);
+    }
+  );
+
+  app.post(
+    '/novels/:novelId/outlines/:versionId/edit',
+    createStructureEditRouteSchema(),
+    async (request, reply) => {
+      const { novelId, versionId } = request.params as { novelId: string; versionId: string };
+      const data = await novelService.editStructureAsset(
+        novelId,
+        'outline',
+        versionId,
+        request.body as EditStructureAssetRequest,
         createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
       );
 
@@ -396,6 +544,23 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
   );
 
   app.post(
+    '/novels/:novelId/stage-outlines/:versionId/edit',
+    createStructureEditRouteSchema(),
+    async (request, reply) => {
+      const { novelId, versionId } = request.params as { novelId: string; versionId: string };
+      const data = await novelService.editStructureAsset(
+        novelId,
+        'stage_outline',
+        versionId,
+        request.body as EditStructureAssetRequest,
+        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+      );
+
+      return sendOk(request, reply, data);
+    }
+  );
+
+  app.post(
     '/novels/:novelId/chapter-plans/generate',
     createStructureGenerateRouteSchema(),
     async (request, reply) => {
@@ -403,6 +568,23 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
       const data = await novelService.generateChapterPlan(
         novelId,
         (request.body ?? {}) as GenerateStructureAssetRequest,
+        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+      );
+
+      return sendOk(request, reply, data);
+    }
+  );
+
+  app.post(
+    '/novels/:novelId/chapter-plans/:versionId/edit',
+    createStructureEditRouteSchema(),
+    async (request, reply) => {
+      const { novelId, versionId } = request.params as { novelId: string; versionId: string };
+      const data = await novelService.editStructureAsset(
+        novelId,
+        'chapter_plan',
+        versionId,
+        request.body as EditStructureAssetRequest,
         createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
       );
 
@@ -419,6 +601,49 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
         novelId,
         versionId,
         (request.body ?? {}) as AdoptStructureAssetRequest,
+        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+      );
+
+      return sendOk(request, reply, data);
+    }
+  );
+
+  app.patch(
+    '/novels/:novelId/chapter-plans/word-targets',
+    {
+      schema: {
+        params: novelIdParamsSchema,
+        body: {
+          type: 'object',
+          required: ['updates'],
+          properties: {
+            updates: {
+              type: 'array',
+              minItems: 1,
+              maxItems: 200,
+              items: {
+                type: 'object',
+                required: ['chapterNo', 'wordTarget'],
+                properties: {
+                  chapterNo: { type: 'integer', minimum: 1, maximum: 1000 },
+                  wordTarget: { type: 'integer', minimum: 100, maximum: 30000 }
+                },
+                additionalProperties: false
+              }
+            },
+            reason: { type: ['string', 'null'], maxLength: 500 },
+            currentChapterPlanVersionId: { type: ['string', 'null'], maxLength: 80 }
+          },
+          additionalProperties: false
+        },
+        response: { 200: responseEnvelopeSchema }
+      }
+    },
+    async (request, reply) => {
+      const { novelId } = request.params as { novelId: string };
+      const data = await novelService.updateChapterWordTargets(
+        novelId,
+        (request.body ?? {}) as UpdateChapterWordTargetsRequest,
         createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
       );
 
@@ -1037,6 +1262,207 @@ function createStructureGenerateRouteSchema() {
   } as const;
 }
 
+async function createOutlineAcceptanceSeed(
+  service: NovelService,
+  body: { title?: string } | undefined,
+  context: ReturnType<typeof createDefaultRequestContext>
+) {
+  const suffix = new Date().toISOString().slice(5, 16).replace('T', ' ');
+  const title = body?.title?.trim() || `验收种子：大纲设计 ${suffix}`;
+  const draft = await service.createDraft(
+    {
+      title,
+      genres: ['都市逆袭', '系统爽文'],
+      preferences: {
+        appealPoints: ['低谷翻盘', '打脸反击', '事业逆袭'],
+        targetAudience: '18-35 岁爽文用户',
+        stageCount: 3,
+        customIdea: '用于本地验收大纲设计节点：主角从底层销售被背叛开始，依靠系统提示和商业判断逐步翻盘。',
+        videoAdaptationPreference: '适合口播短视频'
+      },
+      chapterLimit: 60,
+      chapterWordRange: {
+        min: 1800,
+        max: 2600
+      }
+    } satisfies CreateNovelDraftRequest,
+    context
+  );
+  const novelId = draft.id;
+
+  const directions = await service.generateDirections(
+    novelId,
+    { regenerateReason: '本地验收种子：生成方向候选' },
+    context
+  );
+  const direction = directions.candidates.find((candidate) => candidate.score >= 75) ?? directions.candidates[0];
+  if (!direction) throw new Error('验收种子创建失败：方向候选未生成');
+  await service.adoptDirection(
+    novelId,
+    direction.id,
+    { reason: '本地验收种子：采用方向，进入设定节点。' },
+    context
+  );
+
+  const settingResult = await service.generateSetting(
+    novelId,
+    { regenerateReason: '本地验收种子：生成设定候选' },
+    context
+  );
+  if (!settingResult.candidate) throw new Error('验收种子创建失败：设定候选未生成');
+  await service.adoptSetting(
+    novelId,
+    settingResult.candidate.id,
+    { reason: '本地验收种子：采用设定，进入大纲设计。' },
+    context
+  );
+
+  const outlineResult = await service.generateOutline(
+    novelId,
+    { regenerateReason: '本地验收种子：生成全书大纲候选' },
+    context
+  );
+  if (!outlineResult.candidate) throw new Error('验收种子创建失败：全书大纲候选未生成');
+  await service.adoptOutline(
+    novelId,
+    outlineResult.candidate.id,
+    { reason: '本地验收种子：采用全书大纲，准备阶段大纲验收。' },
+    context
+  );
+
+  const stageOutlineResult = await service.generateStageOutline(
+    novelId,
+    { regenerateReason: '本地验收种子：生成阶段大纲候选，停留待确认。' },
+    context
+  );
+  const detail = await service.getDetail(novelId);
+
+  return {
+    novelId,
+    title,
+    acceptanceStep: 'outline',
+    acceptanceSubStep: 'stages',
+    url: `/novels/${novelId}?step=outline`,
+    currentAssets: detail.currentAssets,
+    stageOutlineCandidateId: stageOutlineResult.candidate?.id ?? null,
+    note: '已创建到第 3 个主节点“大纲设计”：方向和设定已采用，全书大纲已采用，阶段大纲候选待确认。'
+  };
+}
+
+async function createTrialAcceptanceSeed(
+  service: NovelService,
+  body: { title?: string } | undefined,
+  context: ReturnType<typeof createDefaultRequestContext>
+) {
+  const suffix = new Date().toISOString().slice(5, 16).replace('T', ' ');
+  const title = body?.title?.trim() || `验收种子：试写按钮链路 ${suffix}`;
+  const draft = await service.createDraft(
+    {
+      title,
+      genres: ['都市逆袭', '系统爽文'],
+      preferences: {
+        appealPoints: ['低谷翻盘', '打脸反击', '事业逆袭'],
+        targetAudience: '18-35 岁爽文用户',
+        stageCount: 3,
+        customIdea: '用于本地验收试写节点：主角从底层销售被背叛开始，依靠系统提示和商业判断逐步翻盘。',
+        videoAdaptationPreference: '适合口播短视频'
+      },
+      chapterLimit: 60,
+      chapterWordRange: {
+        min: 1800,
+        max: 2600
+      }
+    } satisfies CreateNovelDraftRequest,
+    context
+  );
+  const novelId = draft.id;
+
+  const directions = await service.generateDirections(
+    novelId,
+    { regenerateReason: '本地验收种子：生成方向候选' },
+    context
+  );
+  const direction = directions.candidates.find((candidate) => candidate.score >= 75) ?? directions.candidates[0];
+  if (!direction) throw new Error('验收种子创建失败：方向候选未生成');
+  await service.adoptDirection(
+    novelId,
+    direction.id,
+    { reason: '本地验收种子：采用方向，进入设定节点。' },
+    context
+  );
+
+  const settingResult = await service.generateSetting(
+    novelId,
+    { regenerateReason: '本地验收种子：生成设定候选' },
+    context
+  );
+  if (!settingResult.candidate) throw new Error('验收种子创建失败：设定候选未生成');
+  await service.adoptSetting(
+    novelId,
+    settingResult.candidate.id,
+    { reason: '本地验收种子：采用设定，进入大纲设计。' },
+    context
+  );
+
+  const outlineResult = await service.generateOutline(
+    novelId,
+    { regenerateReason: '本地验收种子：生成全书大纲候选' },
+    context
+  );
+  if (!outlineResult.candidate) throw new Error('验收种子创建失败：全书大纲候选未生成');
+  await service.adoptOutline(
+    novelId,
+    outlineResult.candidate.id,
+    { reason: '本地验收种子：采用全书大纲，进入阶段大纲。' },
+    context
+  );
+
+  const stageOutlineResult = await service.generateStageOutline(
+    novelId,
+    { regenerateReason: '本地验收种子：生成阶段大纲候选' },
+    context
+  );
+  if (!stageOutlineResult.candidate) throw new Error('验收种子创建失败：阶段大纲候选未生成');
+  await service.adoptStageOutline(
+    novelId,
+    stageOutlineResult.candidate.id,
+    { reason: '本地验收种子：采用阶段大纲，进入章节目录。' },
+    context
+  );
+
+  const chapterPlanResult = await service.generateChapterPlan(
+    novelId,
+    { regenerateReason: '本地验收种子：生成章节目录候选' },
+    context
+  );
+  if (!chapterPlanResult.candidate) throw new Error('验收种子创建失败：章节目录候选未生成');
+  await service.adoptChapterPlan(
+    novelId,
+    chapterPlanResult.candidate.id,
+    { reason: '本地验收种子：采用章节目录，进入试写调试。' },
+    context
+  );
+
+  const trialResult = await service.generateTrial(
+    novelId,
+    { chapterCount: 3, regenerateReason: '本地验收种子：生成第 1 章试写候选，停留待选择。' },
+    context
+  );
+  const detail = await service.getDetail(novelId);
+
+  return {
+    novelId,
+    title,
+    acceptanceStep: 'trial',
+    acceptanceSubStep: 'chapterOne',
+    url: `/novels/${novelId}?step=trial`,
+    currentAssets: detail.currentAssets,
+    trialRunId: trialResult.trialRun.id,
+    candidateIds: trialResult.trialRun.chapterOneCandidates.map((candidate) => candidate.id),
+    note: '已创建到第 5 个主节点“试写调试”：方向、设定、大纲和章节目录已采用，第 1 章候选待选择。'
+  };
+}
+
 function createStructureAdoptRouteSchema() {
   return {
     schema: {
@@ -1048,6 +1474,32 @@ function createStructureAdoptRouteSchema() {
           reason: { type: ['string', 'null'], maxLength: 1000 },
           pageVersionSnapshot: { type: ['object', 'null'], additionalProperties: true },
           currentVersionId: { type: ['string', 'null'], maxLength: 80 }
+        },
+        additionalProperties: false
+      },
+      response: {
+        200: responseEnvelopeSchema
+      }
+    }
+  } as const;
+}
+
+function createStructureEditRouteSchema() {
+  return {
+    schema: {
+      params: directionVersionParamsSchema,
+      body: {
+        type: 'object',
+        required: ['title', 'summary', 'sectionTitle', 'sectionBody', 'sectionItems', 'riskTags', 'recommendation', 'reason'],
+        properties: {
+          title: { type: 'string', minLength: 1, maxLength: 160 },
+          summary: { type: 'string', minLength: 1, maxLength: 1000 },
+          sectionTitle: { type: 'string', minLength: 1, maxLength: 160 },
+          sectionBody: { type: 'string', minLength: 1, maxLength: 4000 },
+          sectionItems: { type: 'array', items: { type: 'string', maxLength: 200 }, maxItems: 30 },
+          riskTags: { type: 'array', items: { type: 'string', maxLength: 80 }, maxItems: 20 },
+          recommendation: { type: 'string', minLength: 1, maxLength: 1000 },
+          reason: { type: 'string', minLength: 1, maxLength: 500 }
         },
         additionalProperties: false
       },

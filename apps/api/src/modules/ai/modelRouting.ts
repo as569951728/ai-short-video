@@ -8,6 +8,7 @@ export interface AiProviderEnv {
   DEEPSEEK_API_KEY?: string;
   DEEPSEEK_BASE_URL?: string;
   DEEPSEEK_MODEL?: string;
+  DEEPSEEK_STRUCTURE_MODEL?: string;
   DEEPSEEK_REASONER_MODEL?: string;
   DEEPSEEK_TIMEOUT_MS?: string;
   DEEPSEEK_MAX_RETRIES?: string;
@@ -18,6 +19,7 @@ export interface DeepSeekRuntimeConfig {
   apiKey: string | null;
   baseUrl: string;
   model: string;
+  structureModel: string;
   reasonerModel: string;
   timeoutMs: number;
   maxRetries: number;
@@ -35,6 +37,7 @@ export function resolveDeepSeekConfig(envLike: AiProviderEnv = process.env): Dee
     apiKey: envLike.DEEPSEEK_API_KEY?.trim() || null,
     baseUrl: (envLike.DEEPSEEK_BASE_URL ?? 'https://api.deepseek.com').trim() || 'https://api.deepseek.com',
     model,
+    structureModel: (envLike.DEEPSEEK_STRUCTURE_MODEL ?? model).trim() || model,
     reasonerModel: (envLike.DEEPSEEK_REASONER_MODEL ?? 'deepseek-v4-pro').trim() || model,
     timeoutMs: parsePositiveInt(envLike.DEEPSEEK_TIMEOUT_MS, 60000),
     maxRetries: parseNonNegativeInt(envLike.DEEPSEEK_MAX_RETRIES, 1)

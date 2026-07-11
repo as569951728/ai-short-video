@@ -60,6 +60,7 @@
           <div class="summary-item"><span>章节目标</span><strong>{{ detail?.chapterProgress.text || '-' }}</strong></div>
           <div class="summary-item"><span>结构候选</span><strong>{{ structureRows.length }}</strong></div>
           <div class="summary-item"><span>视频引用</span><strong>{{ detail?.videoReferenceSummary.statusText || '-' }}</strong></div>
+          <div class="summary-item"><span>创作来源</span><strong>{{ detail?.creationSource.label || '-' }}</strong></div>
         </div>
       </div>
 
@@ -95,13 +96,10 @@
             >
               <div class="direction-card-head">
                 <el-tag :type="step.tagType" effect="plain">{{ step.stateText }}</el-tag>
-                <span>{{ step.progressText }}</span>
+                <span>{{ step.key === suggestedStepKey ? '建议处理' : step.progressText }}</span>
               </div>
               <h3>{{ step.name }}</h3>
               <p>{{ step.description }}</p>
-              <div class="stage-progress">
-                <span :style="{ width: `${step.progress}%` }"></span>
-              </div>
               <p><strong>下一步：</strong>{{ step.nextAction }}</p>
             </button>
           </div>
@@ -131,6 +129,7 @@
               :summary="activeRecentTask"
               :loading="loading"
               @view="openTaskDrawer(activeRecentTask?.id)"
+              @view-result="openTaskResult"
               @refresh="loadDetail"
             />
           </el-card>
@@ -211,7 +210,7 @@
               </div>
               <div class="tag-row">
                 <el-tag :type="activeSubStep.tagType" effect="plain">{{ activeSubStep.stateText }}</el-tag>
-                <el-tag effect="plain">{{ activeStep.progressText }}</el-tag>
+                <el-tag effect="plain">{{ activeStep.stateText }}</el-tag>
               </div>
             </div>
 
@@ -219,10 +218,10 @@
               <div class="task-notice step-inline-notice">
                 <div>
                   <strong>方向候选只会进入候选池</strong>
-                  <p>选择两个以上候选后可以融合；只有点击“采用”才会成为正式方向。</p>
+                  <p>融合会生成一个新的候选方向，用来综合多个候选的爽点；它不会自动成为正式方向，仍需要你查看并点击“采用”。</p>
                 </div>
                 <div class="task-notice-actions">
-                  <el-button :disabled="selectedCandidateIds.length < 2" :loading="fusing" @click="handleFuse">融合所选方向</el-button>
+                  <el-button :disabled="selectedCandidateIds.length < 2" :loading="fusing" @click="openFuseDialog">融合所选方向</el-button>
                 </div>
               </div>
 
@@ -259,8 +258,10 @@
                     <el-tag v-for="tag in candidate.riskTags" :key="tag" type="warning" effect="plain">{{ tag }}</el-tag>
                   </div>
                   <div class="split-actions">
+                    <el-button size="small" @click="openDirectionDetail(candidate)">详情</el-button>
+                    <el-button size="small" @click="openEditDirectionDialog(candidate)">编辑</el-button>
                     <el-button size="small" :disabled="!candidate.canAdopt" :loading="adoptingDirectionId === candidate.id" @click="openAdoptDialog(candidate)">采用</el-button>
-                    <el-button size="small" :loading="optimizingId === candidate.id" @click="handleOptimize(candidate.id)">优化</el-button>
+                    <el-button size="small" :loading="optimizingId === candidate.id" @click="openOptimizeDialog(candidate)">按要求优化</el-button>
                   </div>
                 </article>
               </div>
@@ -275,10 +276,33 @@
                 </div>
               </div>
               <el-empty v-if="settingRows.length === 0" description="暂无设定候选">
-                <el-button :disabled="!canGenerateSetting" :loading="structureGeneratingType === 'setting'" type="primary" @click="handleGenerateStructure('setting')">生成设定</el-button>
+                <div class="empty-action-stack">
+                  <div v-if="settingGenerationPending" class="empty-pending-panel">
+                    <div class="empty-pending-head">
+                      <strong>设定正在生成中</strong>
+                      <el-tag type="warning" effect="plain">生成中</el-tag>
+                    </div>
+                    <p>刷新或新开页面后会继续保留等待状态。生成结果会进入设定候选池，点击“采用”后才会成为正式设定。</p>
+                    <div class="empty-pending-actions">
+                      <el-button @click="cancelLocalPendingWait">取消等待</el-button>
+                      <el-button type="warning" plain @click="restartStructureGeneration('setting')">重新生成</el-button>
+                    </div>
+                  </div>
+                  <div v-else class="empty-generate-panel">
+                    <p>方向采用后可生成设定候选，生成结果不会自动覆盖正式设定。</p>
+                    <el-button
+                      :disabled="!canGenerateSetting || hasLocalPendingWait"
+                      :loading="structureGeneratingType === 'setting'"
+                      type="primary"
+                      @click="handleGenerateStructure('setting')"
+                    >
+                      生成设定
+                    </el-button>
+                  </div>
+                </div>
               </el-empty>
-              <div v-else class="structure-grid">
-                <article v-for="asset in settingRows" :key="asset.id" class="structure-card">
+              <div v-else class="structure-grid" data-result-section="setting">
+                <article v-for="asset in settingRows" :id="`structure-candidate-${asset.id}`" :key="asset.id" :class="['structure-card', { 'result-focus-card': focusedStructureCandidateId === asset.id }]">
                   <div class="direction-card-head">
                     <h3>{{ asset.title }}</h3>
                     <el-tag effect="plain">{{ asset.typeText }}</el-tag>
@@ -298,10 +322,20 @@
                   <div class="issue-list">
                     <el-tag v-for="tag in asset.riskTags" :key="tag" type="warning" effect="plain">{{ tag }}</el-tag>
                   </div>
+                  <p v-if="isCurrentStructureAsset(asset)" class="structure-card-note success">这是当前正式版本，后续生成会基于它继续推进。</p>
+                  <p v-else-if="isArchivedStructureAsset(asset)" class="structure-card-note">这是历史版本，仅用于追溯，不会参与后续生成。</p>
                   <div class="split-actions">
-                    <el-button size="small" :disabled="!asset.canAdopt" :loading="structureAdoptingId === asset.id" @click="openStructureAdoptDialog(asset)">采用</el-button>
-                    <el-button size="small" :loading="structureGeneratingType === asset.objectType" @click="handleContinueOptimize(asset)">继续优化</el-button>
-                    <el-button size="small" @click="handleDiscardCandidate(asset)">放弃</el-button>
+                    <template v-if="isCandidateStructureAsset(asset)">
+                      <el-button size="small" @click="openEditStructureDialog(asset)">编辑</el-button>
+                      <el-button size="small" :loading="structureAdoptingId === asset.id" @click="openStructureAdoptDialog(asset)">采用</el-button>
+                      <el-button size="small" :loading="structureGeneratingType === asset.objectType" @click="handleContinueOptimize(asset)">继续优化</el-button>
+                      <el-button size="small" @click="handleDiscardCandidate(asset)">放弃</el-button>
+                    </template>
+                    <template v-else-if="isCurrentStructureAsset(asset)">
+                      <el-button size="small" type="primary" plain @click="openStep('outline')">进入大纲</el-button>
+                      <el-button size="small" :loading="structureGeneratingType === asset.objectType" @click="handleContinueOptimize(asset)">基于当前继续优化</el-button>
+                    </template>
+                    <span v-else class="muted">历史版本不支持采用操作</span>
                   </div>
                 </article>
               </div>
@@ -315,14 +349,66 @@
                   <p>{{ asset.summary }}</p>
                 </div>
               </div>
-              <el-empty v-if="outlineRows.length === 0" description="暂无大纲候选">
+              <div v-if="activeSubStep.key === 'stages' && detail?.currentAssets.outline && !detail.currentAssets.stageOutline && stageOutlineRows.length === 0" class="task-notice step-inline-notice">
+                <div>
+                  <strong>全书大纲已采用</strong>
+                  <p>下一步需要生成阶段大纲，确认阶段目标和冲突推进后，才会进入章节目录规划。</p>
+                </div>
                 <div class="task-notice-actions">
-                  <el-button :disabled="!canGenerateOutline" :loading="structureGeneratingType === 'outline'" @click="handleGenerateStructure('outline')">生成全书大纲</el-button>
-                  <el-button :disabled="!canGenerateStageOutline" :loading="structureGeneratingType === 'stage_outline'" @click="handleGenerateStructure('stage_outline')">生成阶段大纲</el-button>
+                  <el-button
+                    type="primary"
+                    :disabled="!canGenerateStageOutline || hasLocalPendingWait"
+                    :loading="structureGeneratingType === 'stage_outline' || isNovelActionRunning('stage_outline_generate')"
+                    @click="handleGenerateStructure('stage_outline')"
+                  >
+                    生成阶段大纲
+                  </el-button>
+                </div>
+              </div>
+              <div v-else-if="activeSubStep.key === 'stages' && detail?.currentAssets.outline && !detail.currentAssets.stageOutline && stageOutlineRows.length > 0" class="task-notice step-inline-notice">
+                <div>
+                  <strong>阶段大纲候选待确认</strong>
+                  <p>新阶段大纲已进入候选池，请查看内容，必要时编辑或继续优化，确认后点击“采用”。</p>
+                </div>
+              </div>
+              <div v-else-if="activeSubStep.key === 'stages' && detail?.currentAssets.stageOutline" class="task-notice step-inline-notice">
+                <div>
+                  <strong>阶段大纲已采用</strong>
+                  <p>大纲设计已完成，下一步进入章节目录，生成每章标题、摘要、钩子和目标字数。</p>
+                </div>
+                <div class="task-notice-actions">
+                  <el-button type="primary" @click="openStep('chapterPlan')">进入章节目录</el-button>
+                </div>
+              </div>
+              <el-alert
+                v-if="activeSubStep.key === 'stages' && !detail?.currentAssets.outline"
+                title="需要先在“全书主线”里采用一个全书大纲，才能生成阶段大纲。"
+                type="info"
+                show-icon
+                :closable="false"
+              />
+              <el-empty v-if="visibleOutlineRows.length === 0" :description="activeSubStep.key === 'stages' ? '暂无阶段大纲候选' : '暂无全书大纲候选'">
+                <div class="task-notice-actions">
+                  <el-button
+                    v-if="activeSubStep.key !== 'stages'"
+                    :disabled="!canGenerateOutline || hasLocalPendingWait"
+                    :loading="structureGeneratingType === 'outline' || isNovelActionRunning('outline_generate')"
+                    @click="handleGenerateStructure('outline')"
+                  >
+                    生成全书大纲
+                  </el-button>
+                  <el-button
+                    v-else
+                    :disabled="!canGenerateStageOutline || hasLocalPendingWait"
+                    :loading="structureGeneratingType === 'stage_outline' || isNovelActionRunning('stage_outline_generate')"
+                    @click="handleGenerateStructure('stage_outline')"
+                  >
+                    生成阶段大纲
+                  </el-button>
                 </div>
               </el-empty>
-              <div v-else class="structure-grid">
-                <article v-for="asset in outlineRows" :key="asset.id" class="structure-card">
+              <div v-else class="structure-grid" data-result-section="outline">
+                <article v-for="asset in visibleOutlineRows" :id="`structure-candidate-${asset.id}`" :key="asset.id" :class="['structure-card', { 'result-focus-card': focusedStructureCandidateId === asset.id }]">
                   <div class="direction-card-head">
                     <h3>{{ asset.title }}</h3>
                     <el-tag effect="plain">{{ asset.typeText }}</el-tag>
@@ -342,39 +428,140 @@
                   <div class="issue-list">
                     <el-tag v-for="tag in asset.riskTags" :key="tag" type="warning" effect="plain">{{ tag }}</el-tag>
                   </div>
+                  <p v-if="isCurrentStructureAsset(asset)" class="structure-card-note success">这是当前正式版本，后续生成会基于它继续推进。</p>
+                  <p v-else-if="isArchivedStructureAsset(asset)" class="structure-card-note">这是历史版本，仅用于追溯，不会参与后续生成。</p>
                   <div class="split-actions">
-                    <el-button size="small" :disabled="!asset.canAdopt" :loading="structureAdoptingId === asset.id" @click="openStructureAdoptDialog(asset)">采用</el-button>
-                    <el-button size="small" :loading="structureGeneratingType === asset.objectType" @click="handleContinueOptimize(asset)">继续优化</el-button>
-                    <el-button size="small" @click="handleDiscardCandidate(asset)">放弃</el-button>
+                    <template v-if="isCandidateStructureAsset(asset)">
+                      <el-button size="small" @click="openEditStructureDialog(asset)">编辑</el-button>
+                      <el-button size="small" :loading="structureAdoptingId === asset.id" @click="openStructureAdoptDialog(asset)">采用</el-button>
+                      <el-button size="small" :loading="structureGeneratingType === asset.objectType" @click="handleContinueOptimize(asset)">继续优化</el-button>
+                      <el-button size="small" @click="handleDiscardCandidate(asset)">放弃</el-button>
+                    </template>
+                    <template v-else-if="isCurrentStructureAsset(asset)">
+                      <el-button
+                        v-if="asset.objectType === 'outline'"
+                        size="small"
+                        type="primary"
+                        plain
+                        @click="setActiveSubStep('stages')"
+                      >
+                        进入阶段大纲
+                      </el-button>
+                      <el-button v-else-if="asset.objectType === 'stage_outline'" size="small" type="primary" plain @click="openStep('chapterPlan')">进入章节目录</el-button>
+                      <el-button size="small" :loading="structureGeneratingType === asset.objectType" @click="handleContinueOptimize(asset)">基于当前继续优化</el-button>
+                    </template>
+                    <span v-else class="muted">历史版本不支持采用操作</span>
                   </div>
                 </article>
               </div>
             </template>
 
             <template v-else-if="activeStep.key === 'chapterPlan'">
-              <div class="task-notice-actions mb-16">
-                <el-button :disabled="!canGenerateChapterPlan" :loading="structureGeneratingType === 'chapter_plan'" @click="handleGenerateStructure('chapter_plan')">生成章节目录</el-button>
+              <div v-if="detail?.currentAssets.chapterPlan" class="task-notice step-inline-notice">
+                <div>
+                  <strong>章节目录已采用</strong>
+                  <p>章节规划已成为正式目录，下一步进入试写调试，先验证第 1-3 章的文风、爽点和连续性。</p>
+                </div>
+                <div class="task-notice-actions">
+                  <el-button type="primary" @click="openStep('trial')">进入试写调试</el-button>
+                </div>
               </div>
-              <el-empty v-if="chapterRows.length === 0" description="尚未确认章节目录" />
-              <el-table v-else :data="chapterRows" border>
-                <el-table-column prop="chapterNo" label="章序" width="80" />
-                <el-table-column prop="stageIndex" label="阶段" width="80" />
-                <el-table-column prop="title" label="章节标题" min-width="220" />
-                <el-table-column prop="wordTarget" label="目标字数" width="110" />
-                <el-table-column prop="statusText" label="正文状态" width="110" />
-                <el-table-column label="正文版本" width="110">
-                  <template #default="{ row }">
-                    <el-tag :type="row.hasCurrentContent ? 'success' : 'info'" effect="plain">{{ row.hasCurrentContent ? '已有正文' : '未生成' }}</el-tag>
-                  </template>
-                </el-table-column>
-                <el-table-column prop="impactLevelText" label="影响" width="110" />
-                <el-table-column prop="statusNote" label="说明" min-width="220" />
-                <el-table-column label="操作" width="120">
-                  <template #default="{ row }">
-                    <el-button size="small" @click="router.push(`/novels/${novelId}/chapters/${row.id}`)">详情</el-button>
-                  </template>
-                </el-table-column>
-              </el-table>
+              <div v-if="!detail?.currentAssets.chapterPlan" class="task-notice step-inline-notice">
+                <div>
+                  <strong v-if="isChapterPlanGenerating">章节目录正在生成中</strong>
+                  <strong v-else-if="chapterPlanGenerationFailed">章节目录生成失败</strong>
+                  <strong v-else>{{ chapterPlanRows.length > 0 ? '章节目录候选待确认' : '生成章节目录' }}</strong>
+                  <p v-if="isChapterPlanGenerating">模型正在生成章节表、单章摘要、章节钩子和目标字数；刷新或新开页面后会继续保留任务状态。</p>
+                  <p v-else-if="chapterPlanGenerationFailed">{{ chapterPlanFailureReason || '本次生成失败，请查看任务详情后重试。' }}</p>
+                  <p v-else>基于已采用的阶段大纲生成章节表、单章摘要、章节钩子和目标字数。生成结果会进入候选池，只有点击“采用”后才会成为正式章节目录。</p>
+                </div>
+                <div class="task-notice-actions">
+                  <el-button
+                    v-if="chapterPlanGenerationTask"
+                    :type="chapterPlanGenerationFailed ? 'primary' : 'default'"
+                    @click="openTaskDrawer(chapterPlanGenerationTask.id)"
+                  >
+                    查看详情
+                  </el-button>
+                  <el-button
+                    type="primary"
+                    :disabled="!canGenerateChapterPlan || isChapterPlanGenerating"
+                    :loading="isChapterPlanGenerating"
+                    @click="handleGenerateStructure('chapter_plan')"
+                  >
+                    {{ chapterPlanGenerationFailed ? '重新生成章节目录' : chapterPlanRows.length > 0 ? '再生成一版目录候选' : '生成章节目录' }}
+                  </el-button>
+                </div>
+              </div>
+              <div v-if="chapterPlanRows.length > 0 && chapterRows.length === 0" class="structure-grid" data-result-section="chapterPlan">
+                <article v-for="asset in chapterPlanRows" :id="`structure-candidate-${asset.id}`" :key="asset.id" :class="['structure-card', { 'result-focus-card': focusedStructureCandidateId === asset.id }]">
+                  <div class="direction-card-head">
+                    <h3>{{ asset.title }}</h3>
+                    <el-tag effect="plain">{{ asset.typeText }}</el-tag>
+                  </div>
+                  <div class="tag-row">
+                    <el-tag effect="plain">{{ asset.versionLabel }}</el-tag>
+                    <el-tag :type="asset.highRiskRequiresConfirm ? 'danger' : 'success'" effect="plain">评分 {{ asset.scoreText }}</el-tag>
+                    <el-tag type="info" effect="plain">{{ asset.chapterCount }} 章</el-tag>
+                    <el-tag :type="asset.status.includes('过期') ? 'danger' : 'info'" effect="plain">{{ asset.status }}</el-tag>
+                  </div>
+                  <p class="structure-summary">{{ asset.summary }}</p>
+                  <dl>
+                    <dt>推荐理由</dt>
+                    <dd>{{ asset.primaryReason }}</dd>
+                    <dt>章节规划</dt>
+                    <dd>{{ asset.sections[0]?.body || asset.stages[0]?.goal || `已生成 ${asset.chapterCount} 章目录候选` }}</dd>
+                  </dl>
+                  <p v-if="isCurrentStructureAsset(asset)" class="structure-card-note success">这是当前正式版本，后续试写会基于它继续推进。</p>
+                  <p v-else-if="isArchivedStructureAsset(asset)" class="structure-card-note">这是历史版本，仅用于追溯，不会参与后续生成。</p>
+                  <div class="split-actions">
+                    <template v-if="isCandidateStructureAsset(asset)">
+                      <el-button size="small" @click="openEditStructureDialog(asset)">编辑</el-button>
+                      <el-button size="small" :loading="structureAdoptingId === asset.id" @click="openStructureAdoptDialog(asset)">采用</el-button>
+                      <el-button size="small" :loading="structureGeneratingType === asset.objectType" @click="handleContinueOptimize(asset)">继续优化</el-button>
+                      <el-button size="small" @click="handleDiscardCandidate(asset)">放弃</el-button>
+                    </template>
+                    <template v-else-if="isCurrentStructureAsset(asset)">
+                      <el-button size="small" type="primary" plain @click="openStep('trial')">进入试写</el-button>
+                      <el-button size="small" :loading="structureGeneratingType === asset.objectType" @click="handleContinueOptimize(asset)">基于当前继续优化</el-button>
+                    </template>
+                    <span v-else class="muted">历史版本不支持采用操作</span>
+                  </div>
+                </article>
+              </div>
+              <el-empty v-else-if="chapterRows.length === 0" description="尚未确认章节目录" />
+              <template v-else>
+                <div class="chapter-word-target-toolbar">
+                  <div>
+                    <strong>目标字数</strong>
+                    <span>默认 {{ detail?.preferences.chapterWordMin }}-{{ detail?.preferences.chapterWordMax }} 字/章，当前平均 {{ chapterWordTargetSummary.average || '-' }} 字，预计 {{ chapterWordTargetSummary.total || '-' }} 字</span>
+                    <small>只影响后续生成；已生成正文需要在章节详情中扩写或重写。</small>
+                  </div>
+                  <div class="chapter-word-target-actions">
+                    <el-input-number v-model="batchWordTarget" :min="100" :max="30000" :step="100" :precision="0" step-strictly controls-position="right" />
+                    <el-button :loading="updatingChapterWordTargets" :disabled="hasLocalPendingWait" @click="handleApplyBatchWordTarget">批量调整</el-button>
+                  </div>
+                </div>
+                <el-table :data="chapterRows" border>
+                  <el-table-column prop="chapterNo" label="章序" width="80" />
+                  <el-table-column prop="stageIndex" label="阶段" width="80" />
+                  <el-table-column prop="title" label="章节标题" min-width="220" />
+                  <el-table-column prop="wordTarget" label="目标字数" width="110" />
+                  <el-table-column prop="statusText" label="正文状态" width="110" />
+                  <el-table-column label="正文版本" width="110">
+                    <template #default="{ row }">
+                      <el-tag :type="row.hasCurrentContent ? 'success' : 'info'" effect="plain">{{ row.hasCurrentContent ? '已有正文' : '未生成' }}</el-tag>
+                    </template>
+                  </el-table-column>
+                  <el-table-column prop="impactLevelText" label="影响" width="110" />
+                  <el-table-column prop="statusNote" label="说明" min-width="220" />
+                  <el-table-column label="操作" width="120">
+                    <template #default="{ row }">
+                      <el-button size="small" @click="router.push(`/novels/${novelId}/chapters/${row.id}`)">详情</el-button>
+                    </template>
+                  </el-table-column>
+                </el-table>
+              </template>
             </template>
 
             <template v-else-if="activeStep.key === 'trial'">
@@ -384,7 +571,7 @@
                   <p class="muted">先比较第 1 章候选，选定后才继续生成第 2-3 章和试写总评。</p>
                 </div>
                 <div class="task-notice-actions">
-                  <el-button v-if="showTrialAuthoringActions" :disabled="!canGenerateTrial" :loading="generatingTrial" @click="handleGenerateTrial">重新生成 3 个</el-button>
+                  <el-button v-if="showTrialAuthoringActions" :disabled="!canGenerateTrial" :loading="generatingTrial" @click="() => handleGenerateTrial()">重新生成 3 个</el-button>
                 </div>
               </div>
 
@@ -397,7 +584,7 @@
               />
 
               <el-empty v-else-if="!detail?.latestTrialRun" description="暂无试写候选">
-                <el-button v-if="showTrialAuthoringActions" type="primary" :disabled="!canGenerateTrial" :loading="generatingTrial" @click="handleGenerateTrial">生成第 1 章候选</el-button>
+                <el-button v-if="showTrialAuthoringActions" type="primary" :disabled="!canGenerateTrial" :loading="generatingTrial" @click="() => handleGenerateTrial()">生成第 1 章候选</el-button>
               </el-empty>
 
               <template v-else>
@@ -406,6 +593,15 @@
                   <span>{{ detail.latestTrialRun.currentStep }}</span>
                   <el-tag v-if="detail.latestTrialRun.blockingReason" type="danger">{{ detail.latestTrialRun.blockingReason }}</el-tag>
                 </div>
+
+                <el-alert
+                  v-if="selectingTrialCandidateId"
+                  class="step-inline-notice"
+                  :title="trialFollowupPendingTitle"
+                  type="info"
+                  show-icon
+                  :closable="false"
+                />
 
                 <div class="trial-candidate-grid">
                   <article v-for="candidate in trialCandidateRows" :key="candidate.id" :class="['trial-candidate-card', { recommended: candidate.isAiRecommended, selected: candidate.isSelected }]">
@@ -620,13 +816,13 @@
                 </div>
 
                 <div class="issue-list vertical mt-16">
-                  <article v-for="issue in latestFullReview.issues" :key="issue.issueId" class="impact-case-card">
+                  <article v-for="(issue, issueIndex) in latestFullReview.issues" :key="issue.issueId" class="impact-case-card">
                     <div class="direction-card-head">
-                      <h3>{{ issue.title }}</h3>
+                      <h3>{{ issue.title || `质检问题 ${issueIndex + 1}` }}</h3>
                       <el-tag :type="issue.blocking ? 'danger' : 'warning'">{{ issue.status }}</el-tag>
                     </div>
-                    <p>{{ issue.plainDescription }}</p>
-                    <p class="muted">{{ issue.recommendedAction }}</p>
+                    <p>{{ issue.plainDescription || '审稿返回了待处理项，但没有提供详细说明。' }}</p>
+                    <p class="muted">{{ issue.recommendedAction || '请查看章节内容并决定标记解决或接受风险。' }}</p>
                     <div class="task-notice-actions">
                       <el-button size="small" :loading="resolvingFullReviewIssueId === issue.issueId" @click="handleResolveFullReviewIssue(issue.issueId, 'resolve')">标记解决</el-button>
                       <el-button size="small" :loading="resolvingFullReviewIssueId === issue.issueId" @click="handleResolveFullReviewIssue(issue.issueId, 'accept_risk')">接受风险</el-button>
@@ -703,6 +899,7 @@
               :summary="activeRecentTask"
               :loading="loading"
               @view="openTaskDrawer(activeRecentTask?.id)"
+              @view-result="openTaskResult"
               @refresh="loadDetail"
             />
           </el-card>
@@ -750,6 +947,216 @@
       </template>
     </el-dialog>
 
+    <el-dialog v-model="fuseDialog.open" title="融合所选方向" width="620px">
+      <el-alert
+        title="融合会生成一个新的方向候选，不会自动采用，也不会覆盖现有候选。"
+        type="info"
+        show-icon
+        :closable="false"
+      />
+      <div class="dialog-section">
+        <span class="muted">已选择候选</span>
+        <ul class="compact-list">
+          <li v-for="candidate in selectedDirectionCandidates" :key="candidate.id">{{ candidate.title }} · {{ candidate.versionLabel }}</li>
+        </ul>
+      </div>
+      <el-input
+        v-model="fuseDialog.reason"
+        class="reason-input"
+        type="textarea"
+        :rows="4"
+        placeholder="告诉 AI 融合重点，例如：保留重生复仇爽点，弱化商业术语，增强前三秒钩子和短视频节奏"
+      />
+      <p class="muted">融合完成后会回到候选池，请对比新候选，再决定是否采用为正式方向。</p>
+      <template #footer>
+        <el-button @click="fuseDialog.open = false">取消</el-button>
+        <el-button type="primary" :loading="fusing" @click="confirmFuseDirections">生成融合候选</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="optimizeDialog.open" title="按要求优化方向" width="620px">
+      <el-alert
+        title="优化会基于当前候选生成一个新候选，不会直接修改或采用原候选。"
+        type="info"
+        show-icon
+        :closable="false"
+      />
+      <div v-if="optimizeDialog.candidate" class="dialog-section">
+        <span class="muted">当前候选</span>
+        <strong>{{ optimizeDialog.candidate.title }}</strong>
+        <p>{{ optimizeDialog.candidate.logline }}</p>
+      </div>
+      <el-input
+        v-model="optimizeDialog.instruction"
+        class="reason-input"
+        type="textarea"
+        :rows="5"
+        placeholder="必须填写优化目标，例如：开头压迫感更强；主角反击更快；减少商业术语；增强女频情绪；改成更适合短视频前三秒"
+      />
+      <template #footer>
+        <el-button @click="optimizeDialog.open = false">取消</el-button>
+        <el-button type="primary" :disabled="!optimizeDialog.instruction.trim()" :loading="optimizingId === optimizeDialog.candidate?.id" @click="confirmOptimizeDirection">生成优化候选</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="directionDetailDialog.open" title="方向候选详情" width="660px">
+      <template v-if="directionDetailDialog.candidate">
+        <div class="dialog-section">
+          <h3>{{ directionDetailDialog.candidate.title }}</h3>
+          <div class="tag-row">
+            <el-tag effect="plain">{{ directionDetailDialog.candidate.versionLabel }}</el-tag>
+            <el-tag effect="plain">评分 {{ directionDetailDialog.candidate.scoreText }}</el-tag>
+            <el-tag effect="plain">{{ directionDetailDialog.candidate.riskLevelText }}</el-tag>
+          </div>
+        </div>
+        <dl class="detail-dl">
+          <dt>一句话方向</dt>
+          <dd>{{ directionDetailDialog.candidate.logline }}</dd>
+          <dt>前三秒钩子</dt>
+          <dd>{{ directionDetailDialog.candidate.coreHook }}</dd>
+          <dt>推荐理由</dt>
+          <dd>{{ directionDetailDialog.candidate.primaryReason }}</dd>
+          <dt>视频化表达</dt>
+          <dd>{{ directionDetailDialog.candidate.videoPotential }}</dd>
+        </dl>
+        <el-alert
+          title="如果方向不准，先点击“按要求优化”写清楚想改哪里；如果两个以上候选各有优点，再勾选后融合。最终只有“采用”才会进入小说设定。"
+          type="info"
+          show-icon
+          :closable="false"
+        />
+      </template>
+      <template #footer>
+        <el-button @click="directionDetailDialog.open = false">关闭</el-button>
+        <el-button v-if="directionDetailDialog.candidate" @click="openEditDirectionDialog(directionDetailDialog.candidate)">编辑</el-button>
+        <el-button v-if="directionDetailDialog.candidate" @click="openOptimizeDialog(directionDetailDialog.candidate)">按要求优化</el-button>
+        <el-button v-if="directionDetailDialog.candidate" type="primary" :disabled="!directionDetailDialog.candidate.canAdopt" @click="openAdoptDialog(directionDetailDialog.candidate)">采用</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="editDirectionDialog.open" title="编辑方向候选" width="720px">
+      <el-alert
+        title="保存后会生成一个新的方向候选版本，不会覆盖原候选，也不会自动采用。"
+        type="info"
+        show-icon
+        :closable="false"
+      />
+      <div class="edit-form-grid">
+        <label>
+          <span>标题</span>
+          <el-input v-model="editDirectionDialog.form.title" maxlength="120" show-word-limit />
+        </label>
+        <label>
+          <span>一句话方向</span>
+          <el-input v-model="editDirectionDialog.form.logline" type="textarea" :rows="2" maxlength="300" show-word-limit />
+        </label>
+        <label>
+          <span>前三秒钩子</span>
+          <el-input v-model="editDirectionDialog.form.coreHook" type="textarea" :rows="2" maxlength="300" show-word-limit />
+        </label>
+        <label>
+          <span>目标读者</span>
+          <el-input v-model="editDirectionDialog.form.audienceAppeal" type="textarea" :rows="2" maxlength="300" show-word-limit />
+        </label>
+        <label>
+          <span>视频化表达</span>
+          <el-input v-model="editDirectionDialog.form.videoPotential" type="textarea" :rows="2" maxlength="300" show-word-limit />
+        </label>
+        <label>
+          <span>卖点（每行一个）</span>
+          <el-input v-model="editDirectionDialog.form.sellingPointsText" type="textarea" :rows="3" />
+        </label>
+        <label>
+          <span>风险标签（每行一个，可为空）</span>
+          <el-input v-model="editDirectionDialog.form.riskTagsText" type="textarea" :rows="2" />
+        </label>
+        <label>
+          <span>推荐理由</span>
+          <el-input v-model="editDirectionDialog.form.recommendation" type="textarea" :rows="2" maxlength="300" show-word-limit />
+        </label>
+        <label>
+          <span>编辑原因</span>
+          <el-input v-model="editDirectionDialog.form.reason" type="textarea" :rows="2" maxlength="500" show-word-limit />
+        </label>
+      </div>
+      <template #footer>
+        <el-button @click="editDirectionDialog.open = false">取消</el-button>
+        <el-button type="primary" :disabled="!canSubmitDirectionEdit" :loading="editingDirectionId === editDirectionDialog.candidate?.id" @click="confirmEditDirection">保存为新候选</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="editStructureDialog.open" :title="`编辑${editStructureDialog.asset?.typeText || '结构'}候选`" width="720px">
+      <el-alert
+        title="保存后会生成一个新的结构候选版本，不会覆盖原候选，也不会自动采用。"
+        type="info"
+        show-icon
+        :closable="false"
+      />
+      <div class="edit-form-grid">
+        <label>
+          <span>标题</span>
+          <el-input v-model="editStructureDialog.form.title" maxlength="160" show-word-limit />
+        </label>
+        <label>
+          <span>摘要</span>
+          <el-input v-model="editStructureDialog.form.summary" type="textarea" :rows="3" maxlength="1000" show-word-limit />
+        </label>
+        <label>
+          <span>结构标题</span>
+          <el-input v-model="editStructureDialog.form.sectionTitle" maxlength="160" show-word-limit />
+        </label>
+        <label>
+          <span>结构内容</span>
+          <el-input v-model="editStructureDialog.form.sectionBody" type="textarea" :rows="6" maxlength="4000" show-word-limit />
+        </label>
+        <label>
+          <span>结构要点（每行一个）</span>
+          <el-input v-model="editStructureDialog.form.sectionItemsText" type="textarea" :rows="3" />
+        </label>
+        <label>
+          <span>风险标签（每行一个，可为空）</span>
+          <el-input v-model="editStructureDialog.form.riskTagsText" type="textarea" :rows="2" />
+        </label>
+        <label>
+          <span>推荐理由</span>
+          <el-input v-model="editStructureDialog.form.recommendation" type="textarea" :rows="2" maxlength="1000" show-word-limit />
+        </label>
+        <label>
+          <span>编辑原因</span>
+          <el-input v-model="editStructureDialog.form.reason" type="textarea" :rows="2" maxlength="500" show-word-limit />
+        </label>
+      </div>
+      <template #footer>
+        <el-button @click="editStructureDialog.open = false">取消</el-button>
+        <el-button type="primary" :disabled="!canSubmitStructureEdit" :loading="editingStructureId === editStructureDialog.asset?.id" @click="confirmEditStructure">保存为新候选</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="structureOptimizeDialog.open" :title="`继续优化${structureOptimizeDialog.asset?.typeText || '结构'}候选`" width="620px">
+      <el-alert
+        title="优化会生成一个新的结构候选，不会覆盖当前候选，也不会自动采用。"
+        type="info"
+        show-icon
+        :closable="false"
+      />
+      <div v-if="structureOptimizeDialog.asset" class="dialog-section">
+        <span class="muted">当前候选</span>
+        <strong>{{ structureOptimizeDialog.asset.title }}</strong>
+        <p>{{ structureOptimizeDialog.asset.summary }}</p>
+      </div>
+      <el-input
+        v-model="structureOptimizeDialog.instruction"
+        class="reason-input"
+        type="textarea"
+        :rows="5"
+        placeholder="必须填写优化目标，例如：强化阶段冲突；减少系统万能感；把结局伏笔提前；增强短视频前三秒钩子"
+      />
+      <template #footer>
+        <el-button @click="structureOptimizeDialog.open = false">取消</el-button>
+        <el-button type="primary" :disabled="!structureOptimizeDialog.instruction.trim()" :loading="structureGeneratingType === structureOptimizeDialog.asset?.objectType" @click="confirmStructureOptimize">生成优化候选</el-button>
+      </template>
+    </el-dialog>
+
     <el-drawer v-model="taskDrawer.open" title="任务详情" size="540px">
       <div class="drawer-stack">
         <el-alert v-if="taskDrawer.error" :title="taskDrawer.error" type="error" show-icon :closable="false" />
@@ -758,6 +1165,7 @@
           :loading="taskDrawer.loading"
           :action-loading="taskDrawer.actionLoading"
           @refresh="loadTaskDrawer"
+          @view-result="openTaskResult"
           @retry="handleRetryTask"
           @cancel="handleCancelTask"
         />
@@ -817,10 +1225,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { NovelCreationStage, StageStatus, TaskStatus, type StructureAssetType, type TaskDetailDTO } from '@ai-shortvideo/shared'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { NovelCreationStage, StageStatus, TaskStatus, VersionStatus, type StructureAssetType, type TaskDetailDTO } from '@ai-shortvideo/shared'
 import { ApiClientError } from '../shared/services/http'
 import TaskProgressPanel from '../modules/novels/components/TaskProgressPanel.vue'
 import {
@@ -831,6 +1239,8 @@ import {
   adoptStageOutline,
   confirmCompletion,
   confirmVideoReadiness,
+  editDirectionCandidate,
+  editStructureAsset,
   fuseDirections,
   forcePassFullReview,
   generateBodyBatch,
@@ -851,6 +1261,7 @@ import {
   toStructureAssetRow,
   toTrialCandidateRow,
   toTrialChapterResultRow,
+  updateChapterWordTargets,
 } from '../modules/novels/services/novelService'
 import { cancelTask as cancelGenerationTask, getTaskDetail, retryTask as retryGenerationTask } from '../modules/novels/services/taskService'
 import type { DirectionCandidateRow, StructureAssetRow, TrialCandidateRow } from '../modules/novels/model/novelTypes'
@@ -862,6 +1273,7 @@ import {
   getVideoReadyEntryAction,
   getWorkbenchStepLockedReason,
   resolveNovelWorkbenchLocation,
+  resolveTaskSummaryForAction,
   resolveVisibleTaskSummary,
   shouldShowTrialAuthoringAction,
   shouldShowTrialCandidateAction,
@@ -872,16 +1284,25 @@ import {
   type NovelWorkbenchStepState,
   type NovelWorkbenchStepKey,
 } from '../modules/novels/model/novelDetailView'
+import {
+  formatHighRiskConfirmationMessage,
+  normalizeConfirmationReason,
+  type HighRiskConfirmationDetail,
+} from '../modules/novels/model/highRiskConfirmation'
 import type { NovelDetailDTO } from '@ai-shortvideo/shared'
 
 const route = useRoute()
 const router = useRouter()
 const novelId = computed(() => String(route.params.novelId || ''))
+const LOCAL_PENDING_TASK_STORAGE_PREFIX = 'ai-shortvideo:novel-pending-task:'
+const LOCAL_PENDING_TASK_MAX_AGE_MS = 30 * 60 * 1000
 const detail = ref<NovelDetailDTO | null>(null)
 const loading = ref(false)
 const generatingDirection = ref(false)
 const fusing = ref(false)
 const optimizingId = ref('')
+const editingDirectionId = ref('')
+const editingStructureId = ref('')
 const adoptingDirectionId = ref('')
 const structureGeneratingType = ref('')
 const structureAdoptingId = ref('')
@@ -896,7 +1317,95 @@ const selectingTrialCandidateId = ref('')
 const confirmingTrial = ref(false)
 const apiError = ref('')
 const selectedCandidateIds = ref<string[]>([])
+const focusedStructureCandidateId = ref('')
 const bodyBatchIdempotencyKey = ref('')
+const batchWordTarget = ref(2200)
+const updatingChapterWordTargets = ref(false)
+const fuseDialog = reactive({
+  open: false,
+  reason: '',
+})
+const optimizeDialog = reactive<{
+  open: boolean
+  candidate: DirectionCandidateRow | null
+  instruction: string
+}>({
+  open: false,
+  candidate: null,
+  instruction: '',
+})
+const directionDetailDialog = reactive<{
+  open: boolean
+  candidate: DirectionCandidateRow | null
+}>({
+  open: false,
+  candidate: null,
+})
+const editDirectionDialog = reactive<{
+  open: boolean
+  candidate: DirectionCandidateRow | null
+  form: {
+    title: string
+    logline: string
+    coreHook: string
+    audienceAppeal: string
+    videoPotential: string
+    sellingPointsText: string
+    riskTagsText: string
+    recommendation: string
+    reason: string
+  }
+}>({
+  open: false,
+  candidate: null,
+  form: {
+    title: '',
+    logline: '',
+    coreHook: '',
+    audienceAppeal: '',
+    videoPotential: '',
+    sellingPointsText: '',
+    riskTagsText: '',
+    recommendation: '',
+    reason: '',
+  },
+})
+const editStructureDialog = reactive<{
+  open: boolean
+  asset: StructureAssetRow | null
+  form: {
+    title: string
+    summary: string
+    sectionTitle: string
+    sectionBody: string
+    sectionItemsText: string
+    riskTagsText: string
+    recommendation: string
+    reason: string
+  }
+}>({
+  open: false,
+  asset: null,
+  form: {
+    title: '',
+    summary: '',
+    sectionTitle: '',
+    sectionBody: '',
+    sectionItemsText: '',
+    riskTagsText: '',
+    recommendation: '',
+    reason: '',
+  },
+})
+const structureOptimizeDialog = reactive<{
+  open: boolean
+  asset: StructureAssetRow | null
+  instruction: string
+}>({
+  open: false,
+  asset: null,
+  instruction: '',
+})
 const adoptDialog = reactive({
   open: false,
   candidateId: '',
@@ -969,12 +1478,30 @@ const activeStepKey = ref<NovelWorkbenchStepKey>('direction')
 const activeSubStepKey = ref('')
 
 const directionRows = computed(() => (detail.value?.directionCandidates ?? []).map(toDirectionCandidateRow))
+const selectedDirectionCandidates = computed(() => directionRows.value.filter((candidate) => selectedCandidateIds.value.includes(candidate.id)))
 const structureRows = computed(() => (detail.value?.structureCandidates ?? []).map(toStructureAssetRow))
 const settingRows = computed(() => structureRows.value.filter((asset) => asset.objectType === 'setting'))
 const outlineRows = computed(() => structureRows.value.filter((asset) => asset.objectType === 'outline' || asset.objectType === 'stage_outline'))
+const fullOutlineRows = computed(() => structureRows.value.filter((asset) => asset.objectType === 'outline'))
+const stageOutlineRows = computed(() => structureRows.value.filter((asset) => asset.objectType === 'stage_outline'))
+const visibleOutlineRows = computed(() => (activeSubStep.value.key === 'stages' ? stageOutlineRows.value : fullOutlineRows.value))
+const chapterPlanRows = computed(() => structureRows.value.filter((asset) => asset.objectType === 'chapter_plan'))
 const chapterRows = computed(() => (detail.value?.chapters ?? []).map(toNovelChapterPlanRow))
+const chapterWordTargetSummary = computed(() => {
+  const numericTargets = (detail.value?.chapters ?? []).map((chapter) => chapter.wordTarget ?? 0).filter((target) => target > 0)
+  const average = numericTargets.length ? Math.round(numericTargets.reduce((sum, target) => sum + target, 0) / numericTargets.length) : 0
+  const total = numericTargets.reduce((sum, target) => sum + target, 0)
+  return { average, total }
+})
 const trialCandidateRows = computed(() => (detail.value?.latestTrialRun?.chapterOneCandidates ?? []).map(toTrialCandidateRow))
 const trialChapterResultRows = computed(() => (detail.value?.latestTrialRun?.chapterResults ?? []).map(toTrialChapterResultRow))
+const selectingTrialCandidate = computed(() => trialCandidateRows.value.find((candidate) => candidate.id === selectingTrialCandidateId.value) ?? null)
+const trialFollowupPendingTitle = computed(() => {
+  const candidateTitle = selectingTrialCandidate.value?.title
+  return candidateTitle
+    ? `已选择「${candidateTitle}」，正在生成第 2-3 章和试写总评。`
+    : '已选择第 1 章候选，正在生成第 2-3 章和试写总评。'
+})
 const trialContentParagraphs = computed(() => trialContentDrawer.content.split(/\n\s*\n/).map((paragraph) => paragraph.trim()).filter(Boolean))
 const bodyGeneration = computed(() => detail.value?.bodyGeneration ?? null)
 const latestBodyBatch = computed(() => bodyGeneration.value?.latestBatch ?? null)
@@ -994,7 +1521,23 @@ const canStartFullReview = computed(() => detail.value?.creationStage === NovelC
 const canConfirmCompletion = computed(() => Boolean(latestFullReview.value?.gate.allowCompletion && detail.value?.creationStage === NovelCreationStage.CompletionConfirm && detail.value.stageStatus === StageStatus.WaitingUser))
 const canConfirmVideoReady = computed(() => Boolean(videoReadiness.value?.check && videoReadiness.value.status === 'candidate' && detail.value?.completionDecision))
 const activeRecentTask = computed(() => resolveVisibleTaskSummary(pendingTask.value, detail.value))
+const chapterPlanGenerationTask = computed(() => resolveTaskSummaryForAction(pendingTask.value, detail.value, 'chapter_plan_generate'))
+const isChapterPlanGenerating = computed(() =>
+  structureGeneratingType.value === 'chapter_plan' ||
+  chapterPlanGenerationTask.value?.status === TaskStatus.Queued ||
+  chapterPlanGenerationTask.value?.status === TaskStatus.Processing
+)
+const chapterPlanGenerationFailed = computed(() => chapterPlanGenerationTask.value?.status === TaskStatus.Failed)
+const chapterPlanFailureReason = computed(() => chapterPlanGenerationTask.value?.errorMessage ?? chapterPlanGenerationTask.value?.currentStep ?? '')
 const genreText = computed(() => detail.value?.genres.join('、') || '未选择题材')
+watch(
+  () => [chapterWordTargetSummary.value.average, detail.value?.preferences.chapterWordMin, detail.value?.preferences.chapterWordMax] as const,
+  ([average, min = 1800, max = 2600]) => {
+    if (updatingChapterWordTargets.value) return
+    batchWordTarget.value = average || Math.round((min + max) / 2)
+  },
+  { immediate: true },
+)
 const canGenerateDirection = computed(() => {
   const stage = detail.value?.creationStage
   return !detail.value || stage === NovelCreationStage.Draft || stage === NovelCreationStage.Direction
@@ -1004,9 +1547,54 @@ const canGenerateOutline = computed(() => Boolean(detail.value?.currentAssets.se
 const canGenerateStageOutline = computed(() => Boolean(detail.value?.currentAssets.outline))
 const canGenerateChapterPlan = computed(() => Boolean(detail.value?.currentAssets.stageOutline))
 const canGenerateTrial = computed(() => Boolean(detail.value?.currentAssets.chapterPlan) && detail.value?.creationStage === NovelCreationStage.Trial)
+const pendingAction = computed(() => pendingTask.value?.action ?? '')
+const hasLocalPendingWait = computed(() => Boolean(pendingTask.value && activeRecentTask.value?.id === pendingTask.value.id))
+const settingGenerationPending = computed(() => isNovelActionRunning('setting_generate'))
+watch(
+  activeRecentTask,
+  (task) => {
+    if (!pendingTask.value || !task || task.id === pendingTask.value.id) return
+    if ([TaskStatus.Completed, TaskStatus.WaitingConfirmation, TaskStatus.Failed, TaskStatus.Cancelled].includes(task.status as TaskStatus)) {
+      clearLocalPendingTask(pendingTask.value.id)
+    }
+  },
+  { immediate: true },
+)
+const canSubmitDirectionEdit = computed(() =>
+  Boolean(editDirectionDialog.candidate) &&
+  editDirectionDialog.form.title.trim().length > 0 &&
+  editDirectionDialog.form.logline.trim().length > 0 &&
+  editDirectionDialog.form.coreHook.trim().length > 0 &&
+  editDirectionDialog.form.audienceAppeal.trim().length > 0 &&
+  editDirectionDialog.form.videoPotential.trim().length > 0 &&
+  splitTextLines(editDirectionDialog.form.sellingPointsText).length > 0 &&
+  editDirectionDialog.form.recommendation.trim().length > 0 &&
+  editDirectionDialog.form.reason.trim().length > 0
+)
+const canSubmitStructureEdit = computed(() =>
+  Boolean(editStructureDialog.asset) &&
+  editStructureDialog.form.title.trim().length > 0 &&
+  editStructureDialog.form.summary.trim().length > 0 &&
+  editStructureDialog.form.sectionTitle.trim().length > 0 &&
+  editStructureDialog.form.sectionBody.trim().length > 0 &&
+  editStructureDialog.form.recommendation.trim().length > 0 &&
+  editStructureDialog.form.reason.trim().length > 0
+)
 
 function showTrialCandidateAction(candidate: TrialCandidateRow) {
   return shouldShowTrialCandidateAction(detail.value, candidate.canSelect)
+}
+
+function isCurrentStructureAsset(asset: StructureAssetRow) {
+  return asset.statusKey === VersionStatus.Current
+}
+
+function isCandidateStructureAsset(asset: StructureAssetRow) {
+  return asset.statusKey === VersionStatus.Candidate && asset.canAdopt
+}
+
+function isArchivedStructureAsset(asset: StructureAssetRow) {
+  return !isCurrentStructureAsset(asset) && !isCandidateStructureAsset(asset)
 }
 
 const statusTagType = computed(() => {
@@ -1020,8 +1608,8 @@ const primaryGenerateAction = computed(() => {
   if (!detail.value) {
     return {
       label: '生成方向',
-      loading: generatingDirection.value,
-      disabled: false,
+      loading: generatingDirection.value || isNovelActionRunning('direction_generate'),
+      disabled: hasLocalPendingWait.value,
       run: handleGenerateDirection,
     }
   }
@@ -1029,8 +1617,8 @@ const primaryGenerateAction = computed(() => {
   if (canGenerateDirection.value && !detail.value.currentAssets.direction) {
     return {
       label: '生成方向',
-      loading: generatingDirection.value,
-      disabled: false,
+      loading: generatingDirection.value || isNovelActionRunning('direction_generate'),
+      disabled: hasLocalPendingWait.value,
       run: handleGenerateDirection,
     }
   }
@@ -1038,8 +1626,8 @@ const primaryGenerateAction = computed(() => {
   if (detail.value.creationStage === NovelCreationStage.Setting && detail.value.stageStatus === StageStatus.NotStarted) {
     return {
       label: '生成设定',
-      loading: structureGeneratingType.value === 'setting',
-      disabled: !canGenerateSetting.value,
+      loading: structureGeneratingType.value === 'setting' || isNovelActionRunning('setting_generate'),
+      disabled: !canGenerateSetting.value || hasLocalPendingWait.value,
       run: () => handleGenerateStructure('setting'),
     }
   }
@@ -1047,8 +1635,8 @@ const primaryGenerateAction = computed(() => {
   if (detail.value.creationStage === NovelCreationStage.Outline && detail.value.stageStatus === StageStatus.NotStarted && !detail.value.currentAssets.outline) {
     return {
       label: '生成全书大纲',
-      loading: structureGeneratingType.value === 'outline',
-      disabled: !canGenerateOutline.value,
+      loading: structureGeneratingType.value === 'outline' || isNovelActionRunning('outline_generate'),
+      disabled: !canGenerateOutline.value || hasLocalPendingWait.value,
       run: () => handleGenerateStructure('outline'),
     }
   }
@@ -1056,8 +1644,8 @@ const primaryGenerateAction = computed(() => {
   if (detail.value.creationStage === NovelCreationStage.Outline && detail.value.stageStatus === StageStatus.NotStarted && detail.value.currentAssets.outline) {
     return {
       label: '生成阶段大纲',
-      loading: structureGeneratingType.value === 'stage_outline',
-      disabled: !canGenerateStageOutline.value,
+      loading: structureGeneratingType.value === 'stage_outline' || isNovelActionRunning('stage_outline_generate'),
+      disabled: !canGenerateStageOutline.value || hasLocalPendingWait.value,
       run: () => handleGenerateStructure('stage_outline'),
     }
   }
@@ -1065,8 +1653,8 @@ const primaryGenerateAction = computed(() => {
   if (detail.value.creationStage === NovelCreationStage.ChapterPlan && detail.value.stageStatus === StageStatus.NotStarted) {
     return {
       label: '生成章节目录',
-      loading: structureGeneratingType.value === 'chapter_plan',
-      disabled: !canGenerateChapterPlan.value,
+      loading: structureGeneratingType.value === 'chapter_plan' || isNovelActionRunning('chapter_plan_generate'),
+      disabled: !canGenerateChapterPlan.value || hasLocalPendingWait.value,
       run: () => handleGenerateStructure('chapter_plan'),
     }
   }
@@ -1074,8 +1662,8 @@ const primaryGenerateAction = computed(() => {
   if (detail.value.creationStage === NovelCreationStage.Trial && detail.value.stageStatus === StageStatus.NotStarted) {
     return {
       label: '生成试写',
-      loading: generatingTrial.value,
-      disabled: !canGenerateTrial.value,
+      loading: generatingTrial.value || isNovelActionRunning('trial_generate'),
+      disabled: !canGenerateTrial.value || hasLocalPendingWait.value,
       run: () => handleGenerateTrial(),
     }
   }
@@ -1134,6 +1722,7 @@ const workbenchSteps = computed<WorkbenchStepView[]>(() => {
   const hasSetting = Boolean(assets?.setting)
   const hasOutline = Boolean(assets?.outline)
   const hasStageOutline = Boolean(assets?.stageOutline)
+  const hasStageOutlineCandidate = stageOutlineRows.value.some(isCandidateStructureAsset)
   const hasChapterPlan = Boolean(assets?.chapterPlan)
   const hasTrialStrategy = Boolean(detail.value?.bodyStrategySnapshot)
   const hasBodyReady = Boolean(
@@ -1144,6 +1733,7 @@ const workbenchSteps = computed<WorkbenchStepView[]>(() => {
   )
   const hasCompletion = Boolean(detail.value?.completionDecision)
   const hasVideoReady = detail.value?.creationStage === NovelCreationStage.VideoReady
+  const hasVideoReadinessCandidate = hasCompletion && Boolean(videoReadiness.value)
 
   return [
     createStep({
@@ -1154,8 +1744,8 @@ const workbenchSteps = computed<WorkbenchStepView[]>(() => {
       nextAction: hasDirection ? '方向已确认，可进入小说设定。' : directionRows.value.length > 0 ? '比较候选，必要时优化后采用。' : '先生成 3-5 个方向候选。',
       primaryActionLabel: directionRows.value.length > 0 ? '处理方向候选' : '生成方向候选',
       primaryAction: directionRows.value.length > 0 ? null : handleGenerateDirection,
-      primaryLoading: generatingDirection.value,
-      primaryDisabled: false,
+      primaryLoading: generatingDirection.value || isNovelActionRunning('direction_generate'),
+      primaryDisabled: hasLocalPendingWait.value,
       state: stateWithIssue(hasDirection ? 'done' : 'active', [NovelCreationStage.Draft, NovelCreationStage.Direction]),
       progress: hasDirection ? 100 : directionRows.value.length > 0 ? 70 : 20,
       subSteps: createSubSteps([
@@ -1169,12 +1759,12 @@ const workbenchSteps = computed<WorkbenchStepView[]>(() => {
       key: 'setting',
       name: '小说设定',
       description: '沉淀人物、世界观、爽点规则和安全边界。',
-      gateText: '需要先采用正式方向。',
+      gateText: hasSetting ? '正式设定已采用，后续大纲可使用该事实源。' : hasDirection ? '生成并采用正式设定后，大纲设计才会解锁。' : '需要先采用正式方向。',
       nextAction: hasSetting ? '设定已成为事实源。' : hasDirection ? '生成设定候选，并确认采用。' : '先完成方向确认。',
       primaryActionLabel: '生成设定',
       primaryAction: () => handleGenerateStructure('setting'),
-      primaryLoading: structureGeneratingType.value === 'setting',
-      primaryDisabled: !canGenerateSetting.value,
+      primaryLoading: structureGeneratingType.value === 'setting' || isNovelActionRunning('setting_generate'),
+      primaryDisabled: !canGenerateSetting.value || hasLocalPendingWait.value,
       state: stateWithIssue(hasSetting ? 'done' : hasDirection ? 'active' : 'locked', [NovelCreationStage.Setting]),
       progress: hasSetting ? 100 : hasDirection ? 38 : 0,
       subSteps: createSubSteps([
@@ -1188,14 +1778,14 @@ const workbenchSteps = computed<WorkbenchStepView[]>(() => {
       key: 'outline',
       name: '大纲设计',
       description: '规划全书主线、阶段目标、反转和节奏。',
-      gateText: '需要先采用小说设定。',
-      nextAction: hasStageOutline ? '全书大纲和阶段大纲已确认。' : hasSetting ? '生成全书大纲和阶段大纲。' : '先完成小说设定。',
-      primaryActionLabel: hasOutline ? '生成阶段大纲' : '生成全书大纲',
-      primaryAction: () => handleGenerateStructure(hasOutline ? 'stage_outline' : 'outline'),
-      primaryLoading: structureGeneratingType.value === 'outline' || structureGeneratingType.value === 'stage_outline',
-      primaryDisabled: hasOutline ? !canGenerateStageOutline.value : !canGenerateOutline.value,
+      gateText: hasStageOutline ? '阶段大纲已采用，下一步进入章节目录规划。' : hasStageOutlineCandidate ? '阶段大纲候选已生成，请查看后采用。' : hasOutline ? '需要采用阶段大纲，才会进入章节目录规划。' : '需要先采用小说设定。',
+      nextAction: hasStageOutline ? '全书大纲和阶段大纲已确认。' : hasStageOutlineCandidate ? '查看阶段大纲候选，确认是否采用。' : hasOutline ? '生成并采用阶段大纲。' : hasSetting ? '生成全书大纲并采用。' : '先完成小说设定。',
+      primaryActionLabel: hasStageOutlineCandidate ? '查看阶段大纲候选' : hasOutline ? '生成阶段大纲' : '生成全书大纲',
+      primaryAction: hasStageOutlineCandidate ? () => setActiveSubStep('stages') : () => handleGenerateStructure(hasOutline ? 'stage_outline' : 'outline'),
+      primaryLoading: structureGeneratingType.value === 'outline' || structureGeneratingType.value === 'stage_outline' || isNovelActionRunning('outline_generate') || isNovelActionRunning('stage_outline_generate'),
+      primaryDisabled: hasStageOutlineCandidate ? false : hasLocalPendingWait.value || (hasOutline ? !canGenerateStageOutline.value : !canGenerateOutline.value),
       state: stateWithIssue(hasStageOutline ? 'done' : hasSetting ? 'active' : 'locked', [NovelCreationStage.Outline]),
-      progress: hasStageOutline ? 100 : hasOutline ? 62 : hasSetting ? 28 : 0,
+      progress: hasStageOutline ? 100 : hasStageOutlineCandidate ? 78 : hasOutline ? 62 : hasSetting ? 28 : 0,
       subSteps: createSubSteps([
         ['mainline', '全书主线', '主线、终局和关键转折', hasStageOutline || hasOutline ? true : hasSetting ? 'active' : false],
         ['stages', '阶段大纲', '阶段目标与冲突推进', hasStageOutline ? true : hasOutline ? 'active' : false],
@@ -1207,12 +1797,12 @@ const workbenchSteps = computed<WorkbenchStepView[]>(() => {
       key: 'chapterPlan',
       name: '章节目录',
       description: '确认章节标题、摘要、目标字数和每章钩子。',
-      gateText: '需要先采用全书大纲和阶段大纲。',
+      gateText: hasChapterPlan ? '章节目录已采用，试写调试已解锁。' : hasStageOutline ? '生成并采用章节目录后，试写调试才会解锁。' : '需要先采用全书大纲和阶段大纲。',
       nextAction: hasChapterPlan ? '章节计划已创建。' : hasStageOutline ? '生成并采用章节目录。' : '先完成大纲设计。',
       primaryActionLabel: '生成章节目录',
       primaryAction: () => handleGenerateStructure('chapter_plan'),
-      primaryLoading: structureGeneratingType.value === 'chapter_plan',
-      primaryDisabled: !canGenerateChapterPlan.value,
+      primaryLoading: structureGeneratingType.value === 'chapter_plan' || isNovelActionRunning('chapter_plan_generate'),
+      primaryDisabled: !canGenerateChapterPlan.value || hasLocalPendingWait.value,
       state: stateWithIssue(hasChapterPlan ? 'done' : hasStageOutline ? 'active' : 'locked', [NovelCreationStage.ChapterPlan]),
       progress: hasChapterPlan ? 100 : hasStageOutline ? 36 : 0,
       subSteps: createSubSteps([
@@ -1226,12 +1816,12 @@ const workbenchSteps = computed<WorkbenchStepView[]>(() => {
       key: 'trial',
       name: '试写调试',
       description: '先试写 1-3 章，确认文风、爽点和可持续性。',
-      gateText: '需要先采用章节目录。',
+      gateText: hasTrialStrategy ? '试写策略快照已生成，批量正文已解锁。' : hasChapterPlan ? '完成第 1-3 章试写并确认总评后，批量正文才会解锁。' : '需要先采用章节目录。',
       nextAction: hasTrialStrategy ? '试写策略已确认。' : hasChapterPlan ? '生成第 1 章候选，并继续 2-3 章试写。' : '先确认章节目录。',
       primaryActionLabel: '生成试写',
       primaryAction: () => handleGenerateTrial(),
-      primaryLoading: generatingTrial.value,
-      primaryDisabled: !canGenerateTrial.value,
+      primaryLoading: generatingTrial.value || isNovelActionRunning('trial_generate'),
+      primaryDisabled: !canGenerateTrial.value || hasLocalPendingWait.value,
       state: stateWithIssue(hasTrialStrategy ? 'done' : hasChapterPlan ? 'active' : 'locked', [NovelCreationStage.Trial]),
       progress: hasTrialStrategy ? 100 : detail.value?.latestTrialRun?.trialReview ? 82 : detail.value?.latestTrialRun ? 52 : hasChapterPlan ? 20 : 0,
       subSteps: createSubSteps([
@@ -1245,12 +1835,12 @@ const workbenchSteps = computed<WorkbenchStepView[]>(() => {
       key: 'body',
       name: '批量正文',
       description: '按批次生成正文，处理失败章节、重写和影响评估。',
-      gateText: '需要先确认试写策略快照。',
+      gateText: hasBodyReady ? '正文批量生成已完成，全书质检已解锁。' : hasTrialStrategy ? '完成全部正文批次后，全书质检才会解锁。' : '需要先确认试写策略快照。',
       nextAction: hasBodyReady ? '正文已进入后续质检阶段。' : hasTrialStrategy ? bodyGeneration.value?.recommendedAction.reasonText ?? '生成下一批正文。' : '先确认试写策略快照。',
       primaryActionLabel: bodyGeneration.value?.recommendedAction.label ?? '开始本批生成',
       primaryAction: handleGenerateBodyBatch,
-      primaryLoading: generatingBodyBatch.value,
-      primaryDisabled: !canStartBodyBatch.value,
+      primaryLoading: generatingBodyBatch.value || isNovelActionRunning('body_batch_generate'),
+      primaryDisabled: !canStartBodyBatch.value || hasLocalPendingWait.value,
       state: stateWithIssue(hasBodyReady ? 'done' : hasTrialStrategy ? 'active' : 'locked', [NovelCreationStage.Body]),
       progress: hasBodyReady ? 100 : hasTrialStrategy ? Math.max(32, detail.value?.chapterProgress.completedChapterCount ? 58 : 32) : 0,
       subSteps: createSubSteps([
@@ -1264,12 +1854,12 @@ const workbenchSteps = computed<WorkbenchStepView[]>(() => {
       key: 'fullReview',
       name: '全书质检',
       description: '检查全书质量、结构、风险和视频化准备度。',
-      gateText: '需要正文批量生成完成且无阻塞章节。',
+      gateText: hasCompletion ? '小说完成确认已记录，待视频化检查已解锁。' : latestFullReview.value ? '处理阻塞问题或确认完成后，进入待视频化检查。' : '需要正文批量生成完成且无阻塞章节。',
       nextAction: hasCompletion ? '小说已完成确认。' : latestFullReview.value ? '处理 Top 问题并确认小说完成。' : hasBodyReady ? '发起全书 AI 审稿。' : '先完成批量正文。',
       primaryActionLabel: latestFullReview.value ? '确认小说完成' : '全书 AI 审稿',
       primaryAction: latestFullReview.value ? handleConfirmCompletion : handleStartFullReview,
-      primaryLoading: latestFullReview.value ? confirmingCompletion.value : startingFullReview.value,
-      primaryDisabled: latestFullReview.value ? !canConfirmCompletion.value : !canStartFullReview.value,
+      primaryLoading: latestFullReview.value ? confirmingCompletion.value : (startingFullReview.value || isNovelActionRunning('full_review')),
+      primaryDisabled: hasLocalPendingWait.value || (latestFullReview.value ? !canConfirmCompletion.value : !canStartFullReview.value),
       state: stateWithIssue(hasCompletion ? 'done' : hasBodyReady || latestFullReview.value ? 'active' : 'locked', [NovelCreationStage.FullReview, NovelCreationStage.CompletionConfirm]),
       progress: hasCompletion ? 100 : latestFullReview.value ? 76 : hasBodyReady ? 30 : 0,
       subSteps: createSubSteps([
@@ -1283,16 +1873,16 @@ const workbenchSteps = computed<WorkbenchStepView[]>(() => {
       key: 'videoReady',
       name: '待视频化',
       description: '形成视频引用快照和首条视频建议。',
-      gateText: '需要全书质检通过或接受风险。',
-      nextAction: hasVideoReady ? '小说已可被视频模块引用。' : videoReadiness.value ? '确认进入待视频化，生成引用快照。' : '先完成小说完成确认。',
+      gateText: hasVideoReady ? '小说已进入待视频化，可被视频模块引用。' : hasVideoReadinessCandidate ? '确认后生成视频引用快照，小说进入待视频化。' : '需要全书质检通过或接受风险。',
+      nextAction: hasVideoReady ? '小说已可被视频模块引用。' : hasVideoReadinessCandidate ? '确认进入待视频化，生成引用快照。' : '先完成小说完成确认。',
       primaryActionLabel: videoReadyEntryAction.value?.label ?? '确认进入待视频化',
       primaryAction: videoReadyEntryAction.value ? () => router.push(videoReadyEntryAction.value!.route) : handleConfirmVideoReady,
-      primaryLoading: confirmingVideoReady.value,
-      primaryDisabled: videoReadyEntryAction.value ? false : !canConfirmVideoReady.value,
-      state: stateWithIssue(hasVideoReady ? 'done' : videoReadiness.value ? 'active' : 'locked', [NovelCreationStage.VideoReady]),
-      progress: hasVideoReady ? 100 : videoReadiness.value ? 64 : 0,
+      primaryLoading: confirmingVideoReady.value || isNovelActionRunning('video_readiness_confirm'),
+      primaryDisabled: videoReadyEntryAction.value ? false : !canConfirmVideoReady.value || hasLocalPendingWait.value,
+      state: stateWithIssue(hasVideoReady ? 'done' : hasVideoReadinessCandidate ? 'active' : 'locked', [NovelCreationStage.VideoReady]),
+      progress: hasVideoReady ? 100 : hasVideoReadinessCandidate ? 64 : 0,
       subSteps: createSubSteps([
-        ['checks', '检查清单', '章节、风险和可引用范围', hasVideoReady || Boolean(videoReadiness.value) ? true : false],
+        ['checks', '检查清单', '章节、风险和可引用范围', hasVideoReady || hasVideoReadinessCandidate ? true : false],
         ['suggestion', '视频建议', '首条短视频建议', hasVideoReady || Boolean(videoReadiness.value?.firstVideoSuggestion)],
         ['snapshot', '引用快照', '冻结小说版本供视频引用', hasVideoReady],
         ['videos', '去视频列表', '进入视频模块承接', hasVideoReady],
@@ -1307,12 +1897,13 @@ const activeStep = computed<WorkbenchStepView>(() => workbenchSteps.value.find((
 const activeSubStep = computed<SubStepView>(() => activeStep.value.subSteps.find((subStep) => subStep.key === activeSubStepKey.value) ?? activeStep.value.subSteps.find((subStep) => subStep.state === 'active' || subStep.state === 'ready') ?? activeStep.value.subSteps[0])
 
 function createStep(input: Omit<WorkbenchStepView, 'stateText' | 'tagType' | 'progressText' | 'disabledReason'> & { disabledReason?: string }): WorkbenchStepView {
+  const stateText = getStepStateText(input.state)
   return {
     ...input,
-    disabledReason: input.primaryDisabled ? input.disabledReason || getWorkbenchStepLockedReason(input.key) : input.disabledReason ?? '',
-    stateText: getStepStateText(input.state),
+    disabledReason: input.primaryDisabled && input.state !== 'done' ? input.disabledReason || getWorkbenchStepLockedReason(input.key) : input.disabledReason ?? '',
+    stateText,
     tagType: getStepTagType(input.state),
-    progressText: input.progress >= 100 ? '已完成' : input.state === 'locked' ? '待解锁' : `${input.progress}%`,
+    progressText: stateText,
   }
 }
 
@@ -1384,6 +1975,37 @@ function openStep(stepKey: NovelWorkbenchStepKey) {
   })
 }
 
+async function openTaskResult(stepKey: NovelWorkbenchStepKey) {
+  taskDrawer.open = false
+  openStep(stepKey)
+  await nextTick()
+  focusFirstResultCandidate(stepKey)
+}
+
+function focusFirstResultCandidate(stepKey: NovelWorkbenchStepKey) {
+  const structureRowsByStep: Partial<Record<NovelWorkbenchStepKey, StructureAssetRow[]>> = {
+    setting: settingRows.value,
+    outline: outlineRows.value,
+    chapterPlan: chapterPlanRows.value,
+  }
+  const firstStructure = structureRowsByStep[stepKey]?.[0]
+  if (firstStructure) {
+    focusStructureCandidate(firstStructure.id)
+    return
+  }
+
+  const section = document.querySelector(`[data-result-section="${stepKey}"]`)
+  section?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
+function focusStructureCandidate(candidateId: string) {
+  focusedStructureCandidateId.value = candidateId
+  document.getElementById(`structure-candidate-${candidateId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  window.setTimeout(() => {
+    if (focusedStructureCandidateId.value === candidateId) focusedStructureCandidateId.value = ''
+  }, 2200)
+}
+
 function setActiveSubStep(subStepKey: string) {
   activeSubStepKey.value = subStepKey
 }
@@ -1401,7 +2023,7 @@ function goOverview() {
 
 async function loadDetail(silent = false) {
   if (!silent) loading.value = true
-  apiError.value = ''
+  if (!silent) apiError.value = ''
 
   try {
     detail.value = await getNovelDetail(novelId.value)
@@ -1411,6 +2033,73 @@ async function loadDetail(silent = false) {
   } finally {
     if (!silent) loading.value = false
   }
+}
+
+function getLocalPendingTaskStorageKey() {
+  return `${LOCAL_PENDING_TASK_STORAGE_PREFIX}${novelId.value}`
+}
+
+function isStoredPendingTask(value: unknown): value is LocalPendingTaskSummary {
+  if (!value || typeof value !== 'object') return false
+  const task = value as Partial<LocalPendingTaskSummary>
+  return (
+    task.isLocalPending === true &&
+    typeof task.id === 'string' &&
+    typeof task.taskType === 'string' &&
+    typeof task.action === 'string' &&
+    typeof task.startedAt === 'string' &&
+    typeof task.statusNote === 'string'
+  )
+}
+
+function isPendingTaskFresh(task: LocalPendingTaskSummary) {
+  const startedAt = Date.parse(task.startedAt)
+  if (!Number.isFinite(startedAt)) return false
+  return Date.now() - startedAt < LOCAL_PENDING_TASK_MAX_AGE_MS
+}
+
+function readStoredPendingTask(): LocalPendingTaskSummary | null {
+  const rawValue = window.localStorage.getItem(getLocalPendingTaskStorageKey())
+  if (!rawValue) return null
+
+  try {
+    const parsedValue: unknown = JSON.parse(rawValue)
+    if (!isStoredPendingTask(parsedValue) || !isPendingTaskFresh(parsedValue)) {
+      window.localStorage.removeItem(getLocalPendingTaskStorageKey())
+      return null
+    }
+    return parsedValue
+  } catch {
+    window.localStorage.removeItem(getLocalPendingTaskStorageKey())
+    return null
+  }
+}
+
+function persistLocalPendingTask(task: LocalPendingTaskSummary) {
+  window.localStorage.setItem(getLocalPendingTaskStorageKey(), JSON.stringify(task))
+}
+
+function restoreLocalPendingTask() {
+  pendingTask.value = readStoredPendingTask()
+  syncTaskPolling()
+}
+
+function removeStoredPendingTask(taskId?: string) {
+  const storageKey = getLocalPendingTaskStorageKey()
+  if (!taskId) {
+    window.localStorage.removeItem(storageKey)
+    return
+  }
+
+  const storedTask = readStoredPendingTask()
+  if (!storedTask || storedTask.id === taskId) {
+    window.localStorage.removeItem(storageKey)
+  }
+}
+
+function handleLocalPendingStorageChange(event: StorageEvent) {
+  if (event.key !== getLocalPendingTaskStorageKey()) return
+  restoreLocalPendingTask()
 }
 
 function syncTaskPolling() {
@@ -1431,13 +2120,48 @@ function stopTaskPolling() {
 }
 
 function startNovelActionPendingTask(action: NovelLongRunningAction) {
-  pendingTask.value = createNovelActionPendingTask(action)
+  const task = createNovelActionPendingTask(action)
+  pendingTask.value = task
+  persistLocalPendingTask(task)
   syncTaskPolling()
 }
 
-function clearLocalPendingTask() {
+function clearLocalPendingTask(taskId = pendingTask.value?.id) {
   pendingTask.value = null
+  removeStoredPendingTask(taskId)
   syncTaskPolling()
+}
+
+function isNovelActionRunning(action: NovelLongRunningAction) {
+  return hasLocalPendingWait.value && pendingAction.value === action
+}
+
+function cancelLocalPendingWait() {
+  clearLocalPendingTask()
+  ElMessage.info('已取消本地等待状态；如果旧模型请求稍后返回，请刷新查看候选池。')
+}
+
+async function restartStructureGeneration(objectType: StructureAssetType) {
+  if (structureGeneratingType.value) {
+    ElMessage.info('当前页面仍在等待模型返回，请先等待或刷新后再操作。')
+    return
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      '这只会放弃当前页面的等待状态，不能保证中止已经发出的模型请求。新的生成结果仍会进入候选池，最终需要手动采用。',
+      '放弃等待并重新生成？',
+      {
+        confirmButtonText: '重新生成',
+        cancelButtonText: '先不处理',
+        type: 'warning',
+      },
+    )
+  } catch {
+    return
+  }
+  clearLocalPendingTask()
+  await handleGenerateStructure(objectType, '用户放弃等待后重新生成')
 }
 
 async function openTaskDrawer(taskId?: string | null) {
@@ -1523,9 +2247,15 @@ async function handleCancelTask() {
 }
 
 async function handleGenerateDirection() {
+  if (hasLocalPendingWait.value) {
+    ElMessage.info('已有生成任务在等待中，请先查看最近任务或取消等待。')
+    return
+  }
+
   generatingDirection.value = true
   apiError.value = ''
   startNovelActionPendingTask('direction_generate')
+  const pendingTaskId = pendingTask.value?.id
 
   try {
     await generateDirections(novelId.value)
@@ -1536,14 +2266,20 @@ async function handleGenerateDirection() {
     await loadDetail(true)
   } finally {
     generatingDirection.value = false
-    clearLocalPendingTask()
+    clearLocalPendingTask(pendingTaskId)
   }
 }
 
 async function handleGenerateStructure(objectType: StructureAssetType, regenerateReason?: string) {
+  if (hasLocalPendingWait.value) {
+    ElMessage.info('已有生成任务在等待中，请先查看最近任务或取消等待。')
+    return false
+  }
+
   structureGeneratingType.value = objectType
   apiError.value = ''
   startNovelActionPendingTask(getStructurePendingAction(objectType))
+  const pendingTaskId = pendingTask.value?.id
 
   try {
     const request = regenerateReason ? { regenerateReason } : {}
@@ -1553,19 +2289,69 @@ async function handleGenerateStructure(objectType: StructureAssetType, regenerat
     if (objectType === 'chapter_plan') await generateChapterPlan(novelId.value, request)
     ElMessage.success(`${getStructureAssetTypeText(objectType)}候选已生成`)
     await loadDetail()
+    return true
+  } catch (error) {
+    apiError.value = formatApiError(error)
+    await loadDetail(true)
+    return false
+  } finally {
+    structureGeneratingType.value = ''
+    clearLocalPendingTask(pendingTaskId)
+  }
+}
+
+async function handleApplyBatchWordTarget() {
+  if (!detail.value?.currentAssets.chapterPlan || chapterRows.value.length === 0) {
+    ElMessage.info('需要先采用章节目录后再调整目标字数')
+    return
+  }
+  const wordTarget = Number(batchWordTarget.value)
+  if (!Number.isInteger(wordTarget) || wordTarget < 100) {
+    apiError.value = '目标字数必须是大于 100 的整数'
+    return
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      `将当前 ${chapterRows.value.length} 章的目标字数统一调整为 ${wordTarget} 字。已生成正文不会被覆盖，后续生成会按新目标执行。`,
+      '确认批量调整目标字数',
+      { type: 'warning', confirmButtonText: '确认调整', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+
+  updatingChapterWordTargets.value = true
+  apiError.value = ''
+  try {
+    await updateChapterWordTargets(novelId.value, {
+      updates: chapterRows.value.map((chapter) => ({
+        chapterNo: Number(chapter.chapterNo),
+        wordTarget,
+      })),
+      reason: `批量调整章节目标字数为 ${wordTarget}`,
+      currentChapterPlanVersionId: detail.value.currentAssets.chapterPlan.id,
+    })
+    ElMessage.success('章节目标字数已更新')
+    await loadDetail()
   } catch (error) {
     apiError.value = formatApiError(error)
     await loadDetail(true)
   } finally {
-    structureGeneratingType.value = ''
-    clearLocalPendingTask()
+    updatingChapterWordTargets.value = false
   }
 }
 
 async function handleGenerateTrial(regenerateReason?: string) {
+  if (hasLocalPendingWait.value) {
+    ElMessage.info('已有生成任务在等待中，请先查看最近任务或取消等待。')
+    return
+  }
+
   generatingTrial.value = true
   apiError.value = ''
   startNovelActionPendingTask('trial_generate')
+  const pendingTaskId = pendingTask.value?.id
 
   try {
     await generateTrial(novelId.value, {
@@ -1579,16 +2365,34 @@ async function handleGenerateTrial(regenerateReason?: string) {
     await loadDetail(true)
   } finally {
     generatingTrial.value = false
-    clearLocalPendingTask()
+    clearLocalPendingTask(pendingTaskId)
   }
 }
 
 async function handleSelectTrialCandidate(candidate: TrialCandidateRow) {
+  if (hasLocalPendingWait.value) {
+    ElMessage.info('已有生成任务在等待中，请先查看最近任务或取消等待。')
+    return
+  }
+
   const trialRun = detail.value?.latestTrialRun
   if (!trialRun) return
   if (candidate.requiresRiskConfirm) {
-    const reason = window.prompt('该候选评分或门禁存在风险，请填写继续试写原因')
-    if (!reason?.trim()) {
+    const reason = await promptHighRiskReason({
+      title: '确认低分或风险候选继续试写',
+      message: '该第 1 章候选评分或门禁存在风险。继续后只会基于该候选生成第 2-3 章和试写总评，不会自动进入批量正文或视频生产链路。',
+      details: [
+        { label: '候选对象', value: `${candidate.title} ${candidate.versionLabel}` },
+        { label: '候选版本', value: candidate.id },
+        { label: '评分', value: candidate.scoreText },
+        { label: '门禁', value: candidate.gateText },
+        { label: '风险', value: candidate.riskLevelText },
+      ],
+      inputPlaceholder: '请说明为什么仍选择该候选继续试写',
+      confirmButtonText: '填写原因并继续',
+    })
+    if (reason === null) return
+    if (!reason) {
       apiError.value = '低分或风险候选继续试写必须填写原因'
       return
     }
@@ -1597,6 +2401,8 @@ async function handleSelectTrialCandidate(candidate: TrialCandidateRow) {
   selectingTrialCandidateId.value = candidate.id
   apiError.value = ''
   startNovelActionPendingTask('trial_followup_generate')
+  const pendingTaskId = pendingTask.value?.id
+  ElMessage.info(`已选择「${candidate.title}」，正在生成第 2-3 章和试写总评。`)
 
   try {
     await generateTrial(novelId.value, {
@@ -1605,12 +2411,14 @@ async function handleSelectTrialCandidate(candidate: TrialCandidateRow) {
     })
     ElMessage.success('已选择第 1 章候选，继续生成第 2-3 章')
     await loadDetail()
+    activeSubStepKey.value = 'review'
   } catch (error) {
     apiError.value = formatApiError(error)
+    ElMessage.error(apiError.value)
     await loadDetail(true)
   } finally {
     selectingTrialCandidateId.value = ''
-    clearLocalPendingTask()
+    clearLocalPendingTask(pendingTaskId)
   }
 }
 
@@ -1623,9 +2431,10 @@ function openTrialContent(candidate: TrialCandidateRow) {
 function openTrialConfirmDialog() {
   const review = detail.value?.latestTrialRun?.trialReview
   if (!review) return
+  const requiresRisk = isTrialReviewRiskContinue(review)
   trialConfirmDialog.open = true
-  trialConfirmDialog.requiresRisk = review.requiresRiskConfirmation
-  trialConfirmDialog.reason = review.requiresRiskConfirmation ? '' : '试写表现达标，生成正文策略快照。'
+  trialConfirmDialog.requiresRisk = requiresRisk
+  trialConfirmDialog.reason = requiresRisk ? '' : '试写表现达标，生成正文策略快照。'
 }
 
 async function confirmTrialResult() {
@@ -1633,7 +2442,8 @@ async function confirmTrialResult() {
   const review = trialRun?.trialReview
   if (!trialRun || !review) return
 
-  if (review.requiresRiskConfirmation && !trialConfirmDialog.reason.trim()) {
+  const requiresRisk = isTrialReviewRiskContinue(review)
+  if (requiresRisk && !trialConfirmDialog.reason.trim()) {
     apiError.value = '低分或风险试写继续必须填写原因'
     return
   }
@@ -1644,8 +2454,8 @@ async function confirmTrialResult() {
   try {
     await confirmTrialApi(novelId.value, {
       trialRunId: trialRun.id,
-      decision: review.requiresRiskConfirmation ? 'force_pass' : 'confirm_pass',
-      confirmRisk: review.requiresRiskConfirmation,
+      decision: requiresRisk ? 'force_pass' : 'confirm_pass',
+      confirmRisk: requiresRisk,
       reason: trialConfirmDialog.reason,
     })
     ElMessage.success('已确认试写并生成策略快照')
@@ -1658,7 +2468,75 @@ async function confirmTrialResult() {
   }
 }
 
+function isTrialReviewRiskContinue(review: NonNullable<NonNullable<NovelDetailDTO['latestTrialRun']>['trialReview']>) {
+  return review.requiresRiskConfirmation || review.trialResult !== 'pass'
+}
+
+async function confirmHighRiskAction(options: {
+  title: string
+  message: string
+  details?: HighRiskConfirmationDetail[]
+  confirmButtonText?: string
+  type?: 'warning' | 'error' | 'info' | 'success'
+}): Promise<boolean> {
+  try {
+    await ElMessageBox.confirm(
+      formatHighRiskConfirmationMessage(options.message, options.details),
+      options.title,
+      {
+        confirmButtonText: options.confirmButtonText ?? '确认继续',
+        cancelButtonText: '取消',
+        type: options.type ?? 'warning',
+        closeOnClickModal: false,
+        closeOnPressEscape: true,
+        distinguishCancelAndClose: false,
+      },
+    )
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function promptHighRiskReason(options: {
+  title: string
+  message: string
+  details?: HighRiskConfirmationDetail[]
+  inputPlaceholder?: string
+  inputValue?: string
+  confirmButtonText?: string
+  type?: 'warning' | 'error' | 'info' | 'success'
+}) {
+  try {
+    const result = await ElMessageBox.prompt(
+      formatHighRiskConfirmationMessage(options.message, options.details),
+      options.title,
+      {
+        confirmButtonText: options.confirmButtonText ?? '确认提交',
+        cancelButtonText: '取消',
+        inputPlaceholder: options.inputPlaceholder ?? '请填写原因',
+        inputValue: options.inputValue ?? '',
+        inputType: 'textarea',
+        inputPattern: /\S+/,
+        inputErrorMessage: '请填写原因或处理说明',
+        type: options.type ?? 'warning',
+        closeOnClickModal: false,
+        closeOnPressEscape: true,
+        distinguishCancelAndClose: false,
+      },
+    )
+    return normalizeConfirmationReason(result.value)
+  } catch {
+    return null
+  }
+}
+
 async function handleGenerateBodyBatch() {
+  if (hasLocalPendingWait.value) {
+    ElMessage.info('已有生成任务在等待中，请先查看最近任务或取消等待。')
+    return
+  }
+
   const state = bodyGeneration.value
   const snapshot = state?.strategySnapshot
   if (!state || !snapshot || !state.nextBatchRange.startChapterNo || !state.nextBatchRange.endChapterNo) {
@@ -1666,7 +2544,17 @@ async function handleGenerateBodyBatch() {
     return
   }
 
-  const confirmed = window.confirm(`将基于策略快照 v${snapshot.versionNo} 生成${state.nextBatchRange.text}。如果取消或硬失败，已完成章节会保留，未开始章节不会写入正式正文。确认开始？`)
+  const confirmed = await confirmHighRiskAction({
+    title: '确认开始本批正文生成',
+    message: '将基于已确认的正文策略快照生成下一批正式正文。生成任务不会进入全书审稿、待视频化或视频生产链路；如果取消或硬失败，已完成章节会保留，未开始章节不会写入正式正文。',
+    details: [
+      { label: '策略快照', value: `v${snapshot.versionNo}` },
+      { label: '策略快照 ID', value: snapshot.id },
+      { label: '批次范围', value: state.nextBatchRange.text },
+      { label: '当前章节进度', value: state.chapterProgress.text },
+    ],
+    confirmButtonText: '确认生成本批',
+  })
   if (!confirmed) return
 
   if (!bodyBatchIdempotencyKey.value) {
@@ -1676,6 +2564,7 @@ async function handleGenerateBodyBatch() {
   generatingBodyBatch.value = true
   apiError.value = ''
   startNovelActionPendingTask('body_batch_generate')
+  const pendingTaskId = pendingTask.value?.id
 
   try {
     await generateBodyBatch(novelId.value, {
@@ -1693,19 +2582,34 @@ async function handleGenerateBodyBatch() {
     await loadDetail(true)
   } finally {
     generatingBodyBatch.value = false
-    clearLocalPendingTask()
+    clearLocalPendingTask(pendingTaskId)
   }
 }
 
 async function handleStartFullReview() {
   if (!detail.value) return
+  if (hasLocalPendingWait.value) {
+    ElMessage.info('已有生成任务在等待中，请先查看最近任务或取消等待。')
+    return
+  }
 
-  const confirmed = window.confirm('将基于当前全部正式正文创建全书 AI 审稿任务。确认发起？')
+  const confirmed = await confirmHighRiskAction({
+    title: '确认发起全书 AI 审稿',
+    message: '将基于当前全部正式正文创建全书审稿任务。审稿只生成报告、问题卡和门禁结论，不会自动确认完成，也不会进入待视频化或视频生产链路。',
+    details: [
+      { label: '小说对象', value: detail.value.title },
+      { label: '小说版本', value: detail.value.updatedAt },
+      { label: '计划章节数', value: chapterRows.value.length },
+      { label: '当前阶段', value: detail.value.statusSummary.displayStatusText },
+    ],
+    confirmButtonText: '确认发起审稿',
+  })
   if (!confirmed) return
 
   startingFullReview.value = true
   apiError.value = ''
   startNovelActionPendingTask('full_review')
+  const pendingTaskId = pendingTask.value?.id
 
   try {
     await startFullReview(novelId.value, {
@@ -1719,15 +2623,33 @@ async function handleStartFullReview() {
     await loadDetail(true)
   } finally {
     startingFullReview.value = false
-    clearLocalPendingTask()
+    clearLocalPendingTask(pendingTaskId)
   }
 }
 
 async function handleResolveFullReviewIssue(issueId: string, action: 'resolve' | 'accept_risk') {
   const review = latestFullReview.value
   if (!review) return
-  const reason = action === 'accept_risk' ? window.prompt('接受该问题风险前，请填写原因。') : window.prompt('请填写处理说明。', '已处理该问题。')
-  if (!reason?.trim()) {
+  const issue = review.issues.find((item) => item.issueId === issueId)
+  const reason = await promptHighRiskReason({
+    title: action === 'accept_risk' ? '确认接受全书审稿问题风险' : '确认标记全书审稿问题已解决',
+    message: action === 'accept_risk'
+      ? '接受风险会记录该问题的人工决策原因，但不会修改章节正文、不会自动确认小说完成，也不会进入视频生产链路。'
+      : '标记解决会记录处理说明并更新该问题状态；如果问题仍影响完成门禁，后端会继续按门禁规则拦截。',
+    details: [
+      { label: '审稿报告', value: `v${review.version}` },
+      { label: '问题 ID', value: issueId },
+      { label: '问题标题', value: issue?.title },
+      { label: '问题级别', value: issue?.severity },
+      { label: '是否阻塞', value: issue?.blocking ? '阻塞' : '非阻塞' },
+      { label: '推荐动作', value: issue?.recommendedAction },
+    ],
+    inputPlaceholder: action === 'accept_risk' ? '请说明为什么接受该问题风险' : '请填写处理说明',
+    inputValue: action === 'resolve' ? '已处理该问题。' : '',
+    confirmButtonText: action === 'accept_risk' ? '记录原因并接受风险' : '提交处理说明',
+  })
+  if (reason === null) return
+  if (!reason) {
     apiError.value = action === 'accept_risk' ? '接受风险必须填写原因' : '处理问题需要填写说明'
     return
   }
@@ -1753,8 +2675,23 @@ async function handleResolveFullReviewIssue(issueId: string, action: 'resolve' |
 async function handleForcePassFullReview() {
   const review = latestFullReview.value
   if (!review) return
-  const reason = window.prompt('低分全书审稿强制通过必须填写原因。')
-  if (!reason?.trim()) {
+  const reason = await promptHighRiskReason({
+    title: '确认低分全书审稿强制通过',
+    message: '该操作会记录强制通过原因并更新全书审稿门禁，但不会修改正文、不会直接进入待视频化，也不会创建视频生产任务。数据门禁和安全门禁仍由后端拦截。',
+    details: [
+      { label: '审稿报告', value: `v${review.version}` },
+      { label: '审稿报告 ID', value: review.id },
+      { label: '综合分', value: review.totalScore },
+      { label: '评级', value: review.rating },
+      { label: '当前门禁', value: review.gate.gateResultText },
+      { label: '门禁 ID', value: review.gate.id },
+    ],
+    inputPlaceholder: '请说明为什么允许低分或风险审稿继续',
+    confirmButtonText: '填写原因并强制通过',
+    type: 'error',
+  })
+  if (reason === null) return
+  if (!reason) {
     apiError.value = '强制通过必须填写原因'
     return
   }
@@ -1782,10 +2719,41 @@ async function handleForcePassFullReview() {
 async function handleConfirmCompletion() {
   const review = latestFullReview.value
   if (!review || !detail.value) return
-  const reason = review.gate.gateResult === 'forced_pass' || review.gate.gateResult === 'warning'
-    ? window.prompt('该全书审稿存在风险继续记录，请填写完成确认原因。')
-    : '全书审稿通过，确认小说完成。'
-  if (!reason?.trim()) {
+  const requiresRiskReason = review.gate.gateResult === 'forced_pass' || review.gate.gateResult === 'warning'
+  const reason = requiresRiskReason
+    ? await promptHighRiskReason({
+        title: '确认带风险完成小说',
+        message: '该全书审稿存在风险继续记录。确认完成会写入完成决策，并解锁待视频化检查；不会直接进入视频生产链路。',
+        details: [
+          { label: '审稿报告', value: `v${review.version}` },
+          { label: '审稿报告 ID', value: review.id },
+          { label: '综合分', value: review.totalScore },
+          { label: '当前门禁', value: review.gate.gateResultText },
+          { label: '门禁 ID', value: review.gate.id },
+          { label: '计划章节数', value: chapterRows.value.length },
+        ],
+        inputPlaceholder: '请说明为什么仍确认小说完成',
+        confirmButtonText: '填写原因并确认完成',
+      })
+    : await (async () => {
+        const confirmed = await confirmHighRiskAction({
+          title: '确认小说完成',
+          message: '确认后会写入完成决策，并生成待视频化检查。该操作不会创建视频项目，也不会进入 TTS、字幕、渲染或发布链路。',
+          details: [
+            { label: '审稿报告', value: `v${review.version}` },
+            { label: '审稿报告 ID', value: review.id },
+            { label: '综合分', value: review.totalScore },
+            { label: '当前门禁', value: review.gate.gateResultText },
+            { label: '门禁 ID', value: review.gate.id },
+            { label: '计划章节数', value: chapterRows.value.length },
+          ],
+          confirmButtonText: '确认小说完成',
+          type: 'info',
+        })
+        return confirmed ? '全书审稿通过，确认小说完成。' : null
+      })()
+  if (reason === null) return
+  if (!reason) {
     apiError.value = '完成确认需要填写原因'
     return
   }
@@ -1813,9 +2781,15 @@ async function handleConfirmCompletion() {
 }
 
 async function handleRecheckVideoReadiness() {
+  if (hasLocalPendingWait.value) {
+    ElMessage.info('已有生成任务在等待中，请先查看最近任务或取消等待。')
+    return
+  }
+
   recheckingVideoReadiness.value = true
   apiError.value = ''
   startNovelActionPendingTask('video_readiness_recheck')
+  const pendingTaskId = pendingTask.value?.id
 
   try {
     await recheckVideoReadiness(novelId.value, {
@@ -1828,7 +2802,7 @@ async function handleRecheckVideoReadiness() {
     await loadDetail(true)
   } finally {
     recheckingVideoReadiness.value = false
-    clearLocalPendingTask()
+    clearLocalPendingTask(pendingTaskId)
   }
 }
 
@@ -1836,13 +2810,30 @@ async function handleConfirmVideoReady() {
   const readiness = videoReadiness.value
   const completion = detail.value?.completionDecision
   if (!readiness?.check || !completion || !detail.value) return
+  if (hasLocalPendingWait.value) {
+    ElMessage.info('已有生成任务在等待中，请先查看最近任务或取消等待。')
+    return
+  }
 
-  const confirmed = window.confirm('确认后会生成视频化引用快照，小说进入待视频化状态；这里不进入视频生产链路。确认继续？')
+  const confirmed = await confirmHighRiskAction({
+    title: '确认进入待视频化',
+    message: '确认后会生成视频化引用快照，小说进入待视频化/可被视频模块引用状态。这里不创建视频项目，不进入 TTS、字幕、渲染或发布链路。',
+    details: [
+      { label: '完成决策 ID', value: completion.id },
+      { label: '检查 ID', value: readiness.check.id },
+      { label: '检查版本', value: readiness.check.version },
+      { label: '检查状态', value: readiness.check.statusText },
+      { label: '小说版本', value: detail.value.updatedAt },
+    ],
+    confirmButtonText: '确认进入待视频化',
+    type: 'info',
+  })
   if (!confirmed) return
 
   confirmingVideoReady.value = true
   apiError.value = ''
   startNovelActionPendingTask('video_readiness_confirm')
+  const pendingTaskId = pendingTask.value?.id
 
   try {
     await confirmVideoReadiness(novelId.value, {
@@ -1861,7 +2852,7 @@ async function handleConfirmVideoReady() {
     await loadDetail(true)
   } finally {
     confirmingVideoReady.value = false
-    clearLocalPendingTask()
+    clearLocalPendingTask(pendingTaskId)
   }
 }
 
@@ -1877,17 +2868,35 @@ function createActionIdempotencyKey(prefix: string) {
   return `${prefix}-${randomValue}`
 }
 
-async function handleFuse() {
+function openFuseDialog() {
+  fuseDialog.open = true
+  fuseDialog.reason = selectedDirectionCandidates.value.length
+    ? '融合所选方向的核心爽点、人物动机和短视频前三秒钩子，生成一个新的候选方向。'
+    : ''
+}
+
+async function confirmFuseDirections() {
+  if (selectedCandidateIds.value.length < 2) {
+    ElMessage.warning('请至少选择两个方向候选再融合。')
+    return
+  }
+  if (hasLocalPendingWait.value) {
+    ElMessage.info('已有生成任务在等待中，请先查看最近任务或取消等待。')
+    return
+  }
+
   fusing.value = true
   apiError.value = ''
   startNovelActionPendingTask('direction_fuse')
+  const pendingTaskId = pendingTask.value?.id
 
   try {
     await fuseDirections(novelId.value, {
       versionIds: selectedCandidateIds.value,
-      reason: '融合所选方向的爽点和视频化钩子',
+      reason: fuseDialog.reason.trim() || '融合所选方向的爽点和视频化钩子',
     })
-    ElMessage.success('融合候选已生成')
+    ElMessage.success('融合候选已生成，请在候选池中对比后再采用')
+    fuseDialog.open = false
     selectedCandidateIds.value = []
     await loadDetail()
   } catch (error) {
@@ -1895,32 +2904,186 @@ async function handleFuse() {
     await loadDetail(true)
   } finally {
     fusing.value = false
-    clearLocalPendingTask()
+    clearLocalPendingTask(pendingTaskId)
   }
 }
 
-async function handleOptimize(versionId: string) {
+function openOptimizeDialog(candidate: DirectionCandidateRow) {
+  directionDetailDialog.open = false
+  optimizeDialog.open = true
+  optimizeDialog.candidate = candidate
+  optimizeDialog.instruction = ''
+}
+
+function openEditDirectionDialog(candidate: DirectionCandidateRow) {
+  directionDetailDialog.open = false
+  editDirectionDialog.open = true
+  editDirectionDialog.candidate = candidate
+  editDirectionDialog.form = {
+    title: candidate.title,
+    logline: candidate.logline,
+    coreHook: candidate.coreHook,
+    audienceAppeal: candidate.audienceAppeal,
+    videoPotential: candidate.videoPotential,
+    sellingPointsText: candidate.sellingPoints.join('\n'),
+    riskTagsText: candidate.riskTags.join('\n'),
+    recommendation: candidate.primaryReason,
+    reason: '手动微调方向候选，保存为新版本后再对比采用。',
+  }
+}
+
+async function confirmEditDirection() {
+  const candidate = editDirectionDialog.candidate
+  if (!candidate || !canSubmitDirectionEdit.value) {
+    ElMessage.warning('请先补全标题、方向、钩子、卖点和编辑原因。')
+    return
+  }
+  if (hasLocalPendingWait.value) {
+    ElMessage.info('已有生成任务在等待中，请先查看最近任务或取消等待。')
+    return
+  }
+
+  editingDirectionId.value = candidate.id
+  apiError.value = ''
+
+  try {
+    await editDirectionCandidate(novelId.value, candidate.id, {
+      title: editDirectionDialog.form.title.trim(),
+      logline: editDirectionDialog.form.logline.trim(),
+      coreHook: editDirectionDialog.form.coreHook.trim(),
+      audienceAppeal: editDirectionDialog.form.audienceAppeal.trim(),
+      videoPotential: editDirectionDialog.form.videoPotential.trim(),
+      sellingPoints: splitTextLines(editDirectionDialog.form.sellingPointsText),
+      riskTags: splitTextLines(editDirectionDialog.form.riskTagsText),
+      recommendation: editDirectionDialog.form.recommendation.trim(),
+      reason: editDirectionDialog.form.reason.trim(),
+    })
+    ElMessage.success('已保存为新的方向候选，请在候选池中对比后再采用')
+    editDirectionDialog.open = false
+    await loadDetail()
+  } catch (error) {
+    apiError.value = formatApiError(error)
+    await loadDetail(true)
+  } finally {
+    editingDirectionId.value = ''
+  }
+}
+
+function openEditStructureDialog(asset: StructureAssetRow) {
+  const firstSection = asset.sections[0]
+  editStructureDialog.open = true
+  editStructureDialog.asset = asset
+  editStructureDialog.form = {
+    title: asset.title,
+    summary: asset.summary,
+    sectionTitle: firstSection?.title || asset.typeText,
+    sectionBody: firstSection?.body || asset.stages[0]?.goal || asset.summary,
+    sectionItemsText: firstSection?.items.join('\n') || '',
+    riskTagsText: asset.riskTags.join('\n'),
+    recommendation: asset.primaryReason,
+    reason: `手动微调${asset.typeText}候选，保存为新版本后再对比采用。`,
+  }
+}
+
+async function confirmEditStructure() {
+  const asset = editStructureDialog.asset
+  if (!asset || !canSubmitStructureEdit.value) {
+    ElMessage.warning('请先补全标题、摘要、结构内容、推荐理由和编辑原因。')
+    return
+  }
+  if (hasLocalPendingWait.value) {
+    ElMessage.info('已有生成任务在等待中，请先查看最近任务或取消等待。')
+    return
+  }
+
+  editingStructureId.value = asset.id
+  apiError.value = ''
+
+  try {
+    const result = await editStructureAsset(novelId.value, asset.objectType, asset.id, {
+      title: editStructureDialog.form.title.trim(),
+      summary: editStructureDialog.form.summary.trim(),
+      sectionTitle: editStructureDialog.form.sectionTitle.trim(),
+      sectionBody: editStructureDialog.form.sectionBody.trim(),
+      sectionItems: splitTextLines(editStructureDialog.form.sectionItemsText),
+      riskTags: splitTextLines(editStructureDialog.form.riskTagsText),
+      recommendation: editStructureDialog.form.recommendation.trim(),
+      reason: editStructureDialog.form.reason.trim(),
+    })
+    ElMessage.success(`已保存为新的${asset.typeText}候选，请对比后再采用`)
+    editStructureDialog.open = false
+    await loadDetail()
+    await nextTick()
+    const candidateId = result.candidate?.id
+    if (candidateId) focusStructureCandidate(candidateId)
+  } catch (error) {
+    apiError.value = formatApiError(error)
+    await loadDetail(true)
+  } finally {
+    editingStructureId.value = ''
+  }
+}
+
+async function confirmOptimizeDirection() {
+  const candidate = optimizeDialog.candidate
+  const instruction = optimizeDialog.instruction.trim()
+  if (!candidate || !instruction) {
+    ElMessage.warning('请先写清楚希望 AI 优化什么。')
+    return
+  }
+
+  const versionId = candidate.id
+  if (hasLocalPendingWait.value) {
+    ElMessage.info('已有生成任务在等待中，请先查看最近任务或取消等待。')
+    return
+  }
+
   optimizingId.value = versionId
   apiError.value = ''
   startNovelActionPendingTask('direction_optimize')
+  const pendingTaskId = pendingTask.value?.id
 
   try {
     await optimizeDirection(novelId.value, versionId, {
-      instruction: '强化开篇压迫、第一次反击和短视频前三秒钩子',
+      instruction,
     })
-    ElMessage.success('优化候选已生成')
+    ElMessage.success('优化候选已生成，请在候选池中对比后再采用')
+    optimizeDialog.open = false
     await loadDetail()
   } catch (error) {
     apiError.value = formatApiError(error)
     await loadDetail(true)
   } finally {
     optimizingId.value = ''
-    clearLocalPendingTask()
+    clearLocalPendingTask(pendingTaskId)
   }
 }
 
+function openDirectionDetail(candidate: DirectionCandidateRow) {
+  directionDetailDialog.open = true
+  directionDetailDialog.candidate = candidate
+}
+
+function splitTextLines(value: string) {
+  return value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)
+}
+
 function handleContinueOptimize(asset: StructureAssetRow) {
-  handleGenerateStructure(asset.objectType, `继续优化 ${asset.typeText} 候选：${asset.title}`)
+  structureOptimizeDialog.open = true
+  structureOptimizeDialog.asset = asset
+  structureOptimizeDialog.instruction = `基于《${asset.title}》继续优化：强化冲突层次、提升短视频钩子，并保留评分较高的核心设定。`
+}
+
+async function confirmStructureOptimize() {
+  const asset = structureOptimizeDialog.asset
+  const instruction = structureOptimizeDialog.instruction.trim()
+  if (!asset || !instruction) {
+    ElMessage.warning('请先填写优化目标。')
+    return
+  }
+
+  const generated = await handleGenerateStructure(asset.objectType, `基于候选「${asset.title}」继续优化：${instruction}`)
+  if (generated) structureOptimizeDialog.open = false
 }
 
 function handleDiscardCandidate(asset: StructureAssetRow) {
@@ -1999,11 +3162,31 @@ async function confirmStructureAdopt() {
     ElMessage.success(`${getStructureAssetTypeText(structureAdoptDialog.objectType)}已采用`)
     structureAdoptDialog.open = false
     await loadDetail()
+    navigateAfterStructureAdopt(structureAdoptDialog.objectType)
   } catch (error) {
     apiError.value = formatApiError(error)
   } finally {
     structureAdoptingId.value = ''
   }
+}
+
+function navigateAfterStructureAdopt(objectType: StructureAssetType) {
+  if (objectType === 'setting') {
+    openStep('outline')
+    return
+  }
+
+  if (objectType === 'outline') {
+    openStep('outline')
+    return
+  }
+
+  if (objectType === 'stage_outline') {
+    openStep('chapterPlan')
+    return
+  }
+
+  openStep('trial')
 }
 
 function toggleCandidate(candidateId: string) {
@@ -2046,6 +3229,8 @@ function formatApiError(error: unknown) {
 }
 
 onMounted(() => {
+  restoreLocalPendingTask()
+  window.addEventListener('storage', handleLocalPendingStorageChange)
   loadDetail()
 })
 
@@ -2066,5 +3251,59 @@ watch(
 
 onBeforeUnmount(() => {
   stopTaskPolling()
+  window.removeEventListener('storage', handleLocalPendingStorageChange)
 })
 </script>
+
+<style scoped>
+.edit-form-grid {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.edit-form-grid label {
+  display: grid;
+  gap: 6px;
+  color: #4b5563;
+  font-size: 13px;
+}
+
+.chapter-word-target-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  border: 1px solid #dbeafe;
+  border-radius: 6px;
+  background: #eff6ff;
+}
+
+.chapter-word-target-toolbar strong {
+  display: block;
+  color: #1f2937;
+  font-size: 14px;
+}
+
+.chapter-word-target-toolbar span {
+  display: block;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.chapter-word-target-toolbar small {
+  display: block;
+  margin-top: 4px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.chapter-word-target-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+</style>

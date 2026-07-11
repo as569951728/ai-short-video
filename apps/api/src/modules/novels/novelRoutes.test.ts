@@ -1,8 +1,12 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { ErrorCode, TaskStatus } from '@ai-shortvideo/shared';
 import { buildApp } from '../../app.js';
 import type { LlmClient } from '../ai/llmClient.js';
 import { createInMemoryNovelRepository } from './repositories/inMemoryNovelRepository.js';
+import type { BodyBatchTaskCreationInput, NovelRepository } from './domain/novelDomain.js';
+import type { HotspotReferenceGateway, HotspotReferenceValidationInput } from './integrations/hotspotReferenceGateway.js';
+import { BusinessError } from '../../shared/errors.js';
 
 describe('novel package 1 routes', () => {
   it('creates a draft and returns it in the list with a status summary', async () => {
@@ -23,9 +27,8 @@ describe('novel package 1 routes', () => {
       payload: {
         title: '重生后我靠系统逆袭',
         channel: 'novel',
+        creationSourceType: 'system_recommendation',
         genres: ['都市逆袭'],
-        hotspotReportId: 'hotspot-001',
-        hotspotOpportunityId: 'opportunity-001',
         preferences: {
           appealPoints: ['低谷翻盘', '强反击'],
           targetAudience: '18-35 岁爽文用户',
@@ -51,6 +54,8 @@ describe('novel package 1 routes', () => {
     assert.equal(created.data.statusSummary.currentStep, '准备生成小说方向');
     assert.equal(created.data.statusSummary.recommendedAction.label, '进入详情');
     assert.equal(created.data.statusSummary.recommendedAction.target, 'detail');
+    assert.equal(created.data.preferences.creationSourceType, 'system_recommendation');
+    assert.equal(created.data.creationSource.label, '系统推荐');
 
     const listResponse = await app.inject({
       method: 'GET',
@@ -65,6 +70,7 @@ describe('novel package 1 routes', () => {
     assert.notEqual(list.data.items[0].primaryAction.label, '创建视频');
     assert.equal(list.data.items[0].statusSummary.displayStatusText, '草稿已创建');
     assert.equal(list.data.items[0].statusSummary.recommendedAction.reasonText, '暂无 AI 结果，下一步需要进入详情后生成小说方向。');
+    assert.equal(list.data.items[0].creationSource.type, 'system_recommendation');
 
     assert.equal(repository.getOperationLogs()[0]?.action, 'create_novel_draft');
 
@@ -121,6 +127,170 @@ describe('novel package 1 routes', () => {
     assert.equal(summary.data.recentTask, null);
     assert.deepEqual(summary.data.riskTips, ['暂无 AI 结果，尚未进入内容风险判断。']);
     assert.equal(summary.data.recommendedAction.label, '进入详情');
+
+    await app.close();
+  });
+
+  it('defaults old clients to system recommendation but keeps historical missing preferences as legacy unknown', async () => {
+    const repository = createInMemoryNovelRepository();
+    const app = await buildApp({
+      logger: false,
+      novelRepository: repository,
+      now: () => new Date('2026-06-17T10:00:00.000Z')
+    });
+
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/novels/drafts',
+      headers: { 'content-type': 'application/json' },
+      payload: {
+        title: '旧客户端创建的草稿',
+        genres: ['都市逆袭'],
+        preferences: {
+          appealPoints: ['低谷翻盘']
+        }
+      }
+    });
+
+    assert.equal(createResponse.statusCode, 201);
+    assert.equal(createResponse.json().data.preferences.creationSourceType, 'system_recommendation');
+
+    await app.close();
+  });
+
+  it('rejects unavailable hotspot references without creating a draft', async () => {
+    const repository = createInMemoryNovelRepository();
+    const app = await buildApp({
+      logger: false,
+      novelRepository: repository,
+      now: () => new Date('2026-06-17T10:00:00.000Z')
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/novels/drafts',
+      headers: { 'content-type': 'application/json' },
+      payload: {
+        title: '热点草稿',
+        creationSourceType: 'hotspot_reference',
+        hotspotReportId: 'hotspot-001',
+        hotspotOpportunityId: 'opportunity-001',
+        genres: ['都市逆袭']
+      }
+    });
+
+    assert.equal(response.statusCode, 400);
+    const body = response.json();
+    assert.equal(body.success, false);
+    assert.equal(body.error.code, ErrorCode.ValidationError);
+    assert.equal(body.error.details.issues[0].path, 'creationSourceType');
+
+    const listResponse = await app.inject({ method: 'GET', url: '/novels?page=1&pageSize=20' });
+    assert.equal(listResponse.json().data.total, 0);
+
+    await app.close();
+  });
+
+  it('validates hotspot references through an injected gateway and persists safe source summary', async () => {
+    const repository = createInMemoryNovelRepository();
+    const app = await buildApp({
+      logger: false,
+      novelRepository: repository,
+      hotspotReferenceGateway: new FakeHotspotReferenceGateway(),
+      now: () => new Date('2026-06-17T10:00:00.000Z')
+    });
+
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/novels/drafts',
+      headers: { 'content-type': 'application/json' },
+      payload: {
+        title: '热点引用草稿',
+        creationSourceType: 'hotspot_reference',
+        hotspotReportId: 'hotspot-001',
+        hotspotOpportunityId: 'opportunity-001',
+        genres: ['都市逆袭'],
+        preferences: {
+          customIdea: '补充偏好：更强调短视频开场钩子。'
+        }
+      }
+    });
+
+    assert.equal(createResponse.statusCode, 201);
+    const created = createResponse.json().data;
+    assert.equal(created.preferences.creationSourceType, 'hotspot_reference');
+    assert.equal(created.preferences.hotspotTitle, '同租户热点报告');
+    assert.equal(created.preferences.hotspotOpportunityTitle, '短视频机会点');
+    assert.equal(created.creationSource.type, 'hotspot_reference');
+    assert.equal(created.creationSource.hotspotTitle, '同租户热点报告');
+
+    const detailResponse = await app.inject({ method: 'GET', url: `/novels/${created.id}` });
+    assert.equal(detailResponse.statusCode, 200);
+    assert.equal(detailResponse.json().data.preferences.creationSourceType, 'hotspot_reference');
+
+    await app.close();
+  });
+
+  it('returns field-level validation errors for manual and hotspot source conflicts', async () => {
+    const app = await buildApp({
+      logger: false,
+      novelRepository: createInMemoryNovelRepository(),
+      hotspotReferenceGateway: new FakeHotspotReferenceGateway(),
+      now: () => new Date('2026-06-17T10:00:00.000Z')
+    });
+
+    const manualTooShort = await app.inject({
+      method: 'POST',
+      url: '/novels/drafts',
+      headers: { 'content-type': 'application/json' },
+      payload: {
+        title: '手动想法过短',
+        creationSourceType: 'manual_idea',
+        preferences: { customIdea: '太短' }
+      }
+    });
+    assert.equal(manualTooShort.statusCode, 400);
+    assert.equal(manualTooShort.json().error.details.issues[0].path, 'preferences.customIdea');
+
+    const systemConflict = await app.inject({
+      method: 'POST',
+      url: '/novels/drafts',
+      headers: { 'content-type': 'application/json' },
+      payload: {
+        title: '系统推荐冲突',
+        creationSourceType: 'system_recommendation',
+        hotspotReportId: 'hotspot-001'
+      }
+    });
+    assert.equal(systemConflict.statusCode, 400);
+    assert.equal(systemConflict.json().error.details.issues[0].path, 'hotspotReportId');
+
+    const crossTenant = await app.inject({
+      method: 'POST',
+      url: '/novels/drafts',
+      headers: { 'content-type': 'application/json' },
+      payload: {
+        title: '跨租户热点',
+        creationSourceType: 'hotspot_reference',
+        hotspotReportId: 'hotspot-cross-tenant'
+      }
+    });
+    assert.equal(crossTenant.statusCode, 400);
+    assert.equal(crossTenant.json().error.details.reasonCode, 'cross_tenant');
+
+    const wrongOpportunity = await app.inject({
+      method: 'POST',
+      url: '/novels/drafts',
+      headers: { 'content-type': 'application/json' },
+      payload: {
+        title: '机会点归属错误',
+        creationSourceType: 'hotspot_reference',
+        hotspotReportId: 'hotspot-001',
+        hotspotOpportunityId: 'opportunity-other'
+      }
+    });
+    assert.equal(wrongOpportunity.statusCode, 400);
+    assert.equal(wrongOpportunity.json().error.details.reasonCode, 'opportunity_not_in_report');
 
     await app.close();
   });
@@ -253,6 +423,51 @@ describe('novel package 2 direction routes', () => {
     const detail = detailResponse.json();
     assert.equal(detail.data.currentAssets.direction, null);
     assert.ok(detail.data.directionCandidates.length >= generated.candidates.length + 2);
+
+    await app.close();
+  });
+
+  it('saves a manually edited direction as a new candidate without adopting it', async () => {
+    const repository = createInMemoryNovelRepository();
+    const app = await buildApp({
+      logger: false,
+      novelRepository: repository,
+      now: () => new Date('2026-06-17T11:11:00.000Z')
+    });
+    const novelId = await createDraft(app, '方向手动编辑测试');
+    const generated = await generateDirections(app, novelId);
+    const source = generated.candidates[0];
+
+    const editResponse = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/directions/${source.id}/edit`,
+      payload: {
+        title: '手动编辑后的重生商战方向',
+        logline: '重生学渣靠记忆优势打穿考场和商场。',
+        coreHook: '上一世被学历和眼界困住，这一次他先从高考翻盘。',
+        audienceAppeal: '喜欢重生逆袭、商战打脸的短视频爽文读者。',
+        videoPotential: '前三秒用高考考场反差切入，后续接商战逆袭。',
+        sellingPoints: ['高考封神', '商战复仇', '记忆优势'],
+        riskTags: ['避免系统万能'],
+        recommendation: '保留重生爽点，强化短视频开场。',
+        reason: '验收手动编辑候选'
+      }
+    });
+    assert.equal(editResponse.statusCode, 200);
+    const edited = editResponse.json();
+    assert.equal(edited.data.task.taskType, 'novel_direction_manual_edit');
+    assert.equal(edited.data.candidate.title, '手动编辑后的重生商战方向');
+    assert.equal(edited.data.candidate.status, 'candidate');
+    assert.equal(edited.data.currentDirection, null);
+
+    const detailResponse = await app.inject({
+      method: 'GET',
+      url: `/novels/${novelId}`
+    });
+    const detail = detailResponse.json();
+    assert.equal(detail.data.currentAssets.direction, null);
+    assert.ok(detail.data.directionCandidates.some((candidate: any) => candidate.id === edited.data.candidate.id));
+    assert.ok(detail.data.directionCandidates.some((candidate: any) => candidate.id === source.id));
 
     await app.close();
   });
@@ -477,6 +692,165 @@ describe('novel package 3 structure routes', () => {
     await app.close();
   });
 
+  it('blocks a second setting generation while the first model call is still running', async () => {
+    const repository = createInMemoryNovelRepository();
+    let releaseFirstStructureCall: (() => void) | null = null;
+    let firstStructureCallStarted: (() => void) | null = null;
+    const firstStructureCallStartedPromise = new Promise<void>((resolve) => {
+      firstStructureCallStarted = resolve;
+    });
+    let structureCallCount = 0;
+    const app = await buildApp({
+      logger: false,
+      novelRepository: repository,
+      aiProviderEnv: {
+        AI_PROVIDER_MODE: 'deepseek',
+        DEEPSEEK_API_KEY: 'test-key',
+        DEEPSEEK_BASE_URL: 'https://example.test/v1',
+        DEEPSEEK_MODEL: 'deepseek-chat',
+        DEEPSEEK_REASONER_MODEL: 'deepseek-reasoner'
+      },
+      llmClient: {
+        async chat(request) {
+          if (request.taskName === 'novel_structure_setting') {
+            structureCallCount += 1;
+            if (structureCallCount === 1) {
+              firstStructureCallStarted?.();
+              await new Promise<void>((resolve) => {
+                releaseFirstStructureCall = resolve;
+              });
+            }
+          }
+
+          return {
+            content: JSON.stringify(createFakeDeepSeekPayload(request.taskName ?? 'unknown_task')),
+            model: request.model,
+            usage: {
+              promptTokens: 24,
+              completionTokens: 48,
+              totalTokens: 72
+            }
+          };
+        }
+      },
+      now: () => new Date('2026-06-17T12:12:00.000Z')
+    });
+    const { novelId } = await createNovelWithAdoptedDirection(app);
+
+    const firstRequest = app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/settings/generate`,
+      headers: { 'x-request-id': 'setting-concurrent-1' },
+      payload: {}
+    });
+    await firstStructureCallStartedPromise;
+
+    const secondResponse = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/settings/generate`,
+      headers: { 'x-request-id': 'setting-concurrent-2' },
+      payload: {}
+    });
+
+    assert.equal(secondResponse.statusCode, 409);
+    const secondBody = secondResponse.json();
+    assert.equal(secondBody.success, false);
+    assert.equal(secondBody.error.code, 'CONFLICT_TASK_EXISTS');
+    assert.equal(structureCallCount, 1);
+    const activeTasks = repository.getGenerationTasks().filter((task) =>
+      task.conflictScope === 'novel_setting' &&
+      task.conflictKey === novelId &&
+      [TaskStatus.Processing, TaskStatus.WaitingConfirmation].includes(task.status)
+    );
+    assert.equal(activeTasks.length, 1);
+
+    releaseFirstStructureCall?.();
+    const firstResponse = await firstRequest;
+    assert.equal(firstResponse.statusCode, 200);
+    assert.equal(firstResponse.json().data.candidate.objectType, 'setting');
+
+    await app.close();
+  });
+
+  it('keeps a cancelled structure generation from saving a late model result', async () => {
+    const repository = createInMemoryNovelRepository();
+    let releaseFirstStructureCall: (() => void) | null = null;
+    let firstStructureCallStarted: (() => void) | null = null;
+    const firstStructureCallStartedPromise = new Promise<void>((resolve) => {
+      firstStructureCallStarted = resolve;
+    });
+    const app = await buildApp({
+      logger: false,
+      novelRepository: repository,
+      aiProviderEnv: {
+        AI_PROVIDER_MODE: 'deepseek',
+        DEEPSEEK_API_KEY: 'test-key',
+        DEEPSEEK_BASE_URL: 'https://example.test/v1',
+        DEEPSEEK_MODEL: 'deepseek-chat',
+        DEEPSEEK_REASONER_MODEL: 'deepseek-reasoner'
+      },
+      llmClient: {
+        async chat(request) {
+          if (request.taskName === 'novel_structure_setting') {
+            firstStructureCallStarted?.();
+            await new Promise<void>((resolve) => {
+              releaseFirstStructureCall = resolve;
+            });
+          }
+
+          return {
+            content: JSON.stringify(createFakeDeepSeekPayload(request.taskName ?? 'unknown_task')),
+            model: request.model,
+            usage: {
+              promptTokens: 24,
+              completionTokens: 48,
+              totalTokens: 72
+            }
+          };
+        }
+      },
+      now: () => new Date('2026-06-17T12:16:00.000Z')
+    });
+    const { novelId } = await createNovelWithAdoptedDirection(app);
+
+    const firstRequest = app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/settings/generate`,
+      headers: { 'x-request-id': 'setting-cancel-late-1' },
+      payload: {}
+    });
+    await firstStructureCallStartedPromise;
+    const activeTask = repository.getGenerationTasks().find((task) =>
+      task.conflictScope === 'novel_setting' &&
+      task.conflictKey === novelId &&
+      task.status === TaskStatus.Processing
+    );
+    assert.ok(activeTask);
+
+    const cancelResponse = await app.inject({
+      method: 'POST',
+      url: `/tasks/${activeTask.id}/cancel`,
+      headers: { 'x-request-id': 'setting-cancel-late-2' },
+      payload: {
+        reason: '用户取消等待，准备重新生成'
+      }
+    });
+    assert.equal(cancelResponse.statusCode, 200);
+
+    releaseFirstStructureCall?.();
+    const firstResponse = await firstRequest;
+    assert.equal(firstResponse.statusCode, 409);
+    assert.equal(firstResponse.json().error.code, 'GATE_BLOCKED');
+    const storedTask = repository.getGenerationTasks().find((task) => task.id === activeTask.id);
+    assert.equal(storedTask?.status, TaskStatus.Cancelled);
+    assert.equal(
+      repository.getCreativeVersions().some((version) => version.novelId === novelId && version.objectType === 'setting' && version.status === 'candidate'),
+      false
+    );
+
+    await app.close();
+  });
+
   it('marks downstream candidates stale after re-adopting an upstream asset', async () => {
     const repository = createInMemoryNovelRepository();
     const app = await buildApp({
@@ -670,6 +1044,9 @@ describe('novel package 4 task center routes', () => {
     });
     assert.equal(firstResponse.statusCode, 200);
     const activeTaskId = firstResponse.json().data.task.id;
+    const activeTask = repository.getGenerationTasks().find((task) => task.id === activeTaskId)!;
+    activeTask.status = TaskStatus.Processing;
+    activeTask.progress = 45;
 
     const conflictResponse = await app.inject({
       method: 'POST',
@@ -683,6 +1060,40 @@ describe('novel package 4 task center routes', () => {
     assert.equal(conflict.error.code, 'CONFLICT_TASK_EXISTS');
     assert.equal(conflict.error.details.activeTaskId, activeTaskId);
     assert.equal(conflict.requestId, 'conflict-task-1');
+
+    await app.close();
+  });
+
+  it('allows generating another structure candidate while an earlier one waits for confirmation', async () => {
+    const repository = createInMemoryNovelRepository();
+    const app = await buildApp({
+      logger: false,
+      novelRepository: repository,
+      now: () => new Date('2026-06-17T13:35:00.000Z')
+    });
+    const { novelId } = await createNovelWithAdoptedDirection(app);
+
+    const firstResponse = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/settings/generate`,
+      payload: {}
+    });
+    assert.equal(firstResponse.statusCode, 200);
+    assert.equal(firstResponse.json().data.task.status, 'waiting_confirmation');
+
+    const optimizeResponse = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/settings/generate`,
+      headers: { 'x-request-id': 'optimize-setting-candidate-1' },
+      payload: {
+        instruction: '继续优化这个候选，强化人物关系和短视频冲突。'
+      }
+    });
+    assert.equal(optimizeResponse.statusCode, 200);
+    const optimized = optimizeResponse.json();
+    assert.notEqual(optimized.data.task.id, firstResponse.json().data.task.id);
+    assert.equal(optimized.requestId, 'optimize-setting-candidate-1');
+    assert.equal(repository.getGenerationTasks().filter((task) => task.taskType === 'novel_setting_generate').length, 2);
 
     await app.close();
   });
@@ -896,6 +1307,67 @@ describe('novel package 5 trial writing routes', () => {
     await app.close();
   });
 
+  it('persists follow-up trial processing state and avoids duplicate continuation tasks while the model call is running', async () => {
+    const repository = createInMemoryNovelRepository();
+    const delayedClient = createDelayedFollowupFakeLlmClient();
+    const app = await buildApp({
+      logger: false,
+      novelRepository: repository,
+      aiProviderEnv: {
+        AI_PROVIDER_MODE: 'deepseek',
+        DEEPSEEK_API_KEY: 'test-deepseek-key-should-not-leak',
+        DEEPSEEK_MODEL: 'deepseek-fake-chat',
+        DEEPSEEK_REASONER_MODEL: 'deepseek-fake-reasoner'
+      },
+      llmClient: delayedClient.client,
+      now: () => new Date('2026-06-17T14:45:00.000Z')
+    });
+    const { novelId } = await createNovelReadyForTrial(app, '续写处理中刷新测试', 5);
+    const firstStep = await postTrialGenerate(app, novelId);
+    const selectedCandidate = firstStep.trialRun.chapterOneCandidates.find((candidate: any) => candidate.isAiRecommended);
+
+    const followupPromise = postTrialGenerate(app, novelId, {
+      trialRunId: firstStep.trialRun.id,
+      selectedCandidateId: selectedCandidate.id
+    });
+    await delayedClient.waitForFollowup();
+
+    const duringResponse = await app.inject({
+      method: 'GET',
+      url: `/novels/${novelId}`
+    });
+    assert.equal(duringResponse.statusCode, 200);
+    const during = duringResponse.json().data;
+    assert.equal(during.latestTrialRun.status, 'followup_generating');
+    assert.equal(during.latestTrialRun.selectedChapterOneCandidateId, selectedCandidate.id);
+    assert.equal(during.latestTrialRun.task.taskType, 'trial_followup_generate');
+    assert.equal(during.latestTrialRun.task.status, TaskStatus.Processing);
+    assert.equal(during.statusSummary.stageStatus, 'processing');
+    assert.equal(during.latestTrialRun.chapterOneCandidates.find((candidate: any) => candidate.id === selectedCandidate.id).status, 'selected_for_trial');
+
+    const duplicateResponse = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/trial/generate`,
+      payload: {
+        trialRunId: firstStep.trialRun.id,
+        selectedCandidateId: selectedCandidate.id
+      }
+    });
+    assert.equal(duplicateResponse.statusCode, 200);
+    const duplicate = duplicateResponse.json().data;
+    assert.equal(duplicate.task.id, during.latestTrialRun.task.id);
+    assert.equal(repository.getGenerationTasks().filter((task) => task.taskType === 'trial_followup_generate').length, 1);
+
+    delayedClient.releaseFollowup();
+    const followup = await followupPromise;
+    assert.equal(followup.trialRun.status, 'review_ready');
+    assert.equal(followup.task.id, during.latestTrialRun.task.id);
+    assert.equal(followup.task.status, TaskStatus.WaitingConfirmation);
+    assert.equal(repository.getGenerationTasks().filter((task) => task.taskType === 'trial_followup_generate').length, 1);
+
+    await app.close();
+  });
+
   it('blocks chapter three when chapter two has a hard failure', async () => {
     const repository = createInMemoryNovelRepository();
     const app = await buildApp({
@@ -969,10 +1441,23 @@ describe('novel package 5 trial writing routes', () => {
     assert.equal(confirmResponse.statusCode, 200);
     const confirmed = confirmResponse.json().data;
     assert.equal(confirmed.statusSummary.creationStage, 'body');
+    assert.equal(confirmed.task.taskType, 'trial_followup_generate');
+    assert.equal(confirmed.task.status, TaskStatus.Completed);
+    assert.equal(confirmed.task.currentStep, '试写已确认，正文策略快照已生成');
     assert.equal(confirmed.bodyStrategySnapshot.status, 'current');
     assert.equal(confirmed.bodyStrategySnapshot.sourceTrialRunId, followup.trialRun.id);
     assert.ok(confirmed.bodyStrategySnapshot.enhancedReviewRules.length > 0);
     assert.ok(repository.getOperationLogs().some((log) => log.action === 'confirm_trial_force_pass' && log.reason === '开篇差异化强，接受节奏风险进入批量正文前置策略。'));
+
+    const detailAfterConfirmResponse = await app.inject({
+      method: 'GET',
+      url: `/novels/${novelId}`
+    });
+    assert.equal(detailAfterConfirmResponse.statusCode, 200);
+    const detailAfterConfirm = detailAfterConfirmResponse.json().data;
+    assert.equal(detailAfterConfirm.recentTask.taskType, 'trial_followup_generate');
+    assert.equal(detailAfterConfirm.recentTask.status, TaskStatus.Completed);
+    assert.equal(detailAfterConfirm.statusSummary.recommendedAction.type, 'start_body_batch');
 
     await app.close();
   });
@@ -1078,6 +1563,293 @@ describe('novel package 6 body generation routes', () => {
     await app.close();
   });
 
+  it('preclaims a processing body batch task and reuses it for duplicate idempotency keys while the model call is running', async () => {
+    const repository = createInMemoryNovelRepository();
+    const delayedClient = createDelayedBodyFakeLlmClient();
+    const app = await buildApp({
+      logger: false,
+      novelRepository: repository,
+      aiProviderEnv: {
+        AI_PROVIDER_MODE: 'deepseek',
+        DEEPSEEK_API_KEY: 'test-deepseek-key-should-not-leak',
+        DEEPSEEK_MODEL: 'deepseek-fake-chat',
+        DEEPSEEK_REASONER_MODEL: 'deepseek-fake-reasoner'
+      },
+      llmClient: delayedClient.client,
+      now: () => new Date('2026-06-17T15:16:00.000Z')
+    });
+    const { novelId, strategySnapshot } = await createNovelReadyForBody(app, '批量正文处理中刷新测试', 8);
+    const payload = {
+      strategySnapshotId: strategySnapshot.id,
+      expectedStrategySnapshotVersion: strategySnapshot.versionNo,
+      idempotencyKey: 'body-batch-processing-1'
+    };
+
+    const firstRequest = app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/chapters/batch-generate`,
+      payload
+    });
+    await delayedClient.waitForBody();
+
+    const duringResponse = await app.inject({
+      method: 'GET',
+      url: `/novels/${novelId}`
+    });
+    assert.equal(duringResponse.statusCode, 200);
+    const during = duringResponse.json().data;
+    assert.equal(during.statusSummary.creationStage, 'body');
+    assert.equal(during.statusSummary.stageStatus, 'processing');
+    assert.equal(during.recentTask.taskType, 'body_batch_generate');
+    assert.equal(during.recentTask.status, TaskStatus.Processing);
+    assert.match(during.recentTask.currentStep, /第 4-5 章正文/);
+    assert.equal(repository.getGenerationTasks().filter((task) => task.taskType === 'body_batch_generate').length, 1);
+    assert.equal(delayedClient.getBodyCallCount(), 1);
+
+    const duplicateResponse = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/chapters/batch-generate`,
+      headers: { 'x-request-id': 'body-batch-processing-duplicate' },
+      payload
+    });
+    assert.equal(duplicateResponse.statusCode, 200, duplicateResponse.body);
+    const duplicate = duplicateResponse.json().data;
+    assert.equal(duplicateResponse.json().requestId, 'body-batch-processing-duplicate');
+    assert.equal(duplicate.task.id, during.recentTask.id);
+    assert.equal(duplicate.task.status, TaskStatus.Processing);
+    assert.equal(duplicate.batch, null);
+    assert.equal(repository.getGenerationTasks().filter((task) => task.taskType === 'body_batch_generate').length, 1);
+    assert.equal(delayedClient.getBodyCallCount(), 1);
+
+    const fingerprintConflictResponse = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/chapters/batch-generate`,
+      headers: { 'x-request-id': 'body-batch-processing-fingerprint-conflict' },
+      payload: {
+        ...payload,
+        startChapterNo: 5,
+        endChapterNo: 5
+      }
+    });
+    assert.equal(fingerprintConflictResponse.statusCode, 409);
+    assert.equal(fingerprintConflictResponse.json().error.code, 'IDEMPOTENCY_CONFLICT');
+    assert.equal(repository.getGenerationTasks().filter((task) => task.taskType === 'body_batch_generate').length, 1);
+
+    const activeConflictResponse = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/chapters/batch-generate`,
+      headers: { 'x-request-id': 'body-batch-processing-active-conflict' },
+      payload: {
+        ...payload,
+        idempotencyKey: 'body-batch-processing-2'
+      }
+    });
+    assert.equal(activeConflictResponse.statusCode, 409);
+    assert.equal(activeConflictResponse.json().error.code, 'CONFLICT_TASK_EXISTS');
+    assert.equal(repository.getGenerationTasks().filter((task) => task.taskType === 'body_batch_generate').length, 1);
+
+    delayedClient.releaseBody();
+    const firstResponse = await firstRequest;
+    assert.equal(firstResponse.statusCode, 200, firstResponse.body);
+    const generated = firstResponse.json().data;
+    assert.equal(generated.task.id, during.recentTask.id);
+    assert.equal(generated.task.status, TaskStatus.Completed);
+    assert.equal(generated.batch.startChapterNo, 4);
+    assert.equal(generated.batch.endChapterNo, 5);
+
+    await app.close();
+  });
+
+  it('marks the preclaimed body batch task as failed when the body model throws before saving chapters', async () => {
+    const repository = createInMemoryNovelRepository();
+    const app = await buildApp({
+      logger: false,
+      novelRepository: repository,
+      aiProviderEnv: {
+        AI_PROVIDER_MODE: 'deepseek',
+        DEEPSEEK_API_KEY: 'test-deepseek-key-should-not-leak',
+        DEEPSEEK_MODEL: 'deepseek-fake-chat',
+        DEEPSEEK_REASONER_MODEL: 'deepseek-fake-reasoner'
+      },
+      llmClient: createFailingBodyFakeLlmClient(),
+      now: () => new Date('2026-06-17T15:18:00.000Z')
+    });
+    const { novelId, strategySnapshot } = await createNovelReadyForBody(app, '批量正文失败恢复测试', 8);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/chapters/batch-generate`,
+      headers: { 'x-request-id': 'body-batch-failing-model' },
+      payload: {
+        strategySnapshotId: strategySnapshot.id,
+        expectedStrategySnapshotVersion: strategySnapshot.versionNo,
+        idempotencyKey: 'body-batch-failing-model-1'
+      }
+    });
+    assert.equal(response.statusCode, 500);
+    assert.equal(response.json().success, false);
+    assert.equal(response.json().error.code, 'INTERNAL_ERROR');
+    assert.equal(response.json().requestId, 'body-batch-failing-model');
+
+    const detailResponse = await app.inject({
+      method: 'GET',
+      url: `/novels/${novelId}`
+    });
+    assert.equal(detailResponse.statusCode, 200);
+    const detail = detailResponse.json().data;
+    assert.equal(detail.statusSummary.creationStage, 'body');
+    assert.equal(detail.statusSummary.stageStatus, 'failed');
+    assert.equal(detail.recentTask.taskType, 'body_batch_generate');
+    assert.equal(detail.recentTask.status, TaskStatus.Failed);
+    assert.equal(detail.chapters.find((chapter: any) => chapter.chapterNo === 4).currentContentVersionId, null);
+    const task = repository.getGenerationTasks().find((item) => item.id === detail.recentTask.id);
+    assert.equal(task?.errorCode, 'Error');
+    assert.equal(task?.errorMessage, '正文模型测试失败');
+    assert.equal(task?.failureCategory, 'provider_error');
+    assert.equal(repository.getBodyBatches().length, 0);
+
+    await app.close();
+  });
+
+  it('blocks unsupported Prisma-like body write path before preclaiming tasks or calling the provider', async () => {
+    const repository = createInMemoryNovelRepository();
+    const guardedRepository = Object.create(repository) as NovelRepository & ReturnType<typeof createInMemoryNovelRepository>;
+    guardedRepository.createBodyBatchTask = async (_input: BodyBatchTaskCreationInput) => {
+      throw new BusinessError(ErrorCode.ConfigMissing, 'Prisma 正文批量写路径尚未实现，不能创建正文批次预占任务。', {
+        taskType: 'body_batch_generate',
+        capability: 'prisma_body_batch_write'
+      });
+    };
+    const countingClient = createCountingBodyFakeLlmClient();
+    const app = await buildApp({
+      logger: false,
+      novelRepository: guardedRepository,
+      aiProviderEnv: {
+        AI_PROVIDER_MODE: 'deepseek',
+        DEEPSEEK_API_KEY: 'test-deepseek-key-should-not-leak',
+        DEEPSEEK_MODEL: 'deepseek-fake-chat',
+        DEEPSEEK_REASONER_MODEL: 'deepseek-fake-reasoner'
+      },
+      llmClient: countingClient.client,
+      now: () => new Date('2026-06-17T15:19:00.000Z')
+    });
+    const { novelId, strategySnapshot } = await createNovelReadyForBody(app, 'Prisma 正文写路径能力门禁测试', 8);
+    assert.equal(countingClient.getBodyCallCount(), 0);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/chapters/batch-generate`,
+      headers: { 'x-request-id': 'body-batch-prisma-not-implemented' },
+      payload: {
+        strategySnapshotId: strategySnapshot.id,
+        expectedStrategySnapshotVersion: strategySnapshot.versionNo,
+        idempotencyKey: 'body-batch-prisma-gate-1'
+      }
+    });
+    assert.equal(response.statusCode, 500);
+    assert.equal(response.json().error.code, 'CONFIG_MISSING');
+    assert.equal(response.json().requestId, 'body-batch-prisma-not-implemented');
+    assert.equal(countingClient.getBodyCallCount(), 0);
+    assert.equal(repository.getGenerationTasks().filter((task) => task.taskType === 'body_batch_generate').length, 0);
+    assert.equal(repository.getBodyBatches().length, 0);
+
+    await app.close();
+  });
+
+  it('keeps the preclaimed body batch task failed with save_failed when repository saving fails after provider success', async () => {
+    const repository = createInMemoryNovelRepository();
+    const guardedRepository = Object.create(repository) as NovelRepository & ReturnType<typeof createInMemoryNovelRepository>;
+    guardedRepository.generateBodyBatch = async () => {
+      throw new Error('正文保存阶段测试失败：写入正文版本失败');
+    };
+    const countingClient = createCountingBodyFakeLlmClient();
+    const app = await buildApp({
+      logger: false,
+      novelRepository: guardedRepository,
+      aiProviderEnv: {
+        AI_PROVIDER_MODE: 'deepseek',
+        DEEPSEEK_API_KEY: 'test-deepseek-key-should-not-leak',
+        DEEPSEEK_MODEL: 'deepseek-fake-chat',
+        DEEPSEEK_REASONER_MODEL: 'deepseek-fake-reasoner'
+      },
+      llmClient: countingClient.client,
+      now: () => new Date('2026-06-17T15:20:00.000Z')
+    });
+    const { novelId, strategySnapshot } = await createNovelReadyForBody(app, '正文保存失败固定回归测试', 8);
+    const taskCountBefore = repository.getGenerationTasks().filter((task) => task.taskType === 'body_batch_generate').length;
+    const batchCountBefore = repository.getBodyBatches().length;
+    const contentCountBefore = repository.getChapterContentVersions().length;
+    const bodyCallCountBefore = countingClient.getBodyCallCount();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/chapters/batch-generate`,
+      headers: { 'x-request-id': 'body-batch-save-failed' },
+      payload: {
+        strategySnapshotId: strategySnapshot.id,
+        expectedStrategySnapshotVersion: strategySnapshot.versionNo,
+        idempotencyKey: 'body-batch-save-failed-1'
+      }
+    });
+    assert.equal(response.statusCode, 500);
+    assert.equal(response.json().error.code, 'INTERNAL_ERROR');
+    assert.ok(countingClient.getBodyCallCount() > bodyCallCountBefore);
+    const bodyCallCountAfterFailure = countingClient.getBodyCallCount();
+
+    const bodyTasks = repository.getGenerationTasks().filter((task) => task.taskType === 'body_batch_generate');
+    assert.equal(bodyTasks.length, taskCountBefore + 1);
+    const failedTasksForRequest = bodyTasks.filter((task) => (task.metadata as Record<string, unknown>).idempotencyKey === 'body-batch-save-failed-1');
+    assert.equal(failedTasksForRequest.length, 1);
+    const failedTask = failedTasksForRequest[0];
+    assert.equal(failedTask.status, TaskStatus.Failed);
+    assert.equal(failedTask.failureCategory, 'save_failed');
+    assert.equal(failedTask.statusNote, '正文保存失败，请查看原因后重试。');
+    assert.equal(failedTask.errorMessage, '正文保存阶段测试失败：写入正文版本失败');
+    assert.equal(repository.getBodyBatches().length, batchCountBefore);
+    assert.equal(repository.getChapterContentVersions().length, contentCountBefore);
+    assert.equal(repository.getNovelChapters().find((chapter) => chapter.novelId === novelId && chapter.chapterNo === 4)?.currentContentVersionId, null);
+
+    const taskDetailResponse = await app.inject({
+      method: 'GET',
+      url: `/tasks/${failedTask.id}`,
+      headers: { 'x-request-id': 'body-batch-save-failed-task-detail' }
+    });
+    assert.equal(taskDetailResponse.statusCode, 200);
+    const taskDetail = taskDetailResponse.json().data;
+    assert.equal(taskDetail.id, failedTask.id);
+    assert.equal(taskDetail.status, TaskStatus.Failed);
+    assert.equal(taskDetail.failureCategory, 'save_failed');
+    assert.equal(taskDetail.userFailureReason, '正文保存阶段测试失败：写入正文版本失败');
+    assert.equal(taskDetail.retryable, true);
+    assert.equal(taskDetail.nextAction.type, 'retry_task');
+    assert.equal(taskDetail.nextAction.label, '重试任务');
+    assert.doesNotMatch(JSON.stringify(taskDetail), /test-deepseek-key-should-not-leak|FULL_MODEL_RESPONSE_SHOULD_NOT_LEAK/);
+
+    const repeatedResponse = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/chapters/batch-generate`,
+      headers: { 'x-request-id': 'body-batch-save-failed-repeat' },
+      payload: {
+        strategySnapshotId: strategySnapshot.id,
+        expectedStrategySnapshotVersion: strategySnapshot.versionNo,
+        idempotencyKey: 'body-batch-save-failed-1'
+      }
+    });
+    assert.equal(repeatedResponse.statusCode, 200);
+    assert.equal(repeatedResponse.json().data.task.id, failedTask.id);
+    assert.equal(repeatedResponse.json().data.task.status, TaskStatus.Failed);
+    assert.equal(repeatedResponse.json().data.batch, null);
+    assert.equal(countingClient.getBodyCallCount(), bodyCallCountAfterFailure);
+    assert.equal(
+      repository
+        .getGenerationTasks()
+        .filter((task) => task.taskType === 'body_batch_generate' && (task.metadata as Record<string, unknown>).idempotencyKey === 'body-batch-save-failed-1').length,
+      1
+    );
+
+    await app.close();
+  });
+
   it('generates a default five-chapter body batch with per-chapter content, feature card, review, memory, and summary', async () => {
     const repository = createInMemoryNovelRepository();
     const app = await buildApp({
@@ -1118,7 +1890,7 @@ describe('novel package 6 body generation routes', () => {
     });
     assert.equal(eventsResponse.statusCode, 200);
     const eventTypes = eventsResponse.json().data.items.map((event: any) => event.eventType);
-    assert.deepEqual(eventTypes.slice(0, 5), ['preparing_context', 'calling_model', 'parsing_output', 'quality_checking', 'saving_result']);
+    assert.deepEqual(eventTypes.slice(0, 6), ['calling_model', 'preparing_context', 'calling_model', 'parsing_output', 'quality_checking', 'saving_result']);
     assert.equal(eventsResponse.json().data.items.some((event: any) => /正在生成第 1\/5 章/.test(event.message)), true);
 
     const detailResponse = await app.inject({
@@ -1843,6 +2615,55 @@ async function createDraft(app: Awaited<ReturnType<typeof buildApp>>, title: str
   return response.json().data.id as string;
 }
 
+class FakeHotspotReferenceGateway implements HotspotReferenceGateway {
+  async getCapability() {
+    return {
+      available: true,
+      unavailableReason: null
+    };
+  }
+
+  async validateReference(input: HotspotReferenceValidationInput) {
+    if (input.reportId === 'hotspot-cross-tenant') {
+      return {
+        ok: false,
+        reasonCode: 'cross_tenant' as const,
+        message: '热点报告不属于当前租户。',
+        report: null,
+        opportunity: null
+      };
+    }
+
+    if (input.reportId !== 'hotspot-001') {
+      return {
+        ok: false,
+        reasonCode: 'missing_report' as const,
+        message: '热点报告不存在或不可访问。',
+        report: null,
+        opportunity: null
+      };
+    }
+
+    if (input.opportunityId && input.opportunityId !== 'opportunity-001') {
+      return {
+        ok: false,
+        reasonCode: 'opportunity_not_in_report' as const,
+        message: '热点机会点不属于所选报告。',
+        report: { id: input.reportId, title: '同租户热点报告' },
+        opportunity: null
+      };
+    }
+
+    return {
+      ok: true,
+      reasonCode: null,
+      message: null,
+      report: { id: input.reportId, title: '同租户热点报告' },
+      opportunity: input.opportunityId ? { id: input.opportunityId, title: '短视频机会点' } : null
+    };
+  }
+}
+
 async function generateDirections(app: Awaited<ReturnType<typeof buildApp>>, novelId: string) {
   const response = await app.inject({
     method: 'POST',
@@ -2003,6 +2824,140 @@ function createM1E2EFakeLlmClient(): LlmClient {
   };
 }
 
+function createDelayedFollowupFakeLlmClient(): { client: LlmClient; waitForFollowup: () => Promise<void>; releaseFollowup: () => void } {
+  let releaseFollowup!: () => void;
+  let markFollowupStarted!: () => void;
+  const releasePromise = new Promise<void>((resolve) => {
+    releaseFollowup = resolve;
+  });
+  const startedPromise = new Promise<void>((resolve) => {
+    markFollowupStarted = resolve;
+  });
+  let hasDelayedFollowup = false;
+
+  return {
+    client: {
+      async chat(request) {
+        if (request.taskName === 'novel_trial_followup' && !hasDelayedFollowup) {
+          hasDelayedFollowup = true;
+          markFollowupStarted();
+          await releasePromise;
+        }
+
+        return {
+          content: JSON.stringify({
+            ...createFakeDeepSeekPayload(request.taskName ?? 'unknown_task'),
+            debugRaw: 'FULL_MODEL_RESPONSE_SHOULD_NOT_LEAK'
+          }),
+          model: request.model,
+          usage: {
+            promptTokens: 24,
+            completionTokens: 48,
+            totalTokens: 72
+          }
+        };
+      }
+    },
+    waitForFollowup: () => startedPromise,
+    releaseFollowup
+  };
+}
+
+function createDelayedBodyFakeLlmClient(): { client: LlmClient; waitForBody: () => Promise<void>; releaseBody: () => void; getBodyCallCount: () => number } {
+  let releaseBody!: () => void;
+  let markBodyStarted!: () => void;
+  const releasePromise = new Promise<void>((resolve) => {
+    releaseBody = resolve;
+  });
+  const startedPromise = new Promise<void>((resolve) => {
+    markBodyStarted = resolve;
+  });
+  let hasDelayedBody = false;
+  let bodyCallCount = 0;
+
+  return {
+    client: {
+      async chat(request) {
+        if (request.taskName === 'novel_body_chapter_generate') {
+          bodyCallCount += 1;
+          if (!hasDelayedBody) {
+            hasDelayedBody = true;
+            markBodyStarted();
+            await releasePromise;
+          }
+        }
+
+        return {
+          content: JSON.stringify({
+            ...createFakeDeepSeekPayload(request.taskName ?? 'unknown_task'),
+            debugRaw: 'FULL_MODEL_RESPONSE_SHOULD_NOT_LEAK'
+          }),
+          model: request.model,
+          usage: {
+            promptTokens: 24,
+            completionTokens: 48,
+            totalTokens: 72
+          }
+        };
+      }
+    },
+    waitForBody: () => startedPromise,
+    releaseBody,
+    getBodyCallCount: () => bodyCallCount
+  };
+}
+
+function createFailingBodyFakeLlmClient(): LlmClient {
+  return {
+    async chat(request) {
+      if (request.taskName === 'novel_body_chapter_generate') {
+        throw new Error('正文模型测试失败');
+      }
+
+      return {
+        content: JSON.stringify({
+          ...createFakeDeepSeekPayload(request.taskName ?? 'unknown_task'),
+          debugRaw: 'FULL_MODEL_RESPONSE_SHOULD_NOT_LEAK'
+        }),
+        model: request.model,
+        usage: {
+          promptTokens: 24,
+          completionTokens: 48,
+          totalTokens: 72
+        }
+      };
+    }
+  };
+}
+
+function createCountingBodyFakeLlmClient(): { client: LlmClient; getBodyCallCount: () => number } {
+  let bodyCallCount = 0;
+
+  return {
+    client: {
+      async chat(request) {
+        if (request.taskName === 'novel_body_chapter_generate') {
+          bodyCallCount += 1;
+        }
+
+        return {
+          content: JSON.stringify({
+            ...createFakeDeepSeekPayload(request.taskName ?? 'unknown_task'),
+            debugRaw: 'FULL_MODEL_RESPONSE_SHOULD_NOT_LEAK'
+          }),
+          model: request.model,
+          usage: {
+            promptTokens: 24,
+            completionTokens: 48,
+            totalTokens: 72
+          }
+        };
+      }
+    },
+    getBodyCallCount: () => bodyCallCount
+  };
+}
+
 function createFakeDeepSeekPayload(taskName: string): Record<string, unknown> {
   if (taskName === 'novel_direction_generate' || taskName === 'novel_direction_fuse' || taskName === 'novel_direction_optimize') {
     return {
@@ -2015,6 +2970,20 @@ function createFakeDeepSeekPayload(taskName: string): Record<string, unknown> {
         riskLevel: 'low',
         riskTags: ['节奏可控'],
         recommendedReason: '冲突清楚，适合作为短篇主线。'
+      }))
+    };
+  }
+
+  if (taskName.startsWith('novel_structure_chapter_plan_')) {
+    return {
+      chapters: [1, 2, 3, 4, 5].map((chapterNo) => ({
+        chapterNo,
+        stageIndex: 1,
+        title: `第${chapterNo}章`,
+        wordTarget: 2200,
+        goal: `第${chapterNo}章推进翻盘线索`,
+        conflict: '外界质疑升级',
+        hook: '新证据出现'
       }))
     };
   }

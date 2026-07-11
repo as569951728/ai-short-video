@@ -137,6 +137,9 @@
 ## 14. 测试与验证检查
 
 - 核心页面是否至少能通过 typecheck 和 build。
+- admin-web 构建是否通过 `npm run build:budget -w apps/admin-web`。该门禁会重新执行 build、检查 entry/main chunk 预算、检查主要 route chunk 预算，并只允许已记录的第三方 warning 指纹。
+- 当前 admin-web build budget 基线：路由懒加载后 entry chunk 约 1.00 MB / gzip 324 kB，正式预算为 entry <= 1.10 MB、route chunk <= 200 kB。预算超限时应继续拆分页面或移除不必要首包依赖，不能通过调高 Vite `chunkSizeWarningLimit` 掩盖。
+- 当前仅临时白名单 `@vueuse/core/dist/index.js` 两处 Rolldown `INVALID_ANNOTATION` 指纹：`3362:1`、`5780:23`。该白名单是第三方依赖治理债，不代表永久忽略；新增 warning 必须复核并更新文档或修复。
 - 关键 composable 是否有可测试的纯逻辑。
 - 研发首期是否覆盖创建小说、小说列表、轻量章节详情、视频列表、列表行推荐动作和任务进度的基本交互验证计划。
 - 研发首期是否覆盖从小说列表推进到待视频化前的核心链路验证：生成设定、生成大纲、生成章节目录、试写、审稿、重写、批量正文、全书审稿。

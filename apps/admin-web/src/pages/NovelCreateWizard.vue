@@ -26,34 +26,71 @@
             <el-form-item label="小说标题" required>
               <el-input v-model="form.title" placeholder="例如：重生后我靠系统逆袭" maxlength="80" show-word-limit />
             </el-form-item>
-            <el-form-item label="创作来源">
-              <el-radio-group v-model="form.source">
-                <el-radio-button label="系统推荐" />
-                <el-radio-button label="引用热点" />
-                <el-radio-button label="手动想法" />
-              </el-radio-group>
-            </el-form-item>
+            <div class="composite-form-row">
+              <span id="novel-create-source-label" class="composite-form-label">创作来源</span>
+              <div class="composite-form-content">
+                <el-radio-group
+                  v-model="form.source"
+                  class="source-radio-group"
+                  aria-labelledby="novel-create-source-label"
+                >
+                  <el-radio-button
+                    v-for="option in creationSourceOptions"
+                    :key="option.value"
+                    :value="option.value"
+                    :disabled="option.disabled"
+                  >
+                    {{ option.label }}
+                  </el-radio-button>
+                </el-radio-group>
+                <p class="field-hint source-hint">{{ sourceHintText }}</p>
+                <p class="field-hint source-unavailable-hint">{{ hotspotUnavailableReason }}</p>
+              </div>
+            </div>
             <el-form-item label="题材方向">
-              <el-select v-model="form.genres" multiple placeholder="选择 1-3 个题材">
-                <el-option label="都市逆袭" value="都市逆袭" />
-                <el-option label="女频爽文" value="女频爽文" />
-                <el-option label="玄学直播" value="玄学直播" />
-                <el-option label="职场商战" value="职场商战" />
-              </el-select>
+              <div class="tag-picker">
+                <el-select v-model="form.genres" multiple placeholder="从常用题材中选择">
+                  <el-option v-for="genre in genreOptions" :key="genre" :label="genre" :value="genre" />
+                </el-select>
+                <el-input
+                  v-model="genreInput"
+                  placeholder="手写新题材，例如：末世经营"
+                  maxlength="40"
+                  clearable
+                  @keyup.enter="addGenre"
+                >
+                  <template #append>
+                    <el-button @click="addGenre">添加</el-button>
+                  </template>
+                </el-input>
+              </div>
+              <p class="field-hint">可以手选常用题材，也可以手写新增；创建后会随草稿偏好保存。</p>
             </el-form-item>
             <el-form-item label="爽点偏好">
-              <el-select v-model="form.appealPoints" multiple placeholder="选择读者最想看的爽点">
-                <el-option label="低谷翻盘" value="低谷翻盘" />
-                <el-option label="身份反转" value="身份反转" />
-                <el-option label="当场打脸" value="当场打脸" />
-                <el-option label="强成长" value="强成长" />
-              </el-select>
+              <div class="tag-picker">
+                <el-select v-model="form.appealPoints" multiple placeholder="从常用爽点中选择">
+                  <el-option v-for="appeal in appealOptions" :key="appeal" :label="appeal" :value="appeal" />
+                </el-select>
+                <el-input
+                  v-model="appealInput"
+                  placeholder="手写新爽点，例如：幕后反杀"
+                  maxlength="40"
+                  clearable
+                  @keyup.enter="addAppealPoint"
+                >
+                  <template #append>
+                    <el-button @click="addAppealPoint">添加</el-button>
+                  </template>
+                </el-input>
+              </div>
+              <p class="field-hint">可以手选常用爽点，也可以手写新增；不是输入过滤，添加后会成为已选标签。</p>
             </el-form-item>
             <el-form-item label="目标读者">
               <el-input v-model="form.targetAudience" placeholder="例如：18-35 岁爽文用户" />
             </el-form-item>
-            <el-form-item label="一句话想法">
-              <el-input v-model="form.customIdea" type="textarea" :rows="4" placeholder="可以简单写一个开局、反击点或想避开的雷区" />
+            <el-form-item :label="ideaFieldLabel" :required="form.source === 'manual_idea'">
+              <el-input v-model="form.customIdea" type="textarea" :rows="4" :placeholder="ideaPlaceholder" />
+              <p class="field-hint">{{ ideaFieldHint }}</p>
             </el-form-item>
             <el-form-item label="视频化倾向">
               <el-select v-model="form.videoAdaptationPreference">
@@ -87,7 +124,7 @@
 
       <el-alert
         class="mt-16"
-        title="本步骤只创建草稿，不生成方向候选、不生成设定或正文。"
+        title="本步骤只创建草稿，创作来源只作为后续方向生成参考，不生成方向候选、不生成设定或正文。"
         type="info"
         show-icon
         :closable="false"
@@ -102,19 +139,32 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import type { NovelCreationSourceRequestType } from '@ai-shortvideo/shared'
 import { ApiClientError } from '../shared/services/http'
+import {
+  DEFAULT_NOVEL_APPEAL_OPTIONS,
+  DEFAULT_NOVEL_GENRE_OPTIONS,
+  HOTSPOT_SOURCE_UNAVAILABLE_REASON,
+  NOVEL_CREATION_SOURCE_OPTIONS,
+} from '../modules/novels/constants/createOptions'
 import { createNovelDraft } from '../modules/novels/services/novelService'
 
 const router = useRouter()
 const submitting = ref(false)
 const apiError = ref('')
+const genreInput = ref('')
+const appealInput = ref('')
+const genreOptions = DEFAULT_NOVEL_GENRE_OPTIONS
+const appealOptions = DEFAULT_NOVEL_APPEAL_OPTIONS
+const creationSourceOptions = NOVEL_CREATION_SOURCE_OPTIONS
+const hotspotUnavailableReason = HOTSPOT_SOURCE_UNAVAILABLE_REASON
 
 const form = reactive({
   title: '重生后我靠系统逆袭',
-  source: '系统推荐',
+  source: 'system_recommendation' as NovelCreationSourceRequestType,
   genres: ['都市逆袭'],
   appealPoints: ['低谷翻盘'],
   targetAudience: '18-35 岁爽文用户',
@@ -124,6 +174,30 @@ const form = reactive({
   chapterWordMin: 1800,
   chapterWordMax: 2600,
 })
+
+const sourceHintText = computed(() => {
+  if (form.source === 'manual_idea') {
+    return NOVEL_CREATION_SOURCE_OPTIONS.find((option) => option.value === 'manual_idea')?.reason ?? ''
+  }
+
+  if (form.source === 'hotspot_reference') {
+    return hotspotUnavailableReason
+  }
+
+  return NOVEL_CREATION_SOURCE_OPTIONS.find((option) => option.value === 'system_recommendation')?.reason ?? ''
+})
+
+const ideaFieldLabel = computed(() => (form.source === 'manual_idea' ? '核心想法' : '补充想法'))
+const ideaPlaceholder = computed(() => (
+  form.source === 'manual_idea'
+    ? '请写清楚主角开局、核心冲突或想要的反转，不少于 6 个字符'
+    : '可选：简单写一个开局、反击点或想避开的雷区'
+))
+const ideaFieldHint = computed(() => (
+  form.source === 'manual_idea'
+    ? '手动想法会作为创建来源保存；为空或少于 6 个字符时不能创建。'
+    : '补充想法只作为参考，不代表已生成方向、设定或正文。'
+))
 
 async function submitDraft() {
   apiError.value = ''
@@ -138,17 +212,31 @@ async function submitDraft() {
     return
   }
 
+  const customIdea = form.customIdea.trim()
+  if (form.source === 'hotspot_reference') {
+    apiError.value = hotspotUnavailableReason
+    return
+  }
+
+  if (form.source === 'manual_idea' && customIdea.length < 6) {
+    apiError.value = '手动想法需要填写不少于 6 个字符的核心想法'
+    return
+  }
+
   submitting.value = true
 
   try {
+    const genres = normalizeTagValues(form.genres)
+    const appealPoints = normalizeTagValues(form.appealPoints)
     const draft = await createNovelDraft({
       title: form.title,
       channel: 'novel',
-      genres: form.genres,
+      creationSourceType: form.source,
+      genres,
       preferences: {
-        appealPoints: form.appealPoints,
+        appealPoints,
         targetAudience: form.targetAudience,
-        customIdea: form.customIdea || null,
+        customIdea: customIdea || null,
         videoAdaptationPreference: form.videoAdaptationPreference,
       },
       chapterLimit: form.chapterLimit,
@@ -175,4 +263,77 @@ function formatApiError(error: unknown) {
 
   return error instanceof Error ? error.message : '创建草稿失败，请稍后重试'
 }
+
+function addGenre() {
+  addTagValue(form.genres, genreInput)
+}
+
+function addAppealPoint() {
+  addTagValue(form.appealPoints, appealInput)
+}
+
+function addTagValue(target: string[], input: { value: string }) {
+  const value = input.value.trim()
+  if (!value) {
+    return
+  }
+
+  if (!target.includes(value)) {
+    target.push(value)
+  }
+
+  input.value = ''
+}
+
+function normalizeTagValues(values: string[]) {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean))).slice(0, 12)
+}
 </script>
+
+<style scoped>
+.composite-form-row {
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+}
+
+.composite-form-label {
+  box-sizing: border-box;
+  flex: 0 0 104px;
+  padding: 0 12px 0 0;
+  color: var(--el-text-color-regular);
+  font-size: 14px;
+  line-height: 32px;
+  text-align: right;
+}
+
+.composite-form-content {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.tag-picker {
+  display: grid;
+  width: 100%;
+  gap: 8px;
+}
+
+.field-hint {
+  width: 100%;
+  margin: 6px 0 0;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.source-hint {
+  max-width: 560px;
+}
+
+.source-unavailable-hint {
+  max-width: 560px;
+  color: var(--el-color-warning);
+}
+</style>

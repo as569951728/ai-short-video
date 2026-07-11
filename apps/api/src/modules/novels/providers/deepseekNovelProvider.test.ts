@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { LlmProviderError, type LlmClient } from '../../ai/llmClient.js';
+import { LlmProviderError, type ChatCompletionRequest, type LlmClient } from '../../ai/llmClient.js';
 import { DeepSeekNovelProvider } from './deepseekNovelProvider.js';
 
 describe('DeepSeek novel provider', () => {
@@ -214,7 +214,10 @@ describe('DeepSeek novel provider', () => {
 
   it('rejects invalid fake model JSON without leaking the raw response', async () => {
     const provider = new DeepSeekNovelProvider({
-      client: createQueueClient(['{"candidates":[{"title":"缺正文","content":"FULL_MODEL_RESPONSE_SHOULD_NOT_LEAK"}]}'])
+      client: createQueueClient([
+        '{"candidates":[{"title":"缺正文","content":"FULL_MODEL_RESPONSE_SHOULD_NOT_LEAK"}]}',
+        '{"candidates":[{"title":"缺正文","content":"FULL_MODEL_RESPONSE_SHOULD_NOT_LEAK"}]}'
+      ])
     });
 
     await assert.rejects(
@@ -227,6 +230,327 @@ describe('DeepSeek novel provider', () => {
         return true;
       }
     );
+  });
+
+  it('uses the lightweight structure model, schema hint, and token cap for setting generation', async () => {
+    const requests: ChatCompletionRequest[] = [];
+    const provider = new DeepSeekNovelProvider({
+      model: 'deepseek-v4-pro',
+      structureModel: 'deepseek-v4-flash',
+      client: {
+        async chat(request) {
+          requests.push(request);
+          return {
+            content: JSON.stringify({
+              title: '设定档案',
+              summary: '人物和规则清晰。',
+              content: {
+                title: '设定档案',
+                summary: '人物和规则清晰。',
+                sections: [{ title: '人物关系', body: '主角和反派目标清楚。', items: ['主角要逆袭', '反派制造阻力'] }],
+                stages: [],
+                chapters: [],
+                riskTags: [],
+                recommendation: '可进入大纲。'
+              },
+              score: 86,
+              riskLevel: 'low',
+              riskTags: [],
+              recommendedReason: '结构稳定。'
+            }),
+            model: request.model,
+            usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 }
+          };
+        }
+      }
+    });
+
+    const result = await provider.generateAsset({ objectType: 'setting', novel: createNovel(), preferences: [], currentAssets: {} });
+    const request = requests[0];
+    const userPayload = JSON.parse(request.messages[1].content);
+
+    assert.equal(result.title, '设定档案');
+    assert.equal(request.model, 'deepseek-v4-flash');
+    assert.equal(request.maxTokens, 2000);
+    assert.match(userPayload.instruction, /聚焦人物设定/);
+    assert.match(userPayload.outputSchemaHint, /结构任务返回/);
+    assert.doesNotMatch(userPayload.outputSchemaHint, new RegExp('第1章试写返回|正文/重写返回|全书审稿返回'));
+  });
+
+  it('summarizes upstream structure context and uses the structure model for outline generation', async () => {
+    const requests: ChatCompletionRequest[] = [];
+    const provider = new DeepSeekNovelProvider({
+      model: 'deepseek-v4-pro',
+      structureModel: 'deepseek-v4-flash',
+      client: {
+        async chat(request) {
+          requests.push(request);
+          return {
+            content: JSON.stringify({
+              title: '全书大纲',
+              summary: '全书主线稳定。',
+              content: {
+                title: '全书大纲',
+                summary: '全书主线稳定。',
+                sections: [{ title: '主线', body: '主角高考后布局商业帝国。', items: [] }],
+                stages: [{ stageIndex: 1, title: '起势', chapterRange: '1-5', goal: '拿到第一桶金', conflict: '家人与对手质疑', payoff: '首战成名' }],
+                chapters: [{ chapterNo: 1, stageIndex: 1, title: '第1章', wordTarget: 2000, goal: '发现重生机会', conflict: '资源不足', hook: '第一笔机会出现' }],
+                riskTags: [],
+                recommendation: '可进入阶段大纲。'
+              },
+              score: 86,
+              riskLevel: 'low',
+              riskTags: [],
+              recommendedReason: '主线清晰。'
+            }),
+            model: request.model,
+            usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 }
+          };
+        }
+      }
+    });
+
+    await provider.generateAsset({
+      objectType: 'outline',
+      novel: createNovel(),
+      preferences: [],
+      currentAssets: {
+        setting: {
+          title: '设定档案',
+          summary: '人物关系稳定。',
+          content: {
+            summary: '人物关系稳定。',
+            sections: [{ title: '人物', body: '很长的设定正文'.repeat(60), items: ['很长的条目'.repeat(40)] }]
+          }
+        }
+      }
+    });
+
+    const request = requests[0];
+    const userPayload = JSON.parse(request.messages[1].content);
+    const serializedAssets = JSON.stringify(userPayload.payload.currentAssets);
+    const section = userPayload.payload.currentAssets.setting.sections[0];
+
+    assert.equal(request.model, 'deepseek-v4-flash');
+    assert.equal(request.maxTokens, 1600);
+    assert.match(userPayload.instruction, /关键转折/);
+    assert.match(userPayload.outputSchemaHint, /\"stages\":\[\]/);
+    assert.match(userPayload.outputSchemaHint, /\"chapters\":\[\]/);
+    assert.ok(serializedAssets.length < 1000);
+    assert.ok(section.body.length <= 123);
+    assert.ok(section.body.endsWith('...'));
+    assert.ok(section.items[0].length <= 83);
+  });
+
+  it('generates long chapter plans in chunks and merges them into one structure asset', async () => {
+    const requests: ChatCompletionRequest[] = [];
+    const provider = new DeepSeekNovelProvider({
+      model: 'deepseek-v4-pro',
+      structureModel: 'deepseek-v4-flash',
+      client: {
+        async chat(request) {
+          requests.push(request);
+          const payload = JSON.parse(request.messages[1].content);
+          const start = payload.payload.chapterRange.start;
+          const end = payload.payload.chapterRange.end;
+          return {
+            content: JSON.stringify({
+              chapters: Array.from({ length: end - start + 1 }, (_, index) => {
+                const chapterNo = start + index;
+                return {
+                  chapterNo,
+                  stageIndex: Math.ceil(chapterNo / 20),
+                  title: `第${chapterNo}章`,
+                  wordTarget: 1200,
+                  goal: `目标${chapterNo}`,
+                  conflict: `冲突${chapterNo}`,
+                  hook: `钩子${chapterNo}`
+                };
+              })
+            }),
+            model: request.model,
+            usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 }
+          };
+        }
+      }
+    });
+
+    const result = await provider.generateAsset({
+      objectType: 'chapter_plan',
+      novel: { ...createNovel(), chapterLimit: 45 },
+      preferences: [],
+      currentAssets: {
+        stageOutline: {
+          title: '阶段大纲',
+          summary: '三阶段推进。',
+          content: {
+            stages: [
+              { stageIndex: 1, title: '起势', chapterRange: '1-15', goal: '第一桶金', conflict: '质疑', payoff: '翻身' }
+            ]
+          }
+        }
+      }
+    });
+
+    assert.equal(requests.length, 5);
+    assert.equal(result.objectType, 'chapter_plan');
+    assert.equal(result.content.chapters.length, 45);
+    assert.deepEqual(result.content.chapters.map((chapter) => chapter.chapterNo).slice(0, 3), [1, 2, 3]);
+    assert.equal(result.content.chapters.at(-1)?.chapterNo, 45);
+    assert.equal(requests[0].taskName, 'novel_structure_chapter_plan_1_10');
+    assert.equal(requests[1].taskName, 'novel_structure_chapter_plan_11_20');
+    assert.equal(requests[2].taskName, 'novel_structure_chapter_plan_21_30');
+    assert.equal(requests[3].taskName, 'novel_structure_chapter_plan_31_40');
+    assert.equal(requests[4].taskName, 'novel_structure_chapter_plan_41_45');
+    assert.equal(requests[0].model, 'deepseek-v4-flash');
+    assert.equal(requests[0].maxTokens, 2200);
+    const firstPayload = JSON.parse(requests[0].messages[1].content);
+    assert.match(firstPayload.outputSchemaHint, /章节目录分块/);
+    assert.deepEqual(firstPayload.payload.requiredChapterNumbers.slice(0, 3), [1, 2, 3]);
+  });
+
+  it('uses the novel chapter word range for chapter plan targets and fallback values', async () => {
+    const requests: ChatCompletionRequest[] = [];
+    const provider = new DeepSeekNovelProvider({
+      model: 'deepseek-v4-pro',
+      client: {
+        async chat(request) {
+          requests.push(request);
+          return {
+            content: JSON.stringify({
+              chapters: [
+                {
+                  chapterNo: 1,
+                  stageIndex: 1,
+                  title: '第一桶金',
+                  goal: '拿到第一笔启动资金',
+                  conflict: '亲友质疑',
+                  hook: '订单突然翻倍'
+                }
+              ]
+            }),
+            model: request.model,
+            usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 }
+          };
+        }
+      }
+    });
+
+    const result = await provider.generateAsset({
+      objectType: 'chapter_plan',
+      novel: { ...createNovel(), chapterLimit: 1, chapterWordMin: 2200, chapterWordMax: 3200 },
+      preferences: [],
+      currentAssets: {}
+    });
+
+    const payload = JSON.parse(requests[0].messages[1].content);
+    assert.match(payload.instruction, /2200-3200/);
+    assert.doesNotMatch(payload.instruction, /1000-1800/);
+    assert.equal(result.content.chapters[0].wordTarget, 2700);
+  });
+
+  it('sends chapter word target constraints when generating a body chapter', async () => {
+    const requests: ChatCompletionRequest[] = [];
+    const provider = new DeepSeekNovelProvider({
+      model: 'deepseek-v4-pro',
+      client: {
+        async chat(request) {
+          requests.push(request);
+          return {
+            content: JSON.stringify({
+              title: '第4章 订单翻倍',
+              content: '正文内容。'.repeat(300),
+              summary: '主角拿到关键订单。',
+              riskLevel: 'low',
+              riskTags: [],
+              aiRecommendedReason: '承接主线。',
+              scoring: { totalScore: 86, dimensions: [] },
+              featureCard: {},
+              review: { totalScore: 86, issues: [], suggestions: [], riskLevel: 'low' },
+              memory: { summary: '订单线推进。', facts: [], foreshadows: [] },
+              hardFailed: false,
+              hardFailureReasons: []
+            }),
+            model: request.model,
+            usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 }
+          };
+        }
+      }
+    });
+
+    await provider.generateBodyChapter({
+      novel: { ...createNovel(), chapterWordMin: 2200, chapterWordMax: 3200 },
+      chapter: { ...createChapter(4), wordTarget: 2600 },
+      strategySnapshot: {},
+      previousContent: null,
+      previousMemory: null,
+      previousBatchNotes: [],
+      enhancedReview: false
+    });
+
+    const payload = JSON.parse(requests[0].messages[1].content);
+    assert.equal(payload.payload.chapter.wordTarget, 2600);
+    assert.match(payload.payload.wordTargetPolicy.instruction, /2600/);
+    assert.match(payload.payload.wordTargetPolicy.instruction, /低于/);
+  });
+
+  it('summarizes adopted direction context before setting generation', async () => {
+    const requests: ChatCompletionRequest[] = [];
+    const provider = new DeepSeekNovelProvider({
+      model: 'deepseek-v4-pro',
+      structureModel: 'deepseek-v4-flash',
+      client: {
+        async chat(request) {
+          requests.push(request);
+          return {
+            content: JSON.stringify({
+              title: '系统逆袭设定',
+              summary: '主角、反派和返还系统边界清晰。',
+              content: {
+                title: '系统逆袭设定',
+                summary: '主角、反派和返还系统边界清晰。',
+                sections: [{ title: '人物关系', body: '主角靠系统翻盘，反派不断设局。', items: ['系统返还有冷却', '反派掌握旧公司资源'] }],
+                stages: [],
+                chapters: [],
+                riskTags: [],
+                recommendation: '可进入大纲。'
+              },
+              score: 86,
+              riskLevel: 'low',
+              riskTags: [],
+              recommendedReason: '设定可支撑后续结构。'
+            }),
+            model: request.model,
+            usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 }
+          };
+        }
+      }
+    });
+
+    await provider.generateAsset({
+      objectType: 'setting',
+      novel: createNovel(),
+      preferences: [],
+      currentAssets: {
+        direction: {
+          title: '财富返还系统：从亏空亿万开始',
+          summary: '前世公司亏空，被陷害入狱。',
+          content: '前世公司亏空，被陷害入狱，重生后绑定商业返还系统，任何消费双倍返现。'.repeat(8),
+          score: 88,
+          riskLevel: 'low',
+          recommendedReason: '商业逆袭主线清晰。'.repeat(10)
+        },
+        setting: null
+      }
+    });
+
+    const userPayload = JSON.parse(requests[0].messages[1].content);
+    const direction = userPayload.payload.currentAssets.direction;
+
+    assert.equal(direction.title, '财富返还系统：从亏空亿万开始');
+    assert.ok(direction.content.length <= 263);
+    assert.ok(direction.content.endsWith('...'));
+    assert.equal(userPayload.payload.currentAssets.setting, null);
   });
 
   it('retries once when the trial chapter-one candidate count is lower than requested', async () => {
@@ -259,6 +583,36 @@ describe('DeepSeek novel provider', () => {
     assert.equal(callCount, 2);
     assert.equal(result.length, 3);
     assert.equal(result[0].isAiRecommended, true);
+  });
+
+  it('uses the faster structure model and bounded output for trial chapter-one candidates', async () => {
+    let capturedRequest: Parameters<LlmClient['chat']>[0] | null = null;
+    const provider = new DeepSeekNovelProvider({
+      model: 'deepseek-v4-pro',
+      structureModel: 'deepseek-v4-flash',
+      client: {
+        async chat(request) {
+          capturedRequest = request;
+          return {
+            content: JSON.stringify({
+              candidates: [createTrialCandidateJson('候选 A'), createTrialCandidateJson('候选 B'), createTrialCandidateJson('候选 C')]
+            }),
+            model: request.model,
+            usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 }
+          };
+        }
+      }
+    });
+
+    await provider.generateChapterOneCandidates({
+      novel: createNovel(),
+      preferences: [],
+      chapters: [createChapter(1)],
+      chapterCount: 3
+    });
+
+    assert.equal(capturedRequest?.model, 'deepseek-v4-flash');
+    assert.equal(capturedRequest?.maxTokens, 4200);
   });
 
   it('fails as output_parse_failed when retry still returns too few trial candidates', async () => {

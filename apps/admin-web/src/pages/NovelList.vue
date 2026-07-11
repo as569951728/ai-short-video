@@ -111,7 +111,7 @@
         <el-table-column label="小说名称" min-width="230">
           <template #default="{ row }">
             <button class="link-button title-link" type="button" @click="router.push(`/novels/${row.id}`)">{{ row.title }}</button>
-            <div class="muted-line">{{ row.genre }} / {{ row.hotspot }}</div>
+            <div class="muted-line">{{ row.genre }} / {{ row.creationSourceText }}</div>
           </template>
         </el-table-column>
         <el-table-column label="小说状态" min-width="160">

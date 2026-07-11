@@ -11,18 +11,21 @@ describe('AI model routing', () => {
 
     assert.equal(config.mode, 'deepseek');
     assert.equal(config.model, 'deepseek-v4-pro');
+    assert.equal(config.structureModel, 'deepseek-v4-pro');
     assert.equal(config.reasonerModel, 'deepseek-v4-pro');
   });
 
   it('keeps explicit DeepSeek model overrides', () => {
     const config = resolveDeepSeekConfig({
-      AI_PROVIDER_MODE: 'deepseek',
-      DEEPSEEK_API_KEY: 'test-key',
-      DEEPSEEK_MODEL: 'deepseek-v4-flash',
-      DEEPSEEK_REASONER_MODEL: 'deepseek-v4-pro'
-    });
+        AI_PROVIDER_MODE: 'deepseek',
+        DEEPSEEK_API_KEY: 'test-key',
+        DEEPSEEK_MODEL: 'deepseek-v4-flash',
+        DEEPSEEK_STRUCTURE_MODEL: 'deepseek-v4-pro',
+        DEEPSEEK_REASONER_MODEL: 'deepseek-v4-pro'
+      });
 
     assert.equal(config.model, 'deepseek-v4-flash');
+    assert.equal(config.structureModel, 'deepseek-v4-pro');
     assert.equal(config.reasonerModel, 'deepseek-v4-pro');
   });
 });

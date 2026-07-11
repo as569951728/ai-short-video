@@ -16,6 +16,7 @@
 - 视频系统页面流程总图：`docs/prototypes/video-system-page-flow.md`
 - 视频模块核心原型：`docs/prototypes/video-module-core-prototype.md`
 - 视频模块可视化原型：`docs/prototypes/video-module-core-clickable-prototype.html`
+- 视频 P8 步骤式承接原型：`docs/prototypes/video-p8-step-workbench-clickable-prototype.html`，当前已在 `/videos` 落成前端 mock/view-model 承接工作台
 - 视频步骤式工作台可点击原型：`docs/prototypes/video-step-workbench-clickable-prototype.html`
 - 视频列表原型：`docs/prototypes/video-list-prototype.md`
 - 创建视频项目原型：`docs/prototypes/video-create-project-prototype.md`

@@ -4,20 +4,27 @@ import { registerContractRoutes } from './routes/contractRoutes.js';
 import { registerHealthRoutes } from './routes/healthRoutes.js';
 import { registerNovelRoutes } from './modules/novels/routes/novelRoutes.js';
 import { registerTaskRoutes } from './modules/tasks/routes/taskRoutes.js';
+import { registerVideoRoutes } from './modules/videos/routes/videoRoutes.js';
 import { toErrorResponse } from './shared/errors.js';
 import type { LlmClient } from './modules/ai/llmClient.js';
 import type { AiProviderEnv } from './modules/ai/modelRouting.js';
 import type { NovelRepository } from './modules/novels/domain/novelDomain.js';
+import type { VideoRepository } from './modules/videos/domain/videoDomain.js';
 import { createNovelProvidersFromEnv } from './modules/novels/providers/providerFactory.js';
+import type { HotspotReferenceGateway } from './modules/novels/integrations/hotspotReferenceGateway.js';
 import { createInMemoryNovelRepository } from './modules/novels/repositories/inMemoryNovelRepository.js';
+import { createInMemoryVideoRepository } from './modules/videos/repositories/inMemoryVideoRepository.js';
 import { PrismaNovelRepository } from './modules/novels/repositories/prismaNovelRepository.js';
+import { PrismaVideoRepository } from './modules/videos/repositories/prismaVideoRepository.js';
 import { env } from './config/env.js';
 
 interface BuildAppOptions {
   logger?: boolean;
   novelRepository?: NovelRepository;
+  videoRepository?: VideoRepository;
   aiProviderEnv?: AiProviderEnv;
   llmClient?: LlmClient;
+  hotspotReferenceGateway?: HotspotReferenceGateway;
   now?: () => Date;
 }
 
@@ -58,6 +65,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   await registerHealthRoutes(app);
   await registerContractRoutes(app);
   const novelRepository = options.novelRepository ?? createDefaultNovelRepository();
+  const videoRepository = options.videoRepository ?? createDefaultVideoRepository();
   const novelProviders = createNovelProvidersFromEnv({
     env: options.aiProviderEnv,
     llmClient: options.llmClient
@@ -65,10 +73,15 @@ export async function buildApp(options: BuildAppOptions = {}) {
   await registerNovelRoutes(app, {
     repository: novelRepository,
     ...novelProviders,
+    hotspotReferenceGateway: options.hotspotReferenceGateway,
     now: options.now
   });
   await registerTaskRoutes(app, {
     repository: novelRepository,
+    now: options.now
+  });
+  await registerVideoRoutes(app, {
+    repository: videoRepository,
     now: options.now
   });
 
@@ -81,4 +94,12 @@ function createDefaultNovelRepository(): NovelRepository {
   }
 
   return new PrismaNovelRepository();
+}
+
+function createDefaultVideoRepository(): VideoRepository {
+  if (!env.DATABASE_URL) {
+    return createInMemoryVideoRepository();
+  }
+
+  return new PrismaVideoRepository();
 }

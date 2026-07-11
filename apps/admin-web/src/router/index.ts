@@ -1,9 +1,11 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
-import NovelList from '../pages/NovelList.vue'
-import NovelCreateWizard from '../pages/NovelCreateWizard.vue'
-import NovelDetailWorkbench from '../pages/NovelDetailWorkbench.vue'
-import ChapterDetailWorkbench from '../pages/ChapterDetailWorkbench.vue'
-import VideoListTask from '../pages/VideoListTask.vue'
+
+const NovelList = () => import('../pages/NovelList.vue')
+const NovelCreateWizard = () => import('../pages/NovelCreateWizard.vue')
+const NovelDetailWorkbench = () => import('../pages/NovelDetailWorkbench.vue')
+const ChapterDetailWorkbench = () => import('../pages/ChapterDetailWorkbench.vue')
+const VideoListTask = () => import('../pages/VideoListTask.vue')
+const VideoDetailWorkbench = () => import('../pages/VideoDetailWorkbench.vue')
 
 const routes: RouteRecordRaw[] = [
   { path: '/', redirect: '/novels' },
@@ -16,6 +18,10 @@ const routes: RouteRecordRaw[] = [
     path: '/novels/new',
     component: NovelCreateWizard,
     meta: { title: '创建小说', module: 'novels', menu: 'novels', menuKey: '/novels/new', keepAlive: false, permissionCodes: [], breadcrumb: ['小说系统', '创建小说'] },
+  },
+  {
+    path: '/novels/create',
+    redirect: '/novels/new',
   },
   {
     path: '/novels/:novelId',
@@ -31,6 +37,11 @@ const routes: RouteRecordRaw[] = [
     path: '/videos',
     component: VideoListTask,
     meta: { title: '视频列表', module: 'videos', menu: 'videos', menuKey: '/videos', mode: 'videos', keepAlive: true, permissionCodes: [], breadcrumb: ['视频系统', '视频列表'] },
+  },
+  {
+    path: '/videos/:videoId',
+    component: VideoDetailWorkbench,
+    meta: { title: '视频详情工作台', module: 'videos', menu: 'videos', menuKey: '/videos', keepAlive: false, permissionCodes: [], breadcrumb: ['视频系统', '视频详情工作台'] },
   },
   {
     path: '/tasks',

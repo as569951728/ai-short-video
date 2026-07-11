@@ -20,6 +20,8 @@ import {
   type CreateNovelDraftRequest,
   type DirectionActionResultDTO,
   type DirectionCandidateDTO,
+  type EditDirectionCandidateRequest,
+  type EditStructureAssetRequest,
   type ForcePassFullReviewRequest,
   type FullReviewActionResultDTO,
   type FullReviewIssueActionResultDTO,
@@ -43,6 +45,7 @@ import {
   type ResolveImpactCaseRequest,
   type RewriteChapterRequest,
   type StartFullReviewRequest,
+  type UpdateChapterWordTargetsRequest,
   type ChapterContentAdoptionResultDTO,
   type ChapterRewriteResultDTO,
   type StructureActionResultDTO,
@@ -134,7 +137,18 @@ export async function fuseDirections(
   mode: ApiMode = getApiMode(),
 ): Promise<DirectionActionResultDTO> {
   if (mode === 'mock') {
-    return createMockDirectionActionResult(novelId, createMockDirectionCandidate({ id: `mock-fuse-${Date.now()}`, title: '融合方向候选' }))
+    const result = createMockDirectionActionResult(
+      novelId,
+      createMockDirectionCandidate({
+        id: createMockDirectionCandidateId('fuse'),
+        title: '融合方向候选',
+        summary: request.reason || '融合所选方向的核心爽点和视频化钩子。',
+      }),
+      null,
+      'novel_direction_fuse',
+    )
+    applyMockDirectionRevisionActionResult(novelId, result)
+    return result
   }
 
   return apiRequest<DirectionActionResultDTO>(`/novels/${novelId}/directions/fuse`, {
@@ -150,10 +164,60 @@ export async function optimizeDirection(
   mode: ApiMode = getApiMode(),
 ): Promise<DirectionActionResultDTO> {
   if (mode === 'mock') {
-    return createMockDirectionActionResult(novelId, createMockDirectionCandidate({ id: `mock-optimize-${Date.now()}`, title: '优化方向候选' }))
+    const result = createMockDirectionActionResult(
+      novelId,
+      createMockDirectionCandidate({
+        id: createMockDirectionCandidateId('optimize'),
+        title: '优化方向候选',
+        summary: request.instruction || '按用户要求优化方向表达。',
+      }),
+      null,
+      'novel_direction_optimize',
+    )
+    applyMockDirectionRevisionActionResult(novelId, result)
+    return result
   }
 
   return apiRequest<DirectionActionResultDTO>(`/novels/${novelId}/directions/${versionId}/optimize`, {
+    method: 'POST',
+    body: request,
+  })
+}
+
+export async function editDirectionCandidate(
+  novelId: string,
+  versionId: string,
+  request: EditDirectionCandidateRequest,
+  mode: ApiMode = getApiMode(),
+): Promise<DirectionActionResultDTO> {
+  if (mode === 'mock') {
+    const result = createMockDirectionActionResult(
+      novelId,
+      createMockDirectionCandidate({
+        id: createMockDirectionCandidateId('manual-edit'),
+        title: request.title,
+        summary: request.logline,
+        content: {
+          title: request.title,
+          logline: request.logline,
+          coreHook: request.coreHook,
+          audienceAppeal: request.audienceAppeal,
+          videoPotential: request.videoPotential,
+          sellingPoints: request.sellingPoints,
+          riskTags: request.riskTags,
+          recommendation: request.recommendation,
+        },
+        riskTags: request.riskTags,
+        recommendedReason: request.recommendation,
+      }),
+      null,
+      'novel_direction_manual_edit',
+    )
+    applyMockDirectionRevisionActionResult(novelId, result)
+    return result
+  }
+
+  return apiRequest<DirectionActionResultDTO>(`/novels/${novelId}/directions/${versionId}/edit`, {
     method: 'POST',
     body: request,
   })
@@ -198,6 +262,51 @@ export async function adoptSetting(
   if (mode === 'mock') return createMockStructureActionResult(novelId, 'setting', createMockStructureAsset({ id: versionId, objectType: 'setting', status: VersionStatus.Current }))
 
   return apiRequest<StructureActionResultDTO>(`/novels/${novelId}/settings/${versionId}/adopt`, {
+    method: 'POST',
+    body: request,
+  })
+}
+
+export async function editStructureAsset(
+  novelId: string,
+  objectType: StructureAssetType,
+  versionId: string,
+  request: EditStructureAssetRequest,
+  mode: ApiMode = getApiMode(),
+): Promise<StructureActionResultDTO> {
+  if (mode === 'mock') {
+    const result = createMockStructureActionResult(
+      novelId,
+      objectType,
+      createMockStructureAsset({
+        id: `mock-${objectType}-manual-edit-${Date.now()}`,
+        objectType,
+        title: request.title,
+        summary: request.summary,
+        riskTags: request.riskTags,
+        recommendedReason: request.recommendation,
+        content: {
+          title: request.title,
+          summary: request.summary,
+          sections: [
+            {
+              title: request.sectionTitle,
+              body: request.sectionBody,
+              items: request.sectionItems,
+            },
+          ],
+          stages: [],
+          chapters: [],
+          riskTags: request.riskTags,
+          recommendation: request.recommendation,
+        },
+      }),
+    )
+    applyMockStructureActionResult(novelId, result)
+    return result
+  }
+
+  return apiRequest<StructureActionResultDTO>(`/novels/${novelId}/${getStructureAssetResource(objectType)}/${versionId}/edit`, {
     method: 'POST',
     body: request,
   })
@@ -280,6 +389,19 @@ export async function adoptChapterPlan(
 
   return apiRequest<StructureActionResultDTO>(`/novels/${novelId}/chapter-plans/${versionId}/adopt`, {
     method: 'POST',
+    body: request,
+  })
+}
+
+export async function updateChapterWordTargets(
+  novelId: string,
+  request: UpdateChapterWordTargetsRequest,
+  mode: ApiMode = getApiMode(),
+): Promise<StructureActionResultDTO> {
+  if (mode === 'mock') return createMockStructureActionResult(novelId, 'chapter_plan')
+
+  return apiRequest<StructureActionResultDTO>(`/novels/${novelId}/chapter-plans/word-targets`, {
+    method: 'PATCH',
     body: request,
   })
 }
@@ -552,7 +674,9 @@ export function toNovelListRow(item: NovelListItemDTO): NovelListRow {
     id: item.id,
     title: item.title,
     genre: item.genres.join('、') || '未选择题材',
-    hotspot: '暂无热点来源',
+    hotspot: item.creationSource.label,
+    creationSourceType: item.creationSource.type,
+    creationSourceText: getCreationSourceText(item),
     stage: item.statusSummary.displayStatusText,
     status: item.statusSummary.displayStatusText,
     creationStage: item.creationStage,
@@ -585,6 +709,14 @@ export function toNovelListRow(item: NovelListItemDTO): NovelListRow {
   }
 }
 
+function getCreationSourceText(item: NovelListItemDTO) {
+  if (item.creationSource.type === 'hotspot_reference') {
+    return item.creationSource.hotspotTitle ? `引用热点：${item.creationSource.hotspotTitle}` : '引用热点';
+  }
+
+  return item.creationSource.label;
+}
+
 function getVideoReferenceText(item: NovelListItemDTO) {
   if (item.creationStage === NovelCreationStage.VideoReady || item.videoReferenceSummary.status === 'ready') {
     return '可被视频引用'
@@ -598,6 +730,7 @@ export function toDirectionCandidateRow(candidate: DirectionCandidateDTO): Direc
     id: candidate.id,
     title: candidate.title,
     versionLabel: `v${candidate.versionNo}`,
+    statusKey: candidate.status,
     status: getVersionStatusText(candidate.status),
     scoreText: String(candidate.score),
     marketScoreText: String(candidate.marketScore),
@@ -605,6 +738,7 @@ export function toDirectionCandidateRow(candidate: DirectionCandidateDTO): Direc
     riskTags: candidate.riskTags,
     logline: candidate.content.logline,
     coreHook: candidate.content.coreHook,
+    audienceAppeal: candidate.content.audienceAppeal,
     videoPotential: candidate.content.videoPotential,
     sellingPoints: candidate.content.sellingPoints,
     primaryReason: candidate.recommendedReason,
@@ -620,6 +754,7 @@ export function toStructureAssetRow(asset: StructureAssetDTO): StructureAssetRow
     typeText: getStructureAssetTypeText(asset.objectType),
     title: asset.title,
     versionLabel: `v${asset.versionNo}`,
+    statusKey: asset.status,
     status: getVersionStatusText(asset.status),
     scoreText: String(asset.score),
     riskLevelText: getRiskLevelText(asset.riskLevel),
@@ -718,6 +853,9 @@ function matchesKeyword(novel: Novel, keyword?: string) {
 function toMockNovelListRow(novel: Novel): NovelListRow {
   return {
     ...novel,
+    hotspot: '系统推荐',
+    creationSourceType: 'system_recommendation',
+    creationSourceText: `系统推荐 / ${novel.hotspot}`,
     creationStage: inferCreationStage(novel.stage),
     lifecycleStatus: NovelLifecycleStatus.Active,
     stageStatus: novel.status.includes('生成中') ? StageStatus.Processing : novel.status.includes('需') ? StageStatus.Blocked : StageStatus.NotStarted,
@@ -755,6 +893,7 @@ function createMockDraft(request: CreateNovelDraftRequest): NovelDetailDTO {
   const chapterLimit = request.chapterLimit ?? 80
   const chapterWordMin = request.chapterWordRange?.min ?? 1800
   const chapterWordMax = request.chapterWordRange?.max ?? 2600
+  const creationSource = createMockCreationSourceSummary(request)
 
   return {
     id: `mock-${Date.now()}`,
@@ -800,6 +939,7 @@ function createMockDraft(request: CreateNovelDraftRequest): NovelDetailDTO {
       statusText: '未准备',
       referencedVideoCount: 0,
     },
+    creationSource,
     recentTask: null,
     primaryAction: {
       type: 'view_detail',
@@ -809,8 +949,13 @@ function createMockDraft(request: CreateNovelDraftRequest): NovelDetailDTO {
     createdAt: now,
     updatedAt: now,
     preferences: {
+      creationSourceType: creationSource.type,
+      creationSourceLabel: creationSource.label,
+      creationSourceDescription: creationSource.description,
       hotspotReportId: request.hotspotReportId ?? null,
       hotspotOpportunityId: request.hotspotOpportunityId ?? null,
+      hotspotTitle: creationSource.hotspotTitle,
+      hotspotOpportunityTitle: creationSource.hotspotOpportunityTitle,
       appealPoints: request.preferences?.appealPoints ?? [],
       genres,
       openingState: request.preferences?.openingState ?? null,
@@ -850,6 +995,50 @@ function createMockDraft(request: CreateNovelDraftRequest): NovelDetailDTO {
   }
 }
 
+function createMockCreationSourceSummary(request: CreateNovelDraftRequest): NovelDetailDTO['creationSource'] {
+  const sourceType = request.creationSourceType ?? 'system_recommendation'
+
+  if (sourceType === 'hotspot_reference') {
+    return {
+      type: 'hotspot_reference',
+      label: '引用热点',
+      description: '基于已验证的热点报告或机会点作为方向生成参考。',
+      hotspotReportId: request.hotspotReportId ?? null,
+      hotspotOpportunityId: request.hotspotOpportunityId ?? null,
+      hotspotTitle: request.hotspotReportId ? '测试热点报告' : null,
+      hotspotOpportunityTitle: request.hotspotOpportunityId ? '测试热点机会点' : null,
+      isLegacyUnknown: false,
+      unavailableReason: null,
+    }
+  }
+
+  if (sourceType === 'manual_idea') {
+    return {
+      type: 'manual_idea',
+      label: '手动想法',
+      description: '围绕用户填写的核心想法扩展方向。',
+      hotspotReportId: null,
+      hotspotOpportunityId: null,
+      hotspotTitle: null,
+      hotspotOpportunityTitle: null,
+      isLegacyUnknown: false,
+      unavailableReason: null,
+    }
+  }
+
+  return {
+    type: 'system_recommendation',
+    label: '系统推荐',
+    description: '按题材、爽点和默认策略作为方向生成参考。',
+    hotspotReportId: null,
+    hotspotOpportunityId: null,
+    hotspotTitle: null,
+    hotspotOpportunityTitle: null,
+    isLegacyUnknown: false,
+    unavailableReason: null,
+  }
+}
+
 function createMockDetail(novelId: string): NovelDetailDTO {
   const novel = novels.find((item) => item.id === novelId)
   const detail = createMockDraft({
@@ -862,6 +1051,8 @@ function createMockDetail(novelId: string): NovelDetailDTO {
   })
 
   detail.id = novelId
+
+  applyHighRiskConfirmationFixture(detail, novelId)
 
   if (novel?.stage.includes('待视频化')) {
     const fullReview = createMockFullReviewActionResult(novelId)
@@ -906,6 +1097,195 @@ function createMockDetail(novelId: string): NovelDetailDTO {
   }
 }
 
+function applyHighRiskConfirmationFixture(detail: NovelDetailDTO, novelId: string) {
+  if (!novelId.startsWith('qa-')) return
+
+  const now = new Date().toISOString()
+  const direction = createMockDirectionCandidate({
+    id: 'qa-current-direction',
+    status: VersionStatus.Current,
+  })
+  const setting = createMockStructureAsset({
+    id: 'qa-current-setting',
+    objectType: 'setting',
+    status: VersionStatus.Current,
+  })
+  const outline = createMockStructureAsset({
+    id: 'qa-current-outline',
+    objectType: 'outline',
+    status: VersionStatus.Current,
+  })
+  const stageOutline = createMockStructureAsset({
+    id: 'qa-current-stage-outline',
+    objectType: 'stage_outline',
+    status: VersionStatus.Current,
+  })
+  const chapterPlan = createMockStructureAsset({
+    id: 'qa-current-chapter-plan',
+    objectType: 'chapter_plan',
+    status: VersionStatus.Current,
+  })
+  const plannedChapters = createMockChaptersFromPlan(chapterPlan)
+
+  detail.title = getHighRiskFixtureTitle(novelId)
+  detail.currentAssets = {
+    direction,
+    setting,
+    outline,
+    stageOutline,
+    chapterPlan,
+  }
+  detail.directionCandidates = [direction]
+  detail.structureCandidates = [setting, outline, stageOutline, chapterPlan]
+  detail.chapters = plannedChapters
+  detail.chapterStats = {
+    plannedChapterCount: plannedChapters.length,
+    completedChapterCount: 0,
+    pendingChapterCount: 0,
+    text: `0/${plannedChapters.length}`,
+  }
+  detail.chapterProgress = detail.chapterStats
+  detail.updatedAt = now
+  detail.statusSummary.completedSteps = ['创建草稿', '确认方向', '确认设定', '确认大纲', '确认章节目录']
+
+  if (novelId === 'qa-risk-trial') {
+    const trialResult = createMockTrialActionResult(novelId, {})
+    detail.creationStage = NovelCreationStage.Trial
+    detail.stageStatus = StageStatus.WaitingUser
+    detail.statusSummary = {
+      ...trialResult.statusSummary,
+      displayStatusText: '风险试写候选待选择',
+    }
+    detail.latestTrialRun = trialResult.trialRun
+    detail.recentTask = trialResult.task
+    detail.recentTasks = [trialResult.task]
+    detail.scoreSummary = {
+      qualityScore: 68,
+      marketScore: 82,
+      riskLevel: 'medium',
+    }
+    return
+  }
+
+  if (novelId === 'qa-body-batch') {
+    const bodyGeneration = createMockBodyGenerationState('qa-body-strategy-001', 3)
+    detail.creationStage = NovelCreationStage.Body
+    detail.stageStatus = StageStatus.NotStarted
+    detail.statusSummary = createMockStatusSummary(NovelCreationStage.Body, StageStatus.NotStarted, '正文待生成')
+    detail.statusSummary.completedSteps = [...detail.statusSummary.completedSteps, '试写通过']
+    detail.bodyStrategySnapshot = bodyGeneration.strategySnapshot
+    detail.bodyGeneration = bodyGeneration
+    detail.chapterProgress = bodyGeneration.chapterProgress
+    detail.chapterStats = bodyGeneration.chapterProgress
+    detail.chapters = plannedChapters.map((chapter) => ({
+      ...chapter,
+      wordCount: chapter.chapterNo <= 3 ? 2200 : 0,
+      mainStatus: chapter.chapterNo <= 3 ? 'completed' : 'pending',
+      statusNote: chapter.chapterNo <= 3 ? '试写版本已确认进入正式正文。' : '等待批量正文生成。',
+      currentContentVersionId: chapter.chapterNo <= 3 ? `qa-trial-content-${chapter.chapterNo}` : null,
+    }))
+    detail.scoreSummary = {
+      qualityScore: 83,
+      marketScore: 86,
+      riskLevel: 'low',
+    }
+    return
+  }
+
+  if (novelId === 'qa-full-review') {
+    const fullReview = createMockFullReviewActionResult(novelId)
+    detail.creationStage = NovelCreationStage.CompletionConfirm
+    detail.stageStatus = StageStatus.WaitingUser
+    detail.statusSummary = fullReview.statusSummary
+    detail.latestFullReview = fullReview.fullReview
+    detail.recentTask = fullReview.task
+    detail.recentTasks = [fullReview.task]
+    detail.chapterProgress = {
+      plannedChapterCount: 12,
+      completedChapterCount: 12,
+      pendingChapterCount: 0,
+      text: '12/12',
+    }
+    detail.chapterStats = detail.chapterProgress
+    detail.chapters = createCompletedMockChapters(12)
+    detail.scoreSummary = {
+      qualityScore: fullReview.fullReview.totalScore,
+      marketScore: 88,
+      riskLevel: 'low',
+    }
+    return
+  }
+
+  if (novelId === 'qa-video-readiness') {
+    const fullReview = createMockFullReviewActionResult(novelId)
+    const completion = createMockCompletionActionResult(novelId)
+    detail.creationStage = NovelCreationStage.CompletionConfirm
+    detail.stageStatus = StageStatus.Completed
+    detail.statusSummary = completion.statusSummary
+    detail.latestFullReview = fullReview.fullReview
+    detail.completionDecision = completion.completionDecision
+    detail.videoReadiness = completion.videoReadiness
+    detail.chapterProgress = {
+      plannedChapterCount: 12,
+      completedChapterCount: 12,
+      pendingChapterCount: 0,
+      text: '12/12',
+    }
+    detail.chapterStats = detail.chapterProgress
+    detail.chapters = createCompletedMockChapters(12)
+    detail.scoreSummary = {
+      qualityScore: completion.completionDecision.score,
+      marketScore: 88,
+      riskLevel: 'low',
+    }
+  }
+}
+
+function getHighRiskFixtureTitle(novelId: string) {
+  if (novelId === 'qa-risk-trial') return 'QA 风险试写确认夹具'
+  if (novelId === 'qa-body-batch') return 'QA 批量正文确认夹具'
+  if (novelId === 'qa-full-review') return 'QA 全书审稿确认夹具'
+  if (novelId === 'qa-video-readiness') return 'QA 待视频化确认夹具'
+  return 'QA 高风险确认夹具'
+}
+
+function createMockChaptersFromPlan(chapterPlan: StructureAssetDTO) {
+  return chapterPlan.content.chapters.map((chapter) => ({
+    id: `qa-chapter-${chapter.chapterNo}`,
+    chapterNo: chapter.chapterNo,
+    stageIndex: chapter.stageIndex,
+    title: chapter.title,
+    wordTarget: chapter.wordTarget,
+    wordCount: 0,
+    mainStatus: 'pending',
+    statusNote: '章节目录已确认，正文尚未生成。',
+    impactLevel: 'none',
+    currentContentVersionId: null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }))
+}
+
+function createCompletedMockChapters(count: number) {
+  return Array.from({ length: count }, (_, index) => {
+    const chapterNo = index + 1
+    return {
+      id: `qa-chapter-${chapterNo}`,
+      chapterNo,
+      stageIndex: Math.floor(index / 3) + 1,
+      title: `第${chapterNo}章 完成章节`,
+      wordTarget: 2200,
+      wordCount: 2200 + chapterNo * 12,
+      mainStatus: 'completed',
+      statusNote: '正式正文已确认，可用于全书审稿和待视频化检查。',
+      impactLevel: 'none',
+      currentContentVersionId: `qa-content-${chapterNo}`,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }
+  })
+}
+
 function applyMockDetailActionResult(novelId: string, override: Partial<NovelDetailDTO>) {
   mockDetailOverrides.set(novelId, {
     ...mockDetailOverrides.get(novelId),
@@ -913,10 +1293,52 @@ function applyMockDetailActionResult(novelId: string, override: Partial<NovelDet
   })
 }
 
+function applyMockDirectionRevisionActionResult(novelId: string, result: DirectionActionResultDTO) {
+  const detail = createMockDetail(novelId)
+  const candidateIds = new Set(result.candidates.map((candidate) => candidate.id))
+  applyMockDetailActionResult(novelId, {
+    creationStage: result.statusSummary.creationStage,
+    stageStatus: result.statusSummary.stageStatus,
+    statusSummary: result.statusSummary,
+    directionCandidates: [
+      ...result.candidates,
+      ...detail.directionCandidates.filter((candidate) => !candidateIds.has(candidate.id)),
+    ],
+    recentTask: result.task,
+    recentTasks: [result.task, ...detail.recentTasks.filter((task) => task.id !== result.task.id)],
+    updatedAt: new Date().toISOString(),
+  })
+}
+
+function applyMockStructureActionResult(novelId: string, result: StructureActionResultDTO) {
+  const detail = createMockDetail(novelId)
+  const candidateIds = new Set(result.candidates.map((candidate) => candidate.id))
+  applyMockDetailActionResult(novelId, {
+    creationStage: result.statusSummary.creationStage,
+    stageStatus: result.statusSummary.stageStatus,
+    statusSummary: result.statusSummary,
+    structureCandidates: [
+      ...result.candidates,
+      ...detail.structureCandidates.filter((candidate) => !candidateIds.has(candidate.id)),
+    ],
+    recentTask: result.task,
+    recentTasks: [result.task, ...detail.recentTasks.filter((task) => task.id !== result.task.id)],
+    updatedAt: new Date().toISOString(),
+  })
+}
+
+function getStructureAssetResource(objectType: StructureAssetType) {
+  if (objectType === 'setting') return 'settings'
+  if (objectType === 'outline') return 'outlines'
+  if (objectType === 'stage_outline') return 'stage-outlines'
+  return 'chapter-plans'
+}
+
 function createMockDirectionActionResult(
   novelId: string,
   changedCandidate: DirectionCandidateDTO | null = null,
   currentDirection: DirectionCandidateDTO | null = null,
+  taskType = 'novel_direction_generate',
 ): DirectionActionResultDTO {
   const candidates = changedCandidate ? [changedCandidate] : [createMockDirectionCandidate()]
 
@@ -948,11 +1370,11 @@ function createMockDirectionActionResult(
     },
     task: {
       id: `mock-task-${Date.now()}`,
-      taskType: currentDirection ? 'novel_direction_adopt' : 'novel_direction_generate',
+      taskType: currentDirection ? 'novel_direction_adopt' : taskType,
       status: currentDirection ? TaskStatus.Completed : TaskStatus.WaitingConfirmation,
       statusText: currentDirection ? '已完成' : '待确认结果',
       progress: 100,
-      currentStep: currentDirection ? '方向已采用，进入设定阶段' : '方向候选已生成，等待选择',
+      currentStep: currentDirection ? '方向已采用，进入设定阶段' : getMockDirectionTaskStep(taskType),
       resultVersionIds: candidates.map((candidate) => candidate.id),
     },
     candidates,
@@ -970,6 +1392,18 @@ function createMockDirectionActionResult(
       taskType: currentDirection ? 'novel_setting_generate' : 'novel_direction_adopt',
     },
   }
+}
+
+function getMockDirectionTaskStep(taskType: string) {
+  if (taskType === 'novel_direction_fuse') return '融合方向候选已生成，等待选择'
+  if (taskType === 'novel_direction_optimize') return '优化方向候选已生成，等待选择'
+  if (taskType === 'novel_direction_manual_edit') return '手动编辑方向候选已保存，等待选择'
+  return '方向候选已生成，等待选择'
+}
+
+function createMockDirectionCandidateId(action: 'fuse' | 'optimize' | 'manual-edit') {
+  const randomValue = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  return `mock-${action}-${randomValue}`
 }
 
 function createMockDirectionCandidate(overrides: Partial<DirectionCandidateDTO> = {}): DirectionCandidateDTO {
@@ -1893,7 +2327,7 @@ function formatDateTime(value: string) {
 
 function getVersionStatusText(status: VersionStatus | string) {
   if (status === 'selected_for_trial') return '已选试写版'
-  if (status === VersionStatus.Current) return '当前版本'
+  if (status === VersionStatus.Current) return '正式采用版本'
   if (status === VersionStatus.Historical) return '历史版本'
   if (status === VersionStatus.Discarded) return '已放弃'
   if (status === VersionStatus.Stale) return '已过期'

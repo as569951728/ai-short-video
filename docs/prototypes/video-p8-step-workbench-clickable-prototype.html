@@ -1,0 +1,1237 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>视频模块 P8 - 概览与步骤详情原型</title>
+    <style>
+      :root {
+        --bg: #eef3f8;
+        --surface: #ffffff;
+        --surface-soft: #f8fbff;
+        --line: #dce5ef;
+        --line-strong: #c8d6e5;
+        --text: #1f2d3d;
+        --muted: #6f7f90;
+        --blue: #2f8cff;
+        --blue-soft: #e8f3ff;
+        --green: #258f5b;
+        --green-soft: #e8f7ef;
+        --amber: #c7771d;
+        --amber-soft: #fff3df;
+        --red: #cf4444;
+        --red-soft: #fff0f0;
+        --gray-soft: #f3f6fa;
+        --shadow: 0 16px 42px rgba(33, 55, 82, 0.11);
+        --radius: 8px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+        letter-spacing: 0;
+      }
+
+      button,
+      input,
+      select,
+      textarea {
+        font: inherit;
+      }
+
+      button {
+        cursor: pointer;
+      }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.56;
+      }
+
+      .topbar {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+        min-height: 68px;
+        padding: 0 28px;
+        background: rgba(255, 255, 255, 0.94);
+        border-bottom: 1px solid var(--line);
+        backdrop-filter: blur(12px);
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-width: 300px;
+      }
+
+      .brand-mark {
+        width: 8px;
+        height: 34px;
+        border-radius: 999px;
+        background: var(--blue);
+      }
+
+      .brand-title {
+        display: grid;
+        gap: 3px;
+      }
+
+      .brand-title strong {
+        font-size: 19px;
+        line-height: 1.2;
+      }
+
+      .brand-title span {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .top-actions,
+      .action-row,
+      .tag-row,
+      .status-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .btn {
+        min-height: 34px;
+        padding: 0 14px;
+        border: 1px solid var(--line-strong);
+        border-radius: 6px;
+        background: #fff;
+        color: #34465a;
+        transition:
+          background 0.16s ease,
+          border-color 0.16s ease,
+          color 0.16s ease,
+          transform 0.16s ease;
+      }
+
+      .btn:hover:not(:disabled) {
+        border-color: var(--blue);
+        color: var(--blue);
+        background: #f8fbff;
+      }
+
+      .btn:active:not(:disabled) {
+        transform: translateY(1px);
+      }
+
+      .btn.primary {
+        border-color: var(--blue);
+        background: var(--blue);
+        color: #fff;
+      }
+
+      .btn.primary:hover:not(:disabled) {
+        background: #1679ee;
+        color: #fff;
+      }
+
+      .btn.danger {
+        border-color: var(--red);
+        color: var(--red);
+      }
+
+      .btn.ghost {
+        border-color: transparent;
+        background: transparent;
+      }
+
+      .shell {
+        width: min(1440px, 100%);
+        margin: 0 auto;
+        padding: 22px 28px 96px;
+      }
+
+      .view {
+        display: none;
+      }
+
+      .view.active {
+        display: block;
+      }
+
+      .panel,
+      .card,
+      .metric,
+      .step,
+      .table-wrap,
+      .notice {
+        border-radius: var(--radius);
+      }
+
+      .panel,
+      .card,
+      .metric,
+      .table-wrap {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        box-shadow: 0 1px 2px rgba(20, 39, 63, 0.04);
+      }
+
+      .panel-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 18px;
+        padding: 20px 22px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .panel-body {
+        padding: 20px 22px 22px;
+      }
+
+      .panel-head h1,
+      .panel-head h2,
+      .section-title h2,
+      .section-title h3,
+      .card h3 {
+        margin: 0;
+        line-height: 1.25;
+      }
+
+      .panel-head p,
+      .section-title p,
+      .card p,
+      .muted {
+        margin: 5px 0 0;
+        color: var(--muted);
+        line-height: 1.6;
+      }
+
+      .section-title {
+        margin: 22px 0 12px;
+      }
+
+      .summary-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+        margin: 14px 0 18px;
+      }
+
+      .metric {
+        padding: 15px;
+      }
+
+      .metric span {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .metric strong {
+        display: block;
+        margin-top: 8px;
+        font-size: 24px;
+        line-height: 1;
+      }
+
+      .danger-text {
+        color: var(--red);
+      }
+
+      .stepper {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 10px;
+        margin: 14px 0 18px;
+      }
+
+      .stepper.four {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+
+      .step {
+        min-height: 78px;
+        padding: 12px;
+        border: 1px solid var(--line);
+        background: var(--surface);
+        text-align: left;
+      }
+
+      .step.active {
+        border-color: var(--blue);
+        background: var(--blue-soft);
+        box-shadow: 0 0 0 2px rgba(47, 140, 255, 0.12);
+      }
+
+      .step.done {
+        border-color: #b8e4c9;
+        background: var(--green-soft);
+      }
+
+      .step.blocked {
+        border-color: #f2b4b4;
+        background: var(--red-soft);
+      }
+
+      .step.future {
+        background: var(--gray-soft);
+        color: #7e8c9a;
+      }
+
+      .step small {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .step strong {
+        display: block;
+        margin-top: 6px;
+        font-size: 15px;
+      }
+
+      .step span {
+        display: block;
+        margin-top: 6px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .overview-grid,
+      .detail-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.5fr) minmax(320px, 0.75fr);
+        gap: 18px;
+      }
+
+      .card {
+        padding: 16px;
+      }
+
+      .card + .card {
+        margin-top: 12px;
+      }
+
+      .tag {
+        display: inline-flex;
+        align-items: center;
+        min-height: 24px;
+        padding: 0 8px;
+        border: 1px solid var(--line-strong);
+        border-radius: 5px;
+        background: #fff;
+        color: #526477;
+        font-size: 12px;
+        line-height: 1;
+        white-space: nowrap;
+      }
+
+      .tag.blue {
+        border-color: #acd2ff;
+        background: var(--blue-soft);
+        color: #1f6cc8;
+      }
+
+      .tag.green {
+        border-color: #b8e4c9;
+        background: var(--green-soft);
+        color: var(--green);
+      }
+
+      .tag.amber {
+        border-color: #f0c98e;
+        background: var(--amber-soft);
+        color: var(--amber);
+      }
+
+      .tag.red {
+        border-color: #f2b4b4;
+        background: var(--red-soft);
+        color: var(--red);
+      }
+
+      .tag.gray {
+        background: var(--gray-soft);
+      }
+
+      .notice {
+        margin: 14px 0;
+        padding: 13px 15px;
+        border: 1px solid #acd2ff;
+        background: var(--blue-soft);
+        color: #245f9e;
+        line-height: 1.6;
+      }
+
+      .notice.warning {
+        border-color: #f0c98e;
+        background: var(--amber-soft);
+        color: #87510e;
+      }
+
+      .notice.blocking {
+        border-color: #f2b4b4;
+        background: var(--red-soft);
+        color: #963232;
+      }
+
+      .filters {
+        display: grid;
+        grid-template-columns: 1.2fr 1fr 1fr 1fr auto;
+        gap: 10px;
+        margin: 14px 0;
+      }
+
+      input,
+      select,
+      textarea {
+        min-height: 36px;
+        width: 100%;
+        border: 1px solid var(--line-strong);
+        border-radius: 6px;
+        background: #fff;
+        color: var(--text);
+        padding: 0 10px;
+      }
+
+      textarea {
+        min-height: 82px;
+        padding: 10px;
+        resize: vertical;
+      }
+
+      .table-wrap {
+        overflow-x: auto;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        min-width: 980px;
+      }
+
+      th,
+      td {
+        padding: 13px 14px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        color: #526477;
+        font-size: 13px;
+        background: #f8fbff;
+      }
+
+      tbody tr:hover {
+        background: #fbfdff;
+      }
+
+      .video-name {
+        display: grid;
+        gap: 4px;
+      }
+
+      .video-name span {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .mini-list {
+        display: grid;
+        gap: 10px;
+        margin-top: 12px;
+      }
+
+      .mini-item {
+        display: flex;
+        justify-content: space-between;
+        gap: 14px;
+        padding: 10px 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .mini-item:last-child {
+        border-bottom: 0;
+      }
+
+      .check-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 12px;
+      }
+
+      .check {
+        min-height: 76px;
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--surface-soft);
+      }
+
+      .sub-steps {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 8px;
+        margin-bottom: 14px;
+      }
+
+      .sub-step {
+        padding: 10px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #fff;
+        color: var(--muted);
+        text-align: center;
+        font-size: 13px;
+      }
+
+      .sub-step.active {
+        border-color: var(--blue);
+        background: var(--blue-soft);
+        color: #1f6cc8;
+      }
+
+      .range-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 12px;
+      }
+
+      .range-card {
+        padding: 13px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--surface-soft);
+      }
+
+      .range-card.active {
+        border-color: var(--blue);
+        background: var(--blue-soft);
+      }
+
+      .split-actions {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        margin-top: 14px;
+      }
+
+      .hidden {
+        display: none !important;
+      }
+
+      @media (max-width: 980px) {
+        .topbar {
+          align-items: flex-start;
+          flex-direction: column;
+          padding: 14px 18px;
+        }
+
+        .shell {
+          padding: 18px;
+        }
+
+        .summary-grid,
+        .stepper,
+        .stepper.four,
+        .overview-grid,
+        .detail-grid,
+        .filters,
+        .check-grid,
+        .range-grid,
+        .sub-steps {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark"></div>
+        <div class="brand-title">
+          <strong>视频模块 P8 原型</strong>
+          <span>概览、视频列表、创建项目、引用快照、异常处理</span>
+        </div>
+      </div>
+      <div class="top-actions">
+        <button class="btn primary" data-view="overview">视频概览</button>
+        <button class="btn" data-view="list">视频列表</button>
+        <button class="btn" data-view="create">创建项目</button>
+        <button class="btn" data-view="snapshot">引用快照</button>
+        <button class="btn" data-view="issue">异常处理</button>
+      </div>
+    </header>
+
+    <main class="shell">
+      <section id="overviewView" class="view active">
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h1>视频模块概览</h1>
+              <p>当前阶段只把已完成小说稳定交给视频系统。P8 不生成旁白、配音、字幕、渲染、发布和数据回填。</p>
+            </div>
+            <div class="action-row">
+              <button class="btn" data-view="list">查看视频列表</button>
+              <button class="btn primary" data-view="create">新建视频项目</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="summary-grid">
+          <div class="metric"><span>待视频化小说</span><strong>4</strong></div>
+          <div class="metric"><span>视频项目</span><strong>12</strong></div>
+          <div class="metric"><span>引用正常</span><strong>8</strong></div>
+          <div class="metric"><span>阻塞异常</span><strong class="danger-text">1</strong></div>
+        </div>
+
+        <div class="stepper" aria-label="视频 P8 主步骤">
+          <button class="step done" data-view="source">
+            <small>1</small>
+            <strong>小说已待视频化</strong>
+            <span>从小说完成确认后承接</span>
+          </button>
+          <button class="step active" data-view="create">
+            <small>2</small>
+            <strong>创建视频项目</strong>
+            <span>选择小说和章节范围</span>
+          </button>
+          <button class="step done" data-view="snapshot">
+            <small>3</small>
+            <strong>保存引用快照</strong>
+            <span>冻结章节版本和摘要</span>
+          </button>
+          <button class="step blocked" data-view="issue">
+            <small>4</small>
+            <strong>引用状态检查</strong>
+            <span>发现变化、风险和阻塞</span>
+          </button>
+          <button class="step future" data-view="generation">
+            <small>5</small>
+            <strong>待进入生成</strong>
+            <span>P9 后续能力，当前灰态</span>
+          </button>
+        </div>
+
+        <div class="overview-grid">
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h2>当前推荐处理</h2>
+                <p>先处理 1 个 blocking 引用异常，再创建新的首条测试项目。</p>
+              </div>
+              <button class="btn danger" data-view="issue">处理阻塞异常</button>
+            </div>
+            <div class="panel-body">
+              <div class="notice warning">
+                视频模块目前是承接层：创建项目时只保存引用快照，后续生成能力在 P9 原型里确认后再研发。
+              </div>
+              <div class="check-grid">
+                <div class="check"><strong>小说入口</strong><br />待视频化小说可跳转到视频列表并打开创建页</div>
+                <div class="check"><strong>引用快照</strong><br />记录章节范围、章节版本、检查摘要和风险</div>
+                <div class="check"><strong>异常处理</strong><br />normal / info / warning / blocking / resolved</div>
+              </div>
+            </div>
+          </div>
+
+          <aside>
+            <div class="card">
+              <h3>视频列表的定位</h3>
+              <p>像小说列表一样，先让用户看到所有项目状态、引用小说、章节范围和下一步动作。</p>
+              <div class="tag-row" style="margin-top: 10px">
+                <span class="tag blue">列表驾驶舱</span>
+                <span class="tag green">引用状态</span>
+                <span class="tag amber">异常提醒</span>
+              </div>
+            </div>
+            <div class="card">
+              <h3>P8 不做什么</h3>
+              <p>不在列表里出现可点击生成、配音、字幕、渲染、发布、回填数据按钮。</p>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section id="sourceView" class="view">
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h1>步骤 1：小说已待视频化</h1>
+              <p>这一页只确认哪些小说已经具备被视频引用的前置条件。</p>
+            </div>
+            <button class="btn" data-view="overview">回概览</button>
+          </div>
+          <div class="panel-body">
+            <div class="sub-steps">
+              <div class="sub-step active">读取小说</div>
+              <div class="sub-step">查看快照</div>
+              <div class="sub-step">判断可引用</div>
+              <div class="sub-step">进入创建</div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>小说</th>
+                    <th>完成状态</th>
+                    <th>待视频化快照</th>
+                    <th>推荐首条范围</th>
+                    <th>动作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>化学大秦<br /><span class="muted">全书评分 92，低风险</span></td>
+                    <td><span class="tag green">video_ready</span></td>
+                    <td>snapshot v3<br /><span class="muted">2026-06-22 09:30</span></td>
+                    <td>第 1-3 章</td>
+                    <td><button class="btn primary" data-view="create">用它创建视频项目</button></td>
+                  </tr>
+                  <tr>
+                    <td>寒门算法<br /><span class="muted">第 5 章有引用异常</span></td>
+                    <td><span class="tag amber">video_ready</span></td>
+                    <td>snapshot v2<br /><span class="muted">需重新检测</span></td>
+                    <td>第 4-6 章</td>
+                    <td><button class="btn" data-view="issue">先看异常</button></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="listView" class="view">
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h1>视频列表</h1>
+              <p>列表参考小说列表，但只展示视频承接状态：项目、引用、快照、异常和单一推荐动作。</p>
+            </div>
+            <div class="action-row">
+              <button class="btn" data-view="overview">回概览</button>
+              <button class="btn primary" data-view="create">新建视频项目</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="filters">
+          <input value="化学大秦" aria-label="视频项目名称" />
+          <select aria-label="引用状态">
+            <option>引用状态：全部</option>
+            <option>normal</option>
+            <option>warning</option>
+            <option>blocking</option>
+          </select>
+          <select aria-label="项目生命周期">
+            <option>生命周期：active</option>
+            <option>stopped</option>
+            <option>archived</option>
+          </select>
+          <select aria-label="生产状态">
+            <option>生产状态：P8 未开始</option>
+            <option>待后续生成</option>
+            <option>生成锁定</option>
+          </select>
+          <button id="filterBtn" class="btn">筛选</button>
+        </div>
+
+        <div id="listNotice" class="notice hidden" aria-live="polite"></div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>视频项目</th>
+                <th>引用小说</th>
+                <th>引用章节</th>
+                <th>引用快照</th>
+                <th>引用状态</th>
+                <th>生产状态</th>
+                <th>当前推荐动作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+                  <div class="video-name">
+                    <strong>化学大秦：首条测试</strong>
+                    <span>首条测试 · 9:16 · active</span>
+                  </div>
+                </td>
+                <td>化学大秦<br /><span class="muted">video_ready</span></td>
+                <td>第 1-3 章<br /><span class="muted">3 个章节快照</span></td>
+                <td>VideoReference v3<br /><span class="muted">章节版本已冻结</span></td>
+                <td><span class="tag green">normal</span></td>
+                <td><span class="tag gray">P8 未开始生成</span></td>
+                <td><button class="btn primary" data-view="snapshot">查看引用快照</button></td>
+              </tr>
+              <tr>
+                <td>
+                  <div class="video-name">
+                    <strong>寒门算法：试投版</strong>
+                    <span>章节范围 · 最近重检失败</span>
+                  </div>
+                </td>
+                <td>寒门算法<br /><span class="muted">video_ready</span></td>
+                <td>第 4-6 章<br /><span class="muted">第 5 章被修改</span></td>
+                <td>VideoReference v2<br /><span class="muted">sourceVersionRef 不一致</span></td>
+                <td><span class="tag red">blocking</span></td>
+                <td><span class="tag gray">生成锁定</span></td>
+                <td>
+                  <button class="btn danger" data-view="issue">处理异常</button>
+                  <div class="muted">第 5 章正式正文已清空</div>
+                </td>
+              </tr>
+              <tr>
+                <td>
+                  <div class="video-name">
+                    <strong>长安夜雨：视觉测试</strong>
+                    <span>首条测试 · 引用轻微变化</span>
+                  </div>
+                </td>
+                <td>长安夜雨<br /><span class="muted">video_ready</span></td>
+                <td>第 1-2 章</td>
+                <td>VideoReference v1</td>
+                <td><span class="tag amber">warning</span></td>
+                <td><span class="tag gray">待后续生成</span></td>
+                <td><button class="btn" data-view="snapshot">查看差异</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="createView" class="view">
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h1>步骤 2：创建视频项目</h1>
+              <p>采用 4 步向导，不用一个长表单；创建后只保存引用快照，不开始生成视频。</p>
+            </div>
+            <div class="action-row">
+              <button class="btn" data-view="overview">回概览</button>
+              <button class="btn" data-view="list">回视频列表</button>
+            </div>
+          </div>
+          <div class="panel-body">
+            <div class="stepper four" aria-label="创建视频项目子步骤">
+              <button class="step done" data-create-step="1"><small>1</small><strong>选择小说</strong><span>确认 video_ready</span></button>
+              <button class="step active" data-create-step="2"><small>2</small><strong>确认范围</strong><span>使用推荐首条范围</span></button>
+              <button class="step" data-create-step="3"><small>3</small><strong>创建前检查</strong><span>状态、版本、风险</span></button>
+              <button class="step future" data-create-step="4"><small>4</small><strong>创建完成</strong><span>查看引用快照</span></button>
+            </div>
+
+            <div class="detail-grid">
+              <div>
+                <div id="createStep1" class="card create-step">
+                  <h3>选择小说</h3>
+                  <p>从小说详情带入时默认锁定这本小说；也可以更换为其他待视频化小说。</p>
+                  <div class="check-grid">
+                    <div class="check"><strong>小说</strong><br />化学大秦</div>
+                    <div class="check"><strong>状态</strong><br /><span class="tag green">video_ready</span></div>
+                    <div class="check"><strong>快照</strong><br />VideoReadinessSnapshot v3</div>
+                  </div>
+                </div>
+
+                <div id="createStep2" class="card create-step">
+                  <h3>确认引用范围</h3>
+                  <p>系统默认推荐首条范围，用户可以切换，但必须保证章节有正式正文和可引用快照。</p>
+                  <div class="range-grid">
+                    <div class="range-card active">
+                      <strong>推荐首条</strong>
+                      <p>第 1-3 章，预计 58-72 秒。钩子强，适合首条验证。</p>
+                      <span class="tag green">推荐</span>
+                    </div>
+                    <div class="range-card">
+                      <strong>高潮片段</strong>
+                      <p>第 8-10 章，冲突更强，但依赖前文理解。</p>
+                      <span class="tag amber">备选</span>
+                    </div>
+                    <div class="range-card">
+                      <strong>整段试投</strong>
+                      <p>第 1-6 章，时长偏长，当前不建议作为首条。</p>
+                      <span class="tag amber">需关注</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div id="createStep3" class="card create-step hidden">
+                  <h3>创建前检查</h3>
+                  <p>这里明确告诉用户：创建只保存引用快照，不生成视频。</p>
+                  <div class="check-grid">
+                    <div class="check"><strong>小说状态</strong><br /><span class="tag green">通过</span></div>
+                    <div class="check"><strong>章节正文</strong><br /><span class="tag green">3/3 正式版本</span></div>
+                    <div class="check"><strong>风险检查</strong><br /><span class="tag amber">低风险</span></div>
+                    <div class="check"><strong>重复项目</strong><br /><span class="tag green">未发现冲突</span></div>
+                    <div class="check"><strong>幂等保护</strong><br />idempotencyToken 已生成</div>
+                    <div class="check"><strong>后续能力</strong><br /><span class="tag gray">P9 才开放生成</span></div>
+                  </div>
+                </div>
+
+                <div id="createStep4" class="card create-step hidden">
+                  <h3>创建完成</h3>
+                  <p>项目已创建，引用快照已保存。主动作是查看快照，而不是生成视频。</p>
+                  <div class="check-grid">
+                    <div class="check"><strong>VideoProject</strong><br />video_chem_qin_001</div>
+                    <div class="check"><strong>VideoReference</strong><br />reference_v3</div>
+                    <div class="check"><strong>默认视频单元</strong><br />第 1-3 章</div>
+                  </div>
+                </div>
+
+                <div class="split-actions">
+                  <button class="btn" id="createPrev">上一步</button>
+                  <button class="btn primary" id="createNext">下一步：创建前检查</button>
+                </div>
+              </div>
+
+              <aside>
+                <div class="card">
+                  <h3>右侧摘要</h3>
+                  <div class="mini-list">
+                    <div class="mini-item"><strong>全书评分</strong><span class="tag green">92</span></div>
+                    <div class="mini-item"><strong>视频化结论</strong><span class="tag green">可引用</span></div>
+                    <div class="mini-item"><strong>推荐范围</strong><span>第 1-3 章</span></div>
+                    <div class="mini-item"><strong>预计时长</strong><span>58-72 秒</span></div>
+                    <div class="mini-item"><strong>当前风险</strong><span class="tag amber">低风险</span></div>
+                  </div>
+                </div>
+                <div class="notice warning">
+                  创建项目不会调用模型，也不会生成旁白、配音、字幕或视频文件。
+                </div>
+              </aside>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="snapshotView" class="view">
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h1>步骤 3：引用快照详情</h1>
+              <p>让用户看清这个视频项目引用了哪本小说、哪些章节、哪些正式版本。</p>
+            </div>
+            <div class="action-row">
+              <button class="btn" data-view="list">回视频列表</button>
+              <button class="btn primary" id="recheckReference">重新检测引用状态</button>
+            </div>
+          </div>
+          <div class="panel-body">
+            <div class="sub-steps">
+              <div class="sub-step active">来源小说</div>
+              <div class="sub-step">章节版本</div>
+              <div class="sub-step">检查摘要</div>
+              <div class="sub-step">操作日志</div>
+            </div>
+            <div id="snapshotNotice" class="notice hidden"></div>
+            <div class="detail-grid">
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>章节</th>
+                      <th>引用时正文版本</th>
+                      <th>当前正式版本</th>
+                      <th>状态</th>
+                      <th>摘要</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>第 1 章 盐场醒来</td>
+                      <td>body_v12</td>
+                      <td>body_v12</td>
+                      <td><span class="tag green">一致</span></td>
+                      <td>穿越秦朝盐场，现代化学知识开始发挥作用。</td>
+                    </tr>
+                    <tr>
+                      <td>第 2 章 炼盐反转</td>
+                      <td>body_v8</td>
+                      <td>body_v8</td>
+                      <td><span class="tag green">一致</span></td>
+                      <td>炼盐失败被质疑，主角用知识完成反转。</td>
+                    </tr>
+                    <tr>
+                      <td>第 3 章 黑火药惊世</td>
+                      <td>body_v7</td>
+                      <td>body_v7</td>
+                      <td><span class="tag green">一致</span></td>
+                      <td>黑火药概念亮相，形成第一条视频高光。</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <aside>
+                <div class="card">
+                  <h3>引用快照摘要</h3>
+                  <div class="mini-list">
+                    <div class="mini-item"><strong>VideoReference</strong><span>reference_v3</span></div>
+                    <div class="mini-item"><strong>小说</strong><span>化学大秦</span></div>
+                    <div class="mini-item"><strong>章节范围</strong><span>第 1-3 章</span></div>
+                    <div class="mini-item"><strong>引用状态</strong><span id="snapshotStatus" class="tag green">normal</span></div>
+                    <div class="mini-item"><strong>创建说明</strong><span>首条测试投放</span></div>
+                  </div>
+                </div>
+                <div class="card">
+                  <h3>可做动作</h3>
+                  <p>重新检测引用状态、返回小说详情、查看异常历史。不能直接生成视频。</p>
+                  <div class="action-row" style="margin-top: 12px">
+                    <button class="btn" data-view="issue">查看异常历史</button>
+                    <button class="btn" data-view="generation">查看后续生成入口</button>
+                  </div>
+                </div>
+              </aside>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="issueView" class="view">
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h1>步骤 4：引用异常处理</h1>
+              <p>当小说或章节变化后，视频项目不能被静默污染，必须展示异常等级、原因和处理动作。</p>
+            </div>
+            <div class="action-row">
+              <button class="btn" data-view="list">回视频列表</button>
+              <button class="btn primary" id="resolveIssue">确认已处理</button>
+            </div>
+          </div>
+          <div class="panel-body">
+            <div class="sub-steps">
+              <div class="sub-step active">查看异常</div>
+              <div class="sub-step">判断影响</div>
+              <div class="sub-step">选择处理</div>
+              <div class="sub-step">记录结果</div>
+            </div>
+            <div id="issueNotice" class="notice blocking">
+              第 5 章正式正文已清空，当前视频项目引用快照与小说当前版本不一致。P9 生成入口必须锁定。
+            </div>
+            <div class="detail-grid">
+              <div>
+                <div class="card">
+                  <h3>异常结论</h3>
+                  <div class="check-grid">
+                    <div class="check"><strong>异常等级</strong><br /><span id="issueLevel" class="tag red">blocking</span></div>
+                    <div class="check"><strong>影响项目</strong><br />寒门算法：试投版</div>
+                    <div class="check"><strong>影响章节</strong><br />第 5 章</div>
+                    <div class="check"><strong>当前生产状态</strong><br /><span class="tag gray">P8 未生成</span></div>
+                    <div class="check"><strong>推荐动作</strong><br />回小说处理或停止项目</div>
+                    <div class="check"><strong>记录要求</strong><br />忽略或停止必须填写原因</div>
+                  </div>
+                </div>
+                <div class="card">
+                  <h3>处理动作</h3>
+                  <p>请选择一个动作。blocking 未处理前，后续生成入口保持灰态。</p>
+                  <div class="action-row" style="margin-top: 12px">
+                    <button class="btn primary" id="goNovel">回小说处理</button>
+                    <button class="btn" id="ignoreIssue">确认忽略 warning</button>
+                    <button class="btn danger" id="stopProject">停止视频项目</button>
+                  </div>
+                  <textarea id="issueReason" placeholder="填写处理原因，例如：小说侧已决定保留当前引用版本，或该项目暂停投放。"></textarea>
+                </div>
+              </div>
+              <aside>
+                <div class="card">
+                  <h3>处理记录</h3>
+                  <div class="mini-list" id="issueLogs">
+                    <div class="mini-item"><strong>系统检测</strong><span>blocking · 07:20</span></div>
+                    <div class="mini-item"><strong>推荐动作</strong><span>回小说处理</span></div>
+                  </div>
+                </div>
+                <div class="notice warning">
+                  已发布视频后续不会被自动覆盖；P8 只记录风险和处理动作。
+                </div>
+              </aside>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="generationView" class="view">
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h1>步骤 5：待进入生成</h1>
+              <p>这是 P9 的预留入口，当前只展示后续会做什么，不允许点击生成。</p>
+            </div>
+            <button class="btn" data-view="overview">回概览</button>
+          </div>
+          <div class="panel-body">
+            <div class="notice warning">
+              P8 验收时，这里必须保持灰态。研发不会实现旁白、TTS、字幕、渲染、预览、导出、发布和数据回填。
+            </div>
+            <div class="stepper">
+              <div class="step future"><small>P9</small><strong>旁白稿</strong><span>候选、编辑、确认</span></div>
+              <div class="step future"><small>P9</small><strong>配音</strong><span>TTS、试听、确认</span></div>
+              <div class="step future"><small>P9</small><strong>字幕</strong><span>断句、时间轴、样式</span></div>
+              <div class="step future"><small>P9</small><strong>渲染预览</strong><span>生成、检查、导出</span></div>
+              <div class="step future"><small>P10+</small><strong>发布回填</strong><span>后续规划，不进 P8</span></div>
+            </div>
+            <div class="card">
+              <h3>为什么先灰态</h3>
+              <p>如果现在把生成按钮做成可点击，会让研发和测试误判已经进入视频生产链路。P8 只负责建立稳定引用地基。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      const views = {
+        overview: document.getElementById("overviewView"),
+        source: document.getElementById("sourceView"),
+        list: document.getElementById("listView"),
+        create: document.getElementById("createView"),
+        snapshot: document.getElementById("snapshotView"),
+        issue: document.getElementById("issueView"),
+        generation: document.getElementById("generationView"),
+      };
+
+      const createSteps = Array.from(document.querySelectorAll(".create-step"));
+      let currentCreateStep = 2;
+
+      function $(id) {
+        return document.getElementById(id);
+      }
+
+      function switchView(name) {
+        Object.values(views).forEach((view) => view.classList.remove("active"));
+        views[name].classList.add("active");
+        document.querySelectorAll(".top-actions .btn").forEach((button) => {
+          button.classList.toggle("primary", button.dataset.view === name);
+        });
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }
+
+      function showNotice(id, text, kind = "") {
+        const el = $(id);
+        el.textContent = text;
+        el.className = "notice " + kind;
+      }
+
+      function renderCreateStep() {
+        createSteps.forEach((step, index) => {
+          step.classList.toggle("hidden", index + 1 !== currentCreateStep);
+        });
+
+        document.querySelectorAll("[data-create-step]").forEach((button) => {
+          const step = Number(button.dataset.createStep);
+          button.classList.toggle("active", step === currentCreateStep);
+          button.classList.toggle("done", step < currentCreateStep);
+          button.classList.toggle("future", step > currentCreateStep);
+        });
+
+        $("createPrev").disabled = currentCreateStep === 1;
+        $("createNext").textContent =
+          currentCreateStep === 1
+            ? "下一步：确认范围"
+            : currentCreateStep === 2
+              ? "下一步：创建前检查"
+              : currentCreateStep === 3
+                ? "创建视频项目"
+                : "查看引用快照";
+      }
+
+      document.addEventListener("click", (event) => {
+        const target = event.target.closest("button");
+        if (!target) return;
+
+        if (target.dataset.view) {
+          switchView(target.dataset.view);
+        }
+
+        if (target.dataset.createStep) {
+          currentCreateStep = Number(target.dataset.createStep);
+          renderCreateStep();
+        }
+      });
+
+      $("filterBtn").addEventListener("click", () => {
+        showNotice("listNotice", "筛选已应用：当前展示 3 个匹配的视频项目。");
+      });
+
+      $("createPrev").addEventListener("click", () => {
+        currentCreateStep = Math.max(1, currentCreateStep - 1);
+        renderCreateStep();
+      });
+
+      $("createNext").addEventListener("click", () => {
+        if (currentCreateStep < 4) {
+          currentCreateStep += 1;
+          renderCreateStep();
+          return;
+        }
+        switchView("snapshot");
+        showNotice("snapshotNotice", "已从创建向导进入引用快照详情。");
+      });
+
+      $("recheckReference").addEventListener("click", () => {
+        $("snapshotStatus").textContent = "normal";
+        $("snapshotStatus").className = "tag green";
+        showNotice("snapshotNotice", "引用状态已重新检测：当前小说版本与快照一致。");
+      });
+
+      $("goNovel").addEventListener("click", () => {
+        $("issueLogs").insertAdjacentHTML(
+          "beforeend",
+          '<div class="mini-item"><strong>用户动作</strong><span>回小说处理</span></div>',
+        );
+        $("issueReason").value = "已返回小说侧处理第 5 章正文问题";
+      });
+
+      $("ignoreIssue").addEventListener("click", () => {
+        if ($("issueReason").value.trim().length < 4) {
+          showNotice("issueNotice", "需要先填写原因，才能确认忽略。", "warning");
+          return;
+        }
+        $("issueLevel").textContent = "resolved";
+        $("issueLevel").className = "tag green";
+        showNotice("issueNotice", "已记录忽略原因，引用异常进入 resolved。P9 入口仍需重新检测后再打开。");
+      });
+
+      $("stopProject").addEventListener("click", () => {
+        if ($("issueReason").value.trim().length < 4) {
+          showNotice("issueNotice", "停止项目前必须填写原因。", "warning");
+          return;
+        }
+        $("issueLogs").insertAdjacentHTML(
+          "beforeend",
+          '<div class="mini-item"><strong>项目状态</strong><span>stopped</span></div>',
+        );
+        showNotice("issueNotice", "视频项目已停止，后续生成入口关闭。");
+      });
+
+      $("resolveIssue").addEventListener("click", () => {
+        if ($("issueReason").value.trim().length < 4) {
+          showNotice("issueNotice", "请先填写处理原因，再完成异常处理。", "warning");
+          return;
+        }
+        $("issueLevel").textContent = "resolved";
+        $("issueLevel").className = "tag green";
+        showNotice("issueNotice", "异常已标记 resolved，操作日志已记录。");
+      });
+
+      renderCreateStep();
+    </script>
+  </body>
+</html>

@@ -567,6 +567,28 @@ h3 {
   background: #fff;
 }
 
+.structure-card.result-focus-card {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgb(64 158 255 / 14%);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.structure-card-note {
+  margin: 12px 0 0;
+  padding: 8px 10px;
+  border: 1px solid #d9e4ef;
+  border-radius: 4px;
+  background: #f7fbff;
+  color: #5f6f82;
+  line-height: 1.5;
+}
+
+.structure-card-note.success {
+  border-color: #b9e4aa;
+  background: #f2fbef;
+  color: #3f7c33;
+}
+
 .asset-status-item span,
 .asset-status-item strong,
 .asset-status-item p {
@@ -1074,6 +1096,58 @@ h3 {
   gap: 8px;
 }
 
+.empty-action-stack {
+  display: grid;
+  justify-items: center;
+  width: min(420px, 100%);
+}
+
+.empty-pending-panel,
+.empty-generate-panel {
+  display: grid;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 16px;
+  border: 1px solid #dbeafe;
+  border-radius: 6px;
+  background: #f8fbff;
+  text-align: left;
+}
+
+.empty-generate-panel {
+  justify-items: center;
+  border-color: #e5e7eb;
+  background: #fff;
+  text-align: center;
+}
+
+.empty-pending-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.empty-pending-head strong {
+  color: #1f2937;
+  font-size: 15px;
+}
+
+.empty-pending-panel p,
+.empty-generate-panel p {
+  margin: 0;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.empty-pending-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 2px;
+}
+
 .step-action-stack {
   display: grid;
   gap: 6px;
@@ -1468,6 +1542,152 @@ h3 {
   line-height: 1.5;
 }
 
+.video-workbench-layout {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr) 300px;
+  gap: 14px;
+  align-items: start;
+}
+
+.video-workbench-side,
+.video-workbench-main,
+.workbench-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.video-detail-stepper .major-step {
+  min-height: 118px;
+}
+
+.info-list {
+  display: grid;
+  gap: 10px;
+}
+
+.info-list div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+}
+
+.info-list strong {
+  color: var(--text);
+  text-align: right;
+}
+
+.info-list.compact strong {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-placeholder-list {
+  display: grid;
+  gap: 8px;
+}
+
+.artifact-placeholder,
+.task-mini-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+}
+
+.locked-production-step,
+.locked-empty {
+  display: grid;
+  gap: 14px;
+}
+
+.locked-empty {
+  min-height: 260px;
+  align-content: center;
+  justify-items: start;
+  padding: 24px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  background: #fafcff;
+}
+
+.issue-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid #f3c079;
+  border-radius: 6px;
+  background: #fff8eb;
+}
+
+.narration-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.narration-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+}
+
+.narration-card.current {
+  border-color: #67c23a;
+  background: #f6fff2;
+}
+
+.narration-card.risky {
+  border-color: #f56c6c;
+  background: #fff8f8;
+}
+
+.narration-hook {
+  margin: 0;
+  color: var(--text);
+  font-weight: 650;
+  line-height: 1.7;
+}
+
+.tts-control-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(150px, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
+.audio-placeholder {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px dashed #99a9bf;
+  border-radius: 6px;
+  background: #f7faff;
+  color: var(--muted);
+  font-size: 13px;
+  word-break: break-all;
+}
+
+.audio-placeholder strong {
+  color: var(--text);
+}
+
+.risk-tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 @media (max-width: 1320px) {
   body {
     min-width: 1100px;
@@ -1493,6 +1713,10 @@ h3 {
   }
 
   .readiness-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .video-workbench-layout {
     grid-template-columns: 1fr;
   }
 }
