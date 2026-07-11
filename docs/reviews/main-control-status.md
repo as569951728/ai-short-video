@@ -1,6 +1,6 @@
 # AIShortvideo 主控统一状态
 
-更新时间：2026-07-11 17:48 CST
+更新时间：2026-07-11 18:08 CST
 
 本文件是需求主控的当前状态入口。历史过程和详细证据仍保留在各模块设计、验收和工程质量文档中；发生冲突时，以当前代码、最新正式验收结论和本文件列出的证据为准。
 
@@ -15,7 +15,7 @@
 | P10-preflight | 已正式收口 | `creationSource` 的 shared/API/仓储/migration/admin 与浏览器链路通过 `CS-R3` 及条件项复验 |
 | P10 | 需求已确认，未实现 | 只允许在 preflight 通过后按 R0-R4 分包推进 |
 | 测试 | 当前空闲 | `CS-R3` 已通过，没有研发交付待正式验收 |
-| 工程质量 | `watch / medium` | 无新增 P0/P1；共享工作树已归因但仍未纳入版本管理 |
+| 工程质量 | `watch / medium` | 无新增 P0/P1；89 个已验收/已归因文件已纳入远程检查点，仅保留 1 个一次性未归因辅助文件 |
 | 本地服务 | 未运行 | `5173`、`3001` 当前无监听；用户需要浏览器验收时按需启动 |
 | 真实环境 | 冻结/待授权 | P8b-L1b、真实 DeepSeek/provider、外部渲染/云存储均无当前授权 |
 
@@ -73,8 +73,9 @@
 
 - 最新工程质量：`status=watch`，`debt_level=medium`，无新增 P0/P1。
 - `.playwright-cli/` 已安全忽略；源码、migration、测试和文档未被 ignore。
-- `creationSource` 收口后按归因清单创建 `codex/` 检查点分支，显式纳入已验收源码、migration、测试和文档并推送 `origin`。
+- 已创建并推送检查点分支 `codex/aishortvideo-checkpoint-20260711`，提交 `26f1bc9`；89 个已验收/已归因源码、migration、测试和文档已纳入 `origin`。
 - 一次性 `apps/api/tsconfig.testrun.json` 不纳入检查点；`.playwright-cli/` 继续作为本地浏览器运行产物忽略。
+- 当前工作树除上述 `apps/api/tsconfig.testrun.json` 外无 tracked 修改或其它未跟踪业务资产。
 - 禁止在共享工作树使用 reset、checkout、clean、stash 或覆盖式整理。
 
 证据：
@@ -95,8 +96,8 @@
 
 ## 7. 当前唯一推荐动作
 
-1. 完成 `codex/` 检查点分支的显式 staging、提交和远程推送，不直接推 `main`。
-2. 向用户汇报远程分支、提交哈希、验收范围和真实环境保留风险。
-3. 等用户单独授权 P10 后，按已确认的 `P10-R0` 至 `P10-R4` 顺序派发研发与独立验收。
+1. 等用户单独授权 P10 后，按已确认的 `P10-R0` 至 `P10-R4` 顺序派发研发与独立验收。
+2. P10 开工前先记录当前分支/工作树基线，后续每个研发包都要独立验收并提交远程检查点。
+3. 继续保持 P8b-L1b、真实 provider、外部渲染和平台发布能力的授权门禁。
 
 不得提前执行 CS-L1、P10、真实 MySQL/provider 或外部发布能力。

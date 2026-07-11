@@ -131,6 +131,17 @@
 
 条件项修复仅增加可见不可用说明和对应前端测试，未接热点管理、P10/P12、真实数据库或真实 provider。`apps/api/tsconfig.testrun.json` 仍保持未归因的一次性辅助文件，不纳入检查点。
 
+### 2026-07-11 检查点落地结果
+
+- 分支：`codex/aishortvideo-checkpoint-20260711`
+- 远程：`origin/codex/aishortvideo-checkpoint-20260711`
+- 提交：`26f1bc9 feat: checkpoint novel and video workbenches`
+- 纳管范围：89 个已验收/已归因文件，共 31,784 行新增、595 行删除。
+- 提交前门禁：shared 12/12、API 108/108、admin-web 77/77、typecheck、build budget、Prisma validate、staged diff check 全部通过。
+- 排除项：`apps/api/tsconfig.testrun.json` 继续保持未跟踪、未忽略、未纳管；未使用 reset、clean、stash 或覆盖式整理。
+
+本文前半部分“未纳入版本管理”和“未执行 git add/commit/push”描述的是最初归因盘点阶段；本节是最新状态，发生冲突时以本节和 `docs/reviews/main-control-status.md` 为准。
+
 每个研发包完成时，至少交付以下检查点，避免再次出现已验收资产未归因：
 
 1. 开始前记录 `git status --short`，说明哪些文件是前置脏状态。
