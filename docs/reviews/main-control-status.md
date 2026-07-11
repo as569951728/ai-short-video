@@ -1,6 +1,6 @@
 # AIShortvideo 主控统一状态
 
-更新时间：2026-07-11 18:08 CST
+更新时间：2026-07-11 18:29 CST
 
 本文件是需求主控的当前状态入口。历史过程和详细证据仍保留在各模块设计、验收和工程质量文档中；发生冲突时，以当前代码、最新正式验收结论和本文件列出的证据为准。
 
@@ -74,6 +74,7 @@
 - 最新工程质量：`status=watch`，`debt_level=medium`，无新增 P0/P1。
 - `.playwright-cli/` 已安全忽略；源码、migration、测试和文档未被 ignore。
 - 已创建并推送检查点分支 `codex/aishortvideo-checkpoint-20260711`，提交 `26f1bc9`；89 个已验收/已归因源码、migration、测试和文档已纳入 `origin`。
+- 工程质量任务已对远程检查点执行一次性只读复核：本地与 upstream 同步，未发现敏感信息、浏览器产物、一次性配置或 P10/P12 可执行越界误纳管，结论为 `passed`，无 P0/P1。
 - 一次性 `apps/api/tsconfig.testrun.json` 不纳入检查点；`.playwright-cli/` 继续作为本地浏览器运行产物忽略。
 - 当前工作树除上述 `apps/api/tsconfig.testrun.json` 外无 tracked 修改或其它未跟踪业务资产。
 - 禁止在共享工作树使用 reset、checkout、clean、stash 或覆盖式整理。
