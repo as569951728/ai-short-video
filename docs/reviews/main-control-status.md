@@ -1,6 +1,6 @@
 # AIShortvideo 主控统一状态
 
-更新时间：2026-07-12 17:52 CST
+更新时间：2026-07-12 18:37 CST
 
 本文件是需求主控的当前状态入口。历史过程和详细证据仍保留在各模块设计、验收和工程质量文档中；发生冲突时，以当前代码、最新正式验收结论和本文件列出的证据为准。
 
@@ -14,6 +14,7 @@
 | 视频 P8-P9 | 工作台状态流与版本流程按限定范围验收 | P9c 无可播放音频，P9e 无真实 MP4/下载文件；不能称为真实视频生成闭环 |
 | P10-preflight | 已正式收口 | `creationSource` 的 shared/API/仓储/migration/admin 与浏览器链路通过 `CS-R3` 及条件项复验 |
 | P10 | `P10-R0` 已正式收口；R1 准入设计通过 | R1 准入文档已纳入当前远程分支；尚未授权，未启动业务代码 |
+| 整改计划 | 二次复盘与四类执行资产已形成 | 当前进入整改冻结期；唯一总账 42 项，全部关闭前不进入新需求 |
 | 测试 | 206 项低层自动化与 typecheck 通过 | 证明 contract/unit/mock/in-memory；没有纳管浏览器 E2E，不能外推真实 DB/provider/media |
 | 工程质量 | `review / high` | 发现小说真实完本与全书审稿 2 个 P0；检查点已止血，包级提交防复发机制未关闭 |
 | 本地服务 | 未运行 | `5173`、`3001` 当前无监听；用户需要浏览器验收时按需启动 |
@@ -47,7 +48,7 @@
 ### 下一触发动作
 
 - 暂缓 `P10-R1`，不得按编号自动继续。
-- 等用户复盘确认后，建议单独授权“小说 real-flow 修复包”，先关闭 2 个 P0，再做真实 DeepSeek + MySQL 小规模完本金丝雀。
+- 按依赖顺序完成 `RP-00A` 起的治理基线、验收基础设施、任务平台、Prisma、AI 质量、候选交互和小说真实完本金丝雀。
 
 ## 3. 视频模块
 
@@ -78,13 +79,13 @@
 - 全栈研发会话：`P10-R0` 已完成，当前 idle。
 - 测试会话：`P10-R0` 正式验收与定向复验已通过，当前 idle。
 - `P10-R1` 验收准备保留，但当前不是推荐开工项。
-- 五类专业复盘已完成；详细结论见 `docs/reviews/full-project-retrospective-2026-07-12.md`。
+- 五类专业复盘与二次复盘已完成；执行状态以 `docs/remediation/issue-ledger.md` 为唯一事实源。
 - 每个研发包完成后必须由测试会话独立验收，研发自测不能替代正式结论。
 - 浏览器验收必须检查真实 Network/API 状态与刷新恢复，不能只看按钮 loading 或页面 banner。
 
 ## 5. 工程质量与工作树
 
-- 最新工程质量：复盘发现 2 个小说 P0；包级提交、浏览器 E2E、真实环境和媒体证据均有开放项。
+- 最新工程质量：二次复盘归并 42 项 PB/RB/QG/DEBT 和专项验证缺口；当前关闭 0 项，进入逐包整改。
 - `.playwright-cli/` 已安全忽略；源码、migration、测试和文档未被 ignore。
 - 已创建并推送检查点分支 `codex/aishortvideo-checkpoint-20260711`；P10-R0 检查点 `68957be` 及后续 R1 准入文档均纳入该远程分支。
 - 工程质量任务已对远程检查点执行一次性只读复核：本地与 upstream 同步，未发现敏感信息、浏览器产物、一次性配置或 P10/P12 可执行越界误纳管，结论为 `passed`，无 P0/P1。
@@ -94,6 +95,10 @@
 
 证据：
 
+- `docs/reviews/full-project-retrospective-v2-2026-07-12.md`
+- `docs/remediation/issue-ledger.md`
+- `docs/remediation/remediation-program.md`
+- `docs/remediation/acceptance-matrix.md`
 - `docs/reviews/engineering-quality-watch.md`
 - `docs/reviews/worktree-attribution-checkpoint-2026-07-11.md`
 - `docs/reviews/video-p9e-acceptance-closure-2026-07-10.md`
@@ -110,9 +115,9 @@
 
 ## 7. 当前唯一推荐动作
 
-1. 先由用户审阅全量复盘并确认路线；当前停止新增业务研发。
-2. 推荐下一授权包为“小说 real-flow 修复包”：补 Prisma 后半程、修正全书审稿正文输入、建立服务端任务/worker/checkpoint 和纳管浏览器 E2E。
-3. 小说小规模真实完本金丝雀通过后，再评估 P9-real：真实可播放音频、带时间戳字幕和可下载 MP4。
-4. `P10-R1` 暂缓；继续保持真实 DB/provider、外部媒体和平台发布的独立授权门禁。
+1. 先评审并授权 `RP-00A 状态与证据基线`；不得直接跳到业务 P0 修复。
+2. `RP-00A` 关闭后按依赖图逐个推进可派发子包；管理分组不得整体派发。每个子包独立研发、测试、关闭、commit 和 push。
+3. 小说真实完本金丝雀通过后，再执行 P9-real；P10-R1 只在 `RP-10` 重新决策。
+4. 继续保持真实 DB/provider、外部媒体和平台发布的独立授权门禁。
 
-不得提前执行小说 real-flow、`P9-real`、`P10-R1`、CS-L1、真实 MySQL/provider 或外部发布能力。
+不得提前执行 `RP-00B` 及后续子包、`P9-real`、`P10-R1`、CS-L1、真实 MySQL/provider 或外部发布能力。

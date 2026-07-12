@@ -118,18 +118,37 @@
 - 如果研发实现发现文档规则不适合落地，先反馈给主控会话，由主控会话决定是否调整需求文档和架构文档。
 - 任何会影响小说核心创作资产、AI 结果确认、状态流转、视频引用快照或安全日志的改动，都必须经过主控会话确认。
 
+## 整改冻结期协作
+
+当前项目已完成小说与视频多个任务包，但全量复盘确认仍有产品阻塞、发布阻塞、质量门禁和工程债务。当前进入“整改冻结期”，暂停新的需求设计和业务研发。
+
+唯一执行资产：
+
+- 二次复盘：`docs/reviews/full-project-retrospective-v2-2026-07-12.md`。
+- 唯一问题总账：`docs/remediation/issue-ledger.md`。
+- 整改任务包与依赖：`docs/remediation/remediation-program.md`。
+- 验收矩阵：`docs/remediation/acceptance-matrix.md`。
+- 关闭模板：`docs/remediation/closure-evidence-template.md`。
+
+整改期规则：
+
+1. 主控只能派发 `docs/remediation/remediation-program.md` 定义且依赖已满足的可派发子包；`RP-00` 至 `RP-10` 管理分组不得整体派发，不得夹带新功能。
+2. 每次派发必须列出 package_id、issue_ids、acceptance_ids、写集、禁止范围和目标证据等级。
+3. 研发完成后 15 分钟内必须派发独立测试；测试结论后 30 分钟内完成收口或返工决策，超时需记录原因。
+4. DEV 自测不能直接关闭问题；TEST approved 后，MC 使用关闭模板复核并更新唯一总账。
+5. 每包必须独立 commit/push；默认不超过 20 文件或 2,000 净新增行，超限必须拆包或写 ADR。
+6. 涉及真实 DB/provider/media 的包继续需要用户独立授权、安全边界、成本上限和回滚方案。
+7. 任一关闭证据不可复现，问题重新打开并停止后续依赖包。
+8. 唯一问题总账未全量 `closed` 前，不得准备 P10-R1 或其他下一阶段需求。
+
 ## 当前阶段口径
 
-当前项目仍处于需求设计、原型确认和研发前设计阶段。
+当前项目处于“整改冻结期”，不是研发前设计阶段，也不是新功能持续推进阶段。
 
-正式研发开始前，主控会话应先沉淀并持续维护：
+主控当前职责：
 
-- 系统模块边界与衔接节点：`docs/modules/system-module-boundaries.md`。
-- 小说系统状态流转与研发契约：`docs/modules/novel-development-contract.md`。
-- 核心数据模型：`docs/modules/novel-core-data-contract.md`。
-- 接口契约初稿：`docs/modules/novel-api-contract.md`。
-- 首批研发任务包：`docs/modules/novel-first-iteration-development-plan.md`。
-- 前端页面与路由范围：`docs/prototypes/README.md` 和 `docs/prototypes/novel-system-page-flow.md`。
-- 测试验收矩阵：`docs/modules/novel-acceptance-test-matrix.md`。
-
-正式研发开始后，再创建或指派全栈研发会话和测试会话推进对应任务。
+- 维护唯一问题总账和依赖顺序。
+- 组织整改包需求确认、研发、测试、产品与质量复核。
+- 确保真实能力只按对应证据等级汇报。
+- 确保每个整改包提交并推送远程。
+- 在总账全量关闭后组织 `RP-10`，决定是否重新开启下一阶段需求设计。
