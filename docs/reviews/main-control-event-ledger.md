@@ -221,3 +221,19 @@ evidence: docs/reviews/remediation-rmd-gov-*-closure-2026-07-12.md; docs/reviews
 mc_decision: RP-00B closed；允许按依赖进入 RP-01A/RP-01B；RP-01D 真实 MySQL 继续等待独立授权。
 next_action: 推送关闭提交后派发 RP-01A 与 RP-01B，保持新需求和真实环境冻结。
 ```
+
+### MCE-20260712-RP00B-CI-VERIFY
+
+```text
+event_id: MCE-20260712-RP00B-CI-VERIFY
+occurred_at: 2026-07-12 22:50:46 CST
+event_type: remote_ci_result
+source_thread: 019ed4a5-a2f5-7d13-86d0-0c28381af555
+package_id: RP-00B
+issue_ids: RMD-GOV-GIT-001
+acceptance_ids: GOV-GIT-01
+summary: RP-00B 实现提交和关闭提交均触发 Remediation governance，两个 push run 全部成功。
+evidence: GitHub Actions runs 29196618102 and 29196969050; status completed/success
+mc_decision: 远程 CI 未验证残余风险关闭，GOV-GIT-01 证据等级提升为本地/远程可执行门禁。
+next_action: 保持该 workflow 作为后续整改包的持续门禁。
+```

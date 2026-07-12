@@ -96,6 +96,7 @@
 - 最新工程质量：二次复盘归并 42 项 PB/RB/QG/DEBT 和专项验证缺口；`RP-00A`、`RP-00B` 已关闭 5 项 QG 和 1 项 DEBT，当前关闭 6/42。
 - `.playwright-cli/` 已安全忽略；源码、migration、测试和文档未被 ignore。
 - 已创建并推送检查点分支 `codex/aishortvideo-checkpoint-20260711`；P10-R0 检查点 `68957be` 及后续 R1 准入文档均纳入该远程分支。
+- RP-00B 的 `Remediation governance` 已在远程 push runs `29196618102`、`29196969050` 成功执行，Git 预算与 SLA 门禁不再只有本地证据。
 - 工程质量任务已对远程检查点执行一次性只读复核：本地与 upstream 同步，未发现敏感信息、浏览器产物、一次性配置或 P10/P12 可执行越界误纳管，结论为 `passed`，无 P0/P1。
 - 一次性 `apps/api/tsconfig.testrun.json` 已由 RP-00B 完成归因和安全删除，未加入 ignore；独立 TEST/QUALITY 已复核。`.playwright-cli/` 继续作为本地浏览器运行产物忽略。
 - `docs/modules/video-p10-r1-implementation-package.md` 与多会话评审记录已安全归因并纳入远程基线；它们是需求资产，不是已授权业务实现。

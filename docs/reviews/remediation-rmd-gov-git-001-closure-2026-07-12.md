@@ -16,7 +16,7 @@ draft_status: closed
 | acceptance_ids | GOV-GIT-01 |
 | environment | docs/scripts-only / no service / no DB / no provider |
 | target_evidence_level | E1 + Git hook/CI check |
-| actual_evidence_level | E1 + local executable gate + independent TEST/QUALITY review |
+| actual_evidence_level | E1 + local/remote executable gate + independent TEST/QUALITY review |
 
 ## 2. 原始问题
 
@@ -90,7 +90,7 @@ conclusion: approved
 user_goal_status: achieved
 environment: docs/scripts-only / local shallow repository
 evidence_level: E1 + independent TEST
-not_proven: GitHub Actions 尚未通过远程 PR/push 运行记录证明。
+not_proven: N/A
 ```
 
 ## 6. 质量复审
@@ -106,7 +106,7 @@ not_proven: GitHub Actions 尚未通过远程 PR/push 运行记录证明。
 issue_id: RMD-GOV-GIT-001
 final_status: closed
 closed_acceptance_ids: GOV-GIT-01
-residual_risks: GitHub Actions 已部署并推送，但尚未取得真实远程 PR/push 成功运行记录；本地可执行门禁和独立 TEST/QUALITY 已通过。
+residual_risks: N/A；远程 push runs 29196618102、29196969050 均 completed/success。
 reopen_conditions: 后续包绕过规模门禁，或超限包无 ADR 仍被派发/合入。
 decided_by: MC 019ed4a5-a2f5-7d13-86d0-0c28381af555
 decided_at: 2026-07-12 22:39:11 CST
