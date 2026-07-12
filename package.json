@@ -17,7 +17,7 @@
     "governance:git-budget": "node scripts/remediation-governance.mjs git-budget",
     "governance:sla": "node scripts/remediation-governance.mjs sla",
     "test:governance": "node --test scripts/remediation-governance.test.mjs",
-    "e2e:rp01a": "node scripts/e2e/run-playwright-backend-e2e.mjs",
+    "e2e:rp01a": "npm run build -w @ai-shortvideo/shared && node scripts/e2e/run-playwright-backend-e2e.mjs",
     "test:e2e:rp01a": "node --test scripts/e2e/*.test.mjs"
   },
   "devDependencies": {

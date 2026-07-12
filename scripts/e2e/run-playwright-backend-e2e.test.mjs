@@ -48,6 +48,14 @@ describe('RP-01A Playwright backend E2E runner guards', () => {
     assert.doesNotMatch(runnerSource, /npx|--package/);
   });
 
+  it('keeps the root E2E command self-contained for clean clones', () => {
+    const packageJson = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
+    assert.equal(
+      packageJson.scripts['e2e:rp01a'],
+      'npm run build -w @ai-shortvideo/shared && node scripts/e2e/run-playwright-backend-e2e.mjs'
+    );
+  });
+
   it('runs on API, admin and shared source changes in CI', () => {
     const workflowSource = readFileSync(new URL('../../.github/workflows/rp01a-e2e.yml', import.meta.url), 'utf8');
     for (const requiredPath of ['apps/api/src/**', 'apps/admin-web/src/**', 'packages/shared/src/**']) {
@@ -56,6 +64,8 @@ describe('RP-01A Playwright backend E2E runner guards', () => {
     assert.equal(workflowSource.includes('./node_modules/.bin/playwright install chromium'), true);
     assert.doesNotMatch(workflowSource, /npx playwright install chromium/);
     assert.equal(workflowSource.includes('  push:'), true);
+    assert.equal(workflowSource.includes('npm run e2e:rp01a'), true);
+    assert.equal(workflowSource.includes('npm run build -w @ai-shortvideo/shared'), false);
   });
 });
 
