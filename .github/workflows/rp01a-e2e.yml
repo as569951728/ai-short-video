@@ -2,6 +2,25 @@ name: RP-01A backend E2E
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/rp01a-e2e.yml'
+      - 'playwright.config.mjs'
+      - 'scripts/e2e/**'
+      - 'tests/e2e/**'
+      - 'apps/api/src/**'
+      - 'apps/api/prisma/**'
+      - 'apps/api/package.json'
+      - 'apps/api/tsconfig.json'
+      - 'apps/admin-web/src/**'
+      - 'apps/admin-web/package.json'
+      - 'apps/admin-web/tsconfig*.json'
+      - 'apps/admin-web/vite.config.ts'
+      - 'packages/shared/src/**'
+      - 'packages/shared/package.json'
+      - 'packages/shared/tsconfig.json'
+      - 'package.json'
+      - 'package-lock.json'
   pull_request:
     paths:
       - '.github/workflows/rp01a-e2e.yml'

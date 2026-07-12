@@ -55,6 +55,7 @@ describe('RP-01A Playwright backend E2E runner guards', () => {
     }
     assert.equal(workflowSource.includes('./node_modules/.bin/playwright install chromium'), true);
     assert.doesNotMatch(workflowSource, /npx playwright install chromium/);
+    assert.equal(workflowSource.includes('  push:'), true);
   });
 });
 
