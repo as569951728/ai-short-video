@@ -1,6 +1,6 @@
 # AIShortvideo 主控统一状态
 
-更新时间：2026-07-12 12:45 CST
+更新时间：2026-07-12 13:09 CST
 
 本文件是需求主控的当前状态入口。历史过程和详细证据仍保留在各模块设计、验收和工程质量文档中；发生冲突时，以当前代码、最新正式验收结论和本文件列出的证据为准。
 
@@ -13,7 +13,7 @@
 | 小说核心流程 | 已完成既有 mock/local 与真实模型人工验收问题修复链 | 正文批次旧 P1 和 `save_failed` 已关闭；继续由独立小说验收会话接收用户反馈 |
 | 视频 P8-P9 | P8/P8b/P9a-P9e mock/local 已验收 | 已停在本地导出记录，不等于真实渲染、上传或发布 |
 | P10-preflight | 已正式收口 | `creationSource` 的 shared/API/仓储/migration/admin 与浏览器链路通过 `CS-R3` 及条件项复验 |
-| P10 | `P10-R0` 已正式收口 | shared 合同与纯规则已通过独立验收；R1 未授权 |
+| P10 | `P10-R0` 已正式收口；R1 准入设计通过 | R1 准入文档已纳入当前远程分支；尚未授权，未启动业务代码 |
 | 测试 | 当前空闲 | R0 正式验收及唯一阻塞项定向复验已通过 |
 | 工程质量 | `watch / medium` | 无新增 P0/P1；89 个已验收/已归因文件已纳入远程检查点，仅保留 1 个一次性未归因辅助文件 |
 | 本地服务 | 未运行 | `5173`、`3001` 当前无监听；用户需要浏览器验收时按需启动 |
@@ -62,6 +62,7 @@
 - R0 已冻结 shared DTO、枚举、错误码、安全摘要、脱敏规则、纯时间函数与合同测试；没有实现 route/service/repository/Prisma/UI。
 - 正式验收：`docs/reviews/video-p10-r0-acceptance-closure-2026-07-12.md`。
 - P10 各包必须继续使用产品、架构、测试已确认的正式需求和阻塞门禁。
+- `P10-R1` 已完成产品、后端架构、独立测试和工程质量多会话只读评审，当前未授权、未实现；准入包为 `docs/modules/video-p10-r1-implementation-package.md`，评审记录为 `docs/reviews/p10-r1-multi-agent-review-2026-07-12.md`。
 
 ## 4. 测试与验收
 
@@ -75,10 +76,10 @@
 
 - 最新工程质量：`status=watch`，`debt_level=medium`，无新增 P0/P1。
 - `.playwright-cli/` 已安全忽略；源码、migration、测试和文档未被 ignore。
-- 已创建并推送检查点分支 `codex/aishortvideo-checkpoint-20260711`，提交 `26f1bc9`；89 个已验收/已归因源码、migration、测试和文档已纳入 `origin`。
+- 已创建并推送检查点分支 `codex/aishortvideo-checkpoint-20260711`；P10-R0 检查点 `68957be` 及后续 R1 准入文档均纳入该远程分支。
 - 工程质量任务已对远程检查点执行一次性只读复核：本地与 upstream 同步，未发现敏感信息、浏览器产物、一次性配置或 P10/P12 可执行越界误纳管，结论为 `passed`，无 P0/P1。
 - 一次性 `apps/api/tsconfig.testrun.json` 不纳入检查点；`.playwright-cli/` 继续作为本地浏览器运行产物忽略。
-- 当前工作树除上述 `apps/api/tsconfig.testrun.json` 外无 tracked 修改或其它未跟踪业务资产。
+- `docs/modules/video-p10-r1-implementation-package.md` 与多会话评审记录已安全归因并纳入远程基线；它们是需求资产，不是已授权业务实现。
 - 禁止在共享工作树使用 reset、checkout、clean、stash 或覆盖式整理。
 
 证据：
@@ -99,8 +100,7 @@
 
 ## 7. 当前唯一推荐动作
 
-1. 提交并推送 `P10-R0` 远程检查点。
-2. 等用户单独授权 `P10-R1` 后，才允许实现发布记录、冻结快照、幂等、门禁、in-memory 和 Prisma migration draft。
-3. 继续保持 P8b-L1b、真实 provider、外部渲染和平台发布能力的授权门禁。
+1. 等用户单独授权 `P10-R1` 后，才允许实现发布记录、冻结快照、幂等、门禁、in-memory 和 Prisma migration draft。
+2. 继续保持 P8b-L1b、真实 provider、外部渲染和平台发布能力的授权门禁。
 
 不得提前执行 `P10-R1`、CS-L1、真实 MySQL/provider 或外部发布能力。
