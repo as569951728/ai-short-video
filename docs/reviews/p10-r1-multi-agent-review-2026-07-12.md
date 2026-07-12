@@ -21,6 +21,8 @@
 | 独立测试 | `019ed4ee-b33b-7621-b71c-3aa3d9e7b26e` | approved | 接受；补充门禁失败与策略缺失的独立错误优先级样本 |
 | 工程质量与安全 | `019edb3a-a972-75e2-bbb1-774b5ddb6d88` | needs_revision | 接受；准入包与本评审记录必须先提交并推送，临时 `tsconfig.testrun.json` 不纳管 |
 
+质量定向复核：提交 `9c1a286` 推送后，HEAD 与 upstream 一致，提交内容仅包含三个准入文档，临时 `apps/api/tsconfig.testrun.json` 仍未纳管，未出现 R1 业务代码；复核结论 `approved`，原 P1 已关闭，当前无 P0/P1。
+
 ## 3. 一致通过的决策
 
 1. R1 内先为 `VideoUnit` 和 `VideoExport` 补自身 `versionNo`，并同步 shared/domain/Prisma/repository/test。
@@ -55,7 +57,8 @@
 - product_review: approved
 - architecture_review: approved
 - test_review: approved
-- quality_review: approved_after_remote_baseline
-- ready_for_P10_R1_authorization: yes_after_remote_baseline
+- quality_review: approved
+- quality_P1_closed: yes
+- ready_for_P10_R1_authorization: yes
 - P10_R1_authorized: no
 - P10_R1_business_code_started: no
