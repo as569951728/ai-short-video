@@ -15,6 +15,14 @@ acceptance_ids:
 user_goal_status: passed | failed | partial
 evidence_level:
 environment:
+evidence_buckets:
+  contract:
+  unit:
+  API:
+  DB:
+  browser:
+  provider:
+  media:
 not_proven:
 conclusion: approved | needs_revision | blocked
 ```
@@ -26,6 +34,7 @@ conclusion: approved | needs_revision | blocked
 - 只证明接口成功，没有证明用户结果可见和可继续。
 - 刷新、重复点击、并发、失败或重启后状态不一致。
 - 测试通过但工作树、migration、提交或远程状态不清楚。
+- 需要的证据桶未逐项填写，或把 `N/A` 用作逃避验证而没有说明原因。
 
 ## 2. 小说数据库与版本
 

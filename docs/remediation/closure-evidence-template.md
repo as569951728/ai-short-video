@@ -24,6 +24,7 @@
 | acceptance_ids | |
 | environment | |
 | target_evidence_level | |
+| actual_evidence_level | |
 
 ## 2. 原始问题
 
@@ -47,23 +48,27 @@
 
 ## 4. 研发证据
 
-| 项目 | 结果 |
-| --- | --- |
-| unit | |
-| typecheck | |
-| build | |
-| API/in-memory | |
-| browser | |
-| MySQL/Prisma | |
-| provider | |
-| media | |
-| failure injection | |
-| concurrency/restart | |
+以下证据桶必须逐项填写；不适用时写 `N/A` 并说明原因，不能删除行。
+
+| 证据桶 | 命令/证据 | 结果 | not_proven |
+| --- | --- | --- | --- |
+| contract | | | |
+| unit | | | |
+| API | | | |
+| DB/MySQL/Prisma | | | |
+| browser | | | |
+| provider | | | |
+| media | | | |
+| typecheck | | | |
+| build | | | |
+| failure injection | | | |
+| concurrency/restart | | | |
 
 研发自测结论：
 
 ```text
 user_goal_status:
+environment:
 evidence_level:
 not_proven:
 ```
@@ -71,9 +76,15 @@ not_proven:
 ## 5. 独立测试证据
 
 - 执行 acceptance ids：
+- environment：
+- evidence_level：
 - 命令：
 - fixture：
+- contract：
+- unit：
+- API：
 - 浏览器 trace：
+- DB/MySQL/Prisma：
 - API 请求/响应安全摘要：
 - 数据库证据：
 - provider 证据：
@@ -87,6 +98,7 @@ not_proven:
 ```text
 conclusion: approved | needs_revision | blocked
 user_goal_status: passed | failed | partial
+environment:
 evidence_level:
 not_proven:
 ```

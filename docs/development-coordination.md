@@ -141,6 +141,14 @@
 7. 任一关闭证据不可复现，问题重新打开并停止后续依赖包。
 8. 唯一问题总账未全量 `closed` 前，不得准备 P10-R1 或其他下一阶段需求。
 
+状态与证据规则：
+
+1. `docs/reviews/main-control-status.md` 只记录当前状态和当前推荐动作，不承载长篇历史。
+2. 主控派发、研发交付、测试结论、产品复核、质量复核和主控裁决进入 `docs/reviews/main-control-event-ledger.md`。
+3. 旧巡检、旧验收和旧复盘不能覆盖当前状态；如发现冲突，先写事件账本，再由 MC 判断是否更新当前状态和唯一问题总账。
+4. 验收结论必须按 `docs/remediation/acceptance-matrix.md` 分列 `contract/unit/API/DB/browser/provider/media`、`environment`、`evidence_level` 和 `not_proven`。
+5. 关闭证据必须从 `docs/remediation/closure-evidence-template.md` 复制生成；草稿、待验收和正式关闭必须区分清楚，不能用“代码已写”代替“问题已关闭”。
+
 ## 当前阶段口径
 
 当前项目处于“整改冻结期”，不是研发前设计阶段，也不是新功能持续推进阶段。
