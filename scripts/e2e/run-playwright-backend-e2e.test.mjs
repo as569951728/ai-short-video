@@ -10,6 +10,7 @@ import {
   assertSafeTestProfile,
   prepareSanitizedUpload,
   sanitizeLog,
+  waitForAdminReady,
   waitForHttpReady
 } from './run-playwright-backend-e2e.mjs';
 
@@ -47,6 +48,54 @@ describe('RP-01A Playwright backend E2E runner guards', () => {
     assert.equal(redacted.includes('kept summary'), true);
   });
 
+  it('recursively redacts complete JSON logs without leaking nested sibling payloads', () => {
+    const redacted = sanitizeLog(
+      JSON.stringify(
+        {
+          safeSummary: 'kept summary',
+          prompt: {
+            first: 'LEAK_SIBLING_JSON',
+            second: 'LEAK_SIBLING_JSON'
+          },
+          nested: {
+            array: [
+              {
+                providerResponse: {
+                  text: 'LEAK_SIBLING_JSON',
+                  sibling: 'LEAK_SIBLING_JSON'
+                }
+              }
+            ]
+          }
+        },
+        null,
+        2
+      )
+    );
+    assert.equal(redacted.includes('LEAK_SIBLING_JSON'), false);
+    assert.equal(redacted.includes('kept summary'), true);
+    assert.match(redacted, /"prompt": "\[REDACTED\]"/);
+    assert.match(redacted, /"providerResponse": "\[REDACTED\]"/);
+  });
+
+  it('redacts pretty JSON secret fields while preserving sibling safe fields', () => {
+    const redacted = sanitizeLog(`{
+  "safeSummary": "kept summary",
+  "modelResponse": {
+    "body": "LEAK_PRETTY_JSON",
+    "sibling": "LEAK_PRETTY_JSON"
+  },
+  "items": [
+    {
+      "database_url": "mysql://u:p@localhost/db"
+    }
+  ]
+}`);
+    assert.equal(redacted.includes('LEAK_PRETTY_JSON'), false);
+    assert.equal(redacted.includes('mysql://u:p@localhost/db'), false);
+    assert.equal(redacted.includes('kept summary'), true);
+  });
+
   it('detects occupied ports before startup', async () => {
     const server = await occupyRandomPort();
     const address = server.address();
@@ -73,6 +122,18 @@ describe('RP-01A Playwright backend E2E runner guards', () => {
     await new Promise((resolve) => server.close(resolve));
   });
 
+  it('aborts admin readiness when response headers arrive but body never completes', async () => {
+    const { server, close } = await createBodyStallServer('<div id="app"');
+    const address = server.address();
+    const startedAt = Date.now();
+    await assert.rejects(
+      () => waitForAdminReady(`http://127.0.0.1:${address.port}`, { timeoutMs: 200, children: [] }),
+      E2eFailure
+    );
+    assert.equal(Date.now() - startedAt < 1_500, true);
+    await close();
+  });
+
   it('copies only sanitized text artifacts into the CI upload directory', () => {
     const artifactDir = mkdtempSync(join(tmpdir(), 'rp01a-artifacts-'));
     mkdirSync(join(artifactDir, 'playwright-artifacts'), { recursive: true });
@@ -81,7 +142,8 @@ describe('RP-01A Playwright backend E2E runner guards', () => {
     writeFileSync(join(artifactDir, 'playwright-artifacts', 'trace.zip'), 'raw trace bytes');
     const uploadDir = prepareSanitizedUpload(artifactDir);
     assert.equal(readFileSync(join(uploadDir, 'api.log'), 'utf8').includes('value-to-redact'), false);
-    assert.equal(readFileSync(join(uploadDir, 'playwright.log'), 'utf8').includes('kept'), true);
+    assert.equal(readFileSync(join(uploadDir, 'playwright.log'), 'utf8').includes('raw_content_uploaded=false'), true);
+    assert.equal(readFileSync(join(uploadDir, 'playwright.log'), 'utf8').includes('kept'), false);
     assert.equal(existsSync(join(uploadDir, 'trace.zip')), false);
   });
 
@@ -131,5 +193,29 @@ function createStallServer() {
     });
     server.once('error', reject);
     server.listen(0, '127.0.0.1', () => resolve(server));
+  });
+}
+
+function createBodyStallServer(partialBody) {
+  return new Promise((resolve, reject) => {
+    const sockets = new Set();
+    const server = createServer((socket) => {
+      sockets.add(socket);
+      socket.on('close', () => sockets.delete(socket));
+      socket.once('data', () => {
+        socket.write('HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\r\n');
+        socket.write(partialBody);
+      });
+    });
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      resolve({
+        server,
+        close: async () => {
+          for (const socket of sockets) socket.destroy();
+          await new Promise((done) => server.close(done));
+        }
+      });
+    });
   });
 }

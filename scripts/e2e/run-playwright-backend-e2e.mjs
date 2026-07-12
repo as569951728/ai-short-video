@@ -60,6 +60,7 @@ const SENSITIVE_JSON_KEYS = [
   'response_payload',
   'response-payload'
 ];
+const SENSITIVE_NORMALIZED_KEYS = new Set(SENSITIVE_JSON_KEYS.map(normalizeSensitiveKey));
 
 export function assertSafeTestProfile(env = process.env) {
   const present = FORBIDDEN_ENV_KEYS.filter((key) => Boolean(env[key]));
@@ -73,8 +74,43 @@ export function assertSafeTestProfile(env = process.env) {
 }
 
 export function sanitizeLog(text) {
+  const raw = String(text);
+  const structured = sanitizeStructuredJson(raw);
+  if (structured) return structured;
+  return sanitizeTextLog(raw);
+}
+
+function sanitizeStructuredJson(text) {
+  const trimmed = text.trim();
+  if (!trimmed || !['{', '['].includes(trimmed[0])) return null;
+  try {
+    return JSON.stringify(redactJsonValue(JSON.parse(trimmed)), null, 2);
+  } catch {
+    return null;
+  }
+}
+
+function redactJsonValue(value) {
+  if (Array.isArray(value)) return value.map((item) => redactJsonValue(item));
+  if (!value || typeof value !== 'object') return value;
+  const output = {};
+  for (const [key, child] of Object.entries(value)) {
+    output[key] = isSensitiveKey(key) ? '[REDACTED]' : redactJsonValue(child);
+  }
+  return output;
+}
+
+function isSensitiveKey(key) {
+  return SENSITIVE_NORMALIZED_KEYS.has(normalizeSensitiveKey(key));
+}
+
+function normalizeSensitiveKey(key) {
+  return key.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function sanitizeTextLog(text) {
   const sensitiveKeyPattern = SENSITIVE_JSON_KEYS.join('|');
-  return String(text)
+  return text
     .replace(/(Authorization|Cookie)\s*:\s*[^\n\r]+/gi, '$1: [REDACTED]')
     .replace(/(api[_-]?key|token|secret|password)=([^&\s]+)/gi, '$1=[REDACTED]')
     .replace(/mysql:\/\/[^\s"',}]+/gi, 'mysql://[REDACTED]')
@@ -115,7 +151,7 @@ export async function waitForHttpReady(url, { timeoutMs, label, children = [] })
     const exited = children.find((child) => child.exitCode !== null);
     if (exited) throw new E2eFailure(`${label} exited before ready with code ${exited.exitCode}`);
     try {
-      const response = await fetchWithTimeout(url, remainingTimeoutMs(startedAt, timeoutMs));
+      const { response } = await fetchTextWithTimeout(url, remainingTimeoutMs(startedAt, timeoutMs));
       if (response.ok) return;
       lastError = `status ${response.status}`;
     } catch (error) {
@@ -133,8 +169,7 @@ export async function waitForAdminReady(url, options) {
     const exited = options.children.find((child) => child.exitCode !== null);
     if (exited) throw new E2eFailure(`admin exited before ready with code ${exited.exitCode}`);
     try {
-      const response = await fetchWithTimeout(url, remainingTimeoutMs(startedAt, options.timeoutMs));
-      const text = await response.text();
+      const { response, text } = await fetchTextWithTimeout(url, remainingTimeoutMs(startedAt, options.timeoutMs));
       if (response.ok && text.includes('<div id="app"></div>')) return;
       lastError = `status ${response.status}`;
     } catch (error) {
@@ -232,16 +267,32 @@ export function prepareSanitizedUpload(artifactDir) {
   for (const fileName of ['api.log', 'admin.log', 'playwright.log', 'summary.txt']) {
     const sourcePath = join(artifactDir, fileName);
     if (!existsSync(sourcePath)) continue;
-    writeFileSync(join(uploadDir, fileName), sanitizeLog(readFileSync(sourcePath, 'utf8')));
+    const raw = readFileSync(sourcePath, 'utf8');
+    const content = fileName === 'summary.txt' ? sanitizeLog(raw) : createSafeLogSummary(fileName, raw);
+    writeFileSync(join(uploadDir, fileName), content);
   }
   return uploadDir;
 }
 
-async function fetchWithTimeout(url, timeoutMs) {
+function createSafeLogSummary(fileName, raw) {
+  return [
+    'RP-01A sanitized log summary',
+    `source_file=${fileName}`,
+    `source_bytes=${Buffer.byteLength(raw, 'utf8')}`,
+    `source_lines=${raw.length === 0 ? 0 : raw.split(/\r?\n/).length}`,
+    'raw_content_uploaded=false',
+    'sensitive_content_redacted=true',
+    ''
+  ].join('\n');
+}
+
+async function fetchTextWithTimeout(url, timeoutMs) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), Math.max(1, timeoutMs));
   try {
-    return await fetch(url, { signal: controller.signal });
+    const response = await fetch(url, { signal: controller.signal });
+    const text = await response.text();
+    return { response, text };
   } catch (error) {
     if (error?.name === 'AbortError') {
       throw new Error(`request timeout after ${timeoutMs}ms`);

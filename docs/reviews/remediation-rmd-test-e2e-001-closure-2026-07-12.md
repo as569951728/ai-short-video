@@ -40,6 +40,7 @@ draft_status: pending_independent_verification
 - clean clone 修复：首次远程 CI run `29199259463` 失败于 `Cannot find node_modules/@ai-shortvideo/shared/dist/index.js`，原因是本地 `typecheck` 曾生成 shared dist 掩盖了 clean clone 缺失；已将 `npm run build -w @ai-shortvideo/shared` 前置进根 `npm run e2e:rp01a` 单命令，workflow 继续复用该单命令。本地已移走 `packages/shared/dist` 后复跑 `npm run e2e:rp01a` 通过；后续新远程 run 待 TEST/CI 验证。
 - Prisma Client 修复：第二次远程 CI run `29200061517` 在 shared build 通过后失败于 `Cannot find apps/api/src/generated/prisma/client.js`，原因是本地 `typecheck/prisma generate` 留下的忽略产物再次掩盖 clean clone 缺失；已将 `npm run prisma:generate -w @ai-shortvideo/api` 加入根 `npm run e2e:rp01a`，位于 shared build 之后、runner 启动之前。该步骤只生成 Prisma Client，不连接、迁移或写入数据库；后续新远程 run 待 TEST/CI 验证。
 - QUALITY 复审修复：2026-07-13 01:02:49 QUALITY 对独立 TEST approved 后提出 needs_revision，P1-1 为失败 trace/artifact 未脱敏且 workflow `always()` 上传范围过宽，P1-2 为 readiness fetch 无 AbortSignal、遇到 accept 但不响应的服务可能挂到 workflow timeout。已改为 runner 生成 `sanitized-upload` 文本白名单目录，CI 仅上传 `api.log`、`admin.log`、`playwright.log`、`summary.txt` 的脱敏副本，不上传 trace.zip/截图/DOM/network 原始产物；readiness 每次 fetch 使用受控 AbortSignal timeout；后续新远程 run 待 TEST/CI 验证。
+- QUALITY 回归复审修复：2026-07-13 01:24:32 回归 agent needs_revision，P1-1 为正则脱敏无法可靠处理 pretty/multiline/nested object/array/sibling payload，P1-2 为 admin readiness 在收到 headers 后清除 timer、`response.text()` 仍可能 body-stall。已改为完整 JSON 日志优先递归结构化脱敏，命中 normalized sensitive key 时整值替换 `[REDACTED]` 并保留安全 sibling；非 JSON 文本保留兜底脱敏。`sanitized-upload` 中普通 log 文件改为 runner 生成的安全摘要，不再上传任意原始日志内容；admin/API readiness 的 status 与 body 消费共用同一个 AbortSignal deadline；后续新远程 run 待 TEST/CI 验证。
 
 明确未修改：
 
@@ -51,7 +52,7 @@ draft_status: pending_independent_verification
 | 证据桶 | 命令/证据 | 结果 | not_proven |
 | --- | --- | --- | --- |
 | contract | `playwright.config.mjs`、`scripts/e2e/run-playwright-backend-e2e.mjs` | 已纳管固定配置和生命周期 runner | 待独立验收 |
-| unit | `npm run test:e2e:rp01a` | 通过；覆盖安全 profile、JSON/文本日志脱敏、端口占用、health timeout、stall server timeout、本地 Playwright binary guard、CI path/upload allowlist guard、shared build + Prisma generate 单命令 guard | 待独立验收 |
+| unit | `npm run test:e2e:rp01a` | 通过；覆盖安全 profile、完整 JSON 递归脱敏、文本日志兜底脱敏、pretty/nested/array/sibling 泄漏样本、端口占用、health timeout、no-header stall、admin body-stall、本地 Playwright binary guard、CI path/upload allowlist guard、shared build + Prisma generate 单命令 guard | 待独立验收 |
 | API | `npm run e2e:rp01a` 中 `/health`、`GET /novels`、`POST /novels/drafts` | 通过；真实本地 API 返回统一响应并创建草稿；移走 shared dist 和 Prisma Client 后，单命令先 build shared、generate Prisma Client 再通过 | 待独立验收 |
 | DB/MySQL/Prisma | 安全 profile 拒绝 `DATABASE_URL` | 不触碰真实 DB | TEST-DB-001 不在本包 |
 | browser | `tests/e2e/novel-backend.spec.mjs` | 通过；页面加载、用户创建草稿、刷新后仍可定位 | 待独立验收 |
