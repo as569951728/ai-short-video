@@ -52,7 +52,7 @@ describe('RP-01A Playwright backend E2E runner guards', () => {
     const packageJson = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
     assert.equal(
       packageJson.scripts['e2e:rp01a'],
-      'npm run build -w @ai-shortvideo/shared && node scripts/e2e/run-playwright-backend-e2e.mjs'
+      'npm run build -w @ai-shortvideo/shared && npm run prisma:generate -w @ai-shortvideo/api && node scripts/e2e/run-playwright-backend-e2e.mjs'
     );
   });
 

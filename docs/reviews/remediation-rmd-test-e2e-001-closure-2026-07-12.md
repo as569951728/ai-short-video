@@ -38,6 +38,7 @@ draft_status: pending_independent_verification
 - trace/log：固定输出 `output/playwright/rp-01a/<runId>`；日志写入前脱敏 Authorization、Cookie、DATABASE_URL、key/token/secret、prompt/raw/model/provider response 字段；输出目录已加入 `.gitignore`。
 - CI 支撑：`.github/workflows/rp01a-e2e.yml` 使用 Node 24、npm cache 与 `~/.cache/ms-playwright` Chromium cache；API/admin/shared 源码变更会触发回归；仅上传 `output/playwright/rp-01a/**` 脱敏产物。
 - clean clone 修复：首次远程 CI run `29199259463` 失败于 `Cannot find node_modules/@ai-shortvideo/shared/dist/index.js`，原因是本地 `typecheck` 曾生成 shared dist 掩盖了 clean clone 缺失；已将 `npm run build -w @ai-shortvideo/shared` 前置进根 `npm run e2e:rp01a` 单命令，workflow 继续复用该单命令。本地已移走 `packages/shared/dist` 后复跑 `npm run e2e:rp01a` 通过；后续新远程 run 待 TEST/CI 验证。
+- Prisma Client 修复：第二次远程 CI run `29200061517` 在 shared build 通过后失败于 `Cannot find apps/api/src/generated/prisma/client.js`，原因是本地 `typecheck/prisma generate` 留下的忽略产物再次掩盖 clean clone 缺失；已将 `npm run prisma:generate -w @ai-shortvideo/api` 加入根 `npm run e2e:rp01a`，位于 shared build 之后、runner 启动之前。该步骤只生成 Prisma Client，不连接、迁移或写入数据库；后续新远程 run 待 TEST/CI 验证。
 
 明确未修改：
 
@@ -49,8 +50,8 @@ draft_status: pending_independent_verification
 | 证据桶 | 命令/证据 | 结果 | not_proven |
 | --- | --- | --- | --- |
 | contract | `playwright.config.mjs`、`scripts/e2e/run-playwright-backend-e2e.mjs` | 已纳管固定配置和生命周期 runner | 待独立验收 |
-| unit | `npm run test:e2e:rp01a` | 通过；覆盖安全 profile、日志脱敏、端口占用、health timeout、本地 Playwright binary guard、CI path guard | 待独立验收 |
-| API | `npm run e2e:rp01a` 中 `/health`、`GET /novels`、`POST /novels/drafts` | 通过；真实本地 API 返回统一响应并创建草稿；移走 shared dist 后单命令先 build shared 再通过 | 待独立验收 |
+| unit | `npm run test:e2e:rp01a` | 通过；覆盖安全 profile、日志脱敏、端口占用、health timeout、本地 Playwright binary guard、CI path guard、shared build + Prisma generate 单命令 guard | 待独立验收 |
+| API | `npm run e2e:rp01a` 中 `/health`、`GET /novels`、`POST /novels/drafts` | 通过；真实本地 API 返回统一响应并创建草稿；移走 shared dist 和 Prisma Client 后，单命令先 build shared、generate Prisma Client 再通过 | 待独立验收 |
 | DB/MySQL/Prisma | 安全 profile 拒绝 `DATABASE_URL` | 不触碰真实 DB | TEST-DB-001 不在本包 |
 | browser | `tests/e2e/novel-backend.spec.mjs` | 通过；页面加载、用户创建草稿、刷新后仍可定位 | 待独立验收 |
 | provider | 安全 profile 拒绝 provider key，强制 mock | 不触碰真实 provider | 真实 provider E2E 不在本包 |
