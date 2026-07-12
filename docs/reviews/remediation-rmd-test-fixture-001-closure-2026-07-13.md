@@ -33,7 +33,7 @@
   - 场景目录覆盖 valid_state：`processing`、`failed_timeout`、`failed_malformed_json`、`stale_source`、`active_conflict`、`restart_boundary`、`chapter_plan_chunk_failure`、`save_failure_after_provider`。
   - 场景目录覆盖 counterexample：`late_result_after_cancel`、`duplicate_current`；counterexample 不自动归一化，不声称业务已修。
   - 新增 RP-01C 定向测试，覆盖确定性、无全局共享 scenario/source refs/metadata/数组引用、普通对象结构冻结、深拷贝隔离、序列化、引用完整、租户隔离、幂等复用/冲突、场景化 executable failure injection probes、scripted LLM 调用计数、Fastify `/tasks` route 投影。
-  - 新增根单命令 `npm run test:rp01c`，命令内先 build shared，再运行 API fixture 测试。
+  - 新增根单命令 `npm run test:rp01c`，命令内先 build shared，再执行 API Prisma Client generate，然后运行 API fixture 测试，保证 clean checkout 自足。
   - 新增 RP-01C workflow，Node 固定 `24.14.0`，运行 targeted fixture、API 全量、RP-01A guards、governance、typecheck、API build。
 - 修改文件：以最终 git diff 为准。
 - migration：N/A，本包不涉及数据库结构。
@@ -47,7 +47,7 @@
 | 证据桶 | 命令/证据 | 结果 | not_proven |
 | --- | --- | --- | --- |
 | contract | `apps/api/test/rp01c/fixtureFactory.test.ts` 场景目录断言 | passed; valid_state 8 类、counterexample 2 类完整；scenario/source refs/metadata/数组无全局共享引用；普通结构冻结与 Date/嵌套深拷贝隔离通过 | 独立验收待执行 |
-| unit | `npm run test:rp01c` | passed; 10 tests | 独立验收待执行 |
+| unit | `npm run test:rp01c` | passed; 11 tests | 独立验收待执行 |
 | API | Fastify `/tasks/:taskId`、`/tasks/:taskId/events` 投影 processing/failed/stale/conflict；restart_boundary 关闭 app 后同 scenarioId 重建并投影一致 | passed through existing task routes | counterexample 仅作 fixture/detector，不作 route 支持声明；restart 不证明 worker/进程恢复 |
 | DB/MySQL/Prisma | N/A | 本包不触真实 DB/Prisma 写入 | 真实 MySQL/Prisma 未证明 |
 | browser | N/A | 本包为 API test support | 浏览器不属于 TEST-FIXTURE-01 |
@@ -121,7 +121,8 @@ not_proven:
 | branch | `codex/aishortvideo-checkpoint-20260711` |
 | commit | 未提交 |
 | upstream | 待主控确认 |
-| changed_files | `npm run governance:git-budget -- --worktree` reported files=6, netAdditions=1003 |
+| remote_ci_regression | commit `12d77da`, run `29207239740` failed in clean checkout because `apps/api/src/generated/prisma/client.js` was missing; root `test:rp01c` now generates Prisma Client before fixture tests; recheck pending |
+| changed_files | RP-01C cumulative diff from `4490196`: files=6, netAdditions=1017; current follow-up worktree remains within the RP-00B budget |
 | diff_check | `git diff --check` passed |
 | worktree_remaining | RP-01C uncommitted files only; no commit/push performed |
 

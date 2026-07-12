@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { TaskStatus } from '@ai-shortvideo/shared';
 import { buildApp } from '../../src/app.js';
@@ -31,6 +32,18 @@ const COUNTEREXAMPLES = ['late_result_after_cancel', 'duplicate_current'] as con
 const FORBIDDEN_TEXT = /apiKey|authorization|database_url|DATABASE_URL|secret|rawPrompt|rawResponse|providerResponse|fullChapterText|chapterBody/i;
 
 describe('RP-01C fixture factory contract', () => {
+  it('keeps the root RP-01C command self-contained for clean checkouts', () => {
+    const rootPackageJson = JSON.parse(readFileSync(new URL('../../../../package.json', import.meta.url), 'utf8')) as {
+      scripts: Record<string, string>;
+    };
+    const command = rootPackageJson.scripts['test:rp01c'];
+    assert.equal(command.includes('npx'), false);
+    assert.match(
+      command,
+      /^npm run build -w @ai-shortvideo\/shared && npm run prisma:generate -w @ai-shortvideo\/api && npm run test:rp01c -w @ai-shortvideo\/api$/
+    );
+  });
+
   it('keeps the scenario catalogue complete and classified', () => {
     assert.deepEqual(RP01C_SCENARIOS.map((scenario) => scenario.id), [...VALID_SCENARIOS, ...COUNTEREXAMPLES]);
     assert.deepEqual(RP01C_SCENARIOS.filter((scenario) => scenario.kind === 'valid_state').map((scenario) => scenario.id), [...VALID_SCENARIOS]);
