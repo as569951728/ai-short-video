@@ -317,3 +317,19 @@ evidence: docs/reviews/remediation-rmd-test-e2e-001-closure-2026-07-12.md; docs/
 mc_decision: RP-01A closed；允许按依赖进入 RP-01B；RP-01D 真实 MySQL 继续等待独立授权。
 next_action: 推送关闭提交并验证远程治理 CI，然后派发 RP-01B。
 ```
+
+### MCE-20260713-RP01A-CLOSE-CI-VERIFY
+
+```text
+event_id: MCE-20260713-RP01A-CLOSE-CI-VERIFY
+occurred_at: 2026-07-13 01:49:05 CST
+event_type: remote_ci_result
+source_thread: 019ed4a5-a2f5-7d13-86d0-0c28381af555
+package_id: RP-01A
+issue_ids: RMD-TEST-E2E-001
+acceptance_ids: TEST-E2E-BOOTSTRAP-01
+summary: RP-01A 正式关闭提交 ee0b1a2 已推送，Remediation governance 远程运行成功。
+evidence: GitHub Actions run 29202693061; status completed/success; headSha ee0b1a2
+mc_decision: 关闭提交远程验证完成，RP-01A 保持 closed。
+next_action: 按依赖派发 RP-01B；RP-01D 继续等待独立授权。
+```
