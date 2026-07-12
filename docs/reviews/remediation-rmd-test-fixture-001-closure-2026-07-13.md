@@ -14,7 +14,7 @@
 | acceptance_ids | TEST-FIXTURE-01 |
 | environment | local Node 24 / API test-only fixture factory |
 | target_evidence_level | E2/E3 deterministic factory |
-| actual_evidence_level | E2/E3 local DEV + clean-checkout CI; independent re-review needs_revision |
+| actual_evidence_level | E2/E3 local DEV + clean-checkout CI; fresh independent TEST/QUALITY pending |
 
 ## 2. 原始问题
 
@@ -47,14 +47,14 @@
 | 证据桶 | 命令/证据 | 结果 | not_proven |
 | --- | --- | --- | --- |
 | contract | `apps/api/test/rp01c/fixtureFactory.test.ts` 场景目录断言 | passed; valid_state 8 类、counterexample 2 类完整；目录及条目冻结；scenario/source refs/metadata/数组无全局共享引用；普通结构冻结与 Date/嵌套深拷贝隔离通过；stale/current 引用自洽 | 独立验收复验待执行 |
-| unit | `npm run test:rp01c` | passed; 13 tests | 独立验收复验待执行 |
+| unit | `npm run test:rp01c` | passed; 13 tests locally and in clean-checkout run `29208828449` | 独立验收复验待执行 |
 | API | Fastify `/tasks/:taskId`、`/tasks/:taskId/events` 投影 processing/failed/stale/conflict；restart_boundary 关闭 app 后同 scenarioId 重建并投影一致 | passed through existing task routes | counterexample 仅作 fixture/detector，不作 route 支持声明；restart 不证明 worker/进程恢复 |
 | DB/MySQL/Prisma | N/A | 本包不触真实 DB/Prisma 写入 | 真实 MySQL/Prisma 未证明 |
 | browser | N/A | 本包为 API test support | 浏览器不属于 TEST-FIXTURE-01 |
 | provider | N/A | scripted LLM 只验证 test support 调用计数和 release 控制 | 真实 provider 未证明 |
 | media | N/A | 本包不触媒体 | 真实媒体未证明 |
-| typecheck | `npm run typecheck` | passed | 独立验收待执行 |
-| build | `npm run build -w @ai-shortvideo/api` | passed | 独立验收待执行 |
+| typecheck | `npm run typecheck` | passed locally and in clean-checkout run `29208828449` | 独立验收待执行 |
+| build | `npm run build -w @ai-shortvideo/api` | passed locally and in clean-checkout run `29208828449` | 独立验收待执行 |
 | failure injection | `failed_timeout` 第 1 次 chat reject timeout；`failed_malformed_json` 第 1 次 chat 返回 malformed 且 JSON.parse 失败；`chapter_plan_chunk_failure` 第 1 次 valid、第 2 次 malformed；`save_failure_after_provider` provider 成功后第 1 次 repository save reject；`late_result_after_cancel` cancel 后受控 deferred release 迟到输入 | passed as executable test-only probes | 不证明业务已具备完整 repair/retry/worker 恢复；late_result 仍为 counterexample，不声称生产阻止回写 |
 | concurrency/restart | `active_conflict` 同租户 conflict lookup 命中、跨租户不命中；`restart_boundary` app close 后同一 scenarioId 重建 projection 一致 | passed as deterministic fixture/replay input | 不证明真实并发原子 preclaim、worker/retry、进程重启恢复 |
 
@@ -64,7 +64,7 @@
 user_goal_status: partial
 environment: local Node 24 / NODE_ENV=production / AI_PROVIDER_MODE=mock / DOTENV_CONFIG_PATH=/dev/null / API test-only fixture factory
 evidence_level: E2/E3 local DEV
-not_proven: independent TEST, remote CI, real restart recovery, worker/retry, atomic concurrent preclaim, DB current uniqueness, real MySQL/Prisma, real provider, media
+not_proven: independent TEST/QUALITY approval, real restart recovery, worker/retry, atomic concurrent preclaim, DB current uniqueness, real MySQL/Prisma, real provider, media
 ```
 
 ## 5. 独立测试证据
@@ -123,12 +123,12 @@ not_proven:
 | 字段 | 内容 |
 | --- | --- |
 | branch | `codex/aishortvideo-checkpoint-20260711` |
-| commit | implementation/follow-up commits `12d77da`, `7a69c1a`, `dd346be`, `3910a68`; complete-chain environment isolation follow-up pending |
-| upstream | `origin/codex/aishortvideo-checkpoint-20260711` aligned at `3910a68` before current follow-up |
-| remote_ci_regression | run `29207239740` at `12d77da` failed because clean checkout lacked generated Prisma Client; run `29207557235` at `7a69c1a` passed targeted/API/E2E/governance/typecheck/build but failed git-budget because shallow checkout lacked a parent revision; run `29207718875` at `dd346be` passed after adding Prisma generation and `fetch-depth: 0`; run `29208391608` at `3910a68` passed targeted 13/API 108/RP-01A 13/governance 15/typecheck/API build/git-budget. Current complete-chain environment isolation follow-up still requires a fresh clean-checkout run |
-| changed_files | RP-01C cumulative diff from `4490196`: files=6, netAdditions=1077; current follow-up worktree remains within the RP-00B budget |
+| commit | implementation/follow-up commits `12d77da`, `7a69c1a`, `dd346be`, `3910a68`, `dc1991a`; closure evidence revision is the HEAD containing this document |
+| upstream | implementation commit `dc1991a` pushed to `origin/codex/aishortvideo-checkpoint-20260711`; reviewers must verify the closure-evidence HEAD is also aligned before approval |
+| remote_ci_regression | run `29207239740` at `12d77da` failed because clean checkout lacked generated Prisma Client; run `29207557235` at `7a69c1a` passed targeted/API/E2E/governance/typecheck/build but failed git-budget because shallow checkout lacked a parent revision; run `29207718875` at `dd346be` passed after adding Prisma generation and `fetch-depth: 0`; run `29208391608` at `3910a68` passed targeted 13/API 108/RP-01A 13/governance 15/typecheck/API build/git-budget; final implementation run `29208828449` at `dc1991a` passed the same complete clean-checkout matrix after wrapping the full command chain in the sanitized environment. Sibling runs `29208828441` governance, `29208828426` RP-01A and `29208828434` RP-01B DOM also passed |
+| changed_files | RP-01C cumulative diff from `4490196`: files=6, netAdditions=1079; within the RP-00B budget |
 | diff_check | `git diff --check` passed |
-| worktree_remaining | complete-chain environment isolation and closure refresh only; final commit/push and fresh independent re-review pending |
+| worktree_remaining | closure evidence commit/push and fresh independent TEST/QUALITY re-review pending; reviewers must verify clean worktree and aligned upstream |
 
 ## 8. 关闭裁决
 
@@ -136,7 +136,7 @@ not_proven:
 issue_id: RMD-TEST-FIXTURE-001
 final_status: partial
 closed_acceptance_ids:
-residual_risks: fresh remote CI and independent TEST/QUALITY approval pending; not_proven items remain outside RP-01C scope
+residual_risks: independent TEST/QUALITY approval pending; not_proven items remain outside RP-01C scope
 reopen_conditions: fixture factory removed; scenario catalogue incomplete; failure states again require manual state edits; counterexamples normalized or misreported as fixed
 decided_by: pending MC
 decided_at: pending
