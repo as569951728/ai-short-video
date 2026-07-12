@@ -1,0 +1,53 @@
+name: RP-01A backend E2E
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/rp01a-e2e.yml'
+      - 'playwright.config.mjs'
+      - 'scripts/e2e/**'
+      - 'tests/e2e/**'
+      - 'apps/api/src/**'
+      - 'apps/api/prisma/**'
+      - 'apps/api/package.json'
+      - 'apps/api/tsconfig.json'
+      - 'apps/admin-web/src/**'
+      - 'apps/admin-web/package.json'
+      - 'apps/admin-web/tsconfig*.json'
+      - 'apps/admin-web/vite.config.ts'
+      - 'packages/shared/src/**'
+      - 'packages/shared/package.json'
+      - 'packages/shared/tsconfig.json'
+      - 'package.json'
+      - 'package-lock.json'
+
+jobs:
+  backend-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AI_PROVIDER_MODE: mock
+      E2E_PROFILE: rp01a-local-inmemory
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Cache Playwright Chromium
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-1.56.1-chromium
+      - run: npm ci
+      - run: ./node_modules/.bin/playwright install chromium
+      - run: npm run test:e2e:rp01a
+      - run: npm run e2e:rp01a
+      - name: Upload sanitized RP-01A artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rp01a-playwright-artifacts
+          path: output/playwright/rp-01a/**
+          if-no-files-found: ignore
