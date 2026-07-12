@@ -1,0 +1,53 @@
+name: Remediation governance
+
+on:
+  pull_request:
+  push:
+    branches:
+      - codex/**
+
+jobs:
+  governance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm run test:governance
+      - name: Ensure merge-base can be computed
+        run: |
+          if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+            git fetch --unshallow --prune
+          else
+            git fetch --all --prune
+          fi
+      - name: Check package diff budget
+        run: |
+          collect_adr_args() {
+            local base="$1"
+            local head="$2"
+            ADR_ARGS=()
+            while IFS= read -r -d '' path; do
+              case "$path" in
+                docs/adr/*.md) ADR_ARGS+=(--adr "$path") ;;
+              esac
+            done < <(git diff --name-only -z "$base" "$head")
+          }
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+            MERGE_BASE="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"
+            collect_adr_args "$MERGE_BASE" "$HEAD_SHA"
+            npm run governance:git-budget -- --base "$MERGE_BASE" --head "$HEAD_SHA" "${ADR_ARGS[@]}"
+          elif [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            BASE_SHA="${{ github.event.before }}"
+            HEAD_SHA="${{ github.sha }}"
+            collect_adr_args "$BASE_SHA" "$HEAD_SHA"
+            npm run governance:git-budget -- --base "$BASE_SHA" --head "$HEAD_SHA" "${ADR_ARGS[@]}"
+          else
+            npm run governance:git-budget
+          fi

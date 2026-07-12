@@ -13,6 +13,9 @@
     "dev:api": "npm run dev -w apps/api",
     "build:api": "npm run build -w apps/api",
     "build": "npm run build --workspaces --if-present",
-    "typecheck": "npm run build -w @ai-shortvideo/shared && npm run typecheck --workspaces --if-present"
+    "typecheck": "npm run build -w @ai-shortvideo/shared && npm run typecheck --workspaces --if-present",
+    "governance:git-budget": "node scripts/remediation-governance.mjs git-budget",
+    "governance:sla": "node scripts/remediation-governance.mjs sla",
+    "test:governance": "node --test scripts/remediation-governance.test.mjs"
   }
 }
