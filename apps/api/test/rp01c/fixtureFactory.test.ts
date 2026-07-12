@@ -42,6 +42,10 @@ describe('RP-01C fixture factory contract', () => {
       command,
       /^npm run build -w @ai-shortvideo\/shared && npm run prisma:generate -w @ai-shortvideo\/api && npm run test:rp01c -w @ai-shortvideo\/api$/
     );
+
+    const workflow = readFileSync(new URL('../../../../.github/workflows/rp01c-fixtures.yml', import.meta.url), 'utf8');
+    assert.match(workflow, /uses: actions\/checkout@v4\n\s+with:\n\s+fetch-depth: 0/);
+    assert.match(workflow, /run: npm run governance:git-budget/);
   });
 
   it('keeps the scenario catalogue complete and classified', () => {

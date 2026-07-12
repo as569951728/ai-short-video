@@ -121,8 +121,8 @@ not_proven:
 | branch | `codex/aishortvideo-checkpoint-20260711` |
 | commit | 未提交 |
 | upstream | 待主控确认 |
-| remote_ci_regression | commit `12d77da`, run `29207239740` failed in clean checkout because `apps/api/src/generated/prisma/client.js` was missing; root `test:rp01c` now generates Prisma Client before fixture tests; recheck pending |
-| changed_files | RP-01C cumulative diff from `4490196`: files=6, netAdditions=1017; current follow-up worktree remains within the RP-00B budget |
+| remote_ci_regression | commit `12d77da`, run `29207239740` failed because clean checkout lacked generated Prisma Client; commit `7a69c1a`, run `29207557235` then passed targeted 11/API 108/E2E guard 13/governance 15/typecheck/build but failed the final git-budget step because shallow checkout lacked a parent revision. Root `test:rp01c` now generates Prisma Client and RP-01C checkout uses `fetch-depth: 0`; recheck pending |
+| changed_files | RP-01C cumulative diff from `4490196`: files=6, netAdditions=1023; current follow-up worktree remains within the RP-00B budget |
 | diff_check | `git diff --check` passed |
 | worktree_remaining | RP-01C uncommitted files only; no commit/push performed |
 
