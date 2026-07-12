@@ -461,3 +461,83 @@ evidence: GitHub Actions run 29205701139; status completed/success; headSha ae5c
 mc_decision: 关闭提交远程验证完成，RP-01B 保持 closed。
 next_action: 按依赖派发 RP-01C；RP-01D 继续等待独立授权。
 ```
+
+### MCE-20260713-RP01C-REVISION
+
+```text
+event_id: MCE-20260713-RP01C-REVISION
+occurred_at: 2026-07-13 05:00:48 CST
+event_type: dev_revision_complete
+source_thread: 019ed4a5-a2f5-7d13-86d0-0c28381af555
+package_id: RP-01C
+issue_ids: RMD-TEST-FIXTURE-001
+acceptance_ids: TEST-FIXTURE-01
+summary: 两轮独立复核先后发现场景条目可变、引用/租户/request-id/closure 漂移，以及根命令环境隔离未覆盖 Prisma generate；主控完成定向返工并保留全部 needs_revision 历史。
+evidence: commits dd346be, 3910a68, dc1991a; TEST agents 019f5803-feb9-7683-b92a-d88680791af6 and 019f5817-4ba7-70f1-ae71-377f83a5a574; QUALITY agents 019f5804-9dbc-7f21-97e2-25995cf59e66 and 019f5817-e8db-7c80-b77e-b3689db16efe
+mc_decision: 不跳过返工；最终实现必须在污染父环境和 clean checkout 下重新验证。
+next_action: 推送 dc1991a 并等待完整远程矩阵。
+```
+
+### MCE-20260713-RP01C-CI-RESULT
+
+```text
+event_id: MCE-20260713-RP01C-CI-RESULT
+occurred_at: 2026-07-13 05:03:19 CST
+event_type: remote_ci_result
+source_thread: 019ed4a5-a2f5-7d13-86d0-0c28381af555
+package_id: RP-01C
+issue_ids: RMD-TEST-FIXTURE-001
+acceptance_ids: TEST-FIXTURE-01
+summary: 最终实现 dc1991a 在远程 clean checkout 中通过 targeted 13、API 108、RP-01A 13、governance 15、typecheck、API build 和 git-budget；关闭证据 HEAD 1406878 的治理也通过。
+evidence: GitHub Actions runs 29208828449 and 29208908909
+mc_decision: 远程证据通过，允许全新 TEST/QUALITY 对同一关闭候选复验。
+next_action: 独立复验不得修改文件或外推真实 DB/provider/media 能力。
+```
+
+### MCE-20260713-RP01C-TEST-RESULT
+
+```text
+event_id: MCE-20260713-RP01C-TEST-RESULT
+occurred_at: 2026-07-13 05:12:40 CST
+event_type: test_result
+source_thread: 019f5825-8839-7172-8439-3a063fd022a3
+package_id: RP-01C
+issue_ids: RMD-TEST-FIXTURE-001
+acceptance_ids: TEST-FIXTURE-01
+summary: 独立 TEST 对 1406878 最终 approved，P0/P1 为 0；污染父环境根命令 13/13、API 108、RP-01A 13、governance 15、typecheck/build/budget 均通过。
+evidence: implementation dc1991a; closure candidate 1406878; run 29208828449; Node 24.14.0
+mc_decision: TEST 门禁通过；保留真实 MySQL、worker/restart、provider、browser/media 为 not_proven。
+next_action: 等待 QUALITY 最终裁决。
+```
+
+### MCE-20260713-RP01C-QUALITY-RESULT
+
+```text
+event_id: MCE-20260713-RP01C-QUALITY-RESULT
+occurred_at: 2026-07-13 05:12:40 CST
+event_type: quality_review
+source_thread: 019f5824-ea77-7cc2-b798-a0bfbcb22dc6
+package_id: RP-01C
+issue_ids: RMD-TEST-FIXTURE-001
+acceptance_ids: TEST-FIXTURE-01
+summary: 独立 QUALITY 对 1406878 最终 approved，P0/P1 为 0；确认完整命令链隔离、fixture 正确性、历史失败保留、范围/安全边界、clean worktree 和 upstream 对齐。
+evidence: 6 files / 1079 net additions; runs 29208828449 and 29208908909; HEAD/upstream/remote 1406878
+mc_decision: QUALITY 门禁通过，允许 MC 正式关闭 RP-01C。
+next_action: 更新关闭记录、唯一总账、状态单源和 SLA 收据。
+```
+
+### MCE-20260713-RP01C-MC-CLOSE
+
+```text
+event_id: MCE-20260713-RP01C-MC-CLOSE
+occurred_at: 2026-07-13 05:13:43 CST
+event_type: mc_decision
+source_thread: 019ed4a5-a2f5-7d13-86d0-0c28381af555
+package_id: RP-01C
+issue_ids: RMD-TEST-FIXTURE-001
+acceptance_ids: TEST-FIXTURE-01
+summary: 实现与返工提交已推送，远程门禁成功，TEST/QUALITY 均 approved；MC 将 RMD-TEST-FIXTURE-001 更新为 closed，总账进度 9/42。
+evidence: docs/reviews/remediation-rmd-test-fixture-001-closure-2026-07-13.md; docs/reviews/remediation-rp-01c-dispatch-receipt-2026-07-13.md; implementation dc1991a; reviewed closure candidate 1406878
+mc_decision: RP-01C closed；允许按依赖进入 RP-02A；RP-01D 真实 MySQL 继续等待独立授权。
+next_action: 推送关闭提交并验证远程治理 CI，然后派发 RP-02A。
+```
