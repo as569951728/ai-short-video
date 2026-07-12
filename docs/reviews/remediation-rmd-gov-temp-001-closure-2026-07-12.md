@@ -1,6 +1,6 @@
 # RMD-GOV-TEMP-001 整改关闭记录
 
-draft_status: pending_independent_verification
+draft_status: closed
 
 ## 1. 基本信息
 
@@ -12,11 +12,11 @@ draft_status: pending_independent_verification
 | severity | P1 |
 | owner | QUALITY + DEV |
 | dev_thread | 019ed4ee-441a-7fa2-894d-393c7d4c527b |
-| test_thread | 待主控派发 |
+| test_thread | 019ed4ee-b33b-7621-b71c-3aa3d9e7b26e |
 | acceptance_ids | GOV-TEMP-01 |
 | environment | docs/scripts-only / no service / no DB / no provider |
 | target_evidence_level | E1 + clean-worktree check |
-| actual_evidence_level | pending TEST review |
+| actual_evidence_level | E1 + clean-worktree check + independent TEST/QUALITY review |
 
 ## 2. 原始问题
 
@@ -66,11 +66,11 @@ not_proven: TEST/QUALITY 尚未独立核对删除后工作树；MC 尚未更新 
 ## 5. 独立测试证据
 
 - 执行 acceptance ids：GOV-TEMP-01
-- environment：待 TEST 填写
-- evidence_level：待 TEST 填写
-- 命令：待 TEST 填写
+- environment：shared local worktree / no DB/provider/media
+- evidence_level：E1 + independent reference and ignore checks
+- 命令：`find apps/api -maxdepth 1 -name tsconfig.testrun.json -print`；`git check-ignore -v apps/api/tsconfig.testrun.json`；`rg "tsconfig.testrun|apidist2|deepseekNovelProvider.test" package.json apps scripts .github`
 - fixture：`apps/api/tsconfig.testrun.json`
-- contract：待 TEST 填写
+- contract：归因文档包含 owner、决定、日期、删除前后证据和重开条件
 - unit：N/A
 - API：N/A
 - 浏览器 trace：N/A
@@ -86,21 +86,28 @@ not_proven: TEST/QUALITY 尚未独立核对删除后工作树；MC 尚未更新 
 测试结论：
 
 ```text
-conclusion: pending
-user_goal_status: partial
-environment: pending
-evidence_level: pending
-not_proven: 独立验收未执行。
+conclusion: approved
+user_goal_status: achieved
+environment: shared local worktree
+evidence_level: E1 + independent TEST
+not_proven: N/A
 ```
+
+## 6. 质量复审
+
+- QUALITY thread：`019edb3a-a972-75e2-bbb1-774b5ddb6d88`
+- 结论：`approved`
+- 完成时间：2026-07-12 22:28:54 CST
+- 复核范围：文件不存在、未被 ignore 掩盖、代码/脚本无引用，以及删除前后证据完整。
 
 ## 8. 关闭裁决
 
 ```text
 issue_id: RMD-GOV-TEMP-001
-final_status: partial
-closed_acceptance_ids:
-residual_risks: 独立验收和 MC 总账更新尚未完成。
+final_status: closed
+closed_acceptance_ids: GOV-TEMP-01
+residual_risks: N/A
 reopen_conditions: 再次出现无 owner/无期限/无决策的未跟踪临时配置。
-decided_by: pending MC
-decided_at: pending
+decided_by: MC 019ed4a5-a2f5-7d13-86d0-0c28381af555
+decided_at: 2026-07-12 22:39:11 CST
 ```
