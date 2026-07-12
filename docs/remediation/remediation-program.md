@@ -74,7 +74,7 @@ flowchart TD
 | RP-01B | Vue DOM/event 测试 | RP-00B | RMD-TEST-DOM-001 |
 | RP-01C | 失败状态 fixture factory | RP-01A | RMD-TEST-FIXTURE-001 |
 | RP-01D | 受控 MySQL 测试入口 | RP-00B | RMD-TEST-DB-001 基础设施 |
-| RP-02A | Task SSOT、原子 preclaim、幂等与冲突 | RP-01C | RMD-TASK-001 |
+| RP-02A | 小说 AI Task SSOT、provider 前原子 preclaim、幂等与冲突的 E3 阶段；首请求快速返回/worker 与真实 DB 并发不在本包关闭 | RP-01C | RMD-TASK-001（保持 partial/implemented_pending_verification，等待 RP-02B 与 E6） |
 | RP-02B | worker、heartbeat、restart 与真实 retry | RP-02A | RMD-TASK-002、RMD-TASK-003 |
 | RP-02C | cancel 语义、迟到结果和前端统一投影 | RP-02B | RMD-TASK-004、RMD-TASK-005 |
 | RP-03A | 小说 migration、tenant、version/current 基础 | RP-01D | RMD-NOV-VERSION-001 |
