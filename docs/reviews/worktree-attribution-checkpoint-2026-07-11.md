@@ -142,6 +142,16 @@
 
 本文前半部分“未纳入版本管理”和“未执行 git add/commit/push”描述的是最初归因盘点阶段；本节是最新状态，发生冲突时以本节和 `docs/reviews/main-control-status.md` 为准。
 
+### 2026-07-12 P10-R0 收口补充
+
+P10-R0 的研发业务 diff 严格限制为：
+
+- `packages/shared/src/videos.ts`
+- `packages/shared/src/api.ts`
+- `packages/shared/src/contracts.test.ts`
+
+主控同步修改正式需求、评审和状态文档，并新增 `docs/reviews/video-p10-r0-acceptance-closure-2026-07-12.md`。独立验收确认 `apps/api/src`、`apps/api/prisma`、`apps/admin-web` 无本包 diff；`apps/api/tsconfig.testrun.json` 仍是既有一次性未跟踪文件，不纳入 R0 检查点。
+
 每个研发包完成时，至少交付以下检查点，避免再次出现已验收资产未归因：
 
 1. 开始前记录 `git status --short`，说明哪些文件是前置脏状态。

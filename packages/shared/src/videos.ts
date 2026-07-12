@@ -995,3 +995,547 @@ export interface VideoWorkbenchDTO {
     createdAt: string;
   }>;
 }
+
+export type VideoPublishPlatform =
+  | 'douyin'
+  | 'kuaishou'
+  | 'xiaohongshu'
+  | 'bilibili'
+  | 'wechat_channels'
+  | 'tiktok'
+  | 'youtube'
+  | 'other';
+
+export type VideoPublishMethod = 'manual_record';
+export type VideoPublishStatus = 'active' | 'withdrawn' | 'superseded';
+export type VideoMetricWindowType = 'h24' | 'h48';
+export type VideoMetricBackfillPersistentStatus = 'pending' | 'completed' | 'waived';
+export type VideoMetricBackfillDisplayStatus = 'waiting' | 'due' | 'overdue' | 'completed' | 'waived';
+export type VideoMetricDataSource = 'manual';
+export type VideoMetricSampleSizeLevel = 'insufficient' | 'normal';
+export type VideoMetricSubjectiveRating = 'good' | 'average' | 'bad' | 'insufficient';
+export type VideoPublishNextDecision = 'continue' | 'optimize_title' | 'optimize_narration' | 'change_chapter' | 'redo_video' | 'pause_project';
+export type VideoPublishDecisionConfidence = 'low' | 'normal';
+export type VideoPublishingAggregateStatus =
+  | 'exported_unpublished'
+  | 'published_waiting_24h'
+  | 'published_24h_overdue'
+  | 'published_waiting_48h'
+  | 'published_48h_overdue'
+  | 'data_incomplete'
+  | 'sample_insufficient'
+  | 'decision_recorded'
+  | 'version_stale_after_publish';
+export type VideoPublishingRecommendedActionType =
+  | 'register_publish'
+  | 'fill_24h_metrics'
+  | 'fill_48h_metrics'
+  | 'view_overdue'
+  | 'mark_sample_insufficient'
+  | 'record_next_decision'
+  | 'view_publish_records';
+
+export const VIDEO_PUBLISH_PLATFORMS: readonly VideoPublishPlatform[] = [
+  'douyin',
+  'kuaishou',
+  'xiaohongshu',
+  'bilibili',
+  'wechat_channels',
+  'tiktok',
+  'youtube',
+  'other'
+] as const;
+
+export const VIDEO_PUBLISH_METHODS: readonly VideoPublishMethod[] = ['manual_record'] as const;
+export const VIDEO_PUBLISH_STATUSES: readonly VideoPublishStatus[] = ['active', 'withdrawn', 'superseded'] as const;
+export const VIDEO_METRIC_WINDOW_TYPES: readonly VideoMetricWindowType[] = ['h24', 'h48'] as const;
+export const VIDEO_METRIC_BACKFILL_PERSISTENT_STATUSES: readonly VideoMetricBackfillPersistentStatus[] = ['pending', 'completed', 'waived'] as const;
+export const VIDEO_METRIC_BACKFILL_DISPLAY_STATUSES: readonly VideoMetricBackfillDisplayStatus[] = [
+  'waiting',
+  'due',
+  'overdue',
+  'completed',
+  'waived'
+] as const;
+export const VIDEO_METRIC_SAMPLE_SIZE_LEVELS: readonly VideoMetricSampleSizeLevel[] = ['insufficient', 'normal'] as const;
+export const VIDEO_METRIC_SUBJECTIVE_RATINGS: readonly VideoMetricSubjectiveRating[] = ['good', 'average', 'bad', 'insufficient'] as const;
+export const VIDEO_PUBLISH_NEXT_DECISIONS: readonly VideoPublishNextDecision[] = [
+  'continue',
+  'optimize_title',
+  'optimize_narration',
+  'change_chapter',
+  'redo_video',
+  'pause_project'
+] as const;
+export const VIDEO_PUBLISH_DECISION_CONFIDENCES: readonly VideoPublishDecisionConfidence[] = ['low', 'normal'] as const;
+export const VIDEO_PUBLISHING_AGGREGATE_STATUSES: readonly VideoPublishingAggregateStatus[] = [
+  'exported_unpublished',
+  'published_waiting_24h',
+  'published_24h_overdue',
+  'published_waiting_48h',
+  'published_48h_overdue',
+  'data_incomplete',
+  'sample_insufficient',
+  'decision_recorded',
+  'version_stale_after_publish'
+] as const;
+export const VIDEO_PUBLISHING_RECOMMENDED_ACTION_TYPES: readonly VideoPublishingRecommendedActionType[] = [
+  'register_publish',
+  'fill_24h_metrics',
+  'fill_48h_metrics',
+  'view_overdue',
+  'mark_sample_insufficient',
+  'record_next_decision',
+  'view_publish_records'
+] as const;
+
+export const VIDEO_PUBLISH_TEXT_LIMITS = {
+  platformAccountLabel: 120,
+  platformWorkId: 160,
+  platformUrl: 500,
+  publishTitle: 120,
+  publishCaption: 2000,
+  notes: 1000,
+  decisionReason: 1000,
+  withdrawReason: 1000,
+  correctionReason: 1000,
+  safeSummary: 500
+} as const;
+
+export const VIDEO_PUBLISH_FORBIDDEN_FIELD_PATTERN =
+  /credential|credentials|token|cookie|auth|authorization|apikey|api_key|secret|password|session/i;
+
+export const VIDEO_PUBLISH_FORBIDDEN_TEXT_PATTERN =
+  /(sk-[A-Za-z0-9_-]{8,}|api[_-]?key|bearer\s+[A-Za-z0-9._-]+|cookie\s*[:=]|token\s*[:=]|secret\s*[:=]|authorization\s*[:=]|database_url|mysql:\/\/|postgres:\/\/|prompt\s*[:：]|raw\s+(?:response|payload)|provider\s+(?:response|payload))/i;
+
+export interface VideoVersionRefDTO {
+  id: string;
+  versionNo: number;
+}
+
+export interface VideoPublishSourceVersionRefsDTO {
+  videoReference: VideoVersionRefDTO;
+  videoUnit: {
+    id: string;
+    unitNo: number;
+    versionNo: number;
+  };
+  export: VideoVersionRefDTO;
+  render: VideoVersionRefDTO;
+  narration: VideoVersionRefDTO;
+  tts: VideoVersionRefDTO;
+  subtitle: VideoVersionRefDTO;
+  visualPlan: VideoVersionRefDTO;
+  chapters: Array<{
+    chapterId: string;
+    chapterNo: number;
+    contentVersionId: string;
+    contentVersionNo: number;
+  }>;
+}
+
+export interface VideoPublishFreezeSnapshotDTO {
+  id: string;
+  publishRecordId: string;
+  exportId: string;
+  renderId: string;
+  narrationArtifactId: string;
+  ttsArtifactId: string;
+  subtitleArtifactId: string;
+  visualPlanArtifactId: string;
+  fileName: string;
+  fileKey: string;
+  titleHook: string;
+  firstThreeSecondVoiceover: string;
+  firstScreenSubtitle: string;
+  endingSuspense: string;
+  chapterRangeText: string;
+  riskSummary: string;
+  sourceVersionRefs: VideoPublishSourceVersionRefsDTO;
+  createdAt: string;
+}
+
+export interface VideoPublishRecordDTO {
+  id: string;
+  versionNo: number;
+  tenantId: string;
+  videoProjectId: string;
+  videoUnitId: string;
+  videoReferenceId: string;
+  exportId: string;
+  renderId: string;
+  freezeSnapshotId: string;
+  platform: VideoPublishPlatform;
+  platformAccountLabel: string;
+  platformWorkId: string | null;
+  platformUrl: string | null;
+  platformUrlDisplay: string | null;
+  publishedAt: string;
+  publishTitle: string;
+  publishCaption: string | null;
+  notes: string | null;
+  publishMethod: VideoPublishMethod;
+  status: VideoPublishStatus;
+  sourceVersionRefs: VideoPublishSourceVersionRefsDTO;
+  createdBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface VideoMetricBackfillNodeDTO {
+  id: string;
+  versionNo: number;
+  publishRecordId: string;
+  windowType: VideoMetricWindowType;
+  dueAt: string;
+  overdueAt: string;
+  persistentStatus: VideoMetricBackfillPersistentStatus;
+  displayStatus: VideoMetricBackfillDisplayStatus;
+  completedAt: string | null;
+  waivedReason: string | null;
+}
+
+export interface PlatformMetricSnapshotDTO {
+  id: string;
+  publishRecordId: string;
+  backfillNodeId: string;
+  windowType: VideoMetricWindowType;
+  versionNo: number;
+  isCurrent: boolean;
+  collectedAt: string;
+  dataSource: VideoMetricDataSource;
+  playCount: number | null;
+  completionRate: number | null;
+  avgWatchSeconds: number | null;
+  likeCount: number | null;
+  commentCount: number | null;
+  favoriteCount: number | null;
+  shareCount: number | null;
+  followerGain: number | null;
+  sampleSizeLevel: VideoMetricSampleSizeLevel;
+  subjectiveRating: VideoMetricSubjectiveRating;
+  notes: string | null;
+  correctionReason: string | null;
+  createdBy: string | null;
+  createdAt: string;
+}
+
+export interface VideoPublishDecisionRecordDTO {
+  id: string;
+  publishRecordId: string;
+  nextDecision: VideoPublishNextDecision;
+  reason: string;
+  confidence: VideoPublishDecisionConfidence;
+  sourceMetricSnapshotIds: string[];
+  createdBy: string | null;
+  createdAt: string;
+}
+
+export interface VideoPublishAuditSafeSummaryDTO {
+  publishStatus?: VideoPublishStatus | null;
+  platform?: VideoPublishPlatform | null;
+  platformAccountLabel?: string | null;
+  platformWorkId?: string | null;
+  platformUrlDisplay?: string | null;
+  publishedAt?: string | null;
+  publishTitle?: string | null;
+  metricWindowType?: VideoMetricWindowType | null;
+  metricPersistentStatus?: VideoMetricBackfillPersistentStatus | null;
+  metricDisplayStatus?: VideoMetricBackfillDisplayStatus | null;
+  sampleSizeLevel?: VideoMetricSampleSizeLevel | null;
+  subjectiveRating?: VideoMetricSubjectiveRating | null;
+  nextDecision?: VideoPublishNextDecision | null;
+  confidence?: VideoPublishDecisionConfidence | null;
+  publishRecordVersionNo?: number | null;
+  backfillNodeVersionNo?: number | null;
+  metricSnapshotVersionNo?: number | null;
+  decisionRecordId?: string | null;
+}
+
+export interface VideoPublishAuditSummaryDTO {
+  id: string;
+  action:
+    | 'publish_record_create'
+    | 'publish_record_correct'
+    | 'publish_record_withdraw'
+    | 'metric_snapshot_create'
+    | 'metric_snapshot_correct'
+    | 'sample_insufficient_mark'
+    | 'publish_decision_record';
+  objectType: 'video_publish_record' | 'video_metric_backfill_node' | 'platform_metric_snapshot' | 'video_publish_decision';
+  objectId: string;
+  reason: string | null;
+  beforeSummary: VideoPublishAuditSafeSummaryDTO;
+  afterSummary: VideoPublishAuditSafeSummaryDTO;
+  sourceVersionRefs: VideoPublishSourceVersionRefsDTO | null;
+  createdBy: string | null;
+  createdAt: string;
+}
+
+export interface VideoPublishingRecommendedActionDTO {
+  type: VideoPublishingRecommendedActionType;
+  label: string;
+  reason: string;
+  disabled: boolean;
+  disabledReason: string | null;
+  target: 'publish_drawer' | 'metrics_drawer' | 'decision_drawer' | 'detail' | 'disabled';
+}
+
+export interface VideoPublishingOverviewDTO {
+  aggregateStatus: VideoPublishingAggregateStatus;
+  aggregateStatusText: string;
+  recommendedAction: VideoPublishingRecommendedActionDTO;
+  publishRecords: VideoPublishRecordDTO[];
+  metricNodes: VideoMetricBackfillNodeDTO[];
+  latestMetricSnapshots: PlatformMetricSnapshotDTO[];
+  latestDecision: VideoPublishDecisionRecordDTO | null;
+}
+
+export interface CreateVideoPublishRecordRequest {
+  idempotencyToken: string;
+  videoUnitId: string;
+  expectedReferenceVersion: number;
+  exportId: string;
+  expectedExportVersionNo: number;
+  renderId: string;
+  expectedRenderVersionNo: number;
+  platform: VideoPublishPlatform;
+  platformAccountLabel: string;
+  platformWorkId?: string | null;
+  platformUrl?: string | null;
+  publishedAt: string;
+  publishTitle: string;
+  publishCaption?: string | null;
+  notes?: string | null;
+}
+
+export interface CreateVideoPublishRecordResultDTO {
+  publishRecord: VideoPublishRecordDTO;
+  freezeSnapshot: VideoPublishFreezeSnapshotDTO;
+  metricNodes: VideoMetricBackfillNodeDTO[];
+  reusedExisting: boolean;
+}
+
+export interface CorrectVideoPublishRecordRequest {
+  idempotencyToken: string;
+  expectedVersionNo: number;
+  reason: string;
+  platformAccountLabel?: string;
+  platformWorkId?: string | null;
+  platformUrl?: string | null;
+  publishedAt?: string;
+  publishTitle?: string;
+  publishCaption?: string | null;
+  notes?: string | null;
+}
+
+export interface CorrectVideoPublishRecordResultDTO {
+  publishRecord: VideoPublishRecordDTO;
+  audit: VideoPublishAuditSummaryDTO;
+}
+
+export interface WithdrawVideoPublishRecordRequest {
+  idempotencyToken: string;
+  expectedVersionNo: number;
+  reason: string;
+}
+
+export interface WithdrawVideoPublishRecordResultDTO {
+  publishRecord: VideoPublishRecordDTO;
+  audit: VideoPublishAuditSummaryDTO;
+}
+
+export interface CreatePlatformMetricSnapshotRequest {
+  idempotencyToken: string;
+  backfillNodeId: string;
+  expectedBackfillNodeVersionNo: number;
+  windowType: VideoMetricWindowType;
+  collectedAt: string;
+  playCount?: number | null;
+  completionRate?: number | null;
+  avgWatchSeconds?: number | null;
+  likeCount?: number | null;
+  commentCount?: number | null;
+  favoriteCount?: number | null;
+  shareCount?: number | null;
+  followerGain?: number | null;
+  sampleSizeLevel: VideoMetricSampleSizeLevel;
+  subjectiveRating: VideoMetricSubjectiveRating;
+  notes?: string | null;
+  correctionReason?: string | null;
+}
+
+export interface CreatePlatformMetricSnapshotResultDTO {
+  snapshot: PlatformMetricSnapshotDTO;
+  backfillNode: VideoMetricBackfillNodeDTO;
+  audit: VideoPublishAuditSummaryDTO;
+}
+
+export interface RecordVideoPublishDecisionRequest {
+  idempotencyToken: string;
+  nextDecision: VideoPublishNextDecision;
+  reason: string;
+  confidence: VideoPublishDecisionConfidence;
+  sourceMetricSnapshotIds: string[];
+}
+
+export interface RecordVideoPublishDecisionResultDTO {
+  decision: VideoPublishDecisionRecordDTO;
+  audit: VideoPublishAuditSummaryDTO;
+}
+
+export function deriveVideoMetricBackfillDisplayStatus(input: {
+  persistentStatus: VideoMetricBackfillPersistentStatus;
+  dueAt: string | Date;
+  overdueAt: string | Date;
+  now: string | Date;
+}): VideoMetricBackfillDisplayStatus {
+  if (input.persistentStatus === 'completed') return 'completed';
+  if (input.persistentStatus === 'waived') return 'waived';
+
+  const dueAt = parsePublishDate(input.dueAt, 'dueAt');
+  const overdueAt = parsePublishDate(input.overdueAt, 'overdueAt');
+  const now = parsePublishDate(input.now, 'now');
+
+  if (overdueAt.getTime() < dueAt.getTime()) {
+    throw new RangeError('overdueAt must be greater than or equal to dueAt');
+  }
+
+  if (now.getTime() < dueAt.getTime()) return 'waiting';
+  if (now.getTime() < overdueAt.getTime()) return 'due';
+  return 'overdue';
+}
+
+export function sanitizeVideoPublishVisibleText(
+  value: unknown,
+  maxLength: number = VIDEO_PUBLISH_TEXT_LIMITS.safeSummary,
+  fallback = ''
+): string {
+  if (typeof value !== 'string') return fallback;
+  const withoutControls = value.replace(/[\u0000-\u001F\u007F]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!withoutControls) return fallback;
+  if (VIDEO_PUBLISH_FORBIDDEN_TEXT_PATTERN.test(withoutControls)) return fallback;
+  return withoutControls.length > maxLength ? withoutControls.slice(0, maxLength) : withoutControls;
+}
+
+export function sanitizeVideoPublishUrlForDisplay(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (trimmed.length > VIDEO_PUBLISH_TEXT_LIMITS.platformUrl) return null;
+
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+    parsed.username = '';
+    parsed.password = '';
+    parsed.search = '';
+    parsed.hash = '';
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+export function sanitizeVideoPublishAuditSummary(input: unknown): VideoPublishAuditSafeSummaryDTO {
+  if (!input || typeof input !== 'object') return {};
+  const source = input as Partial<Record<keyof VideoPublishAuditSafeSummaryDTO, unknown>>;
+  const summary: VideoPublishAuditSafeSummaryDTO = {};
+
+  assignEnum(summary, source, 'publishStatus', VIDEO_PUBLISH_STATUSES);
+  assignEnum(summary, source, 'platform', VIDEO_PUBLISH_PLATFORMS);
+  assignText(summary, source, 'platformAccountLabel', VIDEO_PUBLISH_TEXT_LIMITS.platformAccountLabel);
+  assignText(summary, source, 'platformWorkId', VIDEO_PUBLISH_TEXT_LIMITS.platformWorkId);
+  assignUrl(summary, source, 'platformUrlDisplay');
+  assignText(summary, source, 'publishedAt', 64);
+  assignText(summary, source, 'publishTitle', VIDEO_PUBLISH_TEXT_LIMITS.publishTitle);
+  assignEnum(summary, source, 'metricWindowType', VIDEO_METRIC_WINDOW_TYPES);
+  assignEnum(summary, source, 'metricPersistentStatus', VIDEO_METRIC_BACKFILL_PERSISTENT_STATUSES);
+  assignEnum(summary, source, 'metricDisplayStatus', VIDEO_METRIC_BACKFILL_DISPLAY_STATUSES);
+  assignEnum(summary, source, 'sampleSizeLevel', VIDEO_METRIC_SAMPLE_SIZE_LEVELS);
+  assignEnum(summary, source, 'subjectiveRating', VIDEO_METRIC_SUBJECTIVE_RATINGS);
+  assignEnum(summary, source, 'nextDecision', VIDEO_PUBLISH_NEXT_DECISIONS);
+  assignEnum(summary, source, 'confidence', VIDEO_PUBLISH_DECISION_CONFIDENCES);
+  assignNumber(summary, source, 'publishRecordVersionNo');
+  assignNumber(summary, source, 'backfillNodeVersionNo');
+  assignNumber(summary, source, 'metricSnapshotVersionNo');
+  assignText(summary, source, 'decisionRecordId', 128);
+
+  return summary;
+}
+
+export function isForbiddenVideoPublishField(key: string): boolean {
+  return VIDEO_PUBLISH_FORBIDDEN_FIELD_PATTERN.test(key);
+}
+
+function assignEnum<T extends keyof VideoPublishAuditSafeSummaryDTO>(
+  target: VideoPublishAuditSafeSummaryDTO,
+  source: Partial<Record<keyof VideoPublishAuditSafeSummaryDTO, unknown>>,
+  field: T,
+  allowed: readonly NonNullable<VideoPublishAuditSafeSummaryDTO[T]>[]
+): void {
+  const value = source[field];
+  if (value === null) {
+    target[field] = null as VideoPublishAuditSafeSummaryDTO[T];
+    return;
+  }
+  if (allowed.includes(value as NonNullable<VideoPublishAuditSafeSummaryDTO[T]>)) {
+    target[field] = value as VideoPublishAuditSafeSummaryDTO[T];
+  }
+}
+
+function assignText(
+  target: VideoPublishAuditSafeSummaryDTO,
+  source: Partial<Record<keyof VideoPublishAuditSafeSummaryDTO, unknown>>,
+  field: keyof VideoPublishAuditSafeSummaryDTO,
+  maxLength: number
+): void {
+  const value = source[field];
+  if (value === null) {
+    target[field] = null;
+    return;
+  }
+  const sanitized = sanitizeVideoPublishVisibleText(value, maxLength, '');
+  if (sanitized) {
+    target[field] = sanitized as never;
+  }
+}
+
+function assignUrl(
+  target: VideoPublishAuditSafeSummaryDTO,
+  source: Partial<Record<keyof VideoPublishAuditSafeSummaryDTO, unknown>>,
+  field: keyof VideoPublishAuditSafeSummaryDTO
+): void {
+  const value = source[field];
+  if (value === null) {
+    target[field] = null;
+    return;
+  }
+  const sanitized = sanitizeVideoPublishUrlForDisplay(value);
+  if (sanitized) {
+    target[field] = sanitized as never;
+  }
+}
+
+function assignNumber(
+  target: VideoPublishAuditSafeSummaryDTO,
+  source: Partial<Record<keyof VideoPublishAuditSafeSummaryDTO, unknown>>,
+  field: keyof VideoPublishAuditSafeSummaryDTO
+): void {
+  const value = source[field];
+  if (value === null) {
+    target[field] = null;
+    return;
+  }
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) {
+    target[field] = value as never;
+  }
+}
+
+function parsePublishDate(value: string | Date, fieldName: string): Date {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    throw new RangeError(`${fieldName} must be a valid date`);
+  }
+
+  return date;
+}
