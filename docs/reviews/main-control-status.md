@@ -99,6 +99,7 @@
 - RP-00B 的 `Remediation governance` 已在远程 push runs `29196618102`、`29196969050` 成功执行，Git 预算与 SLA 门禁不再只有本地证据。
 - RP-01A 已在远程 clean checkout runs `29202209121`、`29202209111` 通过治理与真实 backend E2E；关闭提交 `ee0b1a2` 的治理 run `29202693061` 也已成功。guard 13/13，远程 artifact 仅含 4 个安全摘要文本且敏感模式 0 命中。
 - RP-01B 已在实现/返工提交 `95a62d4`、`efd3851` 建立 Vue DOM/event runner；远程 runs `29205130421`、`29205130419` 在 clean checkout 下通过治理、shared build、旧 admin 77/77 和 DOM 10/10，关闭提交 `ae5c2c8` 的治理 run `29205701139` 也已成功。独立 TEST/QUALITY 对 `efd3851` 均 approved，焦点恢复到触发按钮仍明确为 not_proven。
+- RP-01C 已在实现/返工提交 `12d77da` 至 `dc1991a` 建立 10 类确定性失败 fixture 和完整命令链环境隔离；远程 run `29208828449` 通过 targeted 13/API 108/RP-01A 13/governance 15/typecheck/build/budget，独立 TEST/QUALITY 对 `1406878` 均 approved，关闭提交 `bdfa814` 的治理 run `29209311021` 也已成功。
 - 工程质量任务已对远程检查点执行一次性只读复核：本地与 upstream 同步，未发现敏感信息、浏览器产物、一次性配置或 P10/P12 可执行越界误纳管，结论为 `passed`，无 P0/P1。
 - 一次性 `apps/api/tsconfig.testrun.json` 已由 RP-00B 完成归因和安全删除，未加入 ignore；独立 TEST/QUALITY 已复核。`.playwright-cli/` 继续作为本地浏览器运行产物忽略。
 - `docs/modules/video-p10-r1-implementation-package.md` 与多会话评审记录已安全归因并纳入远程基线；它们是需求资产，不是已授权业务实现。

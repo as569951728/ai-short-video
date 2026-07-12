@@ -126,11 +126,11 @@ not_proven: real MySQL/Prisma, DB current uniqueness, atomic preclaim, worker/re
 | --- | --- |
 | branch | `codex/aishortvideo-checkpoint-20260711` |
 | commit | implementation/follow-up commits `12d77da`, `7a69c1a`, `dd346be`, `3910a68`, `dc1991a`; closure evidence revision is the HEAD containing this document |
-| upstream | implementation commit `dc1991a` and reviewed closure-evidence commit `1406878` pushed to `origin/codex/aishortvideo-checkpoint-20260711` |
+| upstream | implementation `dc1991a`、reviewed closure candidate `1406878` 和 MC closeout `bdfa814` 均已推送；最终证据同步提交以包含本文档的 HEAD 为准 |
 | remote_ci_regression | run `29207239740` at `12d77da` failed because clean checkout lacked generated Prisma Client; run `29207557235` at `7a69c1a` passed targeted/API/E2E/governance/typecheck/build but failed git-budget because shallow checkout lacked a parent revision; run `29207718875` at `dd346be` passed after adding Prisma generation and `fetch-depth: 0`; run `29208391608` at `3910a68` passed targeted 13/API 108/RP-01A 13/governance 15/typecheck/API build/git-budget; final implementation run `29208828449` at `dc1991a` passed the same complete clean-checkout matrix after wrapping the full command chain in the sanitized environment. Sibling runs `29208828441` governance, `29208828426` RP-01A and `29208828434` RP-01B DOM also passed |
 | changed_files | RP-01C cumulative diff from `4490196`: files=6, netAdditions=1079; within the RP-00B budget |
 | diff_check | `git diff --check` passed |
-| worktree_remaining | final MC ledger/status/receipt closeout only; final closeout commit must be pushed and governance verified |
+| worktree_remaining | none；`bdfa814` 的远程治理 run `29209311021` 已 success，最终证据同步提交仍需保持 upstream 对齐和 governance success |
 
 ## 8. 关闭裁决
 

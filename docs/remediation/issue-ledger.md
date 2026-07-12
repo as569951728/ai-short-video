@@ -68,7 +68,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | RMD-TEST-E2E-001 | QG/P0 | 没有纳管 Playwright backend E2E，按钮、结果定位、刷新、多标签和布局无法稳定回归 | closed | `9fc2116`；远程 runs `29202209121`/`29202209111`；独立 TEST/QUALITY approved；关闭记录 | TEST + DEV | RP-01A | TEST-E2E-BOOTSTRAP-01 |
 | RMD-TEST-DOM-001 | QG/P1 | admin 测试没有真实 Vue DOM/event runner，无法捕获事件参数、disabled、弹窗和焦点问题 | closed | `efd3851`；远程 runs `29205130421`/`29205130419`；独立 TEST/QUALITY approved；关闭记录 | TEST + DEV | RP-01B | TEST-DOM-01 |
-| RMD-TEST-FIXTURE-001 | QG/P0 | 缺 processing、timeout、脏 JSON、迟到结果、重复 current、分块失败和重启 fixture | closed | `dc1991a`；runs `29208828449`/`29208908909`；独立 TEST/QUALITY approved；关闭记录 | TEST + DEV | RP-01C | TEST-FIXTURE-01 |
+| RMD-TEST-FIXTURE-001 | QG/P0 | 缺 processing、timeout、脏 JSON、迟到结果、重复 current、分块失败和重启 fixture | closed | `dc1991a`/`bdfa814`；runs `29208828449`/`29209311021`；独立 TEST/QUALITY approved；关闭记录 | TEST + DEV | RP-01C | TEST-FIXTURE-01 |
 | RMD-TEST-DB-001 | QG/P0 | migration 测试多为 SQL 正则，真实 MySQL migrate/write/concurrency/restart 未执行 | open | T-05；P8b-L1b | TEST + QUALITY | RP-01D, RP-03D, RP-07D | TEST-MYSQL-01 |
 | RMD-TEST-CONTENT-001 | QG/P1 | 没有小说字数、重复率、连续性、人物一致性、爽点和钩子质量基准集 | open | T-08；provider 手写 JSON | TEST + PRODUCT | RP-04D | TEST-NOVEL-QUALITY-01 |
 | RMD-TEST-EVIDENCE-001 | QG/P1 | 验收结论未强制分列 contract/unit/API/DB/browser/provider/media | closed | `056f60a`；独立 TEST/PRODUCT/QUALITY approved；关闭记录 | TEST + MC | RP-00A | TEST-EVIDENCE-LEVEL-01 |

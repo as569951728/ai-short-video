@@ -541,3 +541,19 @@ evidence: docs/reviews/remediation-rmd-test-fixture-001-closure-2026-07-13.md; d
 mc_decision: RP-01C closed；允许按依赖进入 RP-02A；RP-01D 真实 MySQL 继续等待独立授权。
 next_action: 推送关闭提交并验证远程治理 CI，然后派发 RP-02A。
 ```
+
+### MCE-20260713-RP01C-CLOSE-CI-VERIFY
+
+```text
+event_id: MCE-20260713-RP01C-CLOSE-CI-VERIFY
+occurred_at: 2026-07-13 05:15:02 CST
+event_type: remote_ci_result
+source_thread: 019ed4a5-a2f5-7d13-86d0-0c28381af555
+package_id: RP-01C
+issue_ids: RMD-TEST-FIXTURE-001
+acceptance_ids: TEST-FIXTURE-01
+summary: RP-01C 正式关闭提交 bdfa814 已推送，Remediation governance 远程运行成功。
+evidence: GitHub Actions run 29209311021; status completed/success; headSha bdfa814
+mc_decision: 关闭提交远程验证完成，RP-01C 保持 closed，总账保持 9/42。
+next_action: 按依赖进入 RP-02A；RP-01D 继续等待真实 MySQL 独立授权。
+```
