@@ -43,6 +43,15 @@ describe('RP-01C fixture factory contract', () => {
       /^npm run build -w @ai-shortvideo\/shared && npm run prisma:generate -w @ai-shortvideo\/api && npm run test:rp01c -w @ai-shortvideo\/api$/
     );
 
+    const apiPackageJson = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as {
+      scripts: Record<string, string>;
+    };
+    const apiCommand = apiPackageJson.scripts['test:rp01c'];
+    assert.equal(apiCommand.includes('npx'), false);
+    assert.match(apiCommand, /env -u DATABASE_URL/);
+    assert.match(apiCommand, /-u DEEPSEEK_API_KEY/);
+    assert.match(apiCommand, /NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=\/dev\/null/);
+
     const workflow = readFileSync(new URL('../../../../.github/workflows/rp01c-fixtures.yml', import.meta.url), 'utf8');
     assert.match(workflow, /uses: actions\/checkout@v4\n\s+with:\n\s+fetch-depth: 0/);
     assert.match(workflow, /run: npm run governance:git-budget/);
@@ -52,6 +61,20 @@ describe('RP-01C fixture factory contract', () => {
     assert.deepEqual(RP01C_SCENARIOS.map((scenario) => scenario.id), [...VALID_SCENARIOS, ...COUNTEREXAMPLES]);
     assert.deepEqual(RP01C_SCENARIOS.filter((scenario) => scenario.kind === 'valid_state').map((scenario) => scenario.id), [...VALID_SCENARIOS]);
     assert.deepEqual(RP01C_SCENARIOS.filter((scenario) => scenario.kind === 'counterexample').map((scenario) => scenario.id), [...COUNTEREXAMPLES]);
+    assert.equal(Object.isFrozen(RP01C_SCENARIOS), true);
+    assert.equal(RP01C_SCENARIOS.every((scenario) => Object.isFrozen(scenario)), true);
+    assert.throws(() => {
+      (RP01C_SCENARIOS[0] as { category: string }).category = 'mutated_global_category';
+    }, TypeError);
+    assert.equal(createRp01cFixture('processing').scenario.category, 'processing');
+  });
+
+  it('runs with project dotenv and real provider or database variables isolated', () => {
+    assert.equal(process.env.NODE_ENV, 'production');
+    assert.equal(process.env.AI_PROVIDER_MODE, 'mock');
+    assert.equal(process.env.DOTENV_CONFIG_PATH, '/dev/null');
+    assert.equal(process.env.DATABASE_URL, undefined);
+    assert.equal(process.env.DEEPSEEK_API_KEY, undefined);
   });
 
   it('builds deterministic, serializable snapshots with frozen ordinary structure and safe references', () => {
@@ -109,6 +132,19 @@ describe('RP-01C fixture factory contract', () => {
     assert.notEqual((lateResult.tasks[0].sourceVersionRefs as Record<string, unknown>).currentDirectionVersionId, lateResult.novels[0].currentDirectionVersionId);
   });
 
+  it('keeps stale and late-result fixtures internally referentially complete', () => {
+    for (const scenarioId of ['stale_source', 'late_result_after_cancel'] as const) {
+      const snapshot = createRp01cFixture(scenarioId);
+      const novel = snapshot.novels[0];
+      const sourceDirectionId = (snapshot.tasks[0].sourceVersionRefs as Record<string, unknown>).currentDirectionVersionId;
+      const currentDirection = snapshot.versions.find((version) => version.id === novel.currentDirectionVersionId);
+      const sourceDirection = snapshot.versions.find((version) => version.id === sourceDirectionId);
+      assert.equal(currentDirection?.status, 'current');
+      assert.equal(sourceDirection?.status, 'historical');
+      assert.notEqual(currentDirection?.id, sourceDirection?.id);
+    }
+  });
+
   it('resolves idempotency reuse, conflict, and tenant isolation deterministically', () => {
     const snapshot = createRp01cFixture('processing');
     const base = snapshot.idempotencyClaims[0];
@@ -139,6 +175,10 @@ describe('RP-01C fixture factory contract', () => {
       }),
       { decision: 'create_new' }
     );
+
+    const customTenantSnapshot = createRp01cFixture('processing', 'tenant_other');
+    assert.equal(new Set(customTenantSnapshot.idempotencyClaims.map((claim) => claim.tenantId)).size, 2);
+    assert.equal(new Set(customTenantSnapshot.idempotencyClaims.map((claim) => `${claim.tenantId}:${claim.taskType}:${claim.idempotencyToken}`)).size, 2);
   });
 
   it('provides test-only scripted LLM and deferred controls with call counts', async () => {
@@ -198,8 +238,10 @@ describe('RP-01C Fastify task projection', () => {
       const app = await buildApp({
         logger: false,
         novelRepository: createRp01cRepository(snapshot),
+        aiProviderEnv: { AI_PROVIDER_MODE: 'mock' },
         now: () => new Date(RP01C_BASE_TIME_ISO)
       });
+      assert.equal(app.hasRoute({ method: 'POST', url: '/dev/novels/acceptance-seeds/outline' }), false);
 
       const task = snapshot.tasks[0];
       const response = await app.inject({ method: 'GET', url: `/tasks/${task.id}`, headers: { 'x-request-id': `rp01c-${scenarioId}` } });
@@ -220,7 +262,7 @@ describe('RP-01C Fastify task projection', () => {
         assert.equal(body.data.cancellable, true);
       }
 
-      const events = await app.inject({ method: 'GET', url: `/tasks/${task.id}/events` });
+      const events = await app.inject({ method: 'GET', url: `/tasks/${task.id}/events`, headers: { 'x-request-id': `rp01c-events-${scenarioId}` } });
       assert.equal(events.statusCode, 200);
       assert.equal(events.json().data.items.length, snapshot.events.length);
 
@@ -261,9 +303,14 @@ async function projectTask(snapshot: ReturnType<typeof createRp01cFixture>) {
   const app = await buildApp({
     logger: false,
     novelRepository: createRp01cRepository(snapshot),
+    aiProviderEnv: { AI_PROVIDER_MODE: 'mock' },
     now: () => new Date(RP01C_BASE_TIME_ISO)
   });
-  const response = await app.inject({ method: 'GET', url: `/tasks/${snapshot.tasks[0].id}` });
+  const response = await app.inject({
+    method: 'GET',
+    url: `/tasks/${snapshot.tasks[0].id}`,
+    headers: { 'x-request-id': `rp01c-project-${snapshot.scenario.id}` }
+  });
   await app.close();
   assert.equal(response.statusCode, 200);
   const body = response.json().data;

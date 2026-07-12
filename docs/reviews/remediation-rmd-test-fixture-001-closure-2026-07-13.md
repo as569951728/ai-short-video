@@ -32,22 +32,22 @@
   - 新增 `apps/api/test/rp01c/fixtureFactory.ts`，只在 test-only 目录提供确定性 snapshot、最小 repository projection、idempotency detector、scripted LLM、deferred 控制和场景化 executable failure injection probes。
   - 场景目录覆盖 valid_state：`processing`、`failed_timeout`、`failed_malformed_json`、`stale_source`、`active_conflict`、`restart_boundary`、`chapter_plan_chunk_failure`、`save_failure_after_provider`。
   - 场景目录覆盖 counterexample：`late_result_after_cancel`、`duplicate_current`；counterexample 不自动归一化，不声称业务已修。
-  - 新增 RP-01C 定向测试，覆盖确定性、无全局共享 scenario/source refs/metadata/数组引用、普通对象结构冻结、深拷贝隔离、序列化、引用完整、租户隔离、幂等复用/冲突、场景化 executable failure injection probes、scripted LLM 调用计数、Fastify `/tasks` route 投影。
+  - 新增 RP-01C 定向测试，覆盖确定性、冻结场景目录及条目、无全局共享 scenario/source refs/metadata/数组引用、普通对象结构冻结、深拷贝隔离、stale/current 引用完整、租户隔离及自定义租户避碰、幂等复用/冲突、场景化 executable failure injection probes、scripted LLM 调用计数、Fastify `/tasks` route 投影。
   - 新增根单命令 `npm run test:rp01c`，命令内先 build shared，再执行 API Prisma Client generate，然后运行 API fixture 测试，保证 clean checkout 自足。
   - 新增 RP-01C workflow，Node 固定 `24.14.0`，运行 targeted fixture、API 全量、RP-01A guards、governance、typecheck、API build。
 - 修改文件：以最终 git diff 为准。
 - migration：N/A，本包不涉及数据库结构。
 - 配置变化：新增 npm script 与 CI workflow。
 - 数据兼容：N/A，test-only fixture 不进入生产数据模型。
-- 安全影响：不读取 `.env`、真实 DB/provider/media；fixture 内容只含安全摘要，不含完整 prompt、raw provider response、章节正文或密钥。
+- 安全影响：官方测试命令固定 `NODE_ENV=production`、`AI_PROVIDER_MODE=mock`、`DOTENV_CONFIG_PATH=/dev/null`，并显式清除 DB/DeepSeek 变量；不读取项目 `.env`，不触真实 DB/provider/media。fixture 内容只含安全摘要，不含完整 prompt、raw provider response、章节正文或密钥。
 - 明确未修改：不改 production service/repository/buildApp，不新增 dev/test route，不改 shared 业务 DTO/枚举，不进入 RP-01D/RP-02。
 
 ## 4. 研发证据
 
 | 证据桶 | 命令/证据 | 结果 | not_proven |
 | --- | --- | --- | --- |
-| contract | `apps/api/test/rp01c/fixtureFactory.test.ts` 场景目录断言 | passed; valid_state 8 类、counterexample 2 类完整；scenario/source refs/metadata/数组无全局共享引用；普通结构冻结与 Date/嵌套深拷贝隔离通过 | 独立验收待执行 |
-| unit | `npm run test:rp01c` | passed; 11 tests | 独立验收待执行 |
+| contract | `apps/api/test/rp01c/fixtureFactory.test.ts` 场景目录断言 | passed; valid_state 8 类、counterexample 2 类完整；目录及条目冻结；scenario/source refs/metadata/数组无全局共享引用；普通结构冻结与 Date/嵌套深拷贝隔离通过；stale/current 引用自洽 | 独立验收复验待执行 |
+| unit | `npm run test:rp01c` | passed; 13 tests | 独立验收复验待执行 |
 | API | Fastify `/tasks/:taskId`、`/tasks/:taskId/events` 投影 processing/failed/stale/conflict；restart_boundary 关闭 app 后同 scenarioId 重建并投影一致 | passed through existing task routes | counterexample 仅作 fixture/detector，不作 route 支持声明；restart 不证明 worker/进程恢复 |
 | DB/MySQL/Prisma | N/A | 本包不触真实 DB/Prisma 写入 | 真实 MySQL/Prisma 未证明 |
 | browser | N/A | 本包为 API test support | 浏览器不属于 TEST-FIXTURE-01 |
@@ -62,7 +62,7 @@
 
 ```text
 user_goal_status: partial
-environment: local Node 24 / API test-only fixture factory
+environment: local Node 24 / NODE_ENV=production / AI_PROVIDER_MODE=mock / DOTENV_CONFIG_PATH=/dev/null / API test-only fixture factory
 evidence_level: E2/E3 local DEV
 not_proven: independent TEST, remote CI, real restart recovery, worker/retry, atomic concurrent preclaim, DB current uniqueness, real MySQL/Prisma, real provider, media
 ```
@@ -70,6 +70,7 @@ not_proven: independent TEST, remote CI, real restart recovery, worker/retry, at
 ## 5. 独立测试证据
 
 - 执行 acceptance ids：TEST-FIXTURE-01
+- 首轮独立 TEST：agent `019f5803-feb9-7683-b92a-d88680791af6` 对 `dd346be` 判定 needs_revision；P1 为 `RP01C_SCENARIOS` 条目仍可变并污染后续 fixture。现已逐条冻结并补反例 guard，待重新验收。
 - environment：待 TEST 填写
 - evidence_level：待 TEST 填写
 - 命令：待 TEST 填写
@@ -108,6 +109,7 @@ not_proven:
 
 质量复核：
 
+- 首轮独立 QUALITY：agent `019f5804-9dbc-7f21-97e2-25995cf59e66` 对 `dd346be` 判定 needs_revision；P1 涉及测试环境未隔离、request-id 随机、stale current 悬空、场景条目可变、自定义租户与固定 other tenant 碰撞及 closure 漂移。现已定向修正，待重新验收。
 - 范围是否越界：pending
 - 真实环境边界：pending
 - 租户/权限/敏感信息：pending
@@ -119,12 +121,12 @@ not_proven:
 | 字段 | 内容 |
 | --- | --- |
 | branch | `codex/aishortvideo-checkpoint-20260711` |
-| commit | 未提交 |
-| upstream | 待主控确认 |
-| remote_ci_regression | commit `12d77da`, run `29207239740` failed because clean checkout lacked generated Prisma Client; commit `7a69c1a`, run `29207557235` then passed targeted 11/API 108/E2E guard 13/governance 15/typecheck/build but failed the final git-budget step because shallow checkout lacked a parent revision. Root `test:rp01c` now generates Prisma Client and RP-01C checkout uses `fetch-depth: 0`; recheck pending |
-| changed_files | RP-01C cumulative diff from `4490196`: files=6, netAdditions=1023; current follow-up worktree remains within the RP-00B budget |
+| commit | implementation/follow-up commits `12d77da`, `7a69c1a`, `dd346be`; independent-review follow-up pending |
+| upstream | `origin/codex/aishortvideo-checkpoint-20260711` aligned at `dd346be` before current follow-up |
+| remote_ci_regression | run `29207239740` at `12d77da` failed because clean checkout lacked generated Prisma Client; run `29207557235` at `7a69c1a` then passed targeted 11/API 108/E2E guard 13/governance 15/typecheck/build but failed git-budget because shallow checkout lacked a parent revision; run `29207718875` at `dd346be` passed every step after adding Prisma generation and `fetch-depth: 0`. Independent review still found fixture correctness gaps, so a new clean-checkout recheck remains required |
+| changed_files | RP-01C cumulative diff from `4490196`: files=6, netAdditions=1077; current follow-up worktree remains within the RP-00B budget |
 | diff_check | `git diff --check` passed |
-| worktree_remaining | RP-01C uncommitted files only; no commit/push performed |
+| worktree_remaining | independent-review follow-up only; final commit/push pending |
 
 ## 8. 关闭裁决
 

@@ -88,10 +88,11 @@ export const RP01C_SCENARIOS: readonly Rp01cScenarioDefinition[] = Object.freeze
   { id: 'save_failure_after_provider', kind: 'valid_state', category: 'save_failure' },
   { id: 'late_result_after_cancel', kind: 'counterexample', category: 'late_result' },
   { id: 'duplicate_current', kind: 'counterexample', category: 'duplicate_current' }
-]);
+].map((scenario) => Object.freeze(scenario)));
 
 export function createRp01cFixture(scenarioId: Rp01cScenarioId, tenantId = DEFAULT_TENANT_ID): Rp01cFixtureSnapshot {
   const scenario = { ...getScenario(scenarioId) };
+  const isolationTenantId = tenantId === 'tenant_other' ? 'tenant_isolation' : 'tenant_other';
   const novel = createNovel(scenarioId, tenantId);
   const task = createTask(scenario, novel);
   const versions = createVersions(scenario, novel);
@@ -113,7 +114,7 @@ export function createRp01cFixture(scenarioId: Rp01cScenarioId, tenantId = DEFAU
         requestHash: `rp01c-hash-${scenario.id}`
       },
       {
-        tenantId: 'tenant_other',
+        tenantId: isolationTenantId,
         novelId: 'rp01c_other_novel',
         taskId: 'rp01c_other_task',
         taskType: task.taskType,
@@ -433,6 +434,10 @@ function createEvents(task: GenerationTaskRecord): GenerationTaskEventRecord[] {
 
 function createVersions(scenario: Rp01cScenarioDefinition, novel: NovelRecord): CreativeVersionRecord[] {
   const base = createVersion(novel, 'rp01c_dir_v1', VersionStatus.Current, 1);
+  if (scenario.id === 'stale_source' || scenario.id === 'late_result_after_cancel') {
+    base.status = VersionStatus.Historical;
+    return [base, createVersion(novel, 'rp01c_dir_v2', VersionStatus.Current, 2)];
+  }
   if (scenario.id !== 'duplicate_current') return [base];
   return [base, createVersion(novel, 'rp01c_dir_v2', VersionStatus.Current, 2)];
 }
