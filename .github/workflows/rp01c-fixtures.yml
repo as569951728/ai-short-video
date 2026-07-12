@@ -1,0 +1,57 @@
+name: RP-01C deterministic fixtures
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/rp01c-fixtures.yml'
+      - 'apps/api/test/rp01c/**'
+      - 'apps/api/src/**'
+      - 'apps/api/prisma/**'
+      - 'apps/api/package.json'
+      - 'apps/api/tsconfig.json'
+      - 'packages/shared/src/**'
+      - 'packages/shared/package.json'
+      - 'packages/shared/tsconfig.json'
+      - 'scripts/e2e/**'
+      - 'scripts/remediation-governance.*'
+      - 'package.json'
+      - 'package-lock.json'
+  pull_request:
+    paths:
+      - '.github/workflows/rp01c-fixtures.yml'
+      - 'apps/api/test/rp01c/**'
+      - 'apps/api/src/**'
+      - 'apps/api/prisma/**'
+      - 'apps/api/package.json'
+      - 'apps/api/tsconfig.json'
+      - 'packages/shared/src/**'
+      - 'packages/shared/package.json'
+      - 'packages/shared/tsconfig.json'
+      - 'scripts/e2e/**'
+      - 'scripts/remediation-governance.*'
+      - 'package.json'
+      - 'package-lock.json'
+
+jobs:
+  rp01c-fixtures:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AI_PROVIDER_MODE: mock
+      E2E_PROFILE: rp01a-local-inmemory
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+          cache: npm
+      - run: npm ci
+      - run: ./node_modules/.bin/playwright install chromium
+      - run: npm run test:rp01c
+      - run: npm test -w @ai-shortvideo/api
+      - run: npm run test:e2e:rp01a
+      - run: npm run test:governance
+      - run: npm run typecheck
+      - run: npm run build -w @ai-shortvideo/api
+      - run: npm run governance:git-budget
