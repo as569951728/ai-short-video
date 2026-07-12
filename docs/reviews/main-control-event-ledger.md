@@ -333,3 +333,115 @@ evidence: GitHub Actions run 29202693061; status completed/success; headSha ee0b
 mc_decision: 关闭提交远程验证完成，RP-01A 保持 closed。
 next_action: 按依赖派发 RP-01B；RP-01D 继续等待独立授权。
 ```
+
+### MCE-20260713-RP01B-DISPATCH
+
+```text
+event_id: MCE-20260713-RP01B-DISPATCH
+occurred_at: 2026-07-13 01:58:59 CST
+event_type: dispatch
+source_thread: 019ed4a5-a2f5-7d13-86d0-0c28381af555
+package_id: RP-01B
+issue_ids: RMD-TEST-DOM-001
+acceptance_ids: TEST-DOM-01
+summary: 主控按依赖正式派发 Vue DOM/event runner，仅允许真实生产 SFC 测试、被测试暴露的最小事件修复和独立 CI；不允许为测试新增生产行为。
+evidence: docs/remediation/remediation-program.md; docs/remediation/acceptance-matrix.md
+mc_decision: 允许 DEV 在 20 files/2,000 net additions 内实现；不允许 DB/provider/media/RP-01C/RP-01D。
+next_action: DEV 完成后先由主控复核，再触发远程 CI 和独立验收。
+```
+
+### MCE-20260713-RP01B-TEST-REVISION
+
+```text
+event_id: MCE-20260713-RP01B-TEST-REVISION
+occurred_at: 2026-07-13 02:39:36 CST
+event_type: test_result
+source_thread: 019f5799-e468-7580-99d3-5c6495283c4a
+package_id: RP-01B
+issue_ids: RMD-TEST-DOM-001
+acceptance_ids: TEST-DOM-01
+summary: 独立 TEST 对实现提交 95a62d4 返回 needs_revision；完整 payload、dialog 关闭生命周期和关闭证据状态存在 3 项 P1。
+evidence: commit 95a62d4; remote run 29204037213; TEST read-only review
+mc_decision: 不关闭问题；接受完整 payload 和证据 P1，并按 Element Plus destroy-on-close=false 语义要求验证 retained-hidden 而非物理删除节点。
+next_action: DEV 定向返工，不修改生产 dialog 语义。
+```
+
+### MCE-20260713-RP01B-DEV-COMPLETE
+
+```text
+event_id: MCE-20260713-RP01B-DEV-COMPLETE
+occurred_at: 2026-07-13 03:03:15 CST
+event_type: dev_result
+source_thread: 019ed4ee-441a-7fa2-894d-393c7d4c527b
+package_id: RP-01B
+issue_ids: RMD-TEST-DOM-001
+acceptance_ids: TEST-DOM-01
+summary: DEV 完成 TEST P1 返工；四个视频入口和小说采用改为完整请求断言，dialog 关闭验证不可见与 modal lock 清除；焦点恢复继续 not_proven。
+evidence: commits 95a62d4 and efd3851; local old admin 77/77; DOM 10/10; full workspace 21/77/108; typecheck/build/budget passed
+mc_decision: 允许推送 efd3851 并对固定 SHA 触发远程门禁和最终独立复验。
+next_action: 等待远程 clean-checkout CI。
+```
+
+### MCE-20260713-RP01B-CI-RESULT
+
+```text
+event_id: MCE-20260713-RP01B-CI-RESULT
+occurred_at: 2026-07-13 03:06:07 CST
+event_type: remote_ci_result
+source_thread: 019ed4a5-a2f5-7d13-86d0-0c28381af555
+package_id: RP-01B
+issue_ids: RMD-TEST-DOM-001
+acceptance_ids: TEST-DOM-01
+summary: efd3851 在远程 clean checkout 中通过治理和 admin DOM workflow；npm ci、shared build、旧 admin 77/77、DOM 10/10 全部成功。
+evidence: GitHub Actions runs 29205130421 and 29205130419; headSha efd3851
+mc_decision: 远程证据通过，允许最终 TEST/QUALITY 对同一 SHA 复验。
+next_action: 独立复验不得修改文件。
+```
+
+### MCE-20260713-RP01B-TEST-RESULT
+
+```text
+event_id: MCE-20260713-RP01B-TEST-RESULT
+occurred_at: 2026-07-13 03:13:52 CST
+event_type: test_result
+source_thread: 019f57b9-7e22-7fe3-b7a6-bd9552b75d55
+package_id: RP-01B
+issue_ids: RMD-TEST-DOM-001
+acceptance_ids: TEST-DOM-01
+summary: 独立 TEST 对 efd3851 最终 approved，P0/P1 为 0；完整请求、disabled/loading、Teleport/dialog/focus、scroll target 与远程 clean CI 均通过。
+evidence: commit efd3851; run 29205130419; local test:dom:admin 77/77 + 10/10
+mc_decision: TEST 门禁通过；保留真实浏览器焦点恢复和 DB/provider/media 为 not_proven/out-of-scope。
+next_action: 等待 QUALITY 最终裁决。
+```
+
+### MCE-20260713-RP01B-QUALITY-RESULT
+
+```text
+event_id: MCE-20260713-RP01B-QUALITY-RESULT
+occurred_at: 2026-07-13 03:14:05 CST
+event_type: quality_review
+source_thread: 019f57ba-1be6-7111-b860-8122cc6665f5
+package_id: RP-01B
+issue_ids: RMD-TEST-DOM-001
+acceptance_ids: TEST-DOM-01
+summary: 独立 QUALITY 最终 approved，P0/P1 为 0；确认无测试专用生产组件、事件修复是被测试暴露的真实缺陷、12 files/1,988 net additions 未越界。
+evidence: commit efd3851; runs 29205130421/29205130419; QUALITY targeted DOM replay 10/10
+mc_decision: 质量门禁通过；TEST 已随后独立 approved，允许 MC 正式关单。
+next_action: 更新关闭记录、唯一总账、状态单源和 SLA 收据。
+```
+
+### MCE-20260713-RP01B-MC-CLOSE
+
+```text
+event_id: MCE-20260713-RP01B-MC-CLOSE
+occurred_at: 2026-07-13 03:16:39 CST
+event_type: mc_decision
+source_thread: 019ed4a5-a2f5-7d13-86d0-0c28381af555
+package_id: RP-01B
+issue_ids: RMD-TEST-DOM-001
+acceptance_ids: TEST-DOM-01
+summary: 实现与返工提交均已推送，远程门禁成功，TEST/QUALITY 均 approved；MC 将 RMD-TEST-DOM-001 更新为 closed，总账进度 8/42。
+evidence: docs/reviews/remediation-rmd-test-dom-001-closure-2026-07-13.md; docs/reviews/remediation-rp-01b-dispatch-receipt-2026-07-13.md; origin/codex/aishortvideo-checkpoint-20260711 @ efd3851
+mc_decision: RP-01B closed；允许按依赖进入 RP-01C；RP-01D 真实 MySQL 继续等待独立授权。
+next_action: 推送关闭提交并验证远程治理 CI，然后派发 RP-01C。
+```
