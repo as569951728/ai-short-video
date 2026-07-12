@@ -124,7 +124,7 @@ not_proven: real-browser rendering/focus behavior; focus restoration to trigger;
 | branch | `codex/aishortvideo-checkpoint-20260711` |
 | commit | `95a62d4`（实现）、`efd3851`（独立 TEST P1 返工） |
 | upstream | `origin/codex/aishortvideo-checkpoint-20260711` |
-| remote_ci | governance `29205130421`; admin DOM `29205130419`; both success at `efd3851` |
+| remote_ci | implementation governance `29205130421`; admin DOM `29205130419`; closure governance `29205701139`; all success |
 | changed_files | 相对 `23fd119` 共 12 files / 1,988 net additions，未越过 20/2,000 门禁 |
 | diff_check | `git diff --check` passed |
 | worktree_remaining | 正式关单文档更新前工作树 clean；实现与返工均已 push |
