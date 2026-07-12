@@ -1,0 +1,43 @@
+name: RP-01B admin DOM tests
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/rp01b-dom.yml'
+      - 'apps/admin-web/src/**'
+      - 'apps/admin-web/package.json'
+      - 'apps/admin-web/tsconfig*.json'
+      - 'apps/admin-web/vite.config.ts'
+      - 'apps/admin-web/vitest*.config.ts'
+      - 'packages/shared/src/**'
+      - 'packages/shared/package.json'
+      - 'packages/shared/tsconfig.json'
+      - 'package.json'
+      - 'package-lock.json'
+  pull_request:
+    paths:
+      - '.github/workflows/rp01b-dom.yml'
+      - 'apps/admin-web/src/**'
+      - 'apps/admin-web/package.json'
+      - 'apps/admin-web/tsconfig*.json'
+      - 'apps/admin-web/vite.config.ts'
+      - 'apps/admin-web/vitest*.config.ts'
+      - 'packages/shared/src/**'
+      - 'packages/shared/package.json'
+      - 'packages/shared/tsconfig.json'
+      - 'package.json'
+      - 'package-lock.json'
+
+jobs:
+  admin-dom:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+          cache: npm
+      - run: npm ci
+      - run: npm run test:dom:admin
