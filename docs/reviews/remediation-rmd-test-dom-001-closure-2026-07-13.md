@@ -34,6 +34,7 @@
   - 直接 mount 现有生产 SFC，不新增测试专用生产组件。
   - 新增 DOM 测试覆盖 emit 参数、disabled/loading 不触发、dialog 打开/确认/取消、Element Plus 默认焦点管理、scroll target。
   - 修正真实 DOM 点击会把 MouseEvent 传入可选参数的绑定：小说详情刷新显式调用 `loadDetail()`，视频旁白/TTS/字幕/渲染生成显式调用生成函数。
+  - 针对独立 TEST 对 `95a62d4` 的 needs_revision：视频四个生成入口改为完整 payload key 集和值断言，仅允许 `idempotencyToken` 使用动态字符串 matcher；小说 `adoptDirection` 改为完整请求对象断言；dialog 关闭断言按 Element Plus `destroy-on-close=false` 语义验证 `modelValue=false`、组件不可见、body modal lock 已清除，不要求物理删除 `.el-dialog`。
   - 新增 RP-01B CI workflow，Node 固定 `24.14.0`，只调用根 `npm run test:dom:admin`。
 - 修改文件：以最终 git diff 为准。
 - migration：N/A，本包不涉及数据库。
@@ -55,7 +56,7 @@
 | media | N/A | N/A | 本包不触媒体 |
 | typecheck | `npm run typecheck` | passed | 独立验收待执行 |
 | build | `npm run build -w admin-web`; `npm run build:budget -w admin-web` | passed; budget passed; existing vueuse annotation and large chunk warnings remain | 独立验收待执行 |
-| failure injection | DOM 负向断言：disabled/loading 不触发、四个视频生成入口 MouseEvent 哨兵不进入 payload、scroll/focus 不是空断言 | passed | 焦点恢复到触发按钮未在 happy-dom 中稳定证明 |
+| failure injection | DOM 负向断言：disabled/loading 不触发、四个视频生成入口完整 payload 无 MouseEvent 额外字段、小说采用请求完整对象、dialog 确认/取消后不保持可见 modal 状态、scroll/focus 不是空断言 | passed | 焦点恢复到触发按钮未在 happy-dom 中稳定证明 |
 | concurrency/restart | N/A | N/A | 本包不涉及后端任务 |
 
 研发自测结论：
@@ -70,6 +71,7 @@ not_proven: independent TEST, remote CI, Element Plus dialog close focus restora
 ## 5. 独立测试证据
 
 - 执行 acceptance ids：TEST-DOM-01
+- 最新独立 TEST 反馈：`95a62d4` 返回 needs_revision / P1；本草稿仅记录 DEV 定向返工，正式 TEST 字段仍待主控再次派发后填写。
 - environment：待 TEST 填写
 - evidence_level：待 TEST 填写
 - 命令：待 TEST 填写
@@ -121,7 +123,7 @@ not_proven:
 | branch | `codex/aishortvideo-checkpoint-20260711` |
 | commit | 未提交 |
 | upstream | `origin/codex/aishortvideo-checkpoint-20260711` |
-| changed_files | 12 worktree files; `npm run governance:git-budget -- --worktree` reported files=12, netAdditions=1901 |
+| changed_files | 3 worktree files after TEST needs_revision rework; `npm run governance:git-budget -- --worktree` reported files=3, netAdditions=94 |
 | diff_check | `git diff --check` passed |
 | worktree_remaining | RP-01B uncommitted files only; no commit/push performed |
 

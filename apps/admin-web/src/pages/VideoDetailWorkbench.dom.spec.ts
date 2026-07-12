@@ -81,11 +81,73 @@ afterEach(() => {
 
 describe('VideoDetailWorkbench DOM behavior', () => {
   it.each([
-    ['旁白稿', '生成旁白候选', mocks.generateVideoNarrations, { candidateCount: 3 }],
-    ['配音', '生成配音候选', mocks.generateVideoTts, { narrationArtifactId: 'narration-current-1' }],
-    ['字幕', '生成字幕候选', mocks.generateVideoSubtitles, { ttsArtifactId: 'tts-current-1' }],
-    ['渲染', '渲染视频预览', mocks.generateVideoRender, { visualPlanArtifactId: 'visual-current-1' }],
-  ])('does not pass the click MouseEvent as generation options for %s', async (stepLabel, actionLabel, serviceMock, payloadSubset) => {
+    [
+      '旁白稿',
+      '生成旁白候选',
+      mocks.generateVideoNarrations,
+      {
+        candidateCount: 3,
+        expectedReferenceVersion: 1,
+        idempotencyToken: expect.stringMatching(/^video-narration-generate-\d+-[a-z0-9]{1,8}$/),
+        mockTaskOutcome: undefined,
+        qualityMode: 'standard',
+        retryOfTaskId: undefined,
+        videoUnitId: 'unit-001',
+      },
+    ],
+    [
+      '配音',
+      '生成配音候选',
+      mocks.generateVideoTts,
+      {
+        emotion: 'suspense',
+        expectedNarrationVersionNo: 1,
+        expectedReferenceVersion: 1,
+        idempotencyToken: expect.stringMatching(/^video-tts-generate-\d+-[a-z0-9]{1,8}$/),
+        mockTaskOutcome: undefined,
+        narrationArtifactId: 'narration-current-1',
+        qualityMode: 'standard',
+        retryOfTaskId: undefined,
+        speed: 1,
+        videoUnitId: 'unit-001',
+        voiceId: 'mock-male-cinematic',
+        voiceName: '男声-剧情感',
+        volume: 90,
+      },
+    ],
+    [
+      '字幕',
+      '生成字幕候选',
+      mocks.generateVideoSubtitles,
+      {
+        expectedReferenceVersion: 1,
+        expectedTtsVersionNo: 1,
+        idempotencyToken: expect.stringMatching(/^video-subtitle-generate-\d+-[a-z0-9]{1,8}$/),
+        lineLength: 18,
+        mockTaskOutcome: undefined,
+        qualityMode: 'standard',
+        retryOfTaskId: undefined,
+        subtitleStyle: 'balanced',
+        ttsArtifactId: 'tts-current-1',
+        videoUnitId: 'unit-001',
+      },
+    ],
+    [
+      '渲染',
+      '渲染视频预览',
+      mocks.generateVideoRender,
+      {
+        expectedReferenceVersion: 1,
+        expectedVisualPlanVersionNo: 1,
+        idempotencyToken: expect.stringMatching(/^video-render-generate-\d+-[a-z0-9]{1,8}$/),
+        mockTaskOutcome: undefined,
+        qualityMode: 'standard',
+        retryOfTaskId: undefined,
+        videoUnitId: 'unit-001',
+        visualPlanArtifactId: 'visual-current-1',
+      },
+    ],
+  ])('does not pass the click MouseEvent as generation options for %s', async (stepLabel, actionLabel, serviceMock, expectedPayload) => {
     ;(MouseEvent.prototype as { retryOfTaskId?: string }).retryOfTaskId = 'mouse-event-leak'
     ;(MouseEvent.prototype as { mockTaskOutcome?: string }).mockTaskOutcome = 'failed'
 
@@ -103,17 +165,20 @@ describe('VideoDetailWorkbench DOM behavior', () => {
     await generateButton?.trigger('click')
     await flushPromises()
 
-    expect(serviceMock).toHaveBeenCalledWith(
-      'video-dom-001',
-      expect.objectContaining({
-        ...payloadSubset,
-        retryOfTaskId: undefined,
-        mockTaskOutcome: undefined,
-      }),
-      'mock',
-    )
+    expectVideoGenerationPayload(serviceMock, expectedPayload)
   })
 })
+
+function expectVideoGenerationPayload(serviceMock: unknown, expectedPayload: Record<string, unknown>) {
+  const mock = serviceMock as typeof mocks.generateVideoNarrations
+  expect(mock).toHaveBeenCalledTimes(1)
+  const [videoId, payload, mode] = mock.mock.calls[0] as [string, Record<string, unknown>, string]
+
+  expect(videoId).toBe('video-dom-001')
+  expect(mode).toBe('mock')
+  expect(Object.keys(payload).sort()).toEqual(Object.keys(expectedPayload).sort())
+  expect(payload).toEqual(expectedPayload)
+}
 
 function createVideoWorkbenchView() {
   return {

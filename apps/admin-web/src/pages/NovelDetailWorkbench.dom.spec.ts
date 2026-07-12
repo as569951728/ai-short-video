@@ -164,15 +164,16 @@ describe('NovelDetailWorkbench DOM behavior', () => {
     await flushPromises()
     await waitForDialogClose()
 
-    expect(mocks.adoptDirection).toHaveBeenCalledWith(
-      'novel-dom-001',
-      'direction-low-1',
-      expect.objectContaining({
-        confirmLowScore: true,
-        reason: '风险可接受，保留开篇强钩子方向',
-      }),
-    )
-    expect(getAdoptDialogModelValue()).toBe(false)
+    expectAdoptDirectionRequest({
+      confirmLowScore: true,
+      currentVersionId: null,
+      pageVersionSnapshot: {
+        seenAt: expect.any(String),
+        seenCandidateVersionId: 'direction-low-1',
+      },
+      reason: '风险可接受，保留开篇强钩子方向',
+    })
+    expectAdoptDialogClosed()
   })
 
   it('closes the existing adopt dialog on cancel without calling the API', async () => {
@@ -200,7 +201,7 @@ describe('NovelDetailWorkbench DOM behavior', () => {
     await waitForDialogClose()
 
     expect(mocks.adoptDirection).not.toHaveBeenCalled()
-    expect(getAdoptDialogModelValue()).toBe(false)
+    expectAdoptDialogClosed()
   })
 
   it('uses the existing task result path to scroll to the structure candidate target', async () => {
@@ -284,6 +285,32 @@ function getAdoptDialog() {
 
 function getAdoptDialogModelValue() {
   return getAdoptDialog().props('modelValue')
+}
+
+function expectAdoptDirectionRequest(expectedRequest: Record<string, unknown>) {
+  expect(mocks.adoptDirection).toHaveBeenCalledTimes(1)
+  const [novelId, versionId, request] = mocks.adoptDirection.mock.calls[0] as [
+    string,
+    string,
+    {
+      pageVersionSnapshot: Record<string, unknown>
+    } & Record<string, unknown>,
+  ]
+
+  expect(novelId).toBe('novel-dom-001')
+  expect(versionId).toBe('direction-low-1')
+  expect(Object.keys(request).sort()).toEqual(Object.keys(expectedRequest).sort())
+  expect(Object.keys(request.pageVersionSnapshot).sort()).toEqual(['seenAt', 'seenCandidateVersionId'])
+  expect(Date.parse(String(request.pageVersionSnapshot.seenAt))).not.toBeNaN()
+  expect(request).toEqual(expectedRequest)
+}
+
+function expectAdoptDialogClosed() {
+  expect(getAdoptDialogModelValue()).toBe(false)
+  expect(getAdoptDialog().props('modelValue')).toBe(false)
+  expect(getAdoptDialog().isVisible()).toBe(false)
+  expect(document.body.classList.contains('el-popup-parent--hidden')).toBe(false)
+  expect(document.body.style.overflow).not.toBe('hidden')
 }
 
 async function waitForDialogClose() {
