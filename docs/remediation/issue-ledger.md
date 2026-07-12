@@ -71,18 +71,18 @@
 | RMD-TEST-FIXTURE-001 | QG/P0 | 缺 processing、timeout、脏 JSON、迟到结果、重复 current、分块失败和重启 fixture | open | T-04；现有 outline/trial seed | TEST + DEV | RP-01C | TEST-FIXTURE-01 |
 | RMD-TEST-DB-001 | QG/P0 | migration 测试多为 SQL 正则，真实 MySQL migrate/write/concurrency/restart 未执行 | open | T-05；P8b-L1b | TEST + QUALITY | RP-01D, RP-03D, RP-07D | TEST-MYSQL-01 |
 | RMD-TEST-CONTENT-001 | QG/P1 | 没有小说字数、重复率、连续性、人物一致性、爽点和钩子质量基准集 | open | T-08；provider 手写 JSON | TEST + PRODUCT | RP-04D | TEST-NOVEL-QUALITY-01 |
-| RMD-TEST-EVIDENCE-001 | QG/P1 | 验收结论未强制分列 contract/unit/API/DB/browser/provider/media | partial | E0-E7 纠偏；历史“通过”口径 | TEST + MC | RP-00A | TEST-EVIDENCE-LEVEL-01 |
+| RMD-TEST-EVIDENCE-001 | QG/P1 | 验收结论未强制分列 contract/unit/API/DB/browser/provider/media | closed | `056f60a`；独立 TEST/PRODUCT/QUALITY approved；关闭记录 | TEST + MC | RP-00A | TEST-EVIDENCE-LEVEL-01 |
 
 ## 7. 工程、主控与协作
 
 | ID | 类别/级别 | 问题与影响 | 状态 | 主要证据 | Owner | 整改包 | 验收 ID |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | RMD-GOV-GIT-001 | QG/P0 | 曾跨包累积并一次纳管 89 文件，无法逐包审查、回滚和 bisect | partial | `26f1bc9`；工作树归因文档 | MC + DEV + QUALITY | RP-00B | GOV-GIT-01 |
-| RMD-GOV-STATUS-001 | QG/P1 | 当前状态、历史事件和追加式文档曾互相冲突，巡检口径滞后 | partial | main-control 与旧 heartbeat | MC + QUALITY | RP-00A | GOV-STATUS-01 |
+| RMD-GOV-STATUS-001 | QG/P1 | 当前状态、历史事件和追加式文档曾互相冲突，巡检口径滞后 | closed | `056f60a`；状态单源与事件账本；独立 TEST/PRODUCT/QUALITY approved | MC + QUALITY | RP-00A | GOV-STATUS-01 |
 | RMD-GOV-SLA-001 | QG/P1 | 研发完成到测试派发曾依赖用户提醒，没有可追踪 SLA | open | 用户提醒“工程进度卡着” | MC | RP-00B | GOV-SLA-01 |
 | RMD-GOV-TEMP-001 | DEBT/P1 | `apps/api/tsconfig.testrun.json` 长期无 owner、期限和处理决策 | open | 当前 git status | QUALITY + DEV | RP-00B | GOV-TEMP-01 |
 | RMD-ARCH-SIZE-001 | DEBT/P1 | 小说/视频核心 service、repository、workbench 和 shared 文件过大，回归半径持续扩大 | open | 首次复盘代码体量表 | DEV + QUALITY | RP-09H1, RP-09H2 | ARCH-SPLIT-01 |
-| RMD-GOV-STAGE-001 | QG/P1 | 协作文档原先仍称“研发前设计阶段”，当前已修改为整改冻结期但尚未完成独立验收 | implemented_pending_verification | `docs/development-coordination.md` 当前 diff | MC | RP-00A | GOV-STAGE-01 |
+| RMD-GOV-STAGE-001 | QG/P1 | 协作文档原先仍称“研发前设计阶段”，当前已修改为整改冻结期并完成独立验收 | closed | `056f60a`；独立 TEST/PRODUCT/QUALITY approved；关闭记录 | MC | RP-00A | GOV-STAGE-01 |
 
 ## 8. 专项验证缺口
 
@@ -102,8 +102,8 @@
 | --- | ---: | ---: |
 | PB | 7 | 0 |
 | RB | 12 | 0 |
-| QG | 21 | 0 |
+| QG | 21 | 3 |
 | DEBT | 2 | 0 |
-| 合计 | 42 | 0 |
+| 合计 | 42 | 3 |
 
 数量只用于确认总账覆盖，不作为完成度指标。每次更新必须重新核对实际分类数量。
