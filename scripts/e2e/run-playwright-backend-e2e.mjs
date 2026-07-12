@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -25,6 +25,42 @@ export const FORBIDDEN_ENV_KEYS = [
 
 export class E2eFailure extends Error {}
 
+const SENSITIVE_JSON_KEYS = [
+  'authorization',
+  'cookie',
+  'apiKey',
+  'api_key',
+  'api-key',
+  'token',
+  'secret',
+  'password',
+  'databaseUrl',
+  'database_url',
+  'database-url',
+  'prompt',
+  'rawPrompt',
+  'raw_prompt',
+  'raw-prompt',
+  'rawResponse',
+  'raw_response',
+  'raw-response',
+  'modelResponse',
+  'model_response',
+  'model-response',
+  'providerResponse',
+  'provider_response',
+  'provider-response',
+  'providerPayload',
+  'provider_payload',
+  'provider-payload',
+  'requestPayload',
+  'request_payload',
+  'request-payload',
+  'responsePayload',
+  'response_payload',
+  'response-payload'
+];
+
 export function assertSafeTestProfile(env = process.env) {
   const present = FORBIDDEN_ENV_KEYS.filter((key) => Boolean(env[key]));
   if (present.length > 0) throw new E2eFailure(`Unsafe E2E environment variables present: ${present.join(', ')}`);
@@ -37,11 +73,15 @@ export function assertSafeTestProfile(env = process.env) {
 }
 
 export function sanitizeLog(text) {
+  const sensitiveKeyPattern = SENSITIVE_JSON_KEYS.join('|');
   return String(text)
     .replace(/(Authorization|Cookie)\s*:\s*[^\n\r]+/gi, '$1: [REDACTED]')
     .replace(/(api[_-]?key|token|secret|password)=([^&\s]+)/gi, '$1=[REDACTED]')
-    .replace(/mysql:\/\/[^\s]+/gi, 'mysql://[REDACTED]')
+    .replace(/mysql:\/\/[^\s"',}]+/gi, 'mysql://[REDACTED]')
     .replace(/DATABASE_URL=([^\s]+)/g, 'DATABASE_URL=[REDACTED]')
+    .replace(new RegExp(`(["'])(${sensitiveKeyPattern})\\1\\s*:\\s*\\{[^\\n\\r}]*\\}`, 'gi'), '$1$2$1: [REDACTED]')
+    .replace(new RegExp(`(["'])(${sensitiveKeyPattern})\\1\\s*:\\s*(["'])[^"'\\n\\r]*\\3`, 'gi'), '$1$2$1: [REDACTED]')
+    .replace(new RegExp(`(["'])(${sensitiveKeyPattern})\\1\\s*:\\s*[^,}\\n\\r]+`, 'gi'), '$1$2$1: [REDACTED]')
     .replace(/(prompt|rawPrompt|rawResponse|modelResponse|providerResponse)["']?\s*[:=]\s*["'][\s\S]{20,}?["']/gi, '$1=[REDACTED]');
 }
 
@@ -75,7 +115,7 @@ export async function waitForHttpReady(url, { timeoutMs, label, children = [] })
     const exited = children.find((child) => child.exitCode !== null);
     if (exited) throw new E2eFailure(`${label} exited before ready with code ${exited.exitCode}`);
     try {
-      const response = await fetch(url);
+      const response = await fetchWithTimeout(url, remainingTimeoutMs(startedAt, timeoutMs));
       if (response.ok) return;
       lastError = `status ${response.status}`;
     } catch (error) {
@@ -93,7 +133,7 @@ export async function waitForAdminReady(url, options) {
     const exited = options.children.find((child) => child.exitCode !== null);
     if (exited) throw new E2eFailure(`admin exited before ready with code ${exited.exitCode}`);
     try {
-      const response = await fetch(url);
+      const response = await fetchWithTimeout(url, remainingTimeoutMs(startedAt, options.timeoutMs));
       const text = await response.text();
       if (response.ok && text.includes('<div id="app"></div>')) return;
       lastError = `status ${response.status}`;
@@ -154,6 +194,7 @@ async function main() {
   } finally {
     if (blocker) await new Promise((resolve) => blocker.close(resolve));
     await stopChildren(children);
+    prepareSanitizedUpload(artifactDir);
   }
 }
 
@@ -183,6 +224,36 @@ function startChild(name, command, extraEnv, artifactDir) {
   child.stdout.on('data', append);
   child.stderr.on('data', append);
   return child;
+}
+
+export function prepareSanitizedUpload(artifactDir) {
+  const uploadDir = join(artifactDir, 'sanitized-upload');
+  mkdirSync(uploadDir, { recursive: true });
+  for (const fileName of ['api.log', 'admin.log', 'playwright.log', 'summary.txt']) {
+    const sourcePath = join(artifactDir, fileName);
+    if (!existsSync(sourcePath)) continue;
+    writeFileSync(join(uploadDir, fileName), sanitizeLog(readFileSync(sourcePath, 'utf8')));
+  }
+  return uploadDir;
+}
+
+async function fetchWithTimeout(url, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(1, timeoutMs));
+  try {
+    return await fetch(url, { signal: controller.signal });
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new Error(`request timeout after ${timeoutMs}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function remainingTimeoutMs(startedAt, timeoutMs) {
+  return Math.max(1, Math.min(1_000, timeoutMs - (Date.now() - startedAt)));
 }
 
 function createChildEnv(extraEnv) {

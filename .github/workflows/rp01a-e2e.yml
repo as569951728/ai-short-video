@@ -68,5 +68,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: rp01a-playwright-artifacts
-          path: output/playwright/rp-01a/**
+          path: |
+            output/playwright/rp-01a/**/sanitized-upload/*.log
+            output/playwright/rp-01a/**/sanitized-upload/summary.txt
           if-no-files-found: ignore
