@@ -14,7 +14,7 @@
 | acceptance_ids | TEST-FIXTURE-01 |
 | environment | local Node 24 / API test-only fixture factory |
 | target_evidence_level | E2/E3 deterministic factory |
-| actual_evidence_level | E2/E3 local DEV, pending independent test |
+| actual_evidence_level | E2/E3 local DEV + clean-checkout CI; independent re-review needs_revision |
 
 ## 2. 原始问题
 
@@ -33,7 +33,7 @@
   - 场景目录覆盖 valid_state：`processing`、`failed_timeout`、`failed_malformed_json`、`stale_source`、`active_conflict`、`restart_boundary`、`chapter_plan_chunk_failure`、`save_failure_after_provider`。
   - 场景目录覆盖 counterexample：`late_result_after_cancel`、`duplicate_current`；counterexample 不自动归一化，不声称业务已修。
   - 新增 RP-01C 定向测试，覆盖确定性、冻结场景目录及条目、无全局共享 scenario/source refs/metadata/数组引用、普通对象结构冻结、深拷贝隔离、stale/current 引用完整、租户隔离及自定义租户避碰、幂等复用/冲突、场景化 executable failure injection probes、scripted LLM 调用计数、Fastify `/tasks` route 投影。
-  - 新增根单命令 `npm run test:rp01c`，命令内先 build shared，再执行 API Prisma Client generate，然后运行 API fixture 测试，保证 clean checkout 自足。
+  - 新增根单命令 `npm run test:rp01c`，先在完整命令链外层清除 DB/DeepSeek 环境并禁用项目 dotenv，再依次 build shared、生成 API Prisma Client、运行 API fixture 测试，保证 clean checkout 自足且前置步骤也不读取项目 `.env`。
   - 新增 RP-01C workflow，Node 固定 `24.14.0`，运行 targeted fixture、API 全量、RP-01A guards、governance、typecheck、API build。
 - 修改文件：以最终 git diff 为准。
 - migration：N/A，本包不涉及数据库结构。
@@ -70,7 +70,8 @@ not_proven: independent TEST, remote CI, real restart recovery, worker/retry, at
 ## 5. 独立测试证据
 
 - 执行 acceptance ids：TEST-FIXTURE-01
-- 首轮独立 TEST：agent `019f5803-feb9-7683-b92a-d88680791af6` 对 `dd346be` 判定 needs_revision；P1 为 `RP01C_SCENARIOS` 条目仍可变并污染后续 fixture。现已逐条冻结并补反例 guard，待重新验收。
+- 首轮独立 TEST：agent `019f5803-feb9-7683-b92a-d88680791af6` 对 `dd346be` 判定 needs_revision；P1 为 `RP01C_SCENARIOS` 条目仍可变并污染后续 fixture。现已逐条冻结并补反例 guard。
+- 第二轮独立 TEST：agent `019f5817-4ba7-70f1-ae71-377f83a5a574` 对 `3910a68` 判定 needs_revision；确认 fixture 正确性与 clean-checkout CI 已通过，剩余 P1 为根命令的环境隔离未覆盖 Prisma generate 前置步骤、closure 状态漂移。本次返工将安全环境包裹完整根命令链，待新提交后重新验收。
 - environment：待 TEST 填写
 - evidence_level：待 TEST 填写
 - 命令：待 TEST 填写
@@ -109,7 +110,8 @@ not_proven:
 
 质量复核：
 
-- 首轮独立 QUALITY：agent `019f5804-9dbc-7f21-97e2-25995cf59e66` 对 `dd346be` 判定 needs_revision；P1 涉及测试环境未隔离、request-id 随机、stale current 悬空、场景条目可变、自定义租户与固定 other tenant 碰撞及 closure 漂移。现已定向修正，待重新验收。
+- 首轮独立 QUALITY：agent `019f5804-9dbc-7f21-97e2-25995cf59e66` 对 `dd346be` 判定 needs_revision；P1 涉及测试环境未隔离、request-id 随机、stale current 悬空、场景条目可变、自定义租户与固定 other tenant 碰撞及 closure 漂移。相关 fixture 正确性问题已定向修正。
+- 第二轮独立 QUALITY：agent `019f5817-e8db-7c80-b77e-b3689db16efe` 对 `3910a68` 判定 needs_revision；确认场景、引用、租户、固定 request-id、production route 边界、范围和远程 CI 通过，剩余 P1 与第二轮 TEST 一致。本次返工仅调整测试命令链和关闭证据，待新提交后重新验收。
 - 范围是否越界：pending
 - 真实环境边界：pending
 - 租户/权限/敏感信息：pending
@@ -121,12 +123,12 @@ not_proven:
 | 字段 | 内容 |
 | --- | --- |
 | branch | `codex/aishortvideo-checkpoint-20260711` |
-| commit | implementation/follow-up commits `12d77da`, `7a69c1a`, `dd346be`; independent-review follow-up pending |
-| upstream | `origin/codex/aishortvideo-checkpoint-20260711` aligned at `dd346be` before current follow-up |
-| remote_ci_regression | run `29207239740` at `12d77da` failed because clean checkout lacked generated Prisma Client; run `29207557235` at `7a69c1a` then passed targeted 11/API 108/E2E guard 13/governance 15/typecheck/build but failed git-budget because shallow checkout lacked a parent revision; run `29207718875` at `dd346be` passed every step after adding Prisma generation and `fetch-depth: 0`. Independent review still found fixture correctness gaps, so a new clean-checkout recheck remains required |
+| commit | implementation/follow-up commits `12d77da`, `7a69c1a`, `dd346be`, `3910a68`; complete-chain environment isolation follow-up pending |
+| upstream | `origin/codex/aishortvideo-checkpoint-20260711` aligned at `3910a68` before current follow-up |
+| remote_ci_regression | run `29207239740` at `12d77da` failed because clean checkout lacked generated Prisma Client; run `29207557235` at `7a69c1a` passed targeted/API/E2E/governance/typecheck/build but failed git-budget because shallow checkout lacked a parent revision; run `29207718875` at `dd346be` passed after adding Prisma generation and `fetch-depth: 0`; run `29208391608` at `3910a68` passed targeted 13/API 108/RP-01A 13/governance 15/typecheck/API build/git-budget. Current complete-chain environment isolation follow-up still requires a fresh clean-checkout run |
 | changed_files | RP-01C cumulative diff from `4490196`: files=6, netAdditions=1077; current follow-up worktree remains within the RP-00B budget |
 | diff_check | `git diff --check` passed |
-| worktree_remaining | independent-review follow-up only; final commit/push pending |
+| worktree_remaining | complete-chain environment isolation and closure refresh only; final commit/push and fresh independent re-review pending |
 
 ## 8. 关闭裁决
 
@@ -134,7 +136,7 @@ not_proven:
 issue_id: RMD-TEST-FIXTURE-001
 final_status: partial
 closed_acceptance_ids:
-residual_risks: independent TEST and remote CI pending; not_proven items remain outside RP-01C scope
+residual_risks: fresh remote CI and independent TEST/QUALITY approval pending; not_proven items remain outside RP-01C scope
 reopen_conditions: fixture factory removed; scenario catalogue incomplete; failure states again require manual state edits; counterexamples normalized or misreported as fixed
 decided_by: pending MC
 decided_at: pending

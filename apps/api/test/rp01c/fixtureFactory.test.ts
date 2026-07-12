@@ -40,7 +40,7 @@ describe('RP-01C fixture factory contract', () => {
     assert.equal(command.includes('npx'), false);
     assert.match(
       command,
-      /^npm run build -w @ai-shortvideo\/shared && npm run prisma:generate -w @ai-shortvideo\/api && npm run test:rp01c -w @ai-shortvideo\/api$/
+      /^env -u DATABASE_URL -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL -u DEEPSEEK_MODEL -u DEEPSEEK_STRUCTURE_MODEL -u DEEPSEEK_REASONER_MODEL -u DEEPSEEK_TIMEOUT_MS -u DEEPSEEK_MAX_RETRIES NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=\/dev\/null sh -c 'npm run build -w @ai-shortvideo\/shared && npm run prisma:generate -w @ai-shortvideo\/api && npm run test:rp01c -w @ai-shortvideo\/api'$/
     );
 
     const apiPackageJson = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as {
