@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { sendOk } from '../../../shared/reply.js';
 import { createDefaultRequestContext, NovelService, type NovelServiceOptions } from '../services/novelService.js';
+import { resolveRequestIdempotencyKey } from '../services/taskClaim.js';
 import type {
   AdoptDirectionRequest,
   AdoptStructureAssetRequest,
@@ -248,7 +249,8 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
         body: {
           type: 'object',
           properties: {
-            regenerateReason: { type: ['string', 'null'], maxLength: 500 }
+            regenerateReason: { type: ['string', 'null'], maxLength: 500 },
+            idempotencyKey: idempotencyKeySchema
           },
           additionalProperties: false
         },
@@ -261,7 +263,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
       const { novelId } = request.params as { novelId: string };
       const data = await novelService.generateDirections(
         novelId,
-        (request.body ?? {}) as GenerateDirectionsRequest,
+        withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as GenerateDirectionsRequest),
         createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
       );
 
@@ -284,7 +286,8 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
               minItems: 2,
               maxItems: 5
             },
-            reason: { type: ['string', 'null'], maxLength: 500 }
+            reason: { type: ['string', 'null'], maxLength: 500 },
+            idempotencyKey: idempotencyKeySchema
           },
           additionalProperties: false
         },
@@ -297,7 +300,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
       const { novelId } = request.params as { novelId: string };
       const data = await novelService.fuseDirections(
         novelId,
-        request.body as FuseDirectionsRequest,
+        withRequestIdempotency(request.headers['idempotency-key'], request.body as FuseDirectionsRequest),
         createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
       );
 
@@ -313,7 +316,8 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
         body: {
           type: 'object',
           properties: {
-            instruction: { type: ['string', 'null'], maxLength: 500 }
+            instruction: { type: ['string', 'null'], maxLength: 500 },
+            idempotencyKey: idempotencyKeySchema
           },
           additionalProperties: false
         },
@@ -327,7 +331,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
       const data = await novelService.optimizeDirection(
         novelId,
         versionId,
-        (request.body ?? {}) as OptimizeDirectionRequest,
+        withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as OptimizeDirectionRequest),
         createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
       );
 
@@ -423,7 +427,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
       const { novelId } = request.params as { novelId: string };
       const data = await novelService.generateSetting(
         novelId,
-        (request.body ?? {}) as GenerateStructureAssetRequest,
+        withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as GenerateStructureAssetRequest),
         createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
       );
 
@@ -471,7 +475,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
       const { novelId } = request.params as { novelId: string };
       const data = await novelService.generateOutline(
         novelId,
-        (request.body ?? {}) as GenerateStructureAssetRequest,
+        withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as GenerateStructureAssetRequest),
         createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
       );
 
@@ -519,7 +523,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
       const { novelId } = request.params as { novelId: string };
       const data = await novelService.generateStageOutline(
         novelId,
-        (request.body ?? {}) as GenerateStructureAssetRequest,
+        withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as GenerateStructureAssetRequest),
         createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
       );
 
@@ -567,7 +571,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
       const { novelId } = request.params as { novelId: string };
       const data = await novelService.generateChapterPlan(
         novelId,
-        (request.body ?? {}) as GenerateStructureAssetRequest,
+        withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as GenerateStructureAssetRequest),
         createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
       );
 
@@ -662,7 +666,8 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
             chapterCount: { type: 'integer', enum: [2, 3, 5] },
             trialRunId: { type: ['string', 'null'], maxLength: 80 },
             selectedCandidateId: { type: ['string', 'null'], maxLength: 80 },
-            regenerateReason: { type: ['string', 'null'], maxLength: 500 }
+            regenerateReason: { type: ['string', 'null'], maxLength: 500 },
+            idempotencyKey: idempotencyKeySchema
           },
           additionalProperties: false
         },
@@ -675,7 +680,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
       const { novelId } = request.params as { novelId: string };
       const data = await novelService.generateTrial(
         novelId,
-        (request.body ?? {}) as GenerateTrialRequest,
+        withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as GenerateTrialRequest),
         createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
       );
 
@@ -723,7 +728,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
         params: novelIdParamsSchema,
         body: {
           type: 'object',
-          required: ['strategySnapshotId', 'expectedStrategySnapshotVersion', 'idempotencyKey'],
+          required: ['strategySnapshotId', 'expectedStrategySnapshotVersion'],
           properties: {
             strategySnapshotId: { type: 'string', minLength: 1, maxLength: 80 },
             expectedStrategySnapshotVersion: { type: 'integer', minimum: 1 },
@@ -742,7 +747,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
       const { novelId } = request.params as { novelId: string };
       const data = await novelService.generateBodyBatch(
         novelId,
-        request.body as GenerateBodyBatchRequest,
+        withRequestIdempotency(request.headers['idempotency-key'], request.body as GenerateBodyBatchRequest),
         createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
       );
 
@@ -761,7 +766,8 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
           properties: {
             strategySnapshotId: { type: 'string', minLength: 1, maxLength: 80 },
             expectedStrategySnapshotVersion: { type: 'integer', minimum: 1 },
-            reason: { type: ['string', 'null'], maxLength: 500 }
+            reason: { type: ['string', 'null'], maxLength: 500 },
+            idempotencyKey: idempotencyKeySchema
           },
           additionalProperties: false
         },
@@ -775,7 +781,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
       const data = await novelService.generateChapterBody(
         novelId,
         chapterId,
-        request.body as GenerateChapterBodyRequest,
+        withRequestIdempotency(request.headers['idempotency-key'], request.body as GenerateChapterBodyRequest),
         createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
       );
 
@@ -793,7 +799,8 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
           properties: {
             instruction: { type: ['string', 'null'], maxLength: 1000 },
             reason: { type: ['string', 'null'], maxLength: 1000 },
-            currentContentVersionId: { type: ['string', 'null'], maxLength: 80 }
+            currentContentVersionId: { type: ['string', 'null'], maxLength: 80 },
+            idempotencyKey: idempotencyKeySchema
           },
           additionalProperties: false
         },
@@ -807,7 +814,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
       const data = await novelService.rewriteChapter(
         novelId,
         chapterId,
-        (request.body ?? {}) as RewriteChapterRequest,
+        withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as RewriteChapterRequest),
         createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
       );
 
@@ -825,7 +832,8 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
           properties: {
             reason: { type: ['string', 'null'], maxLength: 1000 },
             currentContentVersionId: { type: ['string', 'null'], maxLength: 80 },
-            pageVersionSnapshot: { type: ['object', 'null'], additionalProperties: true }
+            pageVersionSnapshot: { type: ['object', 'null'], additionalProperties: true },
+            idempotencyKey: idempotencyKeySchema
           },
           additionalProperties: false
         },
@@ -840,7 +848,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
         novelId,
         chapterId,
         versionId,
-        (request.body ?? {}) as AdoptChapterContentVersionRequest,
+        withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as AdoptChapterContentVersionRequest),
         createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
       );
 
@@ -857,7 +865,8 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
           type: 'object',
           properties: {
             reason: { type: ['string', 'null'], maxLength: 1000 },
-            currentContentVersionId: { type: ['string', 'null'], maxLength: 80 }
+            currentContentVersionId: { type: ['string', 'null'], maxLength: 80 },
+            idempotencyKey: idempotencyKeySchema
           },
           additionalProperties: false
         },
@@ -871,7 +880,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
       const data = await novelService.createImpactAssessment(
         novelId,
         chapterId,
-        (request.body ?? {}) as CreateImpactAssessmentRequest,
+        withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as CreateImpactAssessmentRequest),
         createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
       );
 
@@ -937,7 +946,6 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
         params: novelIdParamsSchema,
         body: {
           type: 'object',
-          required: ['idempotencyKey'],
           properties: {
             idempotencyKey: idempotencyKeySchema,
             expectedNovelVersion: { type: ['string', 'null'], maxLength: 80 },
@@ -954,7 +962,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
       const { novelId } = request.params as { novelId: string };
       const data = await novelService.startFullReview(
         novelId,
-        request.body as StartFullReviewRequest,
+        withRequestIdempotency(request.headers['idempotency-key'], request.body as StartFullReviewRequest),
         createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
       );
 
@@ -1251,7 +1259,8 @@ function createStructureGenerateRouteSchema() {
       body: {
         type: 'object',
         properties: {
-          regenerateReason: { type: ['string', 'null'], maxLength: 500 }
+          regenerateReason: { type: ['string', 'null'], maxLength: 500 },
+          idempotencyKey: idempotencyKeySchema
         },
         additionalProperties: false
       },
@@ -1260,6 +1269,11 @@ function createStructureGenerateRouteSchema() {
       }
     }
   } as const;
+}
+
+function withRequestIdempotency<T extends { idempotencyKey?: string | null }>(headerValue: unknown, body: T): T {
+  const idempotencyKey = resolveRequestIdempotencyKey(headerValue, body.idempotencyKey);
+  return idempotencyKey === undefined ? body : { ...body, idempotencyKey };
 }
 
 async function createOutlineAcceptanceSeed(

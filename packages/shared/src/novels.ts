@@ -929,15 +929,18 @@ export interface CreateNovelDraftRequest {
 
 export interface GenerateDirectionsRequest {
   regenerateReason?: string | null;
+  idempotencyKey?: string | null;
 }
 
 export interface FuseDirectionsRequest {
   versionIds: string[];
   reason?: string | null;
+  idempotencyKey?: string | null;
 }
 
 export interface OptimizeDirectionRequest {
   instruction?: string | null;
+  idempotencyKey?: string | null;
 }
 
 export interface EditDirectionCandidateRequest {
@@ -961,6 +964,7 @@ export interface AdoptDirectionRequest {
 
 export interface GenerateStructureAssetRequest {
   regenerateReason?: string | null;
+  idempotencyKey?: string | null;
 }
 
 export interface EditStructureAssetRequest {
@@ -995,6 +999,7 @@ export interface GenerateTrialRequest {
   trialRunId?: string | null;
   selectedCandidateId?: string | null;
   regenerateReason?: string | null;
+  idempotencyKey?: string | null;
 }
 
 export interface ConfirmTrialRequest {
@@ -1009,17 +1014,18 @@ export interface GenerateBodyBatchRequest {
   expectedStrategySnapshotVersion: number;
   startChapterNo?: number | null;
   endChapterNo?: number | null;
-  idempotencyKey: string;
+  idempotencyKey?: string | null;
 }
 
 export interface GenerateChapterBodyRequest {
   strategySnapshotId: string;
   expectedStrategySnapshotVersion: number;
   reason?: string | null;
+  idempotencyKey?: string | null;
 }
 
 export interface StartFullReviewRequest {
-  idempotencyKey: string;
+  idempotencyKey?: string | null;
   expectedNovelVersion?: string | null;
   reviewPolicyVersionId?: string | null;
 }
@@ -1066,17 +1072,20 @@ export interface RewriteChapterRequest {
   instruction?: string | null;
   reason?: string | null;
   currentContentVersionId?: string | null;
+  idempotencyKey?: string | null;
 }
 
 export interface AdoptChapterContentVersionRequest {
   reason?: string | null;
   currentContentVersionId?: string | null;
   pageVersionSnapshot?: unknown;
+  idempotencyKey?: string | null;
 }
 
 export interface CreateImpactAssessmentRequest {
   reason?: string | null;
   currentContentVersionId?: string | null;
+  idempotencyKey?: string | null;
 }
 
 export interface ResolveImpactCaseRequest {

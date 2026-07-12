@@ -19,6 +19,7 @@
     "test:governance": "node --test scripts/remediation-governance.test.mjs",
     "test:dom:admin": "npm run build -w @ai-shortvideo/shared && npm test -w admin-web && npm run test:dom -w admin-web",
     "test:rp01c": "env -u DATABASE_URL -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL -u DEEPSEEK_MODEL -u DEEPSEEK_STRUCTURE_MODEL -u DEEPSEEK_REASONER_MODEL -u DEEPSEEK_TIMEOUT_MS -u DEEPSEEK_MAX_RETRIES NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=/dev/null sh -c 'npm run build -w @ai-shortvideo/shared && npm run prisma:generate -w @ai-shortvideo/api && npm run test:rp01c -w @ai-shortvideo/api'",
+    "test:rp02a": "env -u DATABASE_URL -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL -u DEEPSEEK_MODEL -u DEEPSEEK_STRUCTURE_MODEL -u DEEPSEEK_REASONER_MODEL -u DEEPSEEK_TIMEOUT_MS -u DEEPSEEK_MAX_RETRIES NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=/dev/null sh -c 'npm run build -w @ai-shortvideo/shared && npm run prisma:generate -w @ai-shortvideo/api && cd apps/api && ../../node_modules/.bin/tsx --test test/rp02a/**/*.test.ts'",
     "e2e:rp01a": "npm run build -w @ai-shortvideo/shared && npm run prisma:generate -w @ai-shortvideo/api && node scripts/e2e/run-playwright-backend-e2e.mjs",
     "test:e2e:rp01a": "node --test scripts/e2e/*.test.mjs"
   },

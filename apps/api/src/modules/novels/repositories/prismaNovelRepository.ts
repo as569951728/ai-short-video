@@ -35,6 +35,8 @@ import {
   type ChapterFeatureCardRecord,
   type ChapterWordTargetUpdateInput,
   type ChapterWorkbenchRecord,
+  type ClaimGenerationTaskInput,
+  type ClaimGenerationTaskResult,
   type CompletionConfirmationInput,
   type CompletionDecisionRecord,
   type ConfirmedCompletionRecord,
@@ -251,7 +253,7 @@ export class PrismaNovelRepository implements NovelRepository {
         novelId,
         taskType: 'novel_direction_generate',
         status: {
-          in: [PrismaTaskStatus.QUEUED, PrismaTaskStatus.PROCESSING, PrismaTaskStatus.WAITING_CONFIRMATION]
+          in: [PrismaTaskStatus.QUEUED, PrismaTaskStatus.PROCESSING]
         }
       },
       orderBy: {
@@ -270,6 +272,13 @@ export class PrismaNovelRepository implements NovelRepository {
       }
     });
 
+    return task ? mapGenerationTask(task) : null;
+  }
+
+  async findTaskByIdempotencyToken(tenantId: string, taskType: string, idempotencyToken: string) {
+    const task = await this.prisma.generationTask.findFirst({
+      where: { tenantId, taskType, idempotencyToken }
+    });
     return task ? mapGenerationTask(task) : null;
   }
 
@@ -302,6 +311,117 @@ export class PrismaNovelRepository implements NovelRepository {
     return tasks.map(mapGenerationTask);
   }
 
+  async assertProviderActionSupported(taskType: string) {
+    const supported = new Set([
+      'novel_direction_generate',
+      'novel_direction_fuse',
+      'novel_direction_optimize',
+      'novel_setting_generate',
+      'novel_outline_generate',
+      'stage_outline_generate',
+      'chapter_plan_generate',
+      'trial_writing_generate',
+      'trial_followup_generate'
+    ]);
+    if (!supported.has(taskType)) {
+      throw new BusinessError(ErrorCode.ConfigMissing, 'Prisma 小说后半写链尚未实现，provider 调用已在 task claim 前阻断。', {
+        taskType,
+        capability: 'prisma_novel_provider_finalize'
+      });
+    }
+  }
+
+  async claimGenerationTask(input: ClaimGenerationTaskInput): Promise<ClaimGenerationTaskResult> {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        return await this.prisma.$transaction(async (tx) => {
+          const idempotentTask = await tx.generationTask.findFirst({
+            where: {
+              tenantId: input.tenantId,
+              taskType: input.taskType,
+              idempotencyToken: input.idempotencyToken
+            }
+          });
+          if (idempotentTask) {
+            return {
+              outcome: idempotentTask.requestHash === input.requestHash ? 'reused' : 'idempotency_conflict',
+              task: mapGenerationTask(idempotentTask)
+            };
+          }
+
+          const activeTask = await tx.generationTask.findFirst({
+            where: { tenantId: input.tenantId, activeClaimKey: input.activeClaimKey }
+          });
+          if (activeTask) return { outcome: 'active_conflict', task: mapGenerationTask(activeTask) };
+
+          const task = await tx.generationTask.create({
+            data: {
+              tenantId: input.tenantId,
+              novelId: input.novelId,
+              taskType: input.taskType,
+              objectType: input.objectType,
+              objectId: input.objectId,
+              status: PrismaTaskStatus.PROCESSING,
+              statusNote: '生成任务已创建，正在调用模型。',
+              progress: 0,
+              currentStep: '正在调用模型',
+              triggerSource: 'manual',
+              sourceVersionRefs: toJsonObject(input.sourceVersionRefs),
+              conflictScope: input.conflictScope,
+              conflictKey: input.conflictKey,
+              idempotencyToken: input.idempotencyToken,
+              requestHash: input.requestHash,
+              activeClaimKey: input.activeClaimKey,
+              inputSummary: input.inputSummary,
+              startedAt: input.now,
+              createdBy: input.context.userId,
+              createdAt: input.now,
+              updatedAt: input.now,
+              metadata: { requestId: input.context.requestId }
+            }
+          });
+          await createTaskEvent(tx, {
+            task,
+            eventType: 'task_claimed',
+            message: '生成任务已创建，正在调用模型。',
+            progress: 0,
+            requestId: input.context.requestId,
+            createdAt: input.now
+          });
+          return { outcome: 'created', task: mapGenerationTask(task) };
+        });
+      } catch (error) {
+        if (!isPrismaUniqueConstraintError(error)) throw error;
+
+        const idempotentTask = await this.prisma.generationTask.findFirst({
+          where: {
+            tenantId: input.tenantId,
+            taskType: input.taskType,
+            idempotencyToken: input.idempotencyToken
+          }
+        });
+        if (idempotentTask) {
+          return {
+            outcome: idempotentTask.requestHash === input.requestHash ? 'reused' : 'idempotency_conflict',
+            task: mapGenerationTask(idempotentTask)
+          };
+        }
+
+        const activeTask = await this.prisma.generationTask.findFirst({
+          where: { tenantId: input.tenantId, activeClaimKey: input.activeClaimKey }
+        });
+        if (activeTask) return { outcome: 'active_conflict', task: mapGenerationTask(activeTask) };
+        if (attempt === 1) {
+          throw new BusinessError(ErrorCode.ConflictTaskExists, '并发任务 claim 正在收敛，请重试当前请求。', {
+            taskType: input.taskType
+          });
+        }
+      }
+    }
+
+    throw new BusinessError(ErrorCode.InternalError, '生成任务 claim 未返回结果。');
+  }
+
   async findActiveTaskByConflict(tenantId: string, conflictScope: string, conflictKey: string) {
     const task = await this.prisma.generationTask.findFirst({
       where: {
@@ -309,7 +429,7 @@ export class PrismaNovelRepository implements NovelRepository {
         conflictScope,
         conflictKey,
         status: {
-          in: [PrismaTaskStatus.QUEUED, PrismaTaskStatus.PROCESSING, PrismaTaskStatus.WAITING_CONFIRMATION]
+          in: [PrismaTaskStatus.QUEUED, PrismaTaskStatus.PROCESSING]
         }
       },
       orderBy: {
@@ -382,14 +502,17 @@ export class PrismaNovelRepository implements NovelRepository {
 
   async createDirectionCandidates(input: DirectionCreationInput): Promise<CreatedDirectionCandidatesRecord> {
     return this.prisma.$transaction(async (tx) => {
-      const task = await tx.generationTask.create({
-        data: createDirectionTaskData({
-          input,
-          taskType: input.taskType,
+      const task = await transitionClaimedTask(tx, {
+        taskId: input.task.id,
+        tenantId: input.context.tenantId,
+        data: {
           status: PrismaTaskStatus.WAITING_CONFIRMATION,
+          statusNote: '模型服务已生成方向候选，等待用户确认。',
+          progress: 100,
           currentStep: '方向候选已生成，等待选择',
-          now: input.now
-        })
+          activeClaimKey: null,
+          updatedAt: input.now
+        }
       });
       const firstVersionNo = await getNextDirectionVersionNo(tx, input.context.tenantId, input.novel.id);
       const versions = [];
@@ -430,7 +553,7 @@ export class PrismaNovelRepository implements NovelRepository {
       }
 
       const updatedTask = await tx.generationTask.update({
-        where: { id: task.id },
+        where: { id: task.id, tenantId: input.context.tenantId },
         data: {
           resultObjectType: 'direction',
           resultObjectId: 'direction',
@@ -464,15 +587,22 @@ export class PrismaNovelRepository implements NovelRepository {
 
   async createDirectionRevision(input: DirectionRevisionInput): Promise<CreatedDirectionRevisionRecord> {
     return this.prisma.$transaction(async (tx) => {
-      const task = await tx.generationTask.create({
-        data: createDirectionTaskData({
-          input,
-          taskType: input.taskType,
-          status: PrismaTaskStatus.WAITING_CONFIRMATION,
-          currentStep: getDirectionRevisionTaskStep(input.taskType),
-          now: input.now
-        })
-      });
+      const task = input.task
+        ? await transitionClaimedTask(tx, {
+            taskId: input.task.id,
+            tenantId: input.context.tenantId,
+            data: {
+              status: PrismaTaskStatus.WAITING_CONFIRMATION,
+              statusNote: '模型服务已生成方向候选，等待用户确认。',
+              progress: 100,
+              currentStep: getDirectionRevisionTaskStep(input.taskType),
+              activeClaimKey: null,
+              updatedAt: input.now
+            }
+          })
+        : await tx.generationTask.create({
+            data: createDirectionTaskData({ input, taskType: input.taskType, status: PrismaTaskStatus.WAITING_CONFIRMATION, currentStep: getDirectionRevisionTaskStep(input.taskType), now: input.now })
+          });
       const versionNo = await getNextDirectionVersionNo(tx, input.context.tenantId, input.novel.id);
       const version = await tx.creativeVersion.create({
         data: {
@@ -505,7 +635,7 @@ export class PrismaNovelRepository implements NovelRepository {
       });
 
       const updatedTask = await tx.generationTask.update({
-        where: { id: task.id },
+        where: { id: task.id, tenantId: input.context.tenantId },
         data: {
           resultObjectType: 'direction',
           resultObjectId: 'direction',
@@ -712,25 +842,21 @@ export class PrismaNovelRepository implements NovelRepository {
 
   async createStructureCandidate(input: StructureCreationInput): Promise<CreatedStructureAssetRecord> {
     return this.prisma.$transaction(async (tx) => {
-      const task = input.reservedTaskId
-        ? await tx.generationTask.update({
-            where: { id: input.reservedTaskId },
+      const task = input.task
+        ? await transitionClaimedTask(tx, {
+            taskId: input.task.id,
+            tenantId: input.context.tenantId,
             data: {
               status: PrismaTaskStatus.WAITING_CONFIRMATION,
               statusNote: `模型服务已生成 ${input.asset.objectType} 候选`,
               progress: 100,
               currentStep: getStructureGenerateStep(input.asset.objectType),
+              activeClaimKey: null,
               updatedAt: input.now
             }
           })
         : await tx.generationTask.create({
-            data: createStructureTaskData({
-              input,
-              taskType: input.taskType,
-              status: PrismaTaskStatus.WAITING_CONFIRMATION,
-              currentStep: getStructureGenerateStep(input.asset.objectType),
-              now: input.now
-            })
+            data: createStructureTaskData({ input, taskType: input.taskType, status: PrismaTaskStatus.WAITING_CONFIRMATION, currentStep: getStructureGenerateStep(input.asset.objectType), now: input.now })
           });
       const versionNo = await getNextVersionNo(tx, input.context.tenantId, input.novel.id, input.asset.objectType);
       const version = await tx.creativeVersion.create({
@@ -761,7 +887,7 @@ export class PrismaNovelRepository implements NovelRepository {
       });
 
       const updatedTask = await tx.generationTask.update({
-        where: { id: task.id },
+        where: { id: task.id, tenantId: input.context.tenantId },
         data: {
           resultObjectType: input.asset.objectType,
           resultObjectId: input.asset.objectType,
@@ -792,8 +918,12 @@ export class PrismaNovelRepository implements NovelRepository {
 
   async failTask(input: TaskFailureInput): Promise<GenerationTaskRecord> {
     return this.prisma.$transaction(async (tx) => {
-      const task = await tx.generationTask.update({
-        where: { id: input.task.id },
+      const transition = await tx.generationTask.updateMany({
+        where: {
+          id: input.task.id,
+          tenantId: input.context.tenantId,
+          status: PrismaTaskStatus.PROCESSING
+        },
         data: {
           status: PrismaTaskStatus.FAILED,
           statusNote: input.statusNote ?? '模型生成失败，请查看原因后重试。',
@@ -801,9 +931,19 @@ export class PrismaNovelRepository implements NovelRepository {
           failureCategory: input.failureCategory ?? 'model_generation_failed',
           errorCode: input.errorCode,
           errorMessage: input.errorMessage,
+          activeClaimKey: null,
           finishedAt: input.now,
           updatedAt: input.now
         }
+      });
+      if (transition.count !== 1) {
+        const current = await tx.generationTask.findFirst({
+          where: { id: input.task.id, tenantId: input.context.tenantId }
+        });
+        return current ? mapGenerationTask(current) : input.task;
+      }
+      const task = await tx.generationTask.findFirstOrThrow({
+        where: { id: input.task.id, tenantId: input.context.tenantId }
       });
       await createTaskEvent(tx, {
         task,
@@ -1204,14 +1344,16 @@ export class PrismaNovelRepository implements NovelRepository {
   async cancelTask(input: TaskCancelInput): Promise<CancelledTaskRecord> {
     return this.prisma.$transaction(async (tx) => {
       const previousStatus = input.task.status;
-      const task = await tx.generationTask.update({
-        where: { id: input.task.id },
+      const task = await transitionCancellableTask(tx, {
+        taskId: input.task.id,
+        tenantId: input.context.tenantId,
         data: {
           status: PrismaTaskStatus.CANCELLED,
           statusNote: '任务已取消，不会写入正式资产。',
           currentStep: '任务已取消',
           cancelRequestedAt: input.now,
           cancelReason: input.reason,
+          activeClaimKey: null,
           finishedAt: input.now,
           updatedAt: input.now
         }
@@ -1343,14 +1485,19 @@ export class PrismaNovelRepository implements NovelRepository {
   async createTrialChapterOneCandidates(input: TrialCandidateCreationInput): Promise<CreatedTrialCandidatesRecord> {
     return this.prisma.$transaction(async (tx) => {
       const trialRunId = createId('trial');
-      const task = await tx.generationTask.create({
-        data: createTrialTaskData({
-          input,
-          taskType: 'trial_writing_generate',
-          trialRunId,
+      const task = await transitionClaimedTask(tx, {
+        taskId: input.task.id,
+        tenantId: input.context.tenantId,
+        data: {
+          status: PrismaTaskStatus.WAITING_CONFIRMATION,
+          statusNote: '模型服务已生成试写结果，等待用户确认。',
+          progress: 100,
           currentStep: '第1章候选已生成，等待选择',
-          sourceVersionRefs: input.sourceVersionRefs
-        })
+          resultObjectType: 'trial_run',
+          resultObjectId: trialRunId,
+          activeClaimKey: null,
+          updatedAt: input.now
+        }
       });
       const trialRun = await tx.trialRun.create({
         data: {
@@ -1415,7 +1562,7 @@ export class PrismaNovelRepository implements NovelRepository {
         );
       }
       const updatedTask = await tx.generationTask.update({
-        where: { id: task.id },
+        where: { id: task.id, tenantId: input.context.tenantId },
         data: {
           resultObjectType: 'trial_run',
           resultObjectId: trialRunId,
@@ -1485,7 +1632,7 @@ export class PrismaNovelRepository implements NovelRepository {
         : null;
       if (sourceTask?.status === PrismaTaskStatus.WAITING_CONFIRMATION) {
         const oldTask = await tx.generationTask.update({
-          where: { id: sourceTask.id },
+          where: { id: sourceTask.id, tenantId: input.context.tenantId },
           data: {
             status: PrismaTaskStatus.COMPLETED,
             statusNote: '用户已选择第1章候选',
@@ -1506,19 +1653,17 @@ export class PrismaNovelRepository implements NovelRepository {
       }
 
       const sourceVersionRefs = createTrialFollowupSourceVersionRefs(input.novel, input.selectedCandidate.id);
-      const task = await tx.generationTask.create({
+      const task = await transitionClaimedTask(tx, {
+        taskId: input.task.id,
+        tenantId: input.context.tenantId,
         data: {
-          ...createTrialTaskData({
-            input,
-            taskType: 'trial_followup_generate',
-            trialRunId: input.trialRun.id,
-            currentStep: '已选择第1章候选，正在生成第2-3章和试写总评',
-            sourceVersionRefs
-          }),
           status: PrismaTaskStatus.PROCESSING,
           statusNote: '正在调用模型继续试写第2-3章并生成试写总评，可能需要 1-3 分钟，可以稍后回来查看。',
           progress: 18,
+          sourceVersionRefs: toJsonObject(sourceVersionRefs),
           resultVersionId: input.selectedCandidate.id,
+          resultObjectType: 'trial_run',
+          resultObjectId: input.trialRun.id,
           outputSummary: null,
           updatedAt: input.now
         }
@@ -1589,7 +1734,7 @@ export class PrismaNovelRepository implements NovelRepository {
       });
       const oldTask = input.trialRun.sourceTaskId && input.trialRun.sourceTaskId !== input.task.id
         ? await tx.generationTask.update({
-            where: { id: input.trialRun.sourceTaskId },
+            where: { id: input.trialRun.sourceTaskId, tenantId: input.context.tenantId },
             data: {
               status: PrismaTaskStatus.COMPLETED,
               statusNote: '用户已选择第1章候选',
@@ -1612,14 +1757,16 @@ export class PrismaNovelRepository implements NovelRepository {
       }
 
       const sourceVersionRefs = createTrialFollowupSourceVersionRefs(input.novel, input.selectedCandidate.id);
-      const task = await tx.generationTask.update({
-        where: { id: input.task.id },
+      const task = await transitionClaimedTask(tx, {
+        taskId: input.task.id,
+        tenantId: input.context.tenantId,
         data: {
           status: PrismaTaskStatus.WAITING_CONFIRMATION,
           statusNote: '模型服务已生成试写结果，等待用户确认。',
           progress: 100,
           currentStep: input.review.trialResult === 'blocked' ? '第2章硬门槛未通过，试写暂停' : '前三章试写总评已生成，等待确认',
           sourceVersionRefs: toJsonObject(sourceVersionRefs),
+          activeClaimKey: null,
           updatedAt: input.now
         }
       });
@@ -1747,7 +1894,7 @@ export class PrismaNovelRepository implements NovelRepository {
       });
       reviewReports.push(mapReviewReport(trialReview));
       const updatedTask = await tx.generationTask.update({
-        where: { id: task.id },
+        where: { id: task.id, tenantId: input.context.tenantId },
         data: {
           resultObjectType: 'trial_run',
           resultObjectId: input.trialRun.id,
@@ -1764,6 +1911,7 @@ export class PrismaNovelRepository implements NovelRepository {
           totalScore: input.review.totalScore,
           trialResult: input.review.trialResult,
           reviewReportId: trialReview.id,
+          sourceTaskId: task.id,
           updatedAt: input.now,
           metadata: {
             ...toRecord(input.trialRun.metadata),
@@ -1933,7 +2081,7 @@ export class PrismaNovelRepository implements NovelRepository {
         : null;
       if (sourceTask?.status === PrismaTaskStatus.WAITING_CONFIRMATION) {
         const completedTask = await tx.generationTask.update({
-          where: { id: sourceTask.id },
+          where: { id: sourceTask.id, tenantId: input.context.tenantId },
           data: {
             status: PrismaTaskStatus.COMPLETED,
             statusNote: isReturnUpstream ? '用户已退回试写' : '用户已确认试写',
@@ -2402,6 +2550,64 @@ function mapCreativeVersion(version: {
   };
 }
 
+async function transitionClaimedTask(
+  tx: Prisma.TransactionClient,
+  input: {
+    taskId: string;
+    tenantId: string;
+    data: Prisma.GenerationTaskUpdateManyMutationInput;
+  }
+) {
+  const transition = await tx.generationTask.updateMany({
+    where: {
+      id: input.taskId,
+      tenantId: input.tenantId,
+      status: PrismaTaskStatus.PROCESSING
+    },
+    data: input.data
+  });
+  if (transition.count !== 1) {
+    const current = await tx.generationTask.findFirst({
+      where: { id: input.taskId, tenantId: input.tenantId }
+    });
+    throw new BusinessError(ErrorCode.GateBlocked, '生成任务已不在可写入状态，模型结果已丢弃。', {
+      taskId: input.taskId,
+      status: current ? fromPrismaEnum<TaskStatus>(current.status) : 'not_found'
+    });
+  }
+  return tx.generationTask.findFirstOrThrow({
+    where: { id: input.taskId, tenantId: input.tenantId }
+  });
+}
+
+async function transitionCancellableTask(
+  tx: Prisma.TransactionClient,
+  input: {
+    taskId: string;
+    tenantId: string;
+    data: Prisma.GenerationTaskUpdateManyMutationInput;
+  }
+) {
+  const transition = await tx.generationTask.updateMany({
+    where: {
+      id: input.taskId,
+      tenantId: input.tenantId,
+      status: { in: [PrismaTaskStatus.QUEUED, PrismaTaskStatus.PROCESSING, PrismaTaskStatus.WAITING_CONFIRMATION] }
+    },
+    data: input.data
+  });
+  if (transition.count !== 1) {
+    throw new BusinessError(ErrorCode.TaskNotRetryable, '当前任务不能取消', { taskId: input.taskId });
+  }
+  return tx.generationTask.findFirstOrThrow({
+    where: { id: input.taskId, tenantId: input.tenantId }
+  });
+}
+
+function isPrismaUniqueConstraintError(error: unknown): error is { code: 'P2002' } {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2002';
+}
+
 function mapGenerationTask(task: {
   id: string;
   tenantId: string;
@@ -2417,6 +2623,9 @@ function mapGenerationTask(task: {
   sourceVersionRefs: unknown;
   conflictScope: string | null;
   conflictKey: string | null;
+  idempotencyToken: string | null;
+  requestHash: string | null;
+  activeClaimKey: string | null;
   inputSummary: string | null;
   outputSummary: string | null;
   resultVersionId: string | null;
@@ -2451,6 +2660,9 @@ function mapGenerationTask(task: {
     sourceVersionRefs: task.sourceVersionRefs,
     conflictScope: task.conflictScope,
     conflictKey: task.conflictKey,
+    idempotencyToken: task.idempotencyToken,
+    requestHash: task.requestHash,
+    activeClaimKey: task.activeClaimKey,
     inputSummary: task.inputSummary,
     outputSummary: task.outputSummary,
     resultVersionIds: task.resultVersionId ? [task.resultVersionId] : [],
