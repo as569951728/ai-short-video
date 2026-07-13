@@ -52,7 +52,7 @@ flowchart TD
 | --- | --- | --- | --- |
 | W0 | RP-00A → RP-00B | 状态、Git、证据模板、SLA 与临时文件归因 | 冻结 |
 | W1 | RP-01A/RP-01B/RP-01D，RP-01A → RP-01C；RP-09A 至 RP-09G 按依赖启动审计 | 可重复浏览器 E2E、fixture、真实测试库入口和遗漏领域审计 | 冻结 |
-| W2 | RP-02A → RP-02B1 → RP-02B2a0 → RP-02B2a → RP-02B2b → RP-02B2c → RP-02B3 → RP-02C；RP-03A → RP-03B → RP-03C → RP-03D | 持久任务平台与小说真实数据库链 | 冻结 |
+| W2 | RP-02A → RP-02B1 → RP-02B2a0 → RP-02B2a1 → RP-02B2a2 → RP-02B2a3 → RP-02B2a4 → RP-02B2a5 → RP-02B2b → RP-02B2c → RP-02B3 → RP-02C；RP-03A → RP-03B → RP-03C → RP-03D | 持久任务平台与小说真实数据库链 | 冻结 |
 | W3 | RP-04A → RP-04B → RP-04C → RP-04D；RP-05A → RP-05B/RP-05C → RP-05D；完成后 RP-09H1 | 小说内容质量、用户交互闭环和小说/任务热点文件拆分 | 冻结 |
 | W4 | RP-06A → RP-06B → RP-06C | 真实 DeepSeek + MySQL 小规模完本 | 冻结 |
 | W5 | RP-07A → RP-07B → RP-07C → RP-07D；RP-08A → RP-08B → RP-08C → RP-08D → RP-08E → RP-08F；完成后 RP-09H2 | 视频数据库与真实音频/字幕/MP4 金丝雀 | 冻结 |
@@ -77,8 +77,12 @@ flowchart TD
 | RP-02A | 小说 AI Task SSOT、provider 前原子 preclaim、幂等与冲突的 E3 阶段；首请求快速返回/worker 与真实 DB 并发不在本包关闭 | RP-01C | RMD-TASK-001（保持 partial/implemented_pending_verification，等待 RP-02B1-B3 与 E6） |
 | RP-02B1 | ExecutionEnvelope、lease/fencing 合同与仓储原语 | RP-02A | RMD-TASK-002、RMD-TASK-003（保持 open/partial） |
 | RP-02B2a0 | high/blocking 试写 `confirmRisk/selectionReason` 从 Admin 到同步 provider 前校验的真实全链 | RP-02B1 | 不新增异步 transport/worker；缺确认或空原因时 task/provider/asset=0；独立 API+service+DOM 验收 |
-| RP-02B2a | 15-action dispatcher、权威重载、严格 provider 输入 ABI、provider checkpoint、双 stale gate、成功/失败原子 fenced terminal | RP-02B2a0 | RMD-TASK-002 保持 partial；RMD-TASK-003 保持 open；不切异步 HTTP/admin；retry child 不执行 provider，只允许终态失败 `RETRY_NOT_AVAILABLE` |
-| RP-02B2b | queued claim、HTTP 202、服务端 capability、worker lifecycle/heartbeat/graceful shutdown | RP-02B2a | RMD-TASK-002 保持 partial；RMD-TASK-003 保持 open；不改 admin transport；gate 默认 off |
+| RP-02B2a1 | 15-action registry 接管同步生产调用，provider public ABI 清除 raw entity/cast，公开 retry projection/API 先行冻结，并建立真实 workflow package gate | RP-02B2a0 | 原 B2a 单包已失效；本包不启用 leased provider；provider-backed retry 固定 409/零 child |
+| RP-02B2a2 | 可信 actor、authoritative clock、canonical envelope、权威重载与 provider 前 stale gate | RP-02B2a1 | authority 缺失或变化必须 provider/asset=0；不启用 leased provider |
+| RP-02B2a3 | expectedPhase CAS、attempt 时机、原子 fail-safe 与历史 retry child provider 前 fencing | RP-02B2a2 | 两种 repository 的正常 leased action 继续 provider=0，直到对应 finalize 包完成 |
+| RP-02B2a4 | repository-owned capability 仅放行 InMemory 15 action，并完成第二 stale gate与资产/receipt/task/event/oplog 原子 finalize | RP-02B2a3 | leased 候选只对 deterministic harness 可见；Prisma 全 disabled，不外推真实 DB |
+| RP-02B2a5 | Prisma 9 action fenced finalize、6 unsupported preclaim/provider 零调用与 B2a 阶段关闭证据 | RP-02B2a4 | RMD-TASK-002 保持 partial；RMD-TASK-003 保持 open；真实 MySQL/多进程仍待 E6 |
+| RP-02B2b | queued claim、HTTP 202、服务端 capability、worker lifecycle/heartbeat/graceful shutdown | RP-02B2a5 | RMD-TASK-002 保持 partial；RMD-TASK-003 保持 open；不改 admin transport；gate 默认 off |
 | RP-02B2c | admin 真实 taskId、服务端 scope、IndexedDB/Web Locks 原子 intent、capability 快照二次门禁、scope suspend/resume、精确轮询、刷新/多标签恢复与 DOM transport | RP-02B2b | RMD-TASK-002 保持 partial；RMD-TASK-003 保持 open；能力未知、安全上下文缺失、scope 不匹配或原子 store 不可用时 POST=0；不得提前进入 implemented_pending_verification |
 | RP-02B3 | restart recovery、真实 retry、poison/unknown outcome 与 deterministic 故障注入 | RP-02B2c | RMD-TASK-002、RMD-TASK-003（E3 后仍等待 RP-01D E6） |
 | RP-02C | cancel 语义、迟到结果和前端统一投影 | RP-02B3 | RMD-TASK-004、RMD-TASK-005 |

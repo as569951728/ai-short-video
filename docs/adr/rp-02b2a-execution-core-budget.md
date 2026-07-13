@@ -1,6 +1,6 @@
 # RP-02B2a 执行核心单包预算 ADR
 
-status: template_pending_implementation_counts
+status: superseded_before_commit
 package_id: RP-02B2a
 exceeded_budget: changed_files
 actual_files: 23
@@ -9,14 +9,10 @@ split_reason: Execution core, existing retry route regression, and its remote CI
 owner: MC
 valid_until: 2026-08-31
 
-本文件是 `RP-02B2a` 实现提交的同 diff ADR 模板。授权资产提交只冻结字段和理由，不构成对未来实际计数的提前批准。
+本文件曾是 `RP-02B2a` 原 23/2000 单包的同 diff ADR 模板。正式生产链复核证明单包无法在预算内诚实完成，MC 已撤销原授权；当前 13-path partial diff 不得提交，本 ADR 不得作为任何后续实现的治理 override。
 
-研发在暂存实现前必须把 `status` 改为 `ready`，并把 `actual_files`、`actual_net_additions` 更新为相对授权基线的真实计数；若超过 `23 files / 2,000 net additions`，必须停工并由 MC 重新拆包裁决。实现 diff 必须实际修改本文件，否则不得作为治理放行证据。专属远程 workflow 必须按 PR/push 的同一 `BASE/HEAD` NUL-safe 发现并传入本 ADR，同时机器验证 `status: ready`；无参 budget、fallback diff、未传 ADR、非 ready 状态或计数不符都必须失败。
+后续实现只允许使用 `rp-02b2a1-*` 至 `rp-02b2a5-*` 的独立 ADR。任何流程把本文件重新改为 `ready`、传给 package gate 或用其 23/2000 计数放行，都必须失败。
 
-该 ADR 只允许以下不可分割增项：
+以下内容仅是已撤销单包的历史记录，不是当前允许写集：当时曾计划加入 retry route 回归、远程 workflow 和本 ADR。该计划未通过生产链复核，任何工具或人员不得从这些历史文字恢复授权。
 
-1. `apps/api/src/modules/novels/novelRoutes.test.ts`：固定 provider-backed retry 投影、409 和零副作用回归。
-2. `.github/workflows/rp01c-fixtures.yml`：让 B2a fixture 和 B2a0 Admin/DOM 回归在远程 clean checkout 可达。
-3. 本 ADR 自身。
-
-不得借此加入 B2b/B2c/B3、HTTP 202、Admin transport、真实 DB/provider/media 或其他业务范围。
+本文件只用于证明旧授权已失效。不得借此放行任何代码、B2b/B2c/B3、HTTP 202、Admin transport、真实 DB/provider/media 或其他业务范围。
