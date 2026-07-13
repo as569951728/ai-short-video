@@ -62,6 +62,9 @@ import {
   type CancelledTaskRecord,
   type ClaimGenerationTaskInput,
   type ClaimGenerationTaskResult,
+  type HashedSafeResultReceipt,
+  type LeasedTaskFailure,
+  type ObservedTaskLease,
   type ChapterContentVersionRecord,
   type ChapterFeatureCardRecord,
   type ChapterWorkbenchRecord,
@@ -96,6 +99,7 @@ import {
   type VideoReadinessSnapshotRecord,
   normalizeDraftRequest
 } from '../domain/novelDomain.js';
+import { verifyHashedSafeResultReceipt } from '../domain/executionContract.js';
 import { BusinessError } from '../../../shared/errors.js';
 
 export function createInMemoryNovelRepository(): NovelRepository & {
@@ -314,8 +318,9 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       );
       if (activeTask) return { outcome: 'active_conflict', task: activeTask };
 
+      const taskId = nextId('task');
       const task: GenerationTaskRecord = {
-        id: nextId('task'),
+        id: taskId,
         tenantId: input.tenantId,
         novelId: input.novelId,
         taskType: input.taskType,
@@ -332,6 +337,8 @@ export function createInMemoryNovelRepository(): NovelRepository & {
         idempotencyToken: input.idempotencyToken,
         requestHash: input.requestHash,
         activeClaimKey: input.activeClaimKey,
+        policyProfileVersionId: input.policyProfileVersionId,
+        modelRoutingVersion: input.modelRoutingVersion,
         inputSummary: input.inputSummary,
         outputSummary: null,
         resultVersionIds: [],
@@ -349,7 +356,24 @@ export function createInMemoryNovelRepository(): NovelRepository & {
         createdBy: input.context.userId,
         createdAt: input.now,
         updatedAt: input.now,
-        metadata: { requestId: input.context.requestId }
+        metadata: { requestId: input.context.requestId },
+        leaseOwnerId: null,
+        leaseToken: null,
+        leaseExpiresAt: null,
+        lastHeartbeatAt: null,
+        retryCount: 0,
+        maxRetries: 2,
+        executionEnvelopeJson: input.executionEnvelopeJson,
+        providerAttemptId: null,
+        providerAttemptPhase: null,
+        providerDispatchedAt: null,
+        resultReceiptHash: null,
+        rootTaskId: taskId,
+        providerCallBudgetMax: 0,
+        providerCallBudgetUsed: 0,
+        durationDeadlineAt: input.now,
+        costBudgetMicrosMax: 0,
+        costBudgetMicrosUsed: 0
       };
       const event: GenerationTaskEventRecord = {
         id: nextId('event'),
@@ -365,6 +389,88 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       generationTasks.unshift(task);
       generationTaskEvents.push(event);
       return { outcome: 'created', task };
+    },
+
+    async leaseNextQueuedTask(workerId: string, leaseToken: string, now: Date, leaseUntil: Date) {
+      for (const task of generationTasks.filter((item) => item.status === TaskStatus.Queued).sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())) {
+        if (!task.executionEnvelopeJson) {
+          failLegacyQueuedTask(task, now);
+          continue;
+        }
+        if (leaseUntil.getTime() <= now.getTime()) return null;
+        task.status = TaskStatus.Processing;
+        task.statusNote = 'Worker 已领取任务。';
+        task.currentStep = 'worker_leased';
+        task.leaseOwnerId = workerId;
+        task.leaseToken = leaseToken;
+        task.leaseExpiresAt = leaseUntil;
+        task.lastHeartbeatAt = now;
+        task.providerAttemptId = nextId('attempt');
+        task.providerAttemptPhase = 'leased';
+        task.startedAt = task.startedAt ?? now;
+        task.updatedAt = now;
+        appendLeaseEvent(task, 'task_leased', 'Worker 已领取任务。', now);
+        return task;
+      }
+      return null;
+    },
+
+    async heartbeatTask(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, now: Date, leaseUntil: Date) {
+      const task = validLease(tenantId, taskId, leaseOwnerId, leaseToken, now);
+      if (!task || leaseUntil.getTime() <= now.getTime()) return false;
+      task.lastHeartbeatAt = now;
+      task.leaseExpiresAt = leaseUntil;
+      task.updatedAt = now;
+      return true;
+    },
+
+    async finalizeLeasedTask(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, authoritativeNow: Date, result: HashedSafeResultReceipt) {
+      const task = validLease(tenantId, taskId, leaseOwnerId, leaseToken, authoritativeNow);
+      let verified: HashedSafeResultReceipt;
+      try {
+        verified = verifyHashedSafeResultReceipt(result);
+      } catch {
+        return { outcome: 'fenced' as const, task: null };
+      }
+      if (!task || task.resultReceiptHash || verified.receipt.taskId !== task.id || verified.receipt.attemptId !== task.providerAttemptId) return { outcome: 'fenced' as const, task: null };
+      task.status = verified.receipt.status === 'completed' ? TaskStatus.Completed : TaskStatus.WaitingConfirmation;
+      task.statusNote = 'Worker 结果已安全落账。';
+      task.progress = 100;
+      task.currentStep = 'finalized';
+      task.resultObjectType = verified.receipt.resultObjectType;
+      task.resultObjectId = verified.receipt.resultObjectId;
+      task.resultVersionIds = verified.receipt.resultVersionIds;
+      task.outputSummary = `${verified.receipt.safeSummary.resultCount} 个安全结果标识`;
+      task.resultReceiptHash = verified.hash;
+      task.providerAttemptPhase = 'finalizing';
+      task.finishedAt = authoritativeNow;
+      clearLease(task);
+      task.updatedAt = authoritativeNow;
+      appendLeaseEvent(task, 'task_finalized', 'Worker 结果已安全落账。', authoritativeNow);
+      return { outcome: 'applied' as const, task };
+    },
+
+    async failLeasedTask(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, authoritativeNow: Date, failure: LeasedTaskFailure) {
+      const task = validLease(tenantId, taskId, leaseOwnerId, leaseToken, authoritativeNow);
+      if (!task) return { outcome: 'fenced' as const, task: null };
+      applyLeaseFailure(task, failure, authoritativeNow);
+      return { outcome: 'applied' as const, task };
+    },
+
+    async recoverExpiredTask(observed: ObservedTaskLease, authoritativeNow: Date) {
+      const task = generationTasks.find((item) => item.tenantId === observed.tenantId && item.id === observed.taskId);
+      if (!task || task.status !== TaskStatus.Processing || task.leaseOwnerId !== observed.leaseOwnerId || task.leaseToken !== observed.leaseToken
+        || task.leaseExpiresAt?.getTime() !== observed.leaseExpiresAt.getTime() || task.leaseExpiresAt.getTime() > authoritativeNow.getTime()) {
+        return { outcome: 'not_recovered' as const, task: null };
+      }
+      const dispatched = task.providerDispatchedAt !== null;
+      applyLeaseFailure(task, {
+        failureCategory: dispatched ? 'provider_outcome_unknown' : 'worker_lease_expired',
+        errorCode: dispatched ? 'PROVIDER_OUTCOME_UNKNOWN' : 'WORKER_LEASE_EXPIRED',
+        errorMessage: dispatched ? 'Provider outcome is unknown.' : 'Worker lease expired.',
+        statusNote: dispatched ? 'Provider 结果未知，禁止自动重放。' : 'Worker 租约已过期。'
+      }, authoritativeNow, 'task_recovered');
+      return { outcome: 'recovered' as const, task };
     },
 
     async findActiveTaskByConflict(tenantId: string, conflictScope: string, conflictKey: string) {
@@ -2431,9 +2537,10 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async retryTask(input: TaskRetryInput): Promise<RetriedTaskRecord> {
+      const newTaskId = nextId('task');
       const newTask: GenerationTaskRecord = {
         ...input.task,
-        id: nextId('task'),
+        id: newTaskId,
         status: TaskStatus.Queued,
         statusNote: '任务已重新加入队列，等待模型服务执行。',
         progress: 0,
@@ -2451,6 +2558,15 @@ export function createInMemoryNovelRepository(): NovelRepository & {
         cancelReason: null,
         startedAt: null,
         finishedAt: null,
+        leaseOwnerId: null,
+        leaseToken: null,
+        leaseExpiresAt: null,
+        lastHeartbeatAt: null,
+        retryCount: (input.task.retryCount ?? 0) + 1,
+        providerAttemptId: null,
+        providerAttemptPhase: null,
+        providerDispatchedAt: null,
+        resultReceiptHash: null,
         createdBy: input.context.userId,
         createdAt: input.now,
         updatedAt: input.now,
@@ -2611,6 +2727,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     const objectType = options.objectType ?? 'direction';
 
     return {
+      ...legacyExecutionFields(options.taskId, options.input.now),
       id: options.taskId,
       tenantId: options.input.context.tenantId,
       novelId: options.input.novel.id,
@@ -2663,6 +2780,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     resultVersionIds: string[];
   }): GenerationTaskRecord {
     return {
+      ...legacyExecutionFields(options.taskId, options.now),
       id: options.taskId,
       tenantId: options.context.tenantId,
       novelId: options.novel.id,
@@ -2723,6 +2841,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     currentStep: string;
   }): GenerationTaskRecord {
     return {
+      ...legacyExecutionFields(options.taskId, options.input.now),
       id: options.taskId,
       tenantId: options.input.context.tenantId,
       novelId: options.input.novel.id,
@@ -2782,6 +2901,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     sourceVersionRefs: unknown;
   }): GenerationTaskRecord {
     return {
+      ...legacyExecutionFields(options.taskId, options.now),
       id: options.taskId,
       tenantId: options.context.tenantId,
       novelId: options.novel.id,
@@ -3653,6 +3773,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     requestFingerprint: unknown;
   }): GenerationTaskRecord {
     return {
+      ...legacyExecutionFields(options.taskId, options.now),
       id: options.taskId,
       tenantId: options.context.tenantId,
       novelId: options.novel.id,
@@ -3809,8 +3930,10 @@ export function createInMemoryNovelRepository(): NovelRepository & {
   }
 
   function createVirtualVideoReadinessTask(novel: NovelRecord, check: VideoReadinessCheckRecord, context: RequestContext, now: Date): GenerationTaskRecord {
+    const taskId = check.taskId ?? `task_${check.id}`;
     return {
-      id: check.taskId ?? `task_${check.id}`,
+      ...legacyExecutionFields(taskId, now),
+      id: taskId,
       tenantId: context.tenantId,
       novelId: novel.id,
       taskType: 'video_readiness_check',
@@ -3973,6 +4096,69 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     const stored = generationTasks.find((item) => item.id === task.id && item.tenantId === tenantId);
     if (!stored) throw new Error('Claimed generation task is missing');
     return stored;
+  }
+
+  function validLease(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, authoritativeNow: Date) {
+    return generationTasks.find((task) => task.tenantId === tenantId && task.id === taskId && task.status === TaskStatus.Processing
+      && task.leaseOwnerId === leaseOwnerId && task.leaseToken === leaseToken
+      && task.leaseExpiresAt != null && task.leaseExpiresAt.getTime() > authoritativeNow.getTime()) ?? null;
+  }
+
+  function clearLease(task: GenerationTaskRecord) {
+    task.activeClaimKey = null;
+    task.leaseOwnerId = null;
+    task.leaseToken = null;
+    task.leaseExpiresAt = null;
+  }
+
+  function applyLeaseFailure(task: GenerationTaskRecord, failure: { failureCategory: string; errorCode: string; errorMessage: string; statusNote: string }, now: Date, eventType = 'task_failed') {
+    task.status = TaskStatus.Failed;
+    task.statusNote = failure.statusNote;
+    task.failureCategory = failure.failureCategory;
+    task.errorCode = failure.errorCode;
+    task.errorMessage = failure.errorMessage;
+    task.currentStep = 'failed';
+    task.finishedAt = now;
+    task.updatedAt = now;
+    clearLease(task);
+    appendLeaseEvent(task, eventType, failure.statusNote, now);
+  }
+
+  function failLegacyQueuedTask(task: GenerationTaskRecord, now: Date) {
+    applyLeaseFailure(task, {
+      failureCategory: 'worker_payload_unsupported',
+      errorCode: 'WORKER_PAYLOAD_UNSUPPORTED',
+      errorMessage: 'Execution envelope is missing.',
+      statusNote: '旧任务缺少可恢复执行合同，已安全失败。'
+    }, now);
+  }
+
+  function appendLeaseEvent(task: GenerationTaskRecord, eventType: string, message: string, now: Date) {
+    generationTaskEvents.push({ id: nextId('event'), tenantId: task.tenantId, taskId: task.id, status: task.status, eventType, message, progress: task.progress, payload: null, createdAt: now });
+  }
+
+  function legacyExecutionFields(taskId: string, now: Date) {
+    return {
+      policyProfileVersionId: null,
+      modelRoutingVersion: null,
+      leaseOwnerId: null,
+      leaseToken: null,
+      leaseExpiresAt: null,
+      lastHeartbeatAt: null,
+      retryCount: 0,
+      maxRetries: 2,
+      executionEnvelopeJson: null,
+      providerAttemptId: null,
+      providerAttemptPhase: null,
+      providerDispatchedAt: null,
+      resultReceiptHash: null,
+      rootTaskId: taskId,
+      providerCallBudgetMax: 0,
+      providerCallBudgetUsed: 0,
+      durationDeadlineAt: now,
+      costBudgetMicrosMax: 0,
+      costBudgetMicrosUsed: 0
+    } as const;
   }
 
   function cloneNovel(novelId: string): NovelRecord {

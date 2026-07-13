@@ -53,6 +53,16 @@ enum TaskStatus {
   @@map("task_status")
 }
 
+enum ProviderAttemptPhase {
+  LEASED                    @map("leased")
+  PREPARED                  @map("prepared")
+  PROVIDER_CALL_STARTED     @map("provider_call_started")
+  PROVIDER_RESULT_VALIDATED @map("provider_result_validated")
+  FINALIZING                @map("finalizing")
+
+  @@map("provider_attempt_phase")
+}
+
 enum VersionStatus {
   CANDIDATE  @map("candidate")
   CURRENT    @map("current")
@@ -484,10 +494,26 @@ model GenerationTask {
   resultObjectType         String?    @map("result_object_type") @db.VarChar(80)
   resultObjectId           String?    @map("result_object_id") @db.VarChar(80)
   resultVersionId          String?    @map("result_version_id") @db.VarChar(32)
+  resultVersionIdsJson     Json?      @map("result_version_ids_json")
   userAcceptedResult       Boolean    @default(false) @map("user_accepted_result")
   startedAt                DateTime?  @map("started_at")
   finishedAt               DateTime?  @map("finished_at")
   lastHeartbeatAt          DateTime?  @map("last_heartbeat_at")
+  leaseOwnerId             String?    @map("lease_owner_id") @db.VarChar(128)
+  leaseToken               String?    @map("lease_token") @db.VarChar(128)
+  leaseExpiresAt           DateTime?  @map("lease_expires_at")
+  executionEnvelopeJson    Json?      @map("execution_envelope_json")
+  modelRoutingVersion      String?    @map("model_routing_version") @db.VarChar(128)
+  providerAttemptId        String?    @map("provider_attempt_id") @db.VarChar(128)
+  providerAttemptPhase     ProviderAttemptPhase? @map("provider_attempt_phase")
+  providerDispatchedAt     DateTime?  @map("provider_dispatched_at")
+  resultReceiptHash        String?    @map("result_receipt_hash") @db.VarChar(64)
+  rootTaskId               String     @default(cuid()) @map("root_task_id") @db.VarChar(32)
+  providerCallBudgetMax    Int        @default(0) @map("provider_call_budget_max")
+  providerCallBudgetUsed   Int        @default(0) @map("provider_call_budget_used")
+  durationDeadlineAt       DateTime   @default(now()) @map("duration_deadline_at")
+  costBudgetMicrosMax      BigInt     @default(0) @map("cost_budget_micros_max")
+  costBudgetMicrosUsed     BigInt     @default(0) @map("cost_budget_micros_used")
   cancelRequestedAt        DateTime?  @map("cancel_requested_at")
   cancelReason             String?    @map("cancel_reason") @db.Text
   createdBy                String?    @map("created_by") @db.VarChar(32)
@@ -500,6 +526,8 @@ model GenerationTask {
   @@index([tenantId, conflictScope, conflictKey, status])
   @@unique([tenantId, taskType, idempotencyToken])
   @@unique([tenantId, activeClaimKey])
+  @@unique([tenantId, providerAttemptId])
+  @@index([status, leaseExpiresAt, createdAt])
   @@map("generation_task")
 }
 

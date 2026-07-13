@@ -8,10 +8,11 @@ import {
   StageStatus,
   TaskStatus,
   VersionStatus,
-  type StructureAssetContentDTO
+  type StructureAssetContentDTO,
+  type ExecutionEnvelopeV1
 } from '@ai-shortvideo/shared';
 import { getPrismaClient } from '../../../infrastructure/database/prisma.js';
-import type { Prisma } from '../../../generated/prisma/client.js';
+import { Prisma } from '../../../generated/prisma/client.js';
 import {
   DEFAULT_POLICY_PROFILE_VERSION_ID,
   type AdoptedDirectionRecord,
@@ -37,6 +38,9 @@ import {
   type ChapterWorkbenchRecord,
   type ClaimGenerationTaskInput,
   type ClaimGenerationTaskResult,
+  type HashedSafeResultReceipt,
+  type LeasedTaskFailure,
+  type ObservedTaskLease,
   type CompletionConfirmationInput,
   type CompletionDecisionRecord,
   type ConfirmedCompletionRecord,
@@ -93,6 +97,7 @@ import {
   type VideoReadinessSnapshotRecord,
   normalizeDraftRequest
 } from '../domain/novelDomain.js';
+import { verifyHashedSafeResultReceipt } from '../domain/executionContract.js';
 import {
   ImpactLevel as PrismaImpactLevel,
   NovelCreationStage as PrismaNovelCreationStage,
@@ -102,6 +107,7 @@ import {
   StageStatus as PrismaStageStatus,
   StaleLevel as PrismaStaleLevel,
   TaskStatus as PrismaTaskStatus,
+  ProviderAttemptPhase as PrismaProviderAttemptPhase,
   VersionStatus as PrismaVersionStatus
 } from '../../../generated/prisma/enums.js';
 import { BusinessError } from '../../../shared/errors.js';
@@ -354,8 +360,10 @@ export class PrismaNovelRepository implements NovelRepository {
           });
           if (activeTask) return { outcome: 'active_conflict', task: mapGenerationTask(activeTask) };
 
+          const taskId = randomUUID().replaceAll('-', '').slice(0, 32);
           const task = await tx.generationTask.create({
             data: {
+              id: taskId,
               tenantId: input.tenantId,
               novelId: input.novelId,
               taskType: input.taskType,
@@ -367,11 +375,15 @@ export class PrismaNovelRepository implements NovelRepository {
               currentStep: '正在调用模型',
               triggerSource: 'manual',
               sourceVersionRefs: toJsonObject(input.sourceVersionRefs),
+              executionEnvelopeJson: toJsonObject(input.executionEnvelopeJson),
               conflictScope: input.conflictScope,
               conflictKey: input.conflictKey,
               idempotencyToken: input.idempotencyToken,
               requestHash: input.requestHash,
               activeClaimKey: input.activeClaimKey,
+              policyProfileVersionId: input.policyProfileVersionId,
+              modelRoutingVersion: input.modelRoutingVersion,
+              rootTaskId: taskId,
               inputSummary: input.inputSummary,
               startedAt: input.now,
               createdBy: input.context.userId,
@@ -420,6 +432,149 @@ export class PrismaNovelRepository implements NovelRepository {
     }
 
     throw new BusinessError(ErrorCode.InternalError, '生成任务 claim 未返回结果。');
+  }
+
+  async leaseNextQueuedTask(workerId: string, leaseToken: string, now: Date, leaseUntil: Date) {
+    if (leaseUntil.getTime() <= now.getTime()) return null;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const result = await this.prisma.$transaction(async (tx) => {
+        const candidate = await tx.generationTask.findFirst({
+          where: { status: PrismaTaskStatus.QUEUED },
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }]
+        });
+        if (!candidate) return { kind: 'empty' as const };
+        if (!candidate.executionEnvelopeJson) {
+          const failed = await tx.generationTask.updateMany({
+            where: { id: candidate.id, tenantId: candidate.tenantId, status: PrismaTaskStatus.QUEUED, executionEnvelopeJson: { equals: Prisma.DbNull } },
+            data: {
+              status: PrismaTaskStatus.FAILED,
+              statusNote: '旧任务缺少可恢复执行合同，已安全失败。',
+              currentStep: 'failed',
+              failureCategory: 'worker_payload_unsupported',
+              errorCode: 'WORKER_PAYLOAD_UNSUPPORTED',
+              errorMessage: 'Execution envelope is missing.',
+              activeClaimKey: null,
+              finishedAt: now,
+              updatedAt: now
+            }
+          });
+          if (failed.count === 1) {
+            const task = await tx.generationTask.findFirstOrThrow({ where: { id: candidate.id, tenantId: candidate.tenantId } });
+            await createTaskEvent(tx, { task, eventType: 'task_failed', message: task.statusNote ?? 'Legacy task failed.', progress: task.progress, requestId: 'worker-legacy-envelope', createdAt: now });
+          }
+          return { kind: 'retry' as const };
+        }
+        const providerAttemptId = randomUUID();
+        const claimed = await tx.generationTask.updateMany({
+          where: { id: candidate.id, tenantId: candidate.tenantId, status: PrismaTaskStatus.QUEUED, leaseOwnerId: null, leaseToken: null },
+          data: {
+            status: PrismaTaskStatus.PROCESSING,
+            statusNote: 'Worker 已领取任务。',
+            currentStep: 'worker_leased',
+            leaseOwnerId: workerId,
+            leaseToken,
+            leaseExpiresAt: leaseUntil,
+            lastHeartbeatAt: now,
+            providerAttemptId,
+            providerAttemptPhase: PrismaProviderAttemptPhase.LEASED,
+            startedAt: candidate.startedAt ?? now,
+            updatedAt: now
+          }
+        });
+        if (claimed.count !== 1) return { kind: 'retry' as const };
+        const task = await tx.generationTask.findFirstOrThrow({ where: { id: candidate.id, tenantId: candidate.tenantId } });
+        await createTaskEvent(tx, { task, eventType: 'task_leased', message: 'Worker 已领取任务。', progress: task.progress, requestId: `worker:${workerId}`, createdAt: now });
+        return { kind: 'claimed' as const, task: mapGenerationTask(task) };
+      });
+      if (result.kind === 'empty') return null;
+      if (result.kind === 'claimed') return result.task;
+    }
+    return null;
+  }
+
+  async heartbeatTask(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, now: Date, leaseUntil: Date) {
+    if (leaseUntil.getTime() <= now.getTime()) return false;
+    const result = await this.prisma.generationTask.updateMany({
+      where: { tenantId, id: taskId, status: PrismaTaskStatus.PROCESSING, leaseOwnerId, leaseToken, leaseExpiresAt: { gt: now } },
+      data: { lastHeartbeatAt: now, leaseExpiresAt: leaseUntil, updatedAt: now }
+    });
+    return result.count === 1;
+  }
+
+  async finalizeLeasedTask(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, authoritativeNow: Date, result: HashedSafeResultReceipt) {
+    let verified: HashedSafeResultReceipt;
+    try {
+      verified = verifyHashedSafeResultReceipt(result);
+    } catch {
+      return { outcome: 'fenced' as const, task: null };
+    }
+    if (verified.receipt.taskId !== taskId) return { outcome: 'fenced' as const, task: null };
+    return this.prisma.$transaction(async (tx) => {
+      const transition = await tx.generationTask.updateMany({
+        where: {
+          tenantId, id: taskId, status: PrismaTaskStatus.PROCESSING, leaseOwnerId, leaseToken,
+          leaseExpiresAt: { gt: authoritativeNow }, resultReceiptHash: null,
+          providerAttemptId: verified.receipt.attemptId
+        },
+        data: {
+          status: verified.receipt.status === 'completed' ? PrismaTaskStatus.COMPLETED : PrismaTaskStatus.WAITING_CONFIRMATION,
+          statusNote: 'Worker 结果已安全落账。', progress: 100, currentStep: 'finalized',
+          resultObjectType: verified.receipt.resultObjectType, resultObjectId: verified.receipt.resultObjectId,
+          resultVersionId: verified.receipt.resultVersionIds[0] ?? null,
+          resultVersionIdsJson: verified.receipt.resultVersionIds,
+          outputSummary: `${verified.receipt.safeSummary.resultCount} 个安全结果标识`,
+          resultReceiptHash: verified.hash, providerAttemptPhase: PrismaProviderAttemptPhase.FINALIZING,
+          activeClaimKey: null, leaseOwnerId: null, leaseToken: null, leaseExpiresAt: null,
+          finishedAt: authoritativeNow, updatedAt: authoritativeNow
+        }
+      });
+      if (transition.count !== 1) return { outcome: 'fenced' as const, task: null };
+      const task = await tx.generationTask.findFirstOrThrow({ where: { tenantId, id: taskId } });
+      await createTaskEvent(tx, { task, eventType: 'task_finalized', message: task.statusNote ?? 'Task finalized.', progress: 100, requestId: `worker:${leaseOwnerId}`, createdAt: authoritativeNow });
+      return { outcome: 'applied' as const, task: mapGenerationTask(task) };
+    });
+  }
+
+  async failLeasedTask(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, authoritativeNow: Date, failure: LeasedTaskFailure) {
+    return this.prisma.$transaction(async (tx) => {
+      const transition = await tx.generationTask.updateMany({
+        where: { tenantId, id: taskId, status: PrismaTaskStatus.PROCESSING, leaseOwnerId, leaseToken, leaseExpiresAt: { gt: authoritativeNow } },
+        data: leaseFailureData(failure, authoritativeNow)
+      });
+      if (transition.count !== 1) return { outcome: 'fenced' as const, task: null };
+      const task = await tx.generationTask.findFirstOrThrow({ where: { tenantId, id: taskId } });
+      await createTaskEvent(tx, { task, eventType: 'task_failed', message: failure.statusNote, progress: task.progress, requestId: `worker:${leaseOwnerId}`, createdAt: authoritativeNow });
+      return { outcome: 'applied' as const, task: mapGenerationTask(task) };
+    });
+  }
+
+  async recoverExpiredTask(observed: ObservedTaskLease, authoritativeNow: Date) {
+    return this.prisma.$transaction(async (tx) => {
+      const current = await tx.generationTask.findFirst({ where: {
+        tenantId: observed.tenantId, id: observed.taskId, status: PrismaTaskStatus.PROCESSING,
+        leaseOwnerId: observed.leaseOwnerId, leaseToken: observed.leaseToken, leaseExpiresAt: observed.leaseExpiresAt
+      } });
+      if (!current || current.leaseExpiresAt === null || current.leaseExpiresAt.getTime() > authoritativeNow.getTime()) return { outcome: 'not_recovered' as const, task: null };
+      const dispatched = current.providerDispatchedAt !== null;
+      const failure = {
+        failureCategory: dispatched ? 'provider_outcome_unknown' : 'worker_lease_expired',
+        errorCode: dispatched ? 'PROVIDER_OUTCOME_UNKNOWN' : 'WORKER_LEASE_EXPIRED',
+        errorMessage: dispatched ? 'Provider outcome is unknown.' : 'Worker lease expired.',
+        statusNote: dispatched ? 'Provider 结果未知，禁止自动重放。' : 'Worker 租约已过期。'
+      };
+      const transition = await tx.generationTask.updateMany({
+        where: {
+          tenantId: observed.tenantId, id: observed.taskId, status: PrismaTaskStatus.PROCESSING,
+          leaseOwnerId: observed.leaseOwnerId, leaseToken: observed.leaseToken,
+          leaseExpiresAt: { equals: observed.leaseExpiresAt, lte: authoritativeNow }
+        },
+        data: leaseFailureData(failure, authoritativeNow)
+      });
+      if (transition.count !== 1) return { outcome: 'not_recovered' as const, task: null };
+      const task = await tx.generationTask.findFirstOrThrow({ where: { tenantId: observed.tenantId, id: observed.taskId } });
+      await createTaskEvent(tx, { task, eventType: 'task_recovered', message: failure.statusNote, progress: task.progress, requestId: 'worker:recovery', createdAt: authoritativeNow });
+      return { outcome: 'recovered' as const, task: mapGenerationTask(task) };
+    });
   }
 
   async findActiveTaskByConflict(tenantId: string, conflictScope: string, conflictKey: string) {
@@ -2608,6 +2763,23 @@ function isPrismaUniqueConstraintError(error: unknown): error is { code: 'P2002'
   return typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2002';
 }
 
+function leaseFailureData(failure: LeasedTaskFailure, now: Date): Prisma.GenerationTaskUpdateManyMutationInput {
+  return {
+    status: PrismaTaskStatus.FAILED,
+    statusNote: failure.statusNote,
+    currentStep: 'failed',
+    failureCategory: failure.failureCategory,
+    errorCode: failure.errorCode,
+    errorMessage: failure.errorMessage,
+    activeClaimKey: null,
+    leaseOwnerId: null,
+    leaseToken: null,
+    leaseExpiresAt: null,
+    finishedAt: now,
+    updatedAt: now
+  };
+}
+
 function mapGenerationTask(task: {
   id: string;
   tenantId: string;
@@ -2626,9 +2798,12 @@ function mapGenerationTask(task: {
   idempotencyToken: string | null;
   requestHash: string | null;
   activeClaimKey: string | null;
+  policyProfileVersionId: string | null;
+  modelRoutingVersion: string | null;
   inputSummary: string | null;
   outputSummary: string | null;
   resultVersionId: string | null;
+  resultVersionIdsJson: unknown;
   retryOfTaskId: string | null;
   failureCategory: string | null;
   errorCode: string | null;
@@ -2644,6 +2819,23 @@ function mapGenerationTask(task: {
   createdAt: Date;
   updatedAt: Date;
   metadata: unknown;
+  leaseOwnerId: string | null;
+  leaseToken: string | null;
+  leaseExpiresAt: Date | null;
+  lastHeartbeatAt: Date | null;
+  retryCount: number;
+  maxRetries: number;
+  executionEnvelopeJson: unknown;
+  providerAttemptId: string | null;
+  providerAttemptPhase: string | null;
+  providerDispatchedAt: Date | null;
+  resultReceiptHash: string | null;
+  rootTaskId: string;
+  providerCallBudgetMax: number;
+  providerCallBudgetUsed: number;
+  durationDeadlineAt: Date;
+  costBudgetMicrosMax: bigint;
+  costBudgetMicrosUsed: bigint;
 }): GenerationTaskRecord {
   return {
     id: task.id,
@@ -2663,9 +2855,11 @@ function mapGenerationTask(task: {
     idempotencyToken: task.idempotencyToken,
     requestHash: task.requestHash,
     activeClaimKey: task.activeClaimKey,
+    policyProfileVersionId: task.policyProfileVersionId,
+    modelRoutingVersion: task.modelRoutingVersion,
     inputSummary: task.inputSummary,
     outputSummary: task.outputSummary,
-    resultVersionIds: task.resultVersionId ? [task.resultVersionId] : [],
+    resultVersionIds: Array.isArray(task.resultVersionIdsJson) ? task.resultVersionIdsJson.filter((value): value is string => typeof value === 'string') : task.resultVersionId ? [task.resultVersionId] : [],
     retryOfTaskId: task.retryOfTaskId,
     failureCategory: task.failureCategory,
     errorCode: task.errorCode,
@@ -2680,7 +2874,24 @@ function mapGenerationTask(task: {
     createdBy: task.createdBy,
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
-    metadata: task.metadata
+    metadata: task.metadata,
+    leaseOwnerId: task.leaseOwnerId,
+    leaseToken: task.leaseToken,
+    leaseExpiresAt: task.leaseExpiresAt,
+    lastHeartbeatAt: task.lastHeartbeatAt,
+    retryCount: task.retryCount,
+    maxRetries: task.maxRetries,
+    executionEnvelopeJson: task.executionEnvelopeJson as ExecutionEnvelopeV1 | null,
+    providerAttemptId: task.providerAttemptId,
+    providerAttemptPhase: task.providerAttemptPhase ? fromPrismaEnum(task.providerAttemptPhase) : null,
+    providerDispatchedAt: task.providerDispatchedAt,
+    resultReceiptHash: task.resultReceiptHash,
+    rootTaskId: task.rootTaskId,
+    providerCallBudgetMax: task.providerCallBudgetMax,
+    providerCallBudgetUsed: task.providerCallBudgetUsed,
+    durationDeadlineAt: task.durationDeadlineAt,
+    costBudgetMicrosMax: task.costBudgetMicrosMax,
+    costBudgetMicrosUsed: task.costBudgetMicrosUsed
   };
 }
 
