@@ -281,10 +281,18 @@ export class NovelService {
 
   async generateDirections(novelId: string, request: GenerateDirectionsRequest, context: RequestContext): Promise<DirectionActionResultDTO> {
     const novel = await this.findNovelOrThrow(context.tenantId, novelId);
-    this.ensureLifecycleActive(novel);
-    this.ensureDirectionGenerationStage(novel);
+    const idempotencyToken = request.idempotencyKey?.trim() || `request:${context.requestId}`.slice(0, 120);
+    const existingTask = await this.options.repository.findTaskByIdempotencyToken(
+      context.tenantId,
+      'novel_direction_generate',
+      idempotencyToken
+    );
+    if (!existingTask) {
+      this.ensureLifecycleActive(novel);
+      this.ensureDirectionGenerationStage(novel);
+    }
     const preferences = await this.options.repository.findPreferencesByNovelId(context.tenantId, novelId);
-    const sourceVersionRefs = { currentDirectionVersionId: novel.currentDirectionVersionId };
+    const sourceVersionRefs = existingTask?.sourceVersionRefs ?? { currentDirectionVersionId: novel.currentDirectionVersionId };
     const execution = await executeClaimedGeneration({
       action: 'direction_generate',
       repository: this.options.repository,

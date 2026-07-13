@@ -78,6 +78,35 @@ describe('RP-02A generation task SSOT and provider preclaim', () => {
     await primary;
   });
 
+  it('binds the idempotency fingerprint to the provider model routing version', async () => {
+    const repository = createInMemoryNovelRepository();
+    const context = requestContext('tenant-routing', 'routing-request');
+    const created = await repository.createDraft({ request: { title: 'Routing fingerprint novel' }, context, now: new Date() });
+    let routingVersion = 'deepseek:model-a:route-v1';
+    let providerCalls = 0;
+    const input = () => ({
+      action: 'direction_generate' as const,
+      repository,
+      novel: created.novel,
+      idempotencyKey: 'rp02a-routing-token',
+      effectiveRequest: { regenerateReason: null },
+      sourceVersionRefs: { currentDirectionVersionId: null },
+      context,
+      now: () => new Date(),
+      providerCapability: { getModelRoutingVersion: () => routingVersion },
+      provider: async () => {
+        providerCalls += 1;
+        return 'draft';
+      },
+      finalize: async (task: { id: string }) => task.id
+    });
+
+    await executeClaimedGeneration(input());
+    routingVersion = 'deepseek:model-b:route-v1';
+    await assertBusinessError(executeClaimedGeneration(input()), ErrorCode.IdempotencyConflict);
+    assert.equal(providerCalls, 1);
+  });
+
   it('isolates identical tokens and conflict keys by tenant and prevents cross-tenant reads', async () => {
     const repository = createInMemoryNovelRepository();
     const provider = new CountingDirectionProvider();
@@ -199,7 +228,7 @@ describe('RP-02A generation task SSOT and provider preclaim', () => {
     const first = await app.inject({ method: 'POST', url: `/novels/${novelId}/directions/generate`, headers, payload: {} });
     const replay = await app.inject({ method: 'POST', url: `/novels/${novelId}/directions/generate`, headers, payload: {} });
     assert.equal(first.statusCode, 200);
-    assert.equal(replay.statusCode, 200);
+    assert.equal(replay.statusCode, 200, replay.body);
     assert.equal(first.json().data.task.id, replay.json().data.task.id);
     assert.doesNotMatch(JSON.stringify(first.json()), /idempotencyToken|requestHash|activeClaimKey|rp02a-header-token/);
 
@@ -216,6 +245,32 @@ describe('RP-02A generation task SSOT and provider preclaim', () => {
     await app.close();
   });
 
+  it('replays a terminal direction task after adoption advances the business stage', async () => {
+    const repository = createInMemoryNovelRepository();
+    const app = await buildApp({ logger: false, novelRepository: repository });
+    const draft = await app.inject({ method: 'POST', url: '/novels/drafts', payload: { title: 'Terminal replay novel' } });
+    const novelId = draft.json().data.id;
+    const headers = { 'idempotency-key': 'rp02a-terminal-direction-token' };
+    const generated = await app.inject({ method: 'POST', url: `/novels/${novelId}/directions/generate`, headers, payload: {} });
+    const candidate = generated.json().data.candidates.find((item: { score: number }) => item.score >= 75);
+    const candidateId = candidate.id;
+    const adopted = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/directions/${candidateId}/adopt`,
+      payload: {
+        reason: 'adopt before replay',
+        pageVersionSnapshot: { seenCandidateVersionId: candidateId }
+      }
+    });
+    const replay = await app.inject({ method: 'POST', url: `/novels/${novelId}/directions/generate`, headers, payload: {} });
+
+    assert.equal(adopted.statusCode, 200);
+    assert.equal(replay.statusCode, 200, replay.body);
+    assert.equal(replay.json().data.task.id, generated.json().data.task.id);
+    assert.equal(repository.getGenerationTasks().filter((task) => task.taskType === 'novel_direction_generate').length, 1);
+    await app.close();
+  });
+
   it('pins the Prisma static claim contract and duplicate-refusal migration without running a database', async () => {
     const schema = await readFile('prisma/schema.prisma', 'utf8');
     const migration = await readFile('prisma/migrations/20260713000000_rp02a_generation_task_preclaim/migration.sql', 'utf8');
@@ -229,6 +284,10 @@ describe('RP-02A generation task SSOT and provider preclaim', () => {
     assert.match(migration, /ADD UNIQUE INDEX `generation_task_tenant_id_active_claim_key_key`/);
     assert.match(migration, /MySQL aborts this migration/);
     assert.match(migration, /active_claim_key/);
+    assert.match(migration, /information_schema`.`COLUMNS/);
+    assert.match(migration, /information_schema`.`STATISTICS/);
+    assert.match(migration, /PREPARE `rp02a_stmt`/);
+    assert.match(migration, /Each DDL is conditional/);
   });
 });
 

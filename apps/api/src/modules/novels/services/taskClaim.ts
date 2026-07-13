@@ -77,7 +77,11 @@ export async function executeClaimedGeneration<TProviderResult, TFinalResult>(
   input: ExecuteClaimedGenerationInput<TProviderResult, TFinalResult>
 ): Promise<ExecuteClaimedGenerationResult<TFinalResult>> {
   const spec = CLAIM_SPECS[input.action];
-  const providerCapability = input.providerCapability as { assertAvailable?: () => void | Promise<void> } | undefined;
+  const providerCapability = input.providerCapability as {
+    assertAvailable?: () => void | Promise<void>;
+    getModelRoutingVersion?: (action: NovelProviderAction) => string;
+    constructor?: { name?: string };
+  } | undefined;
   await providerCapability?.assertAvailable?.();
   await input.repository.assertProviderActionSupported(spec.taskType);
   const objectId = input.objectId ?? input.novel.id;
@@ -90,7 +94,8 @@ export async function executeClaimedGeneration<TProviderResult, TFinalResult>(
     effectiveRequest: input.effectiveRequest,
     sourceVersionRefs: input.sourceVersionRefs,
     policyProfileVersionId: input.novel.policyProfileVersionId,
-    modelRoutingVersion: 'novel-provider-current'
+    modelRoutingVersion: providerCapability?.getModelRoutingVersion?.(input.action)
+      ?? `provider:${providerCapability?.constructor?.name || 'default'}:v1`
   });
   const conflictKey = spec.conflictScope === 'chapter' ? objectId : input.novel.id;
   const claim = await input.repository.claimGenerationTask({

@@ -32,8 +32,21 @@ FROM (
 
 DROP TEMPORARY TABLE `rp02a_generation_task_preflight`;
 
-ALTER TABLE `generation_task`
-  ADD COLUMN `active_claim_key` VARCHAR(64) NULL;
+SET @rp02a_schema_name = DATABASE();
+SET @rp02a_sql = (
+  SELECT IF(
+    COUNT(*) = 0,
+    'ALTER TABLE `generation_task` ADD COLUMN `active_claim_key` VARCHAR(64) NULL',
+    'SELECT 1'
+  )
+  FROM `information_schema`.`COLUMNS`
+  WHERE `TABLE_SCHEMA` = @rp02a_schema_name
+    AND `TABLE_NAME` = 'generation_task'
+    AND `COLUMN_NAME` = 'active_claim_key'
+);
+PREPARE `rp02a_stmt` FROM @rp02a_sql;
+EXECUTE `rp02a_stmt`;
+DEALLOCATE PREPARE `rp02a_stmt`;
 
 UPDATE `generation_task`
 SET `active_claim_key` = SHA2(
@@ -48,11 +61,50 @@ WHERE `status` IN ('queued', 'processing')
   AND `conflict_scope` IS NOT NULL
   AND `conflict_key` IS NOT NULL;
 
-ALTER TABLE `generation_task`
-  -- These unique indexes are the refusal gate: MySQL aborts this migration
-  -- instead of silently reconciling duplicate idempotency or active claims.
-  DROP INDEX `generation_task_tenant_id_idempotency_token_key`,
-  ADD UNIQUE INDEX `generation_task_tenant_id_task_type_idempotency_token_key`
-    (`tenant_id`, `task_type`, `idempotency_token`),
-  ADD UNIQUE INDEX `generation_task_tenant_id_active_claim_key_key`
-    (`tenant_id`, `active_claim_key`);
+-- These unique indexes are the refusal gate: MySQL aborts this migration
+-- instead of silently reconciling duplicate idempotency or active claims.
+-- Each DDL is conditional so a failure after an earlier implicit commit can be retried.
+SET @rp02a_sql = (
+  SELECT IF(
+    COUNT(*) = 0,
+    'ALTER TABLE `generation_task` ADD UNIQUE INDEX `generation_task_tenant_id_task_type_idempotency_token_key` (`tenant_id`, `task_type`, `idempotency_token`)',
+    'SELECT 1'
+  )
+  FROM `information_schema`.`STATISTICS`
+  WHERE `TABLE_SCHEMA` = @rp02a_schema_name
+    AND `TABLE_NAME` = 'generation_task'
+    AND `INDEX_NAME` = 'generation_task_tenant_id_task_type_idempotency_token_key'
+);
+PREPARE `rp02a_stmt` FROM @rp02a_sql;
+EXECUTE `rp02a_stmt`;
+DEALLOCATE PREPARE `rp02a_stmt`;
+
+SET @rp02a_sql = (
+  SELECT IF(
+    COUNT(*) = 0,
+    'ALTER TABLE `generation_task` ADD UNIQUE INDEX `generation_task_tenant_id_active_claim_key_key` (`tenant_id`, `active_claim_key`)',
+    'SELECT 1'
+  )
+  FROM `information_schema`.`STATISTICS`
+  WHERE `TABLE_SCHEMA` = @rp02a_schema_name
+    AND `TABLE_NAME` = 'generation_task'
+    AND `INDEX_NAME` = 'generation_task_tenant_id_active_claim_key_key'
+);
+PREPARE `rp02a_stmt` FROM @rp02a_sql;
+EXECUTE `rp02a_stmt`;
+DEALLOCATE PREPARE `rp02a_stmt`;
+
+SET @rp02a_sql = (
+  SELECT IF(
+    COUNT(*) > 0,
+    'ALTER TABLE `generation_task` DROP INDEX `generation_task_tenant_id_idempotency_token_key`',
+    'SELECT 1'
+  )
+  FROM `information_schema`.`STATISTICS`
+  WHERE `TABLE_SCHEMA` = @rp02a_schema_name
+    AND `TABLE_NAME` = 'generation_task'
+    AND `INDEX_NAME` = 'generation_task_tenant_id_idempotency_token_key'
+);
+PREPARE `rp02a_stmt` FROM @rp02a_sql;
+EXECUTE `rp02a_stmt`;
+DEALLOCATE PREPARE `rp02a_stmt`;
