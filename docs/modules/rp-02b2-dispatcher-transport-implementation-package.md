@@ -1,6 +1,6 @@
 # RP-02B2 Dispatcher、Fenced Finalize 与异步 Transport 实现包
 
-状态：`rp02b2a0_authorized_for_implementation_b2a_b2b_b2c_b3_frozen`
+状态：`rp02b2a0_completed_b2a_authorization_revision_pending_b2b_b2c_b3_frozen`
 
 问题：`RMD-TASK-002`，承接 `RMD-TASK-001` 的异步执行阶段；`RMD-TASK-003` 继续冻结到 `RP-02B3`
 
@@ -246,6 +246,8 @@ Prisma B2 可进入 dispatcher 的 9 个 task type：
 
 B2a/B2b/B2c 期间 `POST /tasks/:id/retry` 遇到 provider-backed task，必须在 stale/conflict/repository retry 之前返回 `409 RETRY_NOT_AVAILABLE`；child/event/log/activeClaim/provider 均为 0。dispatcher 对任何 `retryOfTaskId != null` 的既存 queued/processing task 也必须在 provider 前一次性安全失败为 `RETRY_NOT_AVAILABLE`，provider/asset/receipt/current=0。B3 完成 retry 合同后再开放。
 
+从 B2a 起，provider-backed failed task 的公开投影固定为：`retryable=false`；`userFailureReason="任务执行失败，未写入新的候选或正式内容。"`；`nextAction.type="disabled"`、`label="暂不支持任务重试"`、`reasonText/disabledReason="当前阶段暂不支持任务重试，请返回业务页面查看当前内容。"`、`target="disabled"`、`disabled=true`、`confirmRequired=false`。公开失败文案不得包含“重试”或“稍后重试”的行动建议；这条限制不改变非 provider-backed task 的既有投影。直接调用 retry API 的公开 message 固定为“当前阶段暂不支持任务重试，未创建新任务。”，且不得回显内部异常、provider response 或请求身份字段。
+
 `RETRY_NOT_AVAILABLE` 必须作为 `packages/shared/src/api.ts` 的正式 `ErrorCode`，HTTP definition 固定 409；禁止 route/service 通过字符串、强制 cast 或复用 `TASK_NOT_RETRYABLE` 冒充。
 
 ## 8. HTTP Dispatch 合同（B2b）
@@ -381,7 +383,7 @@ B2a0 使用独立命令 `test:rp02b2a0`，精确运行 API route、Admin service
 19. `controlled_terminal_failures_are_atomic_with_event_and_operation_log`
 20. `provider_public_abi_uses_exact_action_pick_and_preserves_nullable_word_target`
 21. `long_term_memory_identity_uses_source_content_version_and_snapshot_hash`
-22. `provider_backed_task_projection_freezes_retry_and_retry_mutation_zero`
+22. `provider_backed_task_projection_freezes_retry_and_retry_mutation_zero`：除八类副作用精确为 0 外，逐字段断言 `retryable=false`、固定 `userFailureReason`、disabled `nextAction` 和 retry API 的固定 409 message；公开文案不得包含“稍后重试”。
 23. `authority_changes_during_finalize_is_locked_or_cas_fenced`
 24. `trusted_actor_is_identical_across_claim_and_envelope_no_default_fallback`
 
@@ -468,7 +470,7 @@ B2a0/B2a/B2b/B2c E3 可证明：风险参数同步链、单进程 deterministic 
 
 ### RP-02B2a
 
-- 预算与 manifest 均为硬门禁：`20 files / 2,000 net additions`，任何增项必须先由 MC 修订。
+- 预算与 manifest 均为硬门禁：`23 files / 2,000 net additions`。其中 22 个实现/测试/CI 文件加 1 个同提交 ADR；超过全局 20 文件默认上限的唯一理由是把 provider-backed retry 的既有 route 回归和 B2a 专属远程 CI 与执行核心放在同一不可分割验收包中。任何其他增项或超过 2,000 净新增必须先停工并由 MC 重新拆包裁决。
 - `packages/shared/src/api.ts`（新增 `RETRY_NOT_AVAILABLE` typed 409）
 - `packages/shared/src/novels.ts`
 - `apps/api/src/modules/novels/domain/executionContract.ts`
@@ -487,10 +489,15 @@ B2a0/B2a/B2b/B2c E3 可证明：风险参数同步链、单进程 deterministic 
 - `apps/api/src/modules/novels/providers/mockFullReviewProvider.ts`
 - `apps/api/src/modules/novels/providers/deepseekNovelProvider.ts`（只改 strict public ABI；B2 不连接真实 provider）
 - `apps/api/src/app.ts`（注入 authenticated RequestContextResolver；不得让 B2 envelope 回退默认 context）
+- `apps/api/src/modules/novels/novelRoutes.test.ts`（provider-backed retry 投影与 409/零副作用回归；不得删除既有 B2a0 风险回归）
 - `apps/api/test/rp02b2a/rp02b2a.test.ts`（new，fixture 合并在本文件）
+- `.github/workflows/rp01c-fixtures.yml`（path 纳入 `test/rp02b2a/**`，远程串行执行 B1 后 B2a；预算步骤必须消费本次实现 diff 的同提交 ADR）
+- `docs/adr/rp-02b2a-execution-core-budget.md`（实现提交前把 `status` 更新为 `ready`，并写入实际 file/addition/commit 口径；必须与实现同 diff）
 - `package.json`
-- `test:rp02b2a:core` 只运行 B2a execution-core 独立 fixture；复合命令 `test:rp02b2a` 必须按失败即停顺序执行 `test:rp02b2a:core` 和 `test:rp02b2a0`，任一失败则整体失败；不得把 Admin 全链风险回归遗漏在 execution-core 绿灯之外。
+- `test:rp02b2a:core` 必须清空与 B1/B2a0 相同的 DB/provider/secret 环境变量并只运行 B2a execution-core 独立 fixture；复合命令 `test:rp02b2a` 必须按失败即停顺序执行 `test:rp02b2a:core` 和 `test:rp02b2a0`，任一失败则整体失败；不得把 Admin 全链风险回归遗漏在 execution-core 绿灯之外。
 - 现有同步 path 与 worker 必须复用同一 `ActionExecutionPlan` registry；不得复制 15-action provider/finalize mapping。不修改 admin transport，不把 HTTP 改为 202。
+- 远程 workflow 必须在 `test:rp02b1` 成功后执行 `npm run test:rp02b2a`；clean-checkout 验收固定串行执行 `npm run test:rp02b1 && npm run test:rp02b2a`。不得用 API 全量测试、B1 glob 或人工本地记录冒充 B2a 专属远程证据。
+- `.github/workflows/rp01c-fixtures.yml` 的 Git budget 步骤必须复用 `.github/workflows/remediation-governance.yml` 的 PR/push `BASE/HEAD` 计算和 NUL-safe changed-ADR discovery，把本次 diff 中的 `docs/adr/rp-02b2a-execution-core-budget.md` 显式作为 `--adr` 参数传入。该 workflow 还必须在预算检查前机器验证该 ADR 的 `status` 精确等于 `ready`；无参数或 `HEAD~1...HEAD` fallback、ADR 未在实现 diff 中实际修改、`status != ready`、ADR 未被传入，或 `actual_files`/`actual_net_additions` 与同一 `BASE/HEAD` diff 不匹配时均必须失败。不得通过扩大 manifest 修改治理脚本来规避该要求。
 
 ### RP-02B2b
 

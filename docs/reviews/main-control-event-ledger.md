@@ -940,3 +940,51 @@ evidence: commit 2da6d31; docs/reviews/remediation-rmd-task-002-rp-02b2a0-verifi
 mc_decision: RP-02B2a0 阶段完成，当前子包门禁 8/8；RMD-TASK-002 保持 partial，总体关闭进度保持 9/42。不得自动授权 B2a/B2b/B2c/B3 或真实 DB/provider/media。
 next_action: MC 单独核对 RP-02B2a 的依赖、20 files / 2000 additions 写集与冻结边界；在新授权前不修改业务代码。
 ```
+
+### MCE-20260714-RP02B2A-AUTH-AUDIT-REJECTED
+
+```text
+event_id: MCE-20260714-RP02B2A-AUTH-AUDIT-REJECTED
+occurred_at: 2026-07-14 00:15:14 CST
+event_type: implementation_authorization_review
+source_thread: main-control, 019f5987-1d1f-75a3-952e-4a03ac2e96b1, 019f5986-7e35-7862-afea-cae01c798616, 019f5987-bb3c-7f92-be64-e38a38887bc1, 019f5988-59da-7323-9a13-38fab6a61e2b
+package_id: RP-02B2a
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RETRY-01, GOV-GIT-01
+summary: B2a 第一轮单包开工审计完成；后端 approved 0/0/1、QUALITY approved 0/0/0、产品 rejected 0/2/0、TEST rejected 0/1/0。去重后 3 个 P1 为 route retry 回归未进入 manifest、隐藏 retry 后失败文案仍可能诱导重试、B2a fixture/完整复合命令未进入远程 CI。
+evidence: docs/reviews/rp-02b2-multi-agent-admission-review-2026-07-13.md section 16; current baseline c4ae04f; local test:rp02b2a0 50/50 + 17/17 + 6/6
+mc_decision: 拒绝当前 B2a 开工授权。只允许修订实现包、验收矩阵、ADR 模板和治理状态；业务代码继续冻结。manifest 改为 22 个实现/测试/CI 文件加同 diff ADR，总上限 23 files / 2,000 net additions。
+next_action: 修订资产通过 governance/diff check 后，原四角色执行第二轮独立复核；只有四路 P0/P1=0 才能提交授权资产并由 MC 单独授权 B2a。B2b/B2c/B3、真实 DB/provider/media 继续冻结。
+```
+
+### MCE-20260714-RP02B2A-SECOND-AUTH-AUDIT-REJECTED
+
+```text
+event_id: MCE-20260714-RP02B2A-SECOND-AUTH-AUDIT-REJECTED
+occurred_at: 2026-07-14 00:42:25 CST
+event_type: implementation_authorization_review
+source_thread: main-control, 019f5987-1d1f-75a3-952e-4a03ac2e96b1, 019f5986-7e35-7862-afea-cae01c798616, 019f5987-bb3c-7f92-be64-e38a38887bc1, 019f5988-59da-7323-9a13-38fab6a61e2b
+package_id: RP-02B2a
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RETRY-01, GOV-GIT-01
+summary: B2a 第二轮单包授权复核完成；产品/TEST approved 0/0/0，后端 rejected 0/2/0，QUALITY rejected 0/1/0。去重后 2 类 P1 为专属 workflow 无法按实现 diff 消费/机器验证 ready ADR，以及评审记录顶部仍把最新授权上限写成 B2a0。
+evidence: docs/reviews/rp-02b2-multi-agent-admission-review-2026-07-13.md section 17; four independent second-round reports; current baseline c4ae04f
+mc_decision: 再次拒绝 B2a 开工授权。只允许补 PR/push BASE/HEAD、NUL-safe changed-ADR discovery、显式 --adr、status=ready 机器门禁和最新授权口径；业务代码继续冻结。
+next_action: 修订资产通过本地 governance/diff check 后，原四角色执行第三轮独立复核；只有四路 P0/P1=0 才能提交推送授权资产并运行远程治理。B2b/B2c/B3、真实 DB/provider/media 继续冻结。
+```
+
+### MCE-20260714-RP02B2A-THIRD-AUTH-REVIEW-APPROVED
+
+```text
+event_id: MCE-20260714-RP02B2A-THIRD-AUTH-REVIEW-APPROVED
+occurred_at: 2026-07-14 00:59:15 CST
+event_type: implementation_authorization_review
+source_thread: main-control, 019f5987-1d1f-75a3-952e-4a03ac2e96b1, 019f5986-7e35-7862-afea-cae01c798616, 019f5987-bb3c-7f92-be64-e38a38887bc1, 019f5988-59da-7323-9a13-38fab6a61e2b
+package_id: RP-02B2a
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RETRY-01, GOV-GIT-01
+summary: B2a 第三轮单包授权复核完成；后端、产品、TEST、QUALITY 全部 approved，四路 P0/P1/P2=0。专属 workflow 的 BASE/HEAD、NUL-safe ADR discovery、显式 --adr、status=ready/实际计数失败门禁和最新授权口径均闭合，第一轮 retry/route/回归合同未回退。
+evidence: docs/reviews/rp-02b2-multi-agent-admission-review-2026-07-13.md section 18; four independent third-round reports; local governance 15/15; git diff --check
+mc_decision: B2a 单包开工授权合同准入清零，只允许进入授权资产 commit/push 与远程治理；不视为研发授权、实现完成或问题关闭。总体关闭进度保持 9/42。
+next_action: 提交并推送当前授权资产，确认远程治理成功后由 MC 单独裁决是否授权 RP-02B2a。B2b/B2c/B3、真实 DB/provider/media 继续冻结。
+```
