@@ -2377,6 +2377,7 @@ async function handleSelectTrialCandidate(candidate: TrialCandidateRow) {
 
   const trialRun = detail.value?.latestTrialRun
   if (!trialRun) return
+  let selectionReason: string | null = null
   if (candidate.requiresRiskConfirm) {
     const reason = await promptHighRiskReason({
       title: '确认低分或风险候选继续试写',
@@ -2396,6 +2397,7 @@ async function handleSelectTrialCandidate(candidate: TrialCandidateRow) {
       apiError.value = '低分或风险候选继续试写必须填写原因'
       return
     }
+    selectionReason = reason
   }
 
   selectingTrialCandidateId.value = candidate.id
@@ -2408,6 +2410,7 @@ async function handleSelectTrialCandidate(candidate: TrialCandidateRow) {
     await generateTrial(novelId.value, {
       trialRunId: trialRun.id,
       selectedCandidateId: candidate.id,
+      ...(candidate.requiresRiskConfirm ? { confirmRisk: true, selectionReason } : {}),
     })
     ElMessage.success('已选择第 1 章候选，继续生成第 2-3 章')
     await loadDetail()

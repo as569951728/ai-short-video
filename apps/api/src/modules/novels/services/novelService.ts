@@ -688,6 +688,18 @@ export class NovelService {
     if (!selectedCandidate || getMetadataString(selectedCandidate.metadata, 'trialRunId') !== trialRun.id) {
       throw new BusinessError(ErrorCode.NotFound, '第1章候选不存在');
     }
+    const selectionReason = request.selectionReason?.trim() ?? '';
+    if (selectionReason) {
+      assertSafeTrialSelectionReason(selectionReason);
+    }
+    const selectedCandidateRiskLevel = getTrialCandidateRiskLevel(selectedCandidate);
+    const requiresRiskConfirmation = selectedCandidateRiskLevel === RiskLevel.High || selectedCandidateRiskLevel === RiskLevel.Blocking;
+    if (requiresRiskConfirmation && (!request.confirmRisk || !selectionReason)) {
+      throw new BusinessError(ErrorCode.GateBlocked, '高风险试写候选继续生成必须二次确认并填写原因', {
+        confirmRisk: request.confirmRisk === true,
+        issues: [{ path: 'selectionReason', message: 'required for high or blocking trial candidate' }]
+      });
+    }
 
     const sourceVersionRefs = createTrialSourceRefs(novel);
     const execution = await executeClaimedGeneration({
@@ -3245,6 +3257,23 @@ function stableStringify(value: unknown): string {
   }
 
   return JSON.stringify(value);
+}
+
+const TRIAL_SELECTION_REASON_SECRET = /\b(?:authorization|cookie|api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret)\b\s*[:=]\s*["']?[^"',;\s]+|\bBearer\s+[A-Za-z0-9._~+/=-]{8,}|\bsk-[A-Za-z0-9_-]{8,}/i;
+
+function assertSafeTrialSelectionReason(reason: string) {
+  if (!TRIAL_SELECTION_REASON_SECRET.test(reason)) return;
+  throw new BusinessError(ErrorCode.ValidationError, '选择高风险试写候选的原因包含敏感信息，请移除密钥或 token 后重试。', {
+    issues: [{ path: 'selectionReason', message: 'must not contain secrets' }]
+  });
+}
+
+function getTrialCandidateRiskLevel(candidate: ChapterContentVersionRecord): RiskLevel {
+  const metadata = toRecord(candidate.metadata);
+  const riskLevel = metadata.riskLevel;
+  return riskLevel === RiskLevel.High || riskLevel === RiskLevel.Blocking || riskLevel === RiskLevel.Medium || riskLevel === RiskLevel.Low || riskLevel === RiskLevel.None
+    ? riskLevel
+    : RiskLevel.Low;
 }
 
 function calculateBodyBatchRange(

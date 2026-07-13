@@ -448,7 +448,12 @@ describe('novel service data source switching', () => {
 
     try {
       const generated = await generateTrial('novel-001', { chapterCount: 3 }, 'backend')
-      await generateTrial('novel-001', { trialRunId: generated.trialRun.id, selectedCandidateId: generated.trialRun.chapterOneCandidates[0].id }, 'backend')
+      await generateTrial('novel-001', {
+        trialRunId: generated.trialRun.id,
+        selectedCandidateId: generated.trialRun.chapterOneCandidates[0].id,
+        confirmRisk: true,
+        selectionReason: '高风险候选已人工确认，继续用于试写验证。',
+      }, 'backend')
       await confirmTrial('novel-001', { trialRunId: generated.trialRun.id, decision: 'confirm_pass' }, 'backend')
       await getChapterWorkbench('novel-001', 'chapter-001', 'backend')
       const row = toTrialCandidateRow(generated.trialRun.chapterOneCandidates[0])
@@ -457,6 +462,8 @@ describe('novel service data source switching', () => {
       assert.equal(requested[0].method, 'POST')
       assert.equal(requested[0].body.chapterCount, 3)
       assert.equal(requested[1].body.selectedCandidateId, 'trial-candidate-001')
+      assert.equal(requested[1].body.confirmRisk, true)
+      assert.equal(requested[1].body.selectionReason, '高风险候选已人工确认，继续用于试写验证。')
       assert.equal(requested[2].url, 'http://localhost:3001/novels/novel-001/trial/confirm')
       assert.equal(requested[3].url, 'http://localhost:3001/novels/novel-001/chapters/chapter-001')
       assert.equal(row.isAiRecommended, true)
