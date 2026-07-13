@@ -52,7 +52,7 @@ flowchart TD
 | --- | --- | --- | --- |
 | W0 | RP-00A → RP-00B | 状态、Git、证据模板、SLA 与临时文件归因 | 冻结 |
 | W1 | RP-01A/RP-01B/RP-01D，RP-01A → RP-01C；RP-09A 至 RP-09G 按依赖启动审计 | 可重复浏览器 E2E、fixture、真实测试库入口和遗漏领域审计 | 冻结 |
-| W2 | RP-02A → RP-02B1 → RP-02B2 → RP-02B3 → RP-02C；RP-03A → RP-03B → RP-03C → RP-03D | 持久任务平台与小说真实数据库链 | 冻结 |
+| W2 | RP-02A → RP-02B1 → RP-02B2a0 → RP-02B2a → RP-02B2b → RP-02B2c → RP-02B3 → RP-02C；RP-03A → RP-03B → RP-03C → RP-03D | 持久任务平台与小说真实数据库链 | 冻结 |
 | W3 | RP-04A → RP-04B → RP-04C → RP-04D；RP-05A → RP-05B/RP-05C → RP-05D；完成后 RP-09H1 | 小说内容质量、用户交互闭环和小说/任务热点文件拆分 | 冻结 |
 | W4 | RP-06A → RP-06B → RP-06C | 真实 DeepSeek + MySQL 小规模完本 | 冻结 |
 | W5 | RP-07A → RP-07B → RP-07C → RP-07D；RP-08A → RP-08B → RP-08C → RP-08D → RP-08E → RP-08F；完成后 RP-09H2 | 视频数据库与真实音频/字幕/MP4 金丝雀 | 冻结 |
@@ -76,8 +76,11 @@ flowchart TD
 | RP-01D | 受控 MySQL 测试入口 | RP-00B | RMD-TEST-DB-001 基础设施 |
 | RP-02A | 小说 AI Task SSOT、provider 前原子 preclaim、幂等与冲突的 E3 阶段；首请求快速返回/worker 与真实 DB 并发不在本包关闭 | RP-01C | RMD-TASK-001（保持 partial/implemented_pending_verification，等待 RP-02B1-B3 与 E6） |
 | RP-02B1 | ExecutionEnvelope、lease/fencing 合同与仓储原语 | RP-02A | RMD-TASK-002、RMD-TASK-003（保持 open/partial） |
-| RP-02B2 | worker dispatcher、HTTP 快速返回、heartbeat、幂等 finalize、最小前端 transport 适配 | RP-02B1 | RMD-TASK-002 保持 partial；RMD-TASK-003 保持 open/partial；不得提前进入 implemented_pending_verification |
-| RP-02B3 | restart recovery、真实 retry、poison/unknown outcome 与 deterministic 故障注入 | RP-02B2 | RMD-TASK-002、RMD-TASK-003（E3 后仍等待 RP-01D E6） |
+| RP-02B2a0 | high/blocking 试写 `confirmRisk/selectionReason` 从 Admin 到同步 provider 前校验的真实全链 | RP-02B1 | 不新增异步 transport/worker；缺确认或空原因时 task/provider/asset=0；独立 API+service+DOM 验收 |
+| RP-02B2a | 15-action dispatcher、权威重载、严格 provider 输入 ABI、provider checkpoint、双 stale gate、成功/失败原子 fenced terminal | RP-02B2a0 | RMD-TASK-002 保持 partial；RMD-TASK-003 保持 open；不切异步 HTTP/admin；retry child 不执行 provider，只允许终态失败 `RETRY_NOT_AVAILABLE` |
+| RP-02B2b | queued claim、HTTP 202、服务端 capability、worker lifecycle/heartbeat/graceful shutdown | RP-02B2a | RMD-TASK-002 保持 partial；RMD-TASK-003 保持 open；不改 admin transport；gate 默认 off |
+| RP-02B2c | admin 真实 taskId、服务端 scope、IndexedDB/Web Locks 原子 intent、capability 快照二次门禁、scope suspend/resume、精确轮询、刷新/多标签恢复与 DOM transport | RP-02B2b | RMD-TASK-002 保持 partial；RMD-TASK-003 保持 open；能力未知、安全上下文缺失、scope 不匹配或原子 store 不可用时 POST=0；不得提前进入 implemented_pending_verification |
+| RP-02B3 | restart recovery、真实 retry、poison/unknown outcome 与 deterministic 故障注入 | RP-02B2c | RMD-TASK-002、RMD-TASK-003（E3 后仍等待 RP-01D E6） |
 | RP-02C | cancel 语义、迟到结果和前端统一投影 | RP-02B3 | RMD-TASK-004、RMD-TASK-005 |
 | RP-03A | 小说 migration、tenant、version/current 基础 | RP-01D | RMD-NOV-VERSION-001 |
 | RP-03B | 正文批量、重写、采用和影响案例 Prisma | RP-03A、RP-02B3 | RMD-NOV-DB-001 前半 |
