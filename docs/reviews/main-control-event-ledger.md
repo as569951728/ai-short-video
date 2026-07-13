@@ -908,3 +908,19 @@ evidence: commit 42a3f18; https://github.com/as569951728/ai-short-video/actions/
 mc_decision: 当前包门禁推进到 5/8；等待 MC 单独决定是否授权 RP-02B2a0。不得联动授权 B2a/B2b/B2c/B3，不增加 9/42 关闭数。
 next_action: 用户/MC 明确授权 RP-02B2a0 后才可派发研发；真实 DB/provider/media 和 E6 继续冻结。
 ```
+
+### MCE-20260713-RP02B2A0-AUTHORIZED
+
+```text
+event_id: MCE-20260713-RP02B2A0-AUTHORIZED
+occurred_at: 2026-07-13 19:45:10 CST
+event_type: implementation_authorization
+source_thread: main-control
+package_id: RP-02B2a0
+issue_ids: RMD-TASK-002
+acceptance_ids: TASK-PRECLAIM-01, TASK-WORKER-01
+summary: 第十一轮四路准入、需求合同提交/push 和远程治理均已通过；MC 单独授权 RP-02B2a0 修复 high/blocking 试写 confirmRisk/selectionReason 从 Admin 到同步 provider 前校验的真实全链。
+evidence: commits 42a3f18, 210fe59; governance runs 29246455165, 29246900223; docs/modules/rp-02b2-dispatcher-transport-implementation-package.md
+mc_decision: 仅授权 RP-02B2a0，硬写集 8 files / 700 net additions。禁止新增异步任务、provider、worker、transport；B2a/B2b/B2c/B3、真实 DB/provider/media 与 E6 继续冻结。
+next_action: 全栈研发按 manifest 实现并自测；独立 TEST 只准备验收，等待交付后正式执行。DEV 不得 commit/push，主控在验收通过后统一提交。
+```

@@ -1,6 +1,6 @@
 # RP-02B2 Dispatcher、Fenced Finalize 与异步 Transport 实现包
 
-状态：`approved_and_governance_passed_pending_mc_b2a0_authorization`
+状态：`rp02b2a0_authorized_for_implementation_b2a_b2b_b2c_b3_frozen`
 
 问题：`RMD-TASK-002`，承接 `RMD-TASK-001` 的异步执行阶段；`RMD-TASK-003` 继续冻结到 `RP-02B3`
 

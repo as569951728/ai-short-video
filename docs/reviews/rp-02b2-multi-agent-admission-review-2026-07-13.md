@@ -4,7 +4,7 @@
 
 评审对象：原 `docs/modules/rp-02b-worker-recovery-implementation-package.md` 中的 RP-02B2
 
-当前结论：`approved_and_governance_passed_pending_mc_b2a0_authorization`。第十一轮四路均 `approved` 且 P0/P1/P2 全部为 0；需求合同提交 `42a3f18` 已推送，远程 Remediation governance run `29246455165` 通过。当前等待主控单独决定是否授权 `RP-02B2a0`，不得自动派发实现。
+当前结论：`rp02b2a0_authorized_for_implementation`。第十一轮四路均 `approved` 且 P0/P1/P2 全部为 0；需求合同提交 `42a3f18` 与治理证据提交 `210fe59` 已推送，远程 Remediation governance runs `29246455165`、`29246900223` 均通过。MC 已于 2026-07-13 19:45:10 CST 单独授权 `RP-02B2a0`；B2a/B2b/B2c/B3、真实 DB/provider/media 仍冻结。
 
 版本说明：第 1-14 节只记录各轮当时事实，不再构成当前授权合同；任何历史“可授权 B2a”语句均已失效。当前规范只以专属实现包、上位矩阵和本文最新复审节为准，最多只能在最新四路 P0/P1 清零、需求资产提交推送和远程治理通过后单独授权 `RP-02B2a0`。
 

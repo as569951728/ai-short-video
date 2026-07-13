@@ -44,7 +44,7 @@
 | ID | 类别/级别 | 问题与影响 | 状态 | 主要证据 | Owner | 整改包 | 验收 ID |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | RMD-TASK-001 | PB/P0 | AI 动作没有统一持久任务 SSOT；部分动作在 provider 返回后才建任务，存在重复调用竞态 | partial | `novelService.ts`；N-06/N-07；N-AI-01 | DEV | RP-02A | TASK-PRECLAIM-01, TASK-CONCURRENCY-01 |
-| RMD-TASK-002 | PB/P0 | 请求内 await 长 provider，没有独立 worker、心跳和进程重启恢复 | partial | RP-02B1 `415d03a` 已通过；B2 已拆 B2a0/B2a/B2b/B2c，第十一轮四路准入均 approved 且 P0/P1/P2=0；需求合同 `42a3f18` 已推送且远程治理 run `29246455165` 通过，等待 MC 单独授权 B2a0；任何 B2 实现仍未授权，restart E6 未实现 | DEV | RP-02B | TASK-WORKER-01, TASK-RESTART-01 |
+| RMD-TASK-002 | PB/P0 | 请求内 await 长 provider，没有独立 worker、心跳和进程重启恢复 | partial | RP-02B1 `415d03a` 已通过；B2 第十一轮四路准入和远程治理已通过，MC 已单独授权 B2a0 修复 high/blocking 试写风险参数同步全链；B2a/B2b/B2c/B3 仍未授权，restart E6 未实现 | DEV | RP-02B | TASK-WORKER-01, TASK-RESTART-01 |
 | RMD-TASK-003 | RB/P1 | 通用重试只创建 queued 记录，没有消费者实际重新执行 | open | RP-02B1 `415d03a` 只建立 root budget/attempt/recovery 合同；真实 retry child 消费仍未实现 | DEV + TEST | RP-02B | TASK-RETRY-01 |
 | RMD-TASK-004 | RB/P1 | “停止本页等待”“取消后端任务”“放弃并重生成”语义与状态不一致 | partial | N-06/N-07/N-21 | PRODUCT + DEV | RP-02C | TASK-CANCEL-01 |
 | RMD-TASK-005 | QG/P1 | 主卡片、最近任务、任务抽屉、本地 pending 与阶段状态缺统一投影 | implemented_pending_verification | N-07；试写阶段旧任务案例 | DEV + TEST | RP-02C | TASK-SURFACE-01 |
