@@ -573,3 +573,67 @@ evidence: agents 019f5833-44fe-7210-82f3-a1c0d43300ad, 019f5832-a670-70f3-a047-8
 mc_decision: RP-02A 只做 E3 单进程 Task SSOT/provider 前 preclaim；首请求快速返回、worker 和真实 DB 并发继续 not_proven，不得关闭 RMD-TASK-001。
 next_action: 提交并推送需求资产后，派发受控实现 agent；写集不得超过 15 个实现文件/1,700 净新增行。
 ```
+
+### MCE-20260713-RP02A-INITIAL-VERIFY
+
+```text
+event_id: MCE-20260713-RP02A-INITIAL-VERIFY
+occurred_at: 2026-07-13 08:03:03 CST
+event_type: test_result
+source_thread: 019f58b1-6973-74c0-8212-6b9cf6cc6c3f, 019f58b2-0775-7472-b3be-9d619b137d46
+package_id: RP-02A
+issue_ids: RMD-TASK-001
+acceptance_ids: TASK-PRECLAIM-01, TASK-CONCURRENCY-01
+summary: b2b374a 远程门禁成功后，独立 TEST/QUALITY 仍发现 3 个 P1：模型路由未进入真实指纹、方向终态 replay 被阶段门禁拦截、migration 部分提交后不可重入。
+evidence: agents 019f58b1-6973-74c0-8212-6b9cf6cc6c3f and 019f58b2-0775-7472-b3be-9d619b137d46; run 29213667360
+mc_decision: 不接受初次实现收口，立即返工并补复现测试；不修改 issue closed count。
+next_action: 修复 3 个 P1，重新执行本地全量、独立复核和远程 clean-checkout CI。
+```
+
+### MCE-20260713-RP02A-REWORK-VERIFY
+
+```text
+event_id: MCE-20260713-RP02A-REWORK-VERIFY
+occurred_at: 2026-07-13 08:03:03 CST
+event_type: quality_review
+source_thread: 019f58b1-6973-74c0-8212-6b9cf6cc6c3f, 019f58b2-0775-7472-b3be-9d619b137d46
+package_id: RP-02A
+issue_ids: RMD-TASK-001
+acceptance_ids: TASK-PRECLAIM-01, TASK-CONCURRENCY-01
+summary: 3 个 P1 返工后，两名独立验收者均 approved，P0/P1/P2 为 0；RP-02A 11/11、API 110/110、RP-01C 13/13、E2E 13/13、governance 15/15 及工程门禁通过。
+evidence: commit 76dabd8; agents 019f58b1-6973-74c0-8212-6b9cf6cc6c3f and 019f58b2-0775-7472-b3be-9d619b137d46
+mc_decision: 独立验收门禁通过，等待返修提交远程 clean-checkout CI。
+next_action: 推送 76dabd8 并验证所有触发工作流。
+```
+
+### MCE-20260713-RP02A-REMOTE-CI
+
+```text
+event_id: MCE-20260713-RP02A-REMOTE-CI
+occurred_at: 2026-07-13 08:03:03 CST
+event_type: remote_ci_result
+source_thread: 019ed4a5-a2f5-7d13-86d0-0c28381af555
+package_id: RP-02A
+issue_ids: RMD-TASK-001
+acceptance_ids: TASK-PRECLAIM-01, TASK-CONCURRENCY-01
+summary: 返修提交 76dabd8 的 governance、backend E2E 和 RP-01C 组合门禁均 completed/success；组合门禁包含 RP-02A、API 全量、typecheck、build、Prisma validate、diff 和 budget。
+evidence: GitHub Actions runs 29214449969, 29214450023, 29214450008; headSha 76dabd83a50a3d35f3dc7f4f210354bc043debbe
+mc_decision: RP-02A E3 远程证据满足；真实 MySQL/multi-process/worker 继续 not_proven。
+next_action: 写阶段验收记录并更新当前状态单源。
+```
+
+### MCE-20260713-RP02A-MC-PHASE-CLOSE
+
+```text
+event_id: MCE-20260713-RP02A-MC-PHASE-CLOSE
+occurred_at: 2026-07-13 08:03:03 CST
+event_type: mc_decision
+source_thread: 019ed4a5-a2f5-7d13-86d0-0c28381af555
+package_id: RP-02A
+issue_ids: RMD-TASK-001
+acceptance_ids: TASK-PRECLAIM-01, TASK-CONCURRENCY-01
+summary: RP-02A E3 阶段完成；实现、返工、独立 TEST/QUALITY 和远程 CI 均通过，但问题关闭条件仍包含 RP-02B 与真实库 E6。
+evidence: docs/reviews/remediation-rmd-task-001-rp-02a-verification-2026-07-13.md; commits b2b374a and 76dabd8
+mc_decision: RP-02A package completed；RMD-TASK-001 保持 partial；总账关闭数保持 9/42；允许按依赖进入 RP-02B。
+next_action: 对 RP-02B worker、heartbeat、restart 与真实 retry 先做多 agent 需求复核，再冻结实现包。
+```
