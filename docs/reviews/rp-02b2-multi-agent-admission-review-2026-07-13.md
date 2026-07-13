@@ -4,7 +4,7 @@
 
 评审对象：原 `docs/modules/rp-02b-worker-recovery-implementation-package.md` 中的 RP-02B2
 
-当前结论：`rp02b2a0_completed_b2a_authorization_review_approved_pending_governance`。`RP-02B2a0` 已以 `2da6d31` 完成实现、独立验收、远程四路 CI 与 clean checkout；B2a 第三轮单包授权复核四路均 `approved` 且 P0/P1/P2=0，当前只允许提交推送授权资产并验证远程治理。`RMD-TASK-002` 仍为 `partial`；远程治理和 MC 最终裁决前 B2a 尚未授权，B2b/B2c/B3、真实 DB/provider/media 继续冻结。
+当前结论：`rp02b2a_authorized`。`RP-02B2a0` 已以 `2da6d31` 完成实现、独立验收、远程四路 CI 与 clean checkout；B2a 第三轮单包授权复核四路均 `approved` 且 P0/P1/P2=0，授权资产 `48bbac7` 已推送且远程治理 `29269395271` 成功。MC 现只授权 `RP-02B2a` 按 23-file/2,000-net-additions 合同研发。`RMD-TASK-002` 仍为 `partial`；B2b/B2c/B3、真实 DB/provider/media 继续冻结。
 
 版本说明：第 1-15 节只记录历史事实；当前以专属实现包、上位矩阵和本文最新复审节为准。第三轮四路 P0/P1 清零、授权资产提交推送及远程治理通过后，MC 最多可单独授权 `RP-02B2a`；B2b/B2c/B3 和真实 DB/provider/media 继续冻结。
 
@@ -292,3 +292,12 @@
 | QUALITY/安全 | approved | 0/0/0 | 同 diff ADR、`status=ready`、真实计数与禁止 fallback 的治理闭环完整 |
 
 第三轮报告合计 `P0=0、P1=0、P2=0`，B2a 单包开工授权合同首次清零，剩余必须修复项为 0。该结论只允许进入授权资产 commit/push 与远程治理，不代表 B2a 已获研发授权、实现完成或问题关闭。远程治理通过后仍须由 MC 单独裁决；总账继续保持 `9/42`，B2b/B2c/B3、真实 DB/provider/media 继续冻结。
+
+## 19. RP-02B2a 授权资产治理与 MC 裁决
+
+- 授权资产提交：`48bbac7e26854bbae999ef5eacc748d3e6deaa81`。
+- 本地门禁：governance `15/15`、Git budget `6 files / 136 net additions`、tracked 与新增 ADR whitespace check 均通过。
+- 远端分支：`origin/codex/aishortvideo-checkpoint-20260711` 与本地授权资产提交一致。
+- 远程治理：Remediation governance run `29269395271`，`completed/success`。
+
+上述证据满足第三轮复核冻结的授权前置条件。MC 最终裁决：**只授权 `RP-02B2a` 开工**，研发必须严格遵守实现包中的 23-file manifest、2,000 net additions、同 diff ready ADR、24 个 core 场景、route/B2a0 回归和远程 B1→完整 B2a 证据链。该裁决不表示实现、验收或问题关闭；B2b/B2c/B3、HTTP 202/Admin transport、真实 DB/provider/media/E6 继续冻结，总账保持 `9/42`。

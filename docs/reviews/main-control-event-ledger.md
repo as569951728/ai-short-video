@@ -988,3 +988,35 @@ evidence: docs/reviews/rp-02b2-multi-agent-admission-review-2026-07-13.md sectio
 mc_decision: B2a 单包开工授权合同准入清零，只允许进入授权资产 commit/push 与远程治理；不视为研发授权、实现完成或问题关闭。总体关闭进度保持 9/42。
 next_action: 提交并推送当前授权资产，确认远程治理成功后由 MC 单独裁决是否授权 RP-02B2a。B2b/B2c/B3、真实 DB/provider/media 继续冻结。
 ```
+
+### MCE-20260714-RP02B2A-AUTH-ASSETS-GOVERNANCE-PASSED
+
+```text
+event_id: MCE-20260714-RP02B2A-AUTH-ASSETS-GOVERNANCE-PASSED
+occurred_at: 2026-07-14 01:12:00 CST
+event_type: requirements_governance
+source_thread: main-control
+package_id: RP-02B2a
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RETRY-01, GOV-GIT-01
+summary: 第三轮批准后的 B2a 授权资产已以 48bbac7 提交并推送；本地与远端 head 一致，Remediation governance run 29269395271 completed/success。
+evidence: commit 48bbac7e26854bbae999ef5eacc748d3e6deaa81; https://github.com/as569951728/ai-short-video/actions/runs/29269395271; local governance 15/15; git budget 6 files / 136 net additions
+mc_decision: 授权资产与远程治理门禁通过；允许 MC 对 RP-02B2a 做单包最终裁决，不增加 9/42 关闭数。
+next_action: MC 单独决定是否授权 RP-02B2a；B2b/B2c/B3、真实 DB/provider/media 继续冻结。
+```
+
+### MCE-20260714-RP02B2A-AUTHORIZED
+
+```text
+event_id: MCE-20260714-RP02B2A-AUTHORIZED
+occurred_at: 2026-07-14 01:16:32 CST
+event_type: implementation_authorization
+source_thread: main-control
+package_id: RP-02B2a
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RETRY-01, GOV-GIT-01
+summary: 第三轮四路 P0/P1/P2=0、授权资产提交推送及远程治理均通过；MC 只授权 RP-02B2a 实现 15-action execution core、strict provider ABI、双 stale gate、checkpoint/fenced finalize、Prisma 9/6 gate 和 provider-backed retry 冻结。
+evidence: commit 48bbac7; run 29269395271; docs/modules/rp-02b2-dispatcher-transport-implementation-package.md section RP-02B2a; docs/reviews/rp-02b2-multi-agent-admission-review-2026-07-13.md section 19
+mc_decision: 仅授权 RP-02B2a，硬写集 23 files / 2,000 net additions，实施同 diff ADR 必须 status=ready 并写真实计数。禁止 B2b/B2c/B3、HTTP 202/Admin transport、真实 DB/provider/media/E6。
+next_action: 全栈研发按 manifest 实现并自测；不得自行 commit/push。交付后由独立 TEST 与 QUALITY 验收，未通过不得更新总账。
+```
