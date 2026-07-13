@@ -669,3 +669,51 @@ evidence: docs/modules/rp-02b-worker-recovery-implementation-package.md; agents 
 mc_decision: requirements approved_for_implementation，仅允许派发 RP-02B1；RP-02B2/B3 和真实 DB/provider 未授权。
 next_action: 提交并推送需求资产，治理 CI 成功后派发 RP-02B1。
 ```
+
+### MCE-20260713-RP02B1-QUALITY-REWORK
+
+```text
+event_id: MCE-20260713-RP02B1-QUALITY-REWORK
+occurred_at: 2026-07-13 10:45:00 CST
+event_type: quality_review
+source_thread: 019edb3a-a972-75e2-bbb1-774b5ddb6d88, 019f593d-a918-7fc1-b067-3e95172177f7
+package_id: RP-02B1
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TASK-PRECLAIM-01, TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RESTART-01, TASK-RETRY-01
+summary: 工程质量观察和独立 QUALITY 发现新任务仍可能从 objectId/request 合成 source refs，另有幂等优先级、凭据 canary、full-review policy、shared runtime schema 和多结果回执缺口；worker 权威重载/stale 双门禁不属于 B1 已证明范围。
+evidence: quality probes; initial P0/P1/P2 = 0/1/2 after first rework; no real DB/provider/media
+mc_decision: 拒绝初次收口；迁移 runtime parser 到 shared，移除全部 source 回填，新增 14-action 零副作用矩阵、policy/source 同一性、credential canary 和 resultVersionIdsJson。
+next_action: 完整回归后由原 TEST/QUALITY 独立复验。
+```
+
+### MCE-20260713-RP02B1-INDEPENDENT-APPROVAL
+
+```text
+event_id: MCE-20260713-RP02B1-INDEPENDENT-APPROVAL
+occurred_at: 2026-07-13 10:55:00 CST
+event_type: test_result
+source_thread: 019f590c-d6df-7a02-b030-3518c9b1286c, 019f593d-a918-7fc1-b067-3e95172177f7
+package_id: RP-02B1
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TASK-PRECLAIM-01, TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RESTART-01, TASK-RETRY-01
+summary: 返工后 TEST 与 QUALITY 均 APPROVED，P0/P1/P2 = 0；14 action 缺 refs 全部 task/provider/finalize=0，lease/fencing/recovery、safe receipt、Prisma static contract 和完整回归通过。
+evidence: RP02B1 13/13; RP02A 11/11; API 110/110; agents 019f590c-d6df-7a02-b030-3518c9b1286c and 019f593d-a918-7fc1-b067-3e95172177f7
+mc_decision: 接受 RP-02B1 E3 实现，真实 MySQL/多进程/worker/retry 继续 not_proven。
+next_action: 提交、推送并验证 clean checkout 与远程 CI。
+```
+
+### MCE-20260713-RP02B1-REMOTE-CI
+
+```text
+event_id: MCE-20260713-RP02B1-REMOTE-CI
+occurred_at: 2026-07-13 11:03:00 CST
+event_type: remote_ci_result
+source_thread: 019ed4a5-a2f5-7d13-86d0-0c28381af555
+package_id: RP-02B1
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TASK-PRECLAIM-01, TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RESTART-01, TASK-RETRY-01
+summary: 实现提交 415d03a 已推送；本地 detached clean checkout RP02B1 13/13；四条 GitHub Actions 全部 completed/success。
+evidence: commit 415d03a; runs 29220634159, 29220634162, 29220634178, 29220634187
+mc_decision: RP-02B1 E3 远程证据满足；RMD-TASK-002 调整为 partial，RMD-TASK-003 保持 open，总账保持 9/42。
+next_action: 写阶段验收记录；RP-02B2/B3 在单独 MC 授权前继续冻结。
+```
