@@ -539,9 +539,11 @@ B2a0/B2a/B2b/B2c E3 可证明：风险参数同步链、单进程 deterministic 
 
 ## 15. 开工门禁
 
-当前不得派发实现。需要：
+截至 2026-07-13 19:45:10 CST，以下四项门禁均已满足，MC 仅授权 `RP-02B2a0` 开工：
 
 1. 后端架构、产品交互、TEST、QUALITY 对本文复核为 approved，P0/P1=0。
 2. parent package、remediation program、acceptance matrix、issue ledger 和主控事件同步。
 3. 需求资产 commit/push，远程治理 CI 成功。
 4. MC 只授权 `RP-02B2a0`；B2a/B2b/B2c/B3、真实 DB/provider/media 继续冻结。
+
+本节不授权任何后续包。B2a0 研发必须遵守第 2.1、11、14 节的范围、验收命令和 `8 files / 700 net additions` 硬预算；交付后仍须独立 TEST/QUALITY 验收和主控关闭证据，才能决定下一道门禁。
