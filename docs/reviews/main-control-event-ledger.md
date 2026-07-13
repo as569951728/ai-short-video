@@ -892,3 +892,19 @@ evidence: docs/reviews/rp-02b2-multi-agent-admission-review-2026-07-13.md; four 
 mc_decision: 仅推进已批准需求资产 commit/push 与远程治理；总体关闭进度保持 9/42，当前包门禁推进到 4/8。不得自动派发 B2a0/B2a/B2b/B2c/B3。
 next_action: 本地最终治理通过后提交并推送需求资产；远程治理通过后由 MC 单独决定是否授权 RP-02B2a0。
 ```
+
+### MCE-20260713-RP02B2-REQUIREMENTS-GOVERNANCE-PASSED
+
+```text
+event_id: MCE-20260713-RP02B2-REQUIREMENTS-GOVERNANCE-PASSED
+occurred_at: 2026-07-13 19:30:02 CST
+event_type: requirements_governance
+source_thread: main-control
+package_id: RP-02B2a0, RP-02B2a, RP-02B2b, RP-02B2c
+issue_ids: RMD-TASK-002, RMD-TASK-003, RMD-TASK-004, RMD-TASK-005
+acceptance_ids: TASK-PRECLAIM-01, TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RESTART-01, TASK-RETRY-01, TASK-CANCEL-01, TASK-SURFACE-01
+summary: 第十一轮批准后的需求合同已提交并推送；本地与远端 head 均为 42a3f1810d80063c5d8fb3a271aaa7726f87f2bd，GitHub Remediation governance run 29246455165 completed/success。
+evidence: commit 42a3f18; https://github.com/as569951728/ai-short-video/actions/runs/29246455165; local governance 15/15; git diff checks passed
+mc_decision: 当前包门禁推进到 5/8；等待 MC 单独决定是否授权 RP-02B2a0。不得联动授权 B2a/B2b/B2c/B3，不增加 9/42 关闭数。
+next_action: 用户/MC 明确授权 RP-02B2a0 后才可派发研发；真实 DB/provider/media 和 E6 继续冻结。
+```

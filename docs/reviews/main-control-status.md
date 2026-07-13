@@ -36,8 +36,8 @@
 总体关闭进度  [████░░░░░░░░░░░░░░░░]  9 / 42（21%）
 剩余问题      33
 当前整改包    RP-02B2
-当前包门禁进度 [██████████░░░░░░░░░░]  4 / 8（50%）
-当前状态      第十一轮四路 P0/P1/P2 清零，需求资产提交与远程治理中
+当前包门禁进度 [█████████████░░░░░░░]  5 / 8（63%）
+当前状态      第十一轮四路清零且远程治理通过，等待 MC 单独授权 RP-02B2a0
 ```
 
 当前包阶段：
@@ -51,8 +51,8 @@
 | 第九轮拒绝项修订 | 已完成 | 3 路 approved；QUALITY 的 attestation 过期恢复 P1 已进入第十轮稿；`git diff --check` 与 15/15 governance 通过 |
 | 第十轮拒绝项修订 | 已完成 | 3 路 approved；TEST 的 202/200 宽松断言 P1 已拆成第十一轮两个精确子例；`git diff --check` 与 15/15 governance 通过 |
 | 四路 P0/P1 清零 | 已完成 | 第十一轮后端/产品/TEST/QUALITY 均 approved，四路 P0/P1/P2=0 |
-| 需求提交与远程治理 | 进行中 | 正在 commit/push 已批准需求资产并验证远程治理；通过前仍不授权实现 |
-| RP-02B2a0 研发 | 待开始 | 只可单独授权 B2a0；B2a/B2b/B2c/B3 不联动开工 |
+| 需求提交与远程治理 | 已完成 | 需求合同 `42a3f18` 已推送；Remediation governance run `29246455165` success |
+| RP-02B2a0 研发 | 待授权 | 只能由 MC 单独授权 B2a0；B2a/B2b/B2c/B3 不联动开工 |
 | 独立验收 | 待开始 | DEV 自测不能替代 TEST/QUALITY |
 | 关闭证据与总账更新 | 待开始 | 只有正式 closure 才可能推动 9/42 |
 
@@ -84,7 +84,7 @@
 ### 下一触发动作
 
 - 暂缓 `P10-R1`，不得按编号自动继续。
-- `RP-02B1` 已完成实现、返工、独立验收、远程 CI 和干净检出，提交 `415d03a`。原 B2 已拆为 B2a0 风险参数前置修复、B2a 执行核心、B2b API transport/lifecycle 和 B2c admin transport；第十一轮后端/产品/TEST/QUALITY 四路均 approved 且 P0/P1/P2=0，当前只进入需求资产 commit/push 与远程治理，任何 B2 实现尚未授权。RMD-TASK-002 保持 partial、003 保持 open；真实 MySQL 继续等待独立授权。
+- `RP-02B1` 已完成实现、返工、独立验收、远程 CI 和干净检出，提交 `415d03a`。原 B2 已拆为 B2a0 风险参数前置修复、B2a 执行核心、B2b API transport/lifecycle 和 B2c admin transport；第十一轮后端/产品/TEST/QUALITY 四路均 approved 且 P0/P1/P2=0，需求合同 `42a3f18` 已推送且远程治理 run `29246455165` 通过，当前等待 MC 单独授权 B2a0。RMD-TASK-002 保持 partial、003 保持 open；真实 MySQL 继续等待独立授权。
 
 ## 3. 视频模块
 
@@ -112,7 +112,7 @@
 
 ## 4. 测试与验收
 
-- 全栈研发：`RP-02B1` 实现 `415d03a` 已推送；B2 第十一轮四路准入已清零，正在提交/push 需求资产并验证远程治理，B2a0/B2a/B2b/B2c/B3 均不得自动继续。
+- 全栈研发：`RP-02B1` 实现 `415d03a` 已推送；B2 第十一轮四路准入已清零，需求合同 `42a3f18` 已推送且远程治理通过；等待 MC 单独授权 B2a0，B2a/B2b/B2c/B3 均不得自动继续。
 - 独立测试/质量 agent：RP-02B1 最终均 approved，P0/P1/P2 为 0；真实 MySQL、多进程、dispatcher/worker loop、restart/retry 保持 not_proven。
 - `P10-R1` 验收准备保留，但当前不是推荐开工项。
 - 五类专业复盘与二次复盘已完成；执行状态以 `docs/remediation/issue-ledger.md` 为唯一事实源。
@@ -173,7 +173,7 @@
 
 ## 7. 当前唯一推荐动作
 
-1. `RP-02B1` 已完成 E3。B2 专属包第十一轮四路准入已清零，下一步提交/push 需求资产并验证远程治理；通过后 MC 最多只可单独授权 B2a0。B2a、B2b、B2c、B3、真实 DB/provider/media 继续冻结。
+1. `RP-02B1` 已完成 E3。B2 专属包第十一轮四路准入、需求合同提交/push 与远程治理均已通过；下一步等待 MC 单独决定是否授权 B2a0。B2a、B2b、B2c、B3、真实 DB/provider/media 继续冻结。
 2. `RP-01D` 涉及真实 MySQL，只能在安全环境和用户独立授权后执行；管理分组不得整体派发。每个子包独立研发、测试、关闭、commit 和 push。
 3. 小说真实完本金丝雀通过后，再执行 P9-real；P10-R1 只在 `RP-10` 重新决策。
 4. 继续保持真实 DB/provider、外部媒体和平台发布的独立授权门禁。
