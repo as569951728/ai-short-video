@@ -1,6 +1,6 @@
 # RP-02B2 Dispatcher、Fenced Finalize 与异步 Transport 实现包
 
-状态：`rp02b2a0_completed_b2a_single_package_superseded_split_round6_approved_asset_submission_pending_b2b_b2c_b3_frozen`
+状态：`rp02b2a0_completed_b2a_single_package_superseded_split_assets_remote_governance_passed_b2a1_authorized_b2a2_b2a5_b2b_b2c_b3_frozen`
 
 问题：`RMD-TASK-002`，承接 `RMD-TASK-001` 的异步执行阶段；`RMD-TASK-003` 继续冻结到 `RP-02B3`
 
@@ -597,7 +597,7 @@ B2a0/B2a1-B2a5/B2b/B2c E3 可证明：风险参数同步链、单进程 determin
 - E3：repository-owned capability 为 Prisma 9 action 放行、6 action 返回 unsupported；可注入 deterministic Prisma transaction/CAS fixture 证明 9 action 的 authority lock/CAS、资产/receipt/task/event/oplog 原子写，以及 6 unsupported 新 claim 在 preclaim/provider 前 `task/provider/asset=0`、历史 leased task 原子失败且 `provider/asset/receipt/current=0`；最终复合命令按 B1 -> B2a0 -> B2a1 -> B2a2 -> B2a3 -> B2a4 -> B2a5 fail-fast。
 - 只有本包经独立 TEST/QUALITY P0/P1=0、commit/push、远程 clean checkout 后，MC 才能判断原 B2a 阶段完成。真实 MySQL 行锁/事务时钟/P2002、多进程 fencing、真实 provider 和 E6 继续为 `not_proven`。
 
-每包的测试必须与对应生产能力同包交付，禁止把断言集中到最后补齐。每包只能从前一包已独立验收并提交的 clean commit 开始，禁止跨包累计 dirty diff。五个包当前全部 `not_authorized`。
+每包的测试必须与对应生产能力同包交付，禁止把断言集中到最后补齐。每包只能从前一包已独立验收并提交的 clean commit 开始，禁止跨包累计 dirty diff。当前仅 B2a1 已由 MC 单独授权；B2a2-B2a5 仍为 `not_authorized`。
 
 ### B2a1-B2a5 通用 package gate
 
@@ -674,7 +674,7 @@ B2a0/B2a1-B2a5/B2b/B2c E3 可证明：风险参数同步链、单进程 determin
 4. GitHub runs `29256298426`、`29256298444`、`29256298360`、`29256298392` 全部成功；远程干净检出 `2da6d31` 后专属测试再次通过。
 5. 阶段证据为 `docs/reviews/remediation-rmd-task-002-rp-02b2a0-verification-2026-07-13.md`。
 
-`RMD-TASK-002` 继续为 `partial`，总体关闭数保持 9/42。本文不自动授权 B2a1-B2a5/B2b/B2c/B3 或真实 DB/provider/media；下一包必须由 MC 重新核对依赖、预算和授权边界后单独裁决。
+`RMD-TASK-002` 继续为 `partial`，总体关闭数保持 9/42。本段阶段证据本身不自动授权后续包；当前 B2a1 的单独授权以第 18 节和事件账本为准，B2a2-B2a5/B2b/B2c/B3 或真实 DB/provider/media 仍须重新裁决。
 
 ## 17. RP-02B2a 原单包失效与拆包门禁
 
@@ -687,6 +687,16 @@ B2a0/B2a1-B2a5/B2b/B2c E3 可证明：风险参数同步链、单进程 determin
 当前门禁：
 
 1. 原 13-path partial diff 保留在原工作树，禁止 stage/commit/push；治理资产在 `c673eaf` 的 clean worktree 单独修订。
-2. B2a1-B2a5 仍均为 `not_authorized`。第六轮四角色已全部 `approved` 且 P0/P1=0，当前只允许提交推送治理资产并执行远程治理；远程成功后 MC 才能最多单独裁决 B2a1，不得联动授权后续包。
+2. 第六轮四角色已全部 `approved` 且 P0/P1=0；治理资产提交 `501a3cf` 已推送，远程 governance run `29294926790` success。MC 当前只授权 B2a1，不得联动授权后续包；B2a2-B2a5 仍为 `not_authorized`。
 3. 任一包实现后都必须独立 DEV 自测、TEST、QUALITY、commit/push、远程 CI 与 clean checkout；不得把未提交代码带入下一包。
 4. 总账仍为 9/42，`RMD-TASK-002=partial`、`RMD-TASK-003=open`。B2b/B2c/B3、202/Admin transport、真实 DB/provider/media/E6 继续冻结。
+
+## 18. RP-02B2a1 单包授权
+
+截至 2026-07-14 08:20 CST，MC 已核验拆包治理资产提交 `501a3cf` 与远程 Remediation governance run `29294926790` completed/success，只授权 `RP-02B2a1` 从该 clean commit 开工。
+
+- 写集严格限定第 10 节 B2a1 的 18 个路径，硬预算 `18 files / 1,900 net additions`。
+- 研发必须在同一实现 diff 中把 `docs/adr/rp-02b2a1-registry-abi-budget.md` 改为 `status: ready`，将 `baseline_sha` 写为 `501a3cf`，并填写同一 BASE/HEAD 的真实文件数与净新增数；不得提前在授权提交中修改 ADR 模板态。
+- 自测至少执行 `test:rp02b2a1:gate`、`test:rp02b2a1:core`、`test:rp02b2a1`、shared/API 回归、typecheck、Prisma validate、governance、package gate、diff check。
+- 禁止带入原工作树 13-path partial diff，禁止 B2a2-B2a5/B2b/B2c/B3、authority claim、lease/finalize、HTTP 202、Admin transport、真实 DB/provider/media/E6。
+- 研发完成后不得自行提交或继续下一包；主控必须在 15 分钟内派发独立 TEST/QUALITY，P0/P1 清零并形成 commit/push、远程 clean checkout 证据后，才能裁决 B2a2。

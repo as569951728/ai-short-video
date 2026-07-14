@@ -4,7 +4,7 @@
 
 评审对象：原 `docs/modules/rp-02b-worker-recovery-implementation-package.md` 中的 RP-02B2
 
-当前结论：`rp02b2a_single_package_superseded_split_round6_approved_asset_submission_pending`。`RP-02B2a0` 已以 `2da6d31` 完成；原 B2a 23-file/2,000-net-additions 授权因正式生产链验收出现 P0/P1 而撤销。B2a1-B2a5 拆包资产第六轮四角色全部 approved 且 P0/P1=0，当前只进入治理资产提交与远程治理；五包均未授权。`RMD-TASK-002` 仍为 `partial`；总账 9/42；B2b/B2c/B3、真实 DB/provider/media 继续冻结。
+当前结论：`rp02b2a_single_package_superseded_split_assets_remote_governance_passed_b2a1_authorized`。`RP-02B2a0` 已以 `2da6d31` 完成；原 B2a 23-file/2,000-net-additions 授权因正式生产链验收出现 P0/P1 而撤销。B2a1-B2a5 拆包资产第六轮四角色全部 approved 且 P0/P1=0，治理资产提交 `501a3cf` 与远程 governance run `29294926790` 已成功；MC 当前只授权 B2a1。`RMD-TASK-002` 仍为 `partial`；总账 9/42；B2a2-B2a5/B2b/B2c/B3、真实 DB/provider/media 继续冻结。
 
 版本说明：第 1-25 节只记录历史事实；当前以专属实现包第 17 节、上位矩阵和本文第 26 节为准。旧授权资产、远程治理成功和原单包 green tests 不能覆盖后续正式 QUALITY 反证。
 
@@ -432,3 +432,9 @@ MC 合并裁决采用五包，吸收 QUALITY 的安全中间态：
 第六轮四角色全部 approved，合计 `P0=0、P1=0、P2=5`；拆包治理合同准入清零。共同 P2 不阻塞准入：本轮新增事件在未提交账本中的物理顺序需按 `occurred_at` 调整；worktree 预览对五个未跟踪 ADR 各多计一个尾换行，提交前必须以全量 staged、显式 `BASE/HEAD` 的 production gate 输出为唯一权威预算证据。
 
 该批准只允许进入治理资产 commit/push 与远程治理，不等于 B2a1 获得研发授权、实现完成或问题关闭。远程治理成功后仍须由 MC 单独裁决；总账保持 `9/42`，B2a2-B2a5/B2b/B2c/B3、202/Admin、真实 DB/provider/media/E6 继续冻结。
+
+## 27. 拆包资产远程治理与 B2a1 单包裁决
+
+治理资产已按 14 个批准路径提交为 `501a3cf` 并推送至 `codex/rp-02b2a-split-assets-20260714`。远程 Remediation governance run `29294926790` 对同一 head SHA 执行并 completed/success；本地 HEAD、upstream 与远端 head 一致。
+
+MC 据此只授权 `RP-02B2a1 Registry, Strict ABI And Public Retry Freeze`，基线固定为 clean `501a3cf`，硬预算 `18 files / 1,900 net additions`。B2a1 实现必须在同一 diff 更新自己的 ADR 为 `ready` 并填写真实 BASE/HEAD 计数；不得带入原单包 partial diff。B2a2-B2a5/B2b/B2c/B3、authority claim、lease/finalize、202/Admin transport、真实 DB/provider/media/E6 继续 `not_authorized`。

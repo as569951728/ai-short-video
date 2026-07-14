@@ -1,6 +1,6 @@
 # AIShortvideo 主控统一状态
 
-更新时间：2026-07-14 07:34 CST
+更新时间：2026-07-14 08:20 CST
 
 本文件是需求主控的当前状态入口。历史过程和详细证据仍保留在各模块设计、验收和工程质量文档中；发生冲突时，以当前代码、最新正式验收结论和本文件列出的证据为准。
 
@@ -35,10 +35,10 @@
 ```text
 总体关闭进度  [████░░░░░░░░░░░░░░░░]  9 / 42（21%）
 剩余问题      33
-当前整改包    RP-02B2a1-B2a5 拆包治理资产整改
+当前整改包    RP-02B2a1 Registry、严格 provider ABI 与公开 retry 冻结
 拆包准入进度  [████████████████████]  7 / 7（100%）：第六轮四角色全部 approved，P0/P1=0
-研发交付进度  [░░░░░░░░░░░░░░░░░░░░]  0 / 5（0%）：B2a1-B2a5 均未授权
-当前状态      原 B2a 单包授权失效；13-path partial diff 隔离未提交；拆包准入已清零，治理资产提交与远程治理中
+研发交付进度  [░░░░░░░░░░░░░░░░░░░░]  0 / 5（0%）：仅 B2a1 已授权待研发，B2a2-B2a5 未授权
+当前状态      治理资产提交 501a3cf 已推送，远程 governance run 29294926790 success；MC 只授权 B2a1
 ```
 
 当前包阶段：
@@ -76,7 +76,8 @@
 | RP-02B2a1-B2a5 第五轮四路准入 | 已拒绝 4/4 | 四角色均 rejected P0=0/P1=1；唯一 P1 为“当前唯一推荐动作”仍使用整改进行态并称第五轮尚未开始 |
 | 第五轮拒绝项整改 | 已完成 | 当前唯一推荐动作已改为 P1 修订完成、第六轮复核中；diff check、governance 15/15、预算预检和精确陈旧状态检查通过 |
 | RP-02B2a1-B2a5 第六轮四路准入 | 已完成 | 后端 approved 0/0/2、产品 0/0/1、TEST 0/0/1、QUALITY 0/0/1；四路 P0/P1=0，合同无回退 |
-| 拆包资产提交与远程治理 | 进行中 | 只允许提交 14 个治理路径并执行远程治理；远程成功前 B2a1 仍 `not_authorized` |
+| 拆包资产提交与远程治理 | 已完成 | 14 个治理路径提交 `501a3cf` 已推送；Remediation governance run `29294926790` completed/success |
+| RP-02B2a1 MC 单包授权 | 已完成 | 只授权 B2a1 从 clean `501a3cf` 开工；18 files / 1,900 net additions；B2a2-B2a5/B2b/B2c/B3 继续冻结 |
 
 ## 2. 小说模块
 
@@ -106,7 +107,7 @@
 ### 下一触发动作
 
 - 暂缓 `P10-R1`，不得按编号自动继续。
-- `RP-02B1` 与 `RP-02B2a0` 已完成。原 B2a 单包授权虽曾通过治理，但正式生产链验收以更强证据推翻交付，当前授权已失效。下一动作是完成 B2a1-B2a5 拆包资产并重新四路准入；未清零前不得派发任何子包，真实 MySQL 继续等待独立授权。
+- `RP-02B1` 与 `RP-02B2a0` 已完成。原 B2a 单包授权已失效；B2a1-B2a5 拆包资产已四路清零并通过远程治理。当前只派发 B2a1；B2a2-B2a5 必须等待 B2a1 独立验收、commit/push 和远程 clean checkout 后再单独裁决，真实 MySQL 继续等待独立授权。
 
 ## 3. 视频模块
 
@@ -134,7 +135,7 @@
 
 ## 4. 测试与验收
 
-- 全栈研发：`RP-02B1` 和 `RP-02B2a0` 已推送收口；原 B2a partial diff 隔离且禁止提交。B2a1-B2a5/B2b/B2c/B3 均不得自动继续。
+- 全栈研发：`RP-02B1` 和 `RP-02B2a0` 已推送收口；原 B2a partial diff 隔离且禁止提交。仅 B2a1 已授权；B2a2-B2a5/B2b/B2c/B3 均不得自动继续。
 - 独立测试/质量 agent：RP-02B1 最终均 approved，P0/P1/P2 为 0；真实 MySQL、多进程、dispatcher/worker loop、restart/retry 保持 not_proven。
 - `P10-R1` 验收准备保留，但当前不是推荐开工项。
 - 五类专业复盘与二次复盘已完成；执行状态以 `docs/remediation/issue-ledger.md` 为唯一事实源。
@@ -196,7 +197,7 @@
 
 ## 7. 当前唯一推荐动作
 
-1. `RP-02B2a0` 已完成 E3 实现、独立双验收、远程 CI 和 clean checkout。原 B2a 单包已撤销；B2a1-B2a5 第六轮后端/产品/TEST/QUALITY 全部 approved 且 P0/P1=0。当前只允许提交推送 14 个治理路径并执行远程治理；远程治理成功后 MC 最多单独裁决 B2a1。B2a2-B2a5、B2b、B2c、B3、真实 DB/provider/media 继续 `not_authorized`。
+1. 拆包治理资产提交 `501a3cf` 与远程 governance run `29294926790` 已成功。当前只执行 `RP-02B2a1`：从 clean `501a3cf` 重建 Registry、严格 provider ABI 与公开 retry 冻结，严格限制 18 files / 1,900 net additions；完成后立即派独立 TEST/QUALITY。B2a2-B2a5、B2b、B2c、B3、真实 DB/provider/media 继续 `not_authorized`。
 2. `RP-01D` 涉及真实 MySQL，只能在安全环境和用户独立授权后执行；管理分组不得整体派发。每个子包独立研发、测试、关闭、commit 和 push。
 3. 小说真实完本金丝雀通过后，再执行 P9-real；P10-R1 只在 `RP-10` 重新决策。
 4. 继续保持真实 DB/provider、外部媒体和平台发布的独立授权门禁。

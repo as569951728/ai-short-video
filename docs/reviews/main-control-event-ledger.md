@@ -1164,3 +1164,35 @@ evidence: docs/reviews/rp-02b2-multi-agent-admission-review-2026-07-13.md sectio
 mc_decision: 拆包治理合同准入清零，只允许进入 14 个治理路径的 commit/push 与远程治理；不视为 B2a1 研发授权或总账关闭。
 next_action: 全量 stage 后以显式 BASE/HEAD 运行权威预算/manifest 门禁，提交推送并确认远程治理成功；此前 B2a1-B2a5 均 not_authorized。
 ```
+
+### MCE-20260714-RP02B2A-SPLIT-ASSET-REMOTE-GOVERNANCE-PASSED
+
+```text
+event_id: MCE-20260714-RP02B2A-SPLIT-ASSET-REMOTE-GOVERNANCE-PASSED
+occurred_at: 2026-07-14 08:05:04 CST
+event_type: requirements_asset_remote_governance_passed
+source_thread: main-control
+package_id: RP-02B2a1, RP-02B2a2, RP-02B2a3, RP-02B2a4, RP-02B2a5
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TASK-PRECLAIM-01, TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RESTART-01, TASK-RETRY-01, GOV-GIT-01
+summary: 第六轮批准后的 14 个拆包治理路径已提交为 501a3cf 并推送；本地 HEAD、upstream 和远端 head 一致，远程 Remediation governance run 29294926790 对同一 SHA completed/success。
+evidence: commit 501a3cfcdf12341d9f611f0fdd6a6336d4ade483; branch codex/rp-02b2a-split-assets-20260714; GitHub Actions run 29294926790
+mc_decision: 拆包治理资产远程门禁完成，但不增加 9/42 关闭数；允许 MC 最多单独裁决 B2a1。
+next_action: 核对 B2a1 依赖、18-file manifest、1,900 net-additions 硬预算和冻结边界后形成单包授权；不得联动授权后续包。
+```
+
+### MCE-20260714-RP02B2A1-AUTHORIZED
+
+```text
+event_id: MCE-20260714-RP02B2A1-AUTHORIZED
+occurred_at: 2026-07-14 08:20:07 CST
+event_type: implementation_authorization
+source_thread: main-control
+package_id: RP-02B2a1
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TASK-PRECLAIM-01, TASK-WORKER-01, TASK-RETRY-01, GOV-GIT-01
+summary: MC 只授权 B2a1 从 clean 501a3cf 开工，实现 15-action registry、严格 provider public ABI、同步 200 保持和公开 retry freeze；硬预算 18 files / 1,900 net additions。
+evidence: docs/modules/rp-02b2-dispatcher-transport-implementation-package.md section 18; docs/adr/rp-02b2a1-registry-abi-budget.md; commit 501a3cf; GitHub Actions run 29294926790
+mc_decision: 授权 RP-02B2a1。研发必须在同一实现 diff 将 B2a1 ADR 改为 ready、baseline_sha=501a3cf 并填写真实计数；完成后停下，独立 TEST/QUALITY 验收前不得提交或继续 B2a2。
+next_action: 向全栈研发会话派发 B2a1，并向测试会话派发只读验收准备。B2a2-B2a5/B2b/B2c/B3、authority claim、lease/finalize、202/Admin transport、真实 DB/provider/media/E6 继续冻结。
+```
