@@ -219,50 +219,37 @@ describe('RP-02A generation task SSOT and provider preclaim', () => {
     const serviceSource = await readFile('src/modules/novels/services/novelService.ts', 'utf8');
     const serviceFile = ts.createSourceFile('novelService.ts', serviceSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
     const directProviderNames = new Set(['directionProvider', 'structureProvider', 'trialProvider', 'bodyProvider', 'fullReviewProvider']);
-    let claimedGenerationCalls = 0;
-    let registryProviderCallbacks = 0;
-    let directProviderReferences = 0;
-
-    const visit = (node: ts.Node): void => {
-      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'executeClaimedGeneration') {
-        claimedGenerationCalls += 1;
-        const input = node.arguments[0];
-        assert.ok(input && ts.isObjectLiteralExpression(input), 'executeClaimedGeneration must receive an object literal contract');
-        const providerProperty = input.properties.find(
-          (property): property is ts.PropertyAssignment =>
-            ts.isPropertyAssignment(property) && ts.isIdentifier(property.name) && property.name.text === 'provider'
-        );
-        assert.ok(providerProperty, 'executeClaimedGeneration must declare a provider callback');
-
-        let registryCalls = 0;
-        const visitProvider = (providerNode: ts.Node): void => {
-          if (
-            ts.isCallExpression(providerNode) &&
-            ts.isIdentifier(providerNode.expression) &&
-            providerNode.expression.text === 'executeNovelProviderAction'
-          ) {
-            registryCalls += 1;
-          }
-          if (
-            ts.isPropertyAccessExpression(providerNode) &&
-            providerNode.expression.kind === ts.SyntaxKind.ThisKeyword &&
-            directProviderNames.has(providerNode.name.text)
-          ) {
-            directProviderReferences += 1;
-          }
-          ts.forEachChild(providerNode, visitProvider);
-        };
-        visitProvider(providerProperty.initializer);
-        assert.ok(registryCalls > 0, 'each claimed-generation provider callback must dispatch through the provider registry');
-        registryProviderCallbacks += 1;
-      }
-      ts.forEachChild(node, visit);
+    const descendants = (root: ts.Node, matches: (node: ts.Node) => boolean): ts.Node[] => {
+      const found: ts.Node[] = [];
+      const visit = (node: ts.Node): void => { if (matches(node)) found.push(node); ts.forEachChild(node, visit); };
+      visit(root);
+      return found;
     };
-
-    visit(serviceFile);
-    assert.equal(claimedGenerationCalls, 11);
-    assert.equal(registryProviderCallbacks, 11);
-    assert.equal(directProviderReferences, 0);
+    const claimedCalls = descendants(serviceFile, (node) =>
+      ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'executeClaimedGeneration'
+    ) as ts.CallExpression[];
+    const providerCallbacks = claimedCalls.map((call) => {
+      const contract = call.arguments[0];
+      assert.ok(contract && ts.isObjectLiteralExpression(contract), 'claimed generation requires an object literal contract');
+      const provider = contract.properties.find((property): property is ts.PropertyAssignment =>
+        ts.isPropertyAssignment(property) && ts.isIdentifier(property.name) && property.name.text === 'provider'
+      );
+      assert.ok(provider, 'claimed generation requires a provider callback');
+      return provider.initializer;
+    });
+    const registryProviderCallbacks = providerCallbacks.filter((callback) => {
+      const calls = descendants(callback, (node) =>
+        ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'executeNovelProviderAction'
+      );
+      assert.ok(calls.length > 0, 'each provider callback must dispatch through the registry');
+      return calls.length > 0;
+    });
+    const directProviderReferences = providerCallbacks.flatMap((callback) => descendants(callback, (node) =>
+      ts.isPropertyAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword && directProviderNames.has(node.name.text)
+    ));
+    assert.equal(claimedCalls.length, 11);
+    assert.equal(registryProviderCallbacks.length, 11);
+    assert.equal(directProviderReferences.length, 0);
   });
 
   it('accepts Idempotency-Key, rejects mismatched body aliases, and does not expose claim internals', async () => {
