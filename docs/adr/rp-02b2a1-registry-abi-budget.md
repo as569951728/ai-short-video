@@ -7,7 +7,7 @@ baseline_sha: 501a3cfcdf12341d9f611f0fdd6a6336d4ade483
 hard_max_files: 18
 hard_max_net_additions: 1900
 exceeded_budget: package_specific_budget
-actual_files: 17
+actual_files: 18
 actual_net_additions: 1893
 split_reason: Registry, strict provider ABI, public retry freeze, exact call-site tests, and the reusable workflow package gate must land together so neither user-visible retry nor governance can bypass the same contract.
 owner: MC

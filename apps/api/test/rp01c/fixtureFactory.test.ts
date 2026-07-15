@@ -255,7 +255,7 @@ describe('RP-01C Fastify task projection', () => {
       if (scenarioId === 'failed_timeout') assert.equal(body.data.failureCategory, 'timeout');
       if (scenarioId === 'stale_source') {
         assert.equal(body.data.retryable, false);
-        assert.equal(body.data.nextAction.type, 'regenerate');
+        assert.equal(body.data.nextAction.type, 'disabled');
       }
       if (scenarioId === 'active_conflict') {
         assert.equal(body.data.conflictScope, 'novel_body_batch');
