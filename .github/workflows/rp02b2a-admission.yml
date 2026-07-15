@@ -1,0 +1,457 @@
+name: RP-02B2a trusted admission
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+
+concurrency:
+  group: rp02b2a-admission-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+jobs:
+  admission:
+    name: Trusted admission
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      run_id: ${{ steps.evidence.outputs.run_id }}
+      run_attempt: ${{ steps.evidence.outputs.run_attempt }}
+      event_name: ${{ steps.evidence.outputs.event_name }}
+      workflow_path: ${{ steps.evidence.outputs.workflow_path }}
+      workflow_id: ${{ steps.evidence.outputs.workflow_id }}
+      workflow_sha: ${{ steps.evidence.outputs.workflow_sha }}
+      pr_number: ${{ steps.evidence.outputs.pr_number }}
+      pr_base_ref: ${{ steps.evidence.outputs.pr_base_ref }}
+      pr_base_sha: ${{ steps.evidence.outputs.pr_base_sha }}
+      pr_head_sha: ${{ steps.evidence.outputs.pr_head_sha }}
+      gate_source_sha: ${{ steps.evidence.outputs.gate_source_sha }}
+      g0_evidence_sha: ${{ steps.evidence.outputs.g0_evidence_sha }}
+      g0_evidence_digest: ${{ steps.evidence.outputs.g0_evidence_digest }}
+      authorized_package_id: ${{ steps.evidence.outputs.authorized_package_id }}
+      authorized_predecessor_sha: ${{ steps.evidence.outputs.authorized_predecessor_sha }}
+      candidate_sha: ${{ steps.evidence.outputs.candidate_sha }}
+      package_id: ${{ steps.evidence.outputs.package_id }}
+      manifest_digest: ${{ steps.evidence.outputs.manifest_digest }}
+      test_command: ${{ steps.evidence.outputs.test_command }}
+    steps:
+      # Only repository-controlled trusted code is materialized before admission succeeds.
+      - name: Checkout trusted gate source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ vars.RP02B2A_GATE_SOURCE_SHA }}
+          path: trusted
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+          lfs: false
+
+      - name: Validate trusted event context
+        id: context
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_PATH: .github/workflows/rp02b2a-admission.yml
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          EVENT_REF: ${{ github.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GATE_SOURCE_SHA: ${{ vars.RP02B2A_GATE_SOURCE_SHA }}
+          G0_EVIDENCE_SHA: ${{ vars.RP02B2A_G0_EVIDENCE_SHA }}
+          AUTHORIZED_PACKAGE_ID: ${{ vars.RP02B2A_AUTHORIZED_PACKAGE_ID }}
+          AUTHORIZED_PREDECESSOR_SHA: ${{ vars.RP02B2A_AUTHORIZED_PREDECESSOR_SHA }}
+        run: |
+          set -euo pipefail
+          require_sha() {
+            local label="$1"
+            local value="$2"
+            if [[ ! "$value" =~ ^[0-9a-f]{40}$ || "$value" =~ ^0{40}$ ]]; then
+              echo "$label must be a non-zero full commit SHA" >&2
+              exit 1
+            fi
+          }
+
+          [[ "$EVENT_NAME" == "pull_request_target" ]] || {
+            echo "authoritative admission requires pull_request_target" >&2
+            exit 1
+          }
+          [[ "$RUN_ID" =~ ^[1-9][0-9]*$ && "$RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || {
+            echo "workflow run identity is invalid" >&2
+            exit 1
+          }
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] || {
+            echo "pull request number is invalid" >&2
+            exit 1
+          }
+          default_branch="$(gh api "repos/$GITHUB_REPOSITORY" --jq '.default_branch')"
+          [[ -n "$default_branch" && "$PR_BASE_REF" == "$default_branch" && "$EVENT_REF" == "refs/heads/$default_branch" ]] || {
+            echo "authoritative admission requires a pull request targeting the repository default branch" >&2
+            exit 1
+          }
+          require_sha "workflow SHA" "$WORKFLOW_SHA"
+          require_sha "gate source SHA" "$GATE_SOURCE_SHA"
+          require_sha "G0 evidence SHA" "$G0_EVIDENCE_SHA"
+          require_sha "pull request base SHA" "$PR_BASE_SHA"
+          require_sha "pull request head SHA" "$PR_HEAD_SHA"
+          require_sha "authorized predecessor SHA" "$AUTHORIZED_PREDECESSOR_SHA"
+          [[ "$AUTHORIZED_PACKAGE_ID" =~ ^RP-02B2a[2-5]$ ]] || {
+            echo "authorized package ID must select RP-02B2a2 through RP-02B2a5" >&2
+            exit 1
+          }
+          [[ "$(git -C trusted rev-parse HEAD)" == "$GATE_SOURCE_SHA" ]] || {
+            echo "trusted checkout does not match RP02B2A_GATE_SOURCE_SHA" >&2
+            exit 1
+          }
+
+          run_identity="$(
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" \
+              --jq '[.id,.run_attempt,.workflow_id,.path,.event,.head_sha] | @tsv'
+          )"
+          IFS=$'\t' read -r api_run_id api_run_attempt workflow_id api_workflow_path api_event api_head_sha <<< "$run_identity"
+          [[ "$api_run_id" == "$RUN_ID" && "$api_run_attempt" == "$RUN_ATTEMPT" ]] || {
+            echo "current run API identity does not match this run attempt" >&2
+            exit 1
+          }
+          [[ "$workflow_id" =~ ^[1-9][0-9]*$ ]] || {
+            echo "current run API returned an invalid workflow ID" >&2
+            exit 1
+          }
+          case "$api_workflow_path" in
+            "$WORKFLOW_PATH"|"$WORKFLOW_PATH@${EVENT_REF#refs/heads/}"|"$WORKFLOW_PATH@$EVENT_REF") ;;
+            *)
+              echo "current run API workflow path does not match the frozen path" >&2
+              exit 1
+              ;;
+          esac
+          [[ "$api_event" == "$EVENT_NAME" && "$api_head_sha" == "$WORKFLOW_SHA" ]] || {
+            echo "current run API event or workflow revision does not match" >&2
+            exit 1
+          }
+          [[ "$WORKFLOW_REF" == "$GITHUB_REPOSITORY/$WORKFLOW_PATH@$EVENT_REF" ]] || {
+            echo "github.workflow_ref does not match the authoritative workflow source" >&2
+            exit 1
+          }
+
+          {
+            echo "run_id=$RUN_ID"
+            echo "run_attempt=$RUN_ATTEMPT"
+            echo "event_name=$EVENT_NAME"
+            echo "workflow_path=$WORKFLOW_PATH"
+            echo "workflow_id=$workflow_id"
+            echo "workflow_sha=$WORKFLOW_SHA"
+            echo "pr_number=$PR_NUMBER"
+            echo "pr_base_ref=$PR_BASE_REF"
+            echo "pr_base_sha=$PR_BASE_SHA"
+            echo "candidate_sha=$PR_HEAD_SHA"
+            echo "gate_source_sha=$GATE_SOURCE_SHA"
+            echo "g0_evidence_sha=$G0_EVIDENCE_SHA"
+            echo "authorized_package_id=$AUTHORIZED_PACKAGE_ID"
+            echo "authorized_predecessor_sha=$AUTHORIZED_PREDECESSOR_SHA"
+          } >> "$GITHUB_OUTPUT"
+
+      # The candidate is fetched into the trusted repository as objects only; it is not checked out or executed here.
+      - name: Fetch and bind candidate objects
+        shell: bash
+        working-directory: trusted
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_PATH: ${{ steps.context.outputs.workflow_path }}
+          WORKFLOW_SHA: ${{ steps.context.outputs.workflow_sha }}
+          GATE_SOURCE_SHA: ${{ steps.context.outputs.gate_source_sha }}
+          G0_EVIDENCE_SHA: ${{ steps.context.outputs.g0_evidence_sha }}
+          PR_NUMBER: ${{ steps.context.outputs.pr_number }}
+          PR_BASE_SHA: ${{ steps.context.outputs.pr_base_sha }}
+          PR_HEAD_SHA: ${{ steps.context.outputs.candidate_sha }}
+          AUTHORIZED_PREDECESSOR_SHA: ${{ steps.context.outputs.authorized_predecessor_sha }}
+        run: |
+          set -euo pipefail
+          scrub_fetch_auth() {
+            unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0 auth_header GH_TOKEN
+            git config --local --unset-all http.https://github.com/.extraheader 2>/dev/null || true
+          }
+          trap scrub_fetch_auth EXIT
+
+          auth_header="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w 0)"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth_header"
+          git fetch --no-tags --no-recurse-submodules origin \
+            "+refs/pull/${PR_NUMBER}/head:refs/remotes/origin/rp02b2a-candidate"
+          git fetch --no-tags --no-recurse-submodules origin \
+            "$WORKFLOW_SHA" "$PR_BASE_SHA" "$G0_EVIDENCE_SHA" "$AUTHORIZED_PREDECESSOR_SHA"
+          scrub_fetch_auth
+          trap - EXIT
+          if git config --local --get-regexp '^http\..*\.extraheader$' >/dev/null 2>&1; then
+            echo "temporary Git authentication was not scrubbed" >&2
+            exit 1
+          fi
+
+          [[ "$(git rev-parse refs/remotes/origin/rp02b2a-candidate)" == "$PR_HEAD_SHA" ]] || {
+            echo "fetched candidate does not match the event head SHA" >&2
+            exit 1
+          }
+          git cat-file -e "${PR_BASE_SHA}^{commit}"
+          git cat-file -e "${PR_HEAD_SHA}^{commit}"
+          git cat-file -e "${G0_EVIDENCE_SHA}^{commit}"
+          git cat-file -e "${AUTHORIZED_PREDECESSOR_SHA}^{commit}"
+          cmp \
+            <(git show "${GATE_SOURCE_SHA}:${WORKFLOW_PATH}") \
+            <(git show "${WORKFLOW_SHA}:${WORKFLOW_PATH}")
+
+      - name: Run trusted package gate
+        id: gate
+        shell: bash
+        working-directory: trusted
+        env:
+          GATE_SOURCE_SHA: ${{ steps.context.outputs.gate_source_sha }}
+          G0_EVIDENCE_SHA: ${{ steps.context.outputs.g0_evidence_sha }}
+          PR_BASE_SHA: ${{ steps.context.outputs.pr_base_sha }}
+          PR_HEAD_SHA: ${{ steps.context.outputs.candidate_sha }}
+          AUTHORIZED_PACKAGE_ID: ${{ steps.context.outputs.authorized_package_id }}
+          AUTHORIZED_PREDECESSOR_SHA: ${{ steps.context.outputs.authorized_predecessor_sha }}
+        run: |
+          set -euo pipefail
+          env \
+            -u DATABASE_URL \
+            -u DEEPSEEK_API_KEY \
+            -u DEEPSEEK_BASE_URL \
+            -u DEEPSEEK_MODEL \
+            -u DEEPSEEK_STRUCTURE_MODEL \
+            -u DEEPSEEK_REASONER_MODEL \
+            -u DEEPSEEK_TIMEOUT_MS \
+            -u DEEPSEEK_MAX_RETRIES \
+            -u DEPLOYMENT_ACTOR_TENANT_ID \
+            -u DEPLOYMENT_ACTOR_USER_ID \
+            NODE_ENV=production \
+            AI_PROVIDER_MODE=mock \
+            DOTENV_CONFIG_PATH=/dev/null \
+            node scripts/rp02b2a-package-gate.mjs \
+              --github-output \
+              --event pull_request_target \
+              --gate-source "$GATE_SOURCE_SHA" \
+              --g0-evidence-sha "$G0_EVIDENCE_SHA" \
+              --event-base "$PR_BASE_SHA" \
+              --event-head "$PR_HEAD_SHA" \
+              --authorized-package-id "$AUTHORIZED_PACKAGE_ID" \
+              --authorized-predecessor-sha "$AUTHORIZED_PREDECESSOR_SHA" \
+              >> "$GITHUB_OUTPUT"
+
+      - name: Bind admission evidence
+        id: evidence
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ steps.context.outputs.run_id }}
+          RUN_ATTEMPT: ${{ steps.context.outputs.run_attempt }}
+          EVENT_NAME: ${{ steps.context.outputs.event_name }}
+          WORKFLOW_PATH: ${{ steps.context.outputs.workflow_path }}
+          WORKFLOW_ID: ${{ steps.context.outputs.workflow_id }}
+          WORKFLOW_SHA: ${{ steps.context.outputs.workflow_sha }}
+          PR_NUMBER: ${{ steps.context.outputs.pr_number }}
+          PR_BASE_REF: ${{ steps.context.outputs.pr_base_ref }}
+          PR_BASE_SHA: ${{ steps.context.outputs.pr_base_sha }}
+          PR_HEAD_SHA: ${{ steps.context.outputs.candidate_sha }}
+          GATE_SOURCE_SHA: ${{ steps.context.outputs.gate_source_sha }}
+          G0_EVIDENCE_SHA: ${{ steps.context.outputs.g0_evidence_sha }}
+          AUTHORIZED_PACKAGE_ID: ${{ steps.context.outputs.authorized_package_id }}
+          AUTHORIZED_PREDECESSOR_SHA: ${{ steps.context.outputs.authorized_predecessor_sha }}
+          CANDIDATE_SHA: ${{ steps.context.outputs.candidate_sha }}
+          PACKAGE_ID: ${{ steps.gate.outputs.package_id }}
+          GATE_G0_EVIDENCE_SHA: ${{ steps.gate.outputs.g0_evidence_sha }}
+          G0_EVIDENCE_DIGEST: ${{ steps.gate.outputs.g0_evidence_digest }}
+          MANIFEST_DIGEST: ${{ steps.gate.outputs.manifest_digest }}
+          GATE_EVENT_BASE_SHA: ${{ steps.gate.outputs.event_base_sha }}
+          TEST_COMMAND: ${{ steps.gate.outputs.test_command }}
+        run: |
+          set -euo pipefail
+
+          live_pr="$(
+            gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" \
+              --jq '[.number,.state,.base.ref,.base.sha,.head.sha] | @tsv'
+          )"
+          IFS=$'\t' read -r live_pr_number live_pr_state live_base_ref live_base_sha live_head_sha <<< "$live_pr"
+          [[ "$live_pr_number" == "$PR_NUMBER" && "$live_pr_state" == "open" ]] || {
+            echo "pull request is no longer the open admission target" >&2
+            exit 1
+          }
+          [[ "$live_base_ref" == "$PR_BASE_REF" && "$live_base_sha" == "$PR_BASE_SHA" && "$live_head_sha" == "$PR_HEAD_SHA" ]] || {
+            echo "stale pull_request_target snapshot: current PR base ref/base SHA/head SHA changed" >&2
+            exit 1
+          }
+
+          case "${AUTHORIZED_PACKAGE_ID}:${PACKAGE_ID}:${TEST_COMMAND}" in
+            RP-02B2a2:RP-02B2a2:test:rp02b2a2) ;;
+            RP-02B2a3:RP-02B2a3:test:rp02b2a3) ;;
+            RP-02B2a4:RP-02B2a4:test:rp02b2a4) ;;
+            RP-02B2a5:RP-02B2a5:test:rp02b2a5) ;;
+            *)
+              echo "trusted gate returned a package or command outside the fixed admission map" >&2
+              exit 1
+              ;;
+          esac
+          [[ "$GATE_EVENT_BASE_SHA" == "$PR_BASE_SHA" ]] || {
+            echo "trusted gate did not bind the pull request base SHA" >&2
+            exit 1
+          }
+          [[ "$GATE_G0_EVIDENCE_SHA" == "$G0_EVIDENCE_SHA" ]] || {
+            echo "trusted gate did not bind the repository-controlled G0 evidence SHA" >&2
+            exit 1
+          }
+          [[ "$G0_EVIDENCE_DIGEST" =~ ^[0-9a-f]{64}$ ]] || {
+            echo "trusted gate did not return a valid G0 evidence digest" >&2
+            exit 1
+          }
+          [[ "$MANIFEST_DIGEST" =~ ^[0-9a-f]{64}$ ]] || {
+            echo "trusted gate did not return a valid manifest digest" >&2
+            exit 1
+          }
+
+          install -d -m 0700 "$RUNNER_TEMP/rp02b2a-admission"
+          jq --null-input --compact-output --sort-keys \
+            --arg schema "rp02b2a-admission/v1" \
+            --argjson run_id "$RUN_ID" \
+            --argjson run_attempt "$RUN_ATTEMPT" \
+            --arg event_name "$EVENT_NAME" \
+            --argjson workflow_id "$WORKFLOW_ID" \
+            --arg workflow_path "$WORKFLOW_PATH" \
+            --arg workflow_sha "$WORKFLOW_SHA" \
+            --argjson pr_number "$PR_NUMBER" \
+            --arg pr_base_ref "$PR_BASE_REF" \
+            --arg pr_base_sha "$PR_BASE_SHA" \
+            --arg pr_head_sha "$PR_HEAD_SHA" \
+            --arg gate_source_sha "$GATE_SOURCE_SHA" \
+            --arg g0_evidence_sha "$G0_EVIDENCE_SHA" \
+            --arg g0_evidence_digest "$G0_EVIDENCE_DIGEST" \
+            --arg authorized_package_id "$AUTHORIZED_PACKAGE_ID" \
+            --arg authorized_predecessor_sha "$AUTHORIZED_PREDECESSOR_SHA" \
+            --arg package_id "$PACKAGE_ID" \
+            --arg manifest_digest "$MANIFEST_DIGEST" \
+            --arg test_command "$TEST_COMMAND" \
+            '{
+              schema: $schema,
+              run_id: $run_id,
+              run_attempt: $run_attempt,
+              event_name: $event_name,
+              workflow_id: $workflow_id,
+              workflow_path: $workflow_path,
+              workflow_sha: $workflow_sha,
+              pr_number: $pr_number,
+              pr_base_ref: $pr_base_ref,
+              pr_base_sha: $pr_base_sha,
+              pr_head_sha: $pr_head_sha,
+              candidate_sha: $pr_head_sha,
+              gate_source_sha: $gate_source_sha,
+              g0_evidence_sha: $g0_evidence_sha,
+              g0_evidence_digest: $g0_evidence_digest,
+              authorized_package_id: $authorized_package_id,
+              authorized_predecessor_sha: $authorized_predecessor_sha,
+              package_id: $package_id,
+              manifest_digest: $manifest_digest,
+              test_command: $test_command
+            }' > "$RUNNER_TEMP/rp02b2a-admission/admission.json"
+
+          {
+            echo "run_id=$RUN_ID"
+            echo "run_attempt=$RUN_ATTEMPT"
+            echo "event_name=$EVENT_NAME"
+            echo "workflow_path=$WORKFLOW_PATH"
+            echo "workflow_id=$WORKFLOW_ID"
+            echo "workflow_sha=$WORKFLOW_SHA"
+            echo "pr_number=$PR_NUMBER"
+            echo "pr_base_ref=$PR_BASE_REF"
+            echo "pr_base_sha=$PR_BASE_SHA"
+            echo "pr_head_sha=$PR_HEAD_SHA"
+            echo "gate_source_sha=$GATE_SOURCE_SHA"
+            echo "g0_evidence_sha=$G0_EVIDENCE_SHA"
+            echo "g0_evidence_digest=$G0_EVIDENCE_DIGEST"
+            echo "authorized_package_id=$AUTHORIZED_PACKAGE_ID"
+            echo "authorized_predecessor_sha=$AUTHORIZED_PREDECESSOR_SHA"
+            echo "candidate_sha=$CANDIDATE_SHA"
+            echo "package_id=$PACKAGE_ID"
+            echo "manifest_digest=$MANIFEST_DIGEST"
+            echo "test_command=$TEST_COMMAND"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload canonical admission evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rp02b2a-admission-pr-${{ steps.evidence.outputs.pr_number }}-run-${{ steps.evidence.outputs.run_id }}-attempt-${{ steps.evidence.outputs.run_attempt }}
+          path: ${{ runner.temp }}/rp02b2a-admission/admission.json
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+          overwrite: false
+
+  candidate:
+    name: Admitted candidate
+    needs: admission
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      # Candidate materialization and execution are allowed only after the trusted admission job succeeds.
+      - name: Checkout admitted candidate
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ needs.admission.outputs.candidate_sha }}
+          token: ${{ github.token }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+          lfs: false
+
+      - name: Scrub candidate checkout authentication
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config --local --unset-all http.https://github.com/.extraheader 2>/dev/null || true
+          rm -f "$HOME/.git-credentials"
+          if git config --local --get-regexp '^http\..*\.extraheader$' >/dev/null 2>&1; then
+            echo "candidate checkout authentication remains configured" >&2
+            exit 1
+          fi
+          test ! -e "$HOME/.git-credentials"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.14.0
+
+      - name: Install admitted dependencies
+        run: npm ci
+
+      - name: Run trusted-selected package tests
+        shell: bash
+        env:
+          B2A_TEST_COMMAND: ${{ needs.admission.outputs.test_command }}
+        run: |
+          set -euo pipefail
+          case "$B2A_TEST_COMMAND" in
+            test:rp02b2a2) npm run test:rp02b2a2 ;;
+            test:rp02b2a3) npm run test:rp02b2a3 ;;
+            test:rp02b2a4) npm run test:rp02b2a4 ;;
+            test:rp02b2a5) npm run test:rp02b2a5 ;;
+            *)
+              echo "refusing non-allowlisted package test command" >&2
+              exit 1
+              ;;
+          esac

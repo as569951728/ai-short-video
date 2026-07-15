@@ -89,6 +89,20 @@ interface ExecutionAuditContextV1 {
   pageVersionSnapshot?: ActionPageVersionSnapshotV1;
 }
 
+interface ExecutionEnvelopeV1_1<TAction extends NovelProviderAction, TRequest, TSourceRefs> {
+  schemaVersion: '1.1';
+  tenantId: string;
+  novelId: string;
+  objectType: string;
+  objectId: string;
+  action: TAction;
+  normalizedRequest: TRequest;
+  sourceVersionRefs: TSourceRefs;
+  policyProfileVersionId: string | null;
+  modelRoutingVersion: string;
+  auditContext: ExecutionAuditContextV1;
+}
+
 interface ActionPageVersionSnapshotV1 {
   novelUpdatedAt: string;
   currentDirectionVersionId?: string | null;
@@ -104,12 +118,43 @@ interface ActionPageVersionSnapshotV1 {
 - `requestedByUserId` 只能来自已鉴权 context；worker context 使用 task 的 tenant/user，不回退默认租户或默认用户。B2 新任务必须非空；legacy task 缺 tenant/user/envelope 时安全失败 `WORKER_PAYLOAD_UNSUPPORTED`，provider/asset=0。
 - `pageVersionSnapshot` 只允许上述白名单字段。现有 `unknown` client payload 必须在 claim 前解析为该结构，未知字段或敏感值拒绝；不得把原对象直接持久化。
 - 结构生成补 `regenerateReason?`；trial chapter one 补 `regenerateReason?`；trial followup 固定 `trialRunId/selectedCandidateVersionId/chapterPlanVersionId/confirmRisk/selectionReason`。high/blocking 风险候选必须同时满足 `confirmRisk === true` 与非空 `selectionReason`，并由 shared schema、route、NovelService、ExecutionEnvelope、operation log 全链保留；固定默认原因只允许非风险候选。chapter rewrite 同时保留 `instruction` 与 `reason`；impact assess 使用 `instruction?` 与 `reason?` 的明确映射；adopt-impact 保留 `reason` 和安全 page snapshot。
-- envelope 仍受 strict union、32 KiB、安全字段和值 canary、canonical JSON/requestHash 一致性约束。
-- 同 key 重放时，服务端必须先按 `tenantId+userId+action+objectId+idempotencyKey` 加载既存 task；身份一致时复用该 task 持久化的 `requestedAt`、服务端 authority snapshot 和规范化 request 重算 canonical envelope/requestHash，禁止使用新的 `now` 或调用方提交的 snapshot。任何 hash/identity 不一致都稳定返回 typed conflict，provider/asset=0。
+- `ExecutionEnvelopeV1_1` 保留 V1 的 `objectType`、`policyProfileVersionId` 与 `modelRoutingVersion`；`effectiveRequest` 仅重命名为 action-specific `normalizedRequest`。迁移不得丢弃或从客户端补写这三个既有执行字段。
+- canonical payload 是**不含 `requestHash`** 的完整 `ExecutionEnvelopeV1_1`。服务端对该 payload 做 strict parse、canonical JSON 和 SHA-256，结果仅写入 task 顶层 `requestHash`；匹配时重新 canonicalize envelope 并与 task 顶层 hash 比较。禁止把 hash 放回 envelope 后对自身求 hash。
+- envelope 仍受 strict union、32 KiB、安全字段和值 canary、canonical JSON/task 顶层 requestHash 一致性约束。B2 新任务只写 `schemaVersion='1.1'`，`tenantId` 与 `auditContext` 都是基接口必填字段；legacy 缺版本、旧版本或未知版本只能走同步 parser/replay 的 fail-closed 兼容，不得原地升级、补字段或进入 lease/worker。
+- 同 key 重放时，服务端必须先按 `tenantId+userId+action+objectId+idempotencyKey` 加载既存 task；身份一致时复用该 task 持久化的 `requestedAt`、服务端 authority snapshot 和规范化 request 重算 canonical envelope/requestHash，禁止使用新的 `now` 或调用方提交的 snapshot。任何 hash/identity 不一致都稳定返回 typed conflict，八类副作用 `task/event/provider/asset/receipt/current/operation-log/child` 全为 0。
+
+### 3.1 B2a2 可信 RequestContext 注入合同
+
+`buildApp` 必须新增可注入的 authenticated `RequestContextResolver`，并原样传给 15 个 provider-backed route；B2a2 不允许 route 或 service 自行创建可信身份。生产 `main.ts` 必须从 `config/env.ts` 已校验的服务端 deployment actor 配置 `DEPLOYMENT_ACTOR_TENANT_ID` 与 `DEPLOYMENT_ACTOR_USER_ID` 显式构造 resolver；该配置不是客户端 header/body，也不是 `tenant_default/user_default`。生产配置缺失或空白时启动 fail closed，不得暴露一个会回退默认身份的 B2 route：
+
+```ts
+interface TrustedRequestActor {
+  tenantId: string;
+  userId: string;
+}
+
+type RequestContextResolver = (request: FastifyRequest) => Promise<TrustedRequestActor | null>;
+```
+
+- resolver 是 B2 task/envelope 的唯一 actor 来源。每次请求只解析一次，结果规范化后以不可变值同时传给 authority loader、task claim 与 envelope builder；`task.tenantId === envelope.tenantId === actor.tenantId` 且 `task.createdBy === envelope.auditContext.requestedByUserId === actor.userId`。
+- 请求 body、query、cookie 及任意 `x-tenant-id`/`x-user-id` 伪造值都不能覆盖 resolver 结果，也不能参与 idempotency scope、authority lookup 或 canonical hash；测试必须带冲突 canary 证明伪造值零命中 task/envelope/provider payload。
+- resolver 未注入、返回 `null`/`undefined`、抛错，或返回缺失/空白 tenant/user 时，15 个 B2 入口稳定 fail closed；禁止回退 `createDefaultRequestContext`。`createDefaultRequestContext` 只保留既有 legacy 同步路径，任何由它产生的 `tenant_default/user_default` context 都不得创建、补写或重放 B2 envelope。
+- 身份隔离矩阵必须至少覆盖：同一 tenant 的 user A/user B 使用相同 action/object/key 不得互相复用；tenant A/tenant B 使用相同 user/action/object/key 不得互相命中 actor-scoped idempotency lookup；resolver actor 与 novel tenant 不一致必须在 claim 前失败。每例都逐字段断言 task/envelope actor 一致。公开 `/tasks/:id` 与 events 查询的 actor 可见性仍归 RP-02B2b，不得在 A2 越权修改或宣称关闭。
+- A2 不迁表：存储层 idempotency token 必须由 `tenantId/userId/action/objectId/rawIdempotencyKey` 的 canonical UTF-8 bytes 计算 SHA-256，并继续落入现有 `tenantId+taskType+idempotencyToken` 唯一约束；禁止直接存 raw key 或只按 tenant/action/key 复用。
+- B2a2 的 resolver 只证明 trusted actor 注入与 task/envelope 绑定，不新增 capability endpoint、scope/revision/expiry、lease、worker、finalize 或异步 transport。
+
+### 3.2 B2a2 persisted requestedAt replay oracle
+
+该 oracle 必须使用单一 `ManualClock` 和固定时间点，不接受“两个请求很快发生”或真实 timer 作为替代：
+
+1. `ManualClock.set(T0='2026-07-15T00:00:00.000Z')`，以 trusted actor、固定 action/object/idempotencyKey 和规范化 request 首次 claim。断言 task 持久化的 `executionEnvelopeJson.auditContext.requestedAt` 与 canonical envelope 的 `requestedAt` 都精确等于 T0，并保存 canonical envelope bytes、`requestHash`、authority snapshot 和 taskId；不得为此新增 task 表顶层时间列。
+2. `ManualClock.set(T1='2026-07-15T00:05:00.000Z')`，以完全相同 actor/action/object/key/request 重放。实现必须先读取既存 task，再使用持久化 T0、持久化规范化 request 和持久化 authority snapshot 重算；断言 taskId、canonical bytes、`requestHash` 与 T0 全部逐字节相同，`requestedAt !== T1`，返回既有同步结果且不出现 `queued/202`。
+3. T1 重放的八类增量 `task/event/provider/asset/receipt/current/operation-log/child` 必须全部为 0，既存 task 总数保持 1；调用方提交 `requestedAt=T1`、伪造 authority snapshot 或 server clock canary 都不得改变结果。
+4. 负 oracle 必须把重放实现临时变异为使用 T1 或调用方 `requestedAt`，并证明测试因 canonical bytes/requestHash 改变而失败；只断言“复用了 taskId”不算通过。若 T0 后 authority 已缺失或变化，T1 重放必须走下节 `SOURCE_STALE` 零副作用路径，禁止把新 authority 写回既存 envelope。
 
 ## 4. 15-Action Authority Matrix
 
-两次 gate 使用同一 action-specific matcher。第一次在 provider 前完成；第二次必须在 `finalizeLeasedAction` 的数据库事务内重新加载并比较。ownership、tenant、novel、状态或版本任一不匹配均为 `failed/SOURCE_STALE`；不得自动替换为最新版本。
+全阶段的 provider 前 gate 与后续包的 finalize gate 使用同一 action-specific matcher。B2a2 只交付 claim 前和 claim 后/provider 前两次权威检查，不实现或认领 finalize gate。ownership、tenant、novel、状态或版本任一不匹配均为 `SOURCE_STALE`；不得自动替换为最新版本。
 
 authority snapshot 必须覆盖 handler 实际传给 provider 与 finalize 的全部持久事实，未进入 snapshot 的持久值禁止传给 provider：
 
@@ -166,7 +211,21 @@ interface ChapterProviderInputV1 {
 | `chapter_adopt_impact_assess` | novel；chapter；current content；candidate content | current pointer 一致；candidate 属于 chapter 且仍为 candidate；安全 page snapshot 未冲突 | adopt + impact case；Prisma B2 零任务阻断 |
 | `novel_full_review` | novel；五个 current structure refs；按 chapterNo 排序的全部 chapter/current content/feature/review refs；policy profile | current refs、章节集合、每章 current IDs 和 policy version 完全一致 | full review report；Prisma B2 零任务阻断 |
 
-matcher 输出只能是 `{ ok: true, sources }` 或 `{ ok: false, code: 'SOURCE_STALE', safeReason }`。`safeReason` 不包含正文、prompt、provider raw response、密钥或数据库连接信息。
+matcher 输出只能是 `{ ok: true, sources }` 或 `{ ok: false, code: 'SOURCE_STALE', safeReason }`。`SOURCE_STALE` 是 domain 内部 typed code；route 稳定映射为既有公开 `409 VERSION_CONFLICT`。A2 同时在 `packages/shared/src/api.ts` 新增公开错误定义：resolver 缺失/null/空身份稳定映射为 `401 UNAUTHORIZED`，resolver 抛错稳定映射为 `503 DEPENDENCY_UNAVAILABLE`。不得把内部堆栈或 raw reason 放入公开响应；`safeReason` 不包含正文、prompt、provider raw response、密钥或数据库连接信息。
+
+### 4.1 B2a2 两阶段 15-action 零副作用 oracle
+
+`authority-claim.test.ts` 必须对上表全部 15 action 分别运行 `missing` 与 `changed` 两类变异，并在两个 barrier 位置各执行一次；不得用一个代表 action 外推其余 14 个：
+
+| barrier | 注入时机 | 必须断言 |
+| --- | --- | --- |
+| claim 前 | 构造规范化 request 后、任何 task claim 前，删除一个 required authority 或改变任一 required ID/hash/ownership/tenant/novel/status/version/order/current pointer | typed `SOURCE_STALE`；`task/event/provider/asset/receipt/current/operation-log/child = 0`；provider spy 未 entered |
+| claim 后/provider 前 | authority claim 已按 T0 snapshot 组装后、provider 调用前暂停；再删除或改变同一 action 的 required authority，然后恢复执行 | 第二次 matcher 必须发现变化；本次 claim 不得提交可见 task，孤立 fixture 的八类最终绝对计数仍全部为 0；provider spy 未 entered |
+
+- 两阶段都必须使用生产 `NovelService -> taskClaim -> registry -> repository authority loader` 符号和 `MutableAuthorityStore` barrier；probe-only matcher、预先让 schema 失败或只检查返回码不算证据。
+- “八类全 0”是逐类精确断言，不允许只写 `no side effects`，也不允许以删除已提交 task 冒充原子零写；claim 后变异必须由同一原子 claim/authority 边界回滚或不提交。
+- legacy replay 另设固定矩阵：fixture 初始精确存在 1 条 legacy task；B2 envelope/task actor 字段缺失、`null`、空对象、空白字符串；来自默认 fallback 的 `tenant_default/user_default` 占位身份；task 与 envelope tenant/user 不一致；task/envelope 与 novel tenant 或 novelId 不一致。只走同步 replay/parser，不进入 lease/worker。全部稳定 fail closed 为 `WORKER_PAYLOAD_UNSUPPORTED` 或 shared contract 映射的等价 typed error，既存 task 总数保持 1，八类副作用增量全 0，禁止合成默认身份、自动升级 payload 或调用 provider。
+- 本节只证明 deterministic mock E3 的 authoritative claim 与 provider 前 gate；不创建 capability/lease/checkpoint/finalize/receipt 写链，不返回 202，不连接真实 DB/provider/media，也不声称 E6。
 
 ## 5. Worker Handler 与 Checkpoint 合同
 
@@ -367,24 +426,43 @@ HTTP 线程只允许鉴权、schema、capability/config gate、规范化/idempot
 
 B2a0 使用独立命令 `test:rp02b2a0`，精确运行 API route、Admin service 和 Vue DOM 三类既有文件。必须分别证明：普通候选保持同步生成；high/blocking 候选缺 `confirmRisk` 或空 `selectionReason` 时 provider 前拒绝；合法原因从页面到 route/service 原样但安全地透传；刷新/重复点击不绕过校验。另设 `risk_selection_reason_secret_canary`：API key、Authorization、Cookie、token 形态值在 provider 前稳定拒绝，task/provider/asset/operation-log/普通日志/浏览器持久化全部零命中，错误响应只含受控原因。每个失败场景逐项断言 task/event/provider/asset/receipt/current/operation-log/child 和 browser persistence 计数。
 
-五包命令必须固定为以下精确接口；每个 `:core` 只运行本包列出的测试文件，每个复合命令先串行全部已完成前序包，任一失败立即停止。每个 `:core`、`:gate` 和复合命令必须自己以 `env -u DATABASE_URL -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL -u DEEPSEEK_MODEL -u DEEPSEEK_STRUCTURE_MODEL -u DEEPSEEK_REASONER_MODEL -u DEEPSEEK_TIMEOUT_MS -u DEEPSEEK_MAX_RETRIES NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=/dev/null` 清空真实 DB/provider/secret 环境；不得依赖调用方或 workflow 的外部清理：
+五包命令必须固定为以下精确接口；每个 `:core` 只运行本包列出的测试文件，每个复合命令先串行全部已完成前序包，任一失败立即停止。每个 `:core`、`:gate` 和复合命令必须自己以 `env -u DATABASE_URL -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL -u DEEPSEEK_MODEL -u DEEPSEEK_STRUCTURE_MODEL -u DEEPSEEK_REASONER_MODEL -u DEEPSEEK_TIMEOUT_MS -u DEEPSEEK_MAX_RETRIES -u DEPLOYMENT_ACTOR_TENANT_ID -u DEPLOYMENT_ACTOR_USER_ID NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=/dev/null` 清空真实 DB/provider/secret/actor 环境；不得依赖调用方或 workflow 的外部清理：
 
-- `test:rp02b2a1:gate`：真实执行 `scripts/rp02b2a-package-gate.test.mjs`，该测试只通过子进程调用生产 `scripts/rp02b2a-package-gate.mjs` 和读取真实 `.github/workflows/rp01c-fixtures.yml`，不得复制 helper、正则模拟或跳过 YAML wiring。
-- `test:rp02b2a1:core`：显式串行 `registry-provider-abi.test.ts`、`novelRoutes.test.ts` 中 A1 同步 200/retry freeze 回归和 `test:rp02b2a1:gate`；`test:rp02b2a1 = test:rp02b1 -> test:rp02b2a0 -> test:rp02b2a1:core`。
+- `test:rp02b2a1:gate`：真实执行 `scripts/rp02b2a-package-gate.test.mjs`，该测试只通过子进程调用生产 `scripts/rp02b2a-package-gate.mjs`，并读取真实 `.github/workflows/rp01c-fixtures.yml` 与 `.github/workflows/rp02b2a-admission.yml`，不得复制 helper、正则模拟或跳过 YAML wiring。前者只承担 bootstrap/普通 CI/post-merge 回归，后者只有在 accepted G0 进入默认分支后才承担 A2-A5 authoritative admission；候选分支上的任一 workflow/gate 都不能自证准入。
+- `test:rp02b2a1:core`：显式运行真实存在的 `apps/api/test/rp02a/rp02a.test.ts` 与 `apps/api/src/modules/novels/novelRoutes.test.ts`，后者承载 A1 registry/strict ABI、同步 200 和 retry freeze 回归；并串行执行 `test:rp02b2a1:gate`。A1 从未交付 `apps/api/test/rp02b2a/registry-provider-abi.test.ts`，不得再把该不存在路径列为测试映射或验收证据；`test:rp02b2a1 = test:rp02b1 -> test:rp02b2a0 -> test:rp02b2a1:core`。
 - `test:rp02b2a2:core`：`authority-claim.test.ts` 与 A2 同步 200 回归；`test:rp02b2a2 = test:rp02b2a1 -> test:rp02b2a2:core`。
 - `test:rp02b2a3:core`：`lease-dispatch-retry.test.ts`；`test:rp02b2a3 = test:rp02b2a2 -> test:rp02b2a3:core`。
 - `test:rp02b2a4:core`：`inmemory-fenced-finalize.test.ts` 与 A4 同步 200 回归；`test:rp02b2a4 = test:rp02b2a3 -> test:rp02b2a4:core`。
 - `test:rp02b2a5:core`：`prisma-fenced-finalize.test.ts`；`test:rp02b2a5 = test:rp02b2a4 -> test:rp02b2a5:core`。
 - `test:rp02b2a:core` 显式串行 A1-A5 五个 core；`test:rp02b2a = test:rp02b2a5`。禁止目录 glob、复制 fixture helper 或依赖全仓测试偶然覆盖。
 
-生产 workflow 从唯一 changed B2aN ADR 解析 packageId，并只调用该包复合命令；A1 远程复合命令必须实际包含 `test:rp02b2a1:gate`，因此远程始终固定执行 B1、B2a0、全部已完成前序包和当前包。`test:rp02b1` 必须缩窄到 B1 文件，避免未来污染。A2/A3 的 E3 必须经过真实 `NovelService -> taskClaim -> registry -> repository` 生产符号，不得只测 MutableAuthorityStore/probe。
+B2a2 在 `package.json` 中的三个 script value 必须逐字符等于下列合同；`ENV_PREFIX` 不得抽成依赖调用方状态的外部变量：
+
+```json
+{
+  "test:rp02b2a2:env-probe": "node -e \"const keys=['DATABASE_URL','DEEPSEEK_API_KEY','DEEPSEEK_BASE_URL','DEEPSEEK_MODEL','DEEPSEEK_STRUCTURE_MODEL','DEEPSEEK_REASONER_MODEL','DEEPSEEK_TIMEOUT_MS','DEEPSEEK_MAX_RETRIES','DEPLOYMENT_ACTOR_TENANT_ID','DEPLOYMENT_ACTOR_USER_ID']; if(keys.some((key)=>process.env[key]!==undefined)||process.env.NODE_ENV!=='production'||process.env.AI_PROVIDER_MODE!=='mock'||process.env.DOTENV_CONFIG_PATH!=='/dev/null') process.exit(1); console.log('RP02B2A2_ENV_CLEAN')\"",
+  "test:rp02b2a2:core": "env -u DATABASE_URL -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL -u DEEPSEEK_MODEL -u DEEPSEEK_STRUCTURE_MODEL -u DEEPSEEK_REASONER_MODEL -u DEEPSEEK_TIMEOUT_MS -u DEEPSEEK_MAX_RETRIES -u DEPLOYMENT_ACTOR_TENANT_ID -u DEPLOYMENT_ACTOR_USER_ID NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=/dev/null sh -c 'npm run test:rp02b2a2:env-probe && npm run build -w @ai-shortvideo/shared && npm run prisma:generate -w @ai-shortvideo/api && npm exec -w @ai-shortvideo/api -- tsx --test test/rp02b2a/authority-claim.test.ts src/modules/novels/novelRoutes.test.ts'",
+  "test:rp02b2a2": "env -u DATABASE_URL -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL -u DEEPSEEK_MODEL -u DEEPSEEK_STRUCTURE_MODEL -u DEEPSEEK_REASONER_MODEL -u DEEPSEEK_TIMEOUT_MS -u DEEPSEEK_MAX_RETRIES -u DEPLOYMENT_ACTOR_TENANT_ID -u DEPLOYMENT_ACTOR_USER_ID NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=/dev/null sh -c 'npm run test:rp02b2a2:env-probe && npm run test:rp02b2a1 && npm run test:rp02b2a2:core'"
+}
+```
+
+生产 `scripts/rp02b2a-package-gate.mjs` 必须从选定 candidate HEAD（`--worktree` 时才读当前 worktree）读取真实 `package.json` 并对上述三个值做 exact assertion；`scripts/rp02b2a-package-gate.test.mjs` 必须用临时 committed candidate/mutation fixture 执行以下负例。每个负例都必须红，不能只做字符串搜索，也不能误读未提交 dirty `package.json`：
+
+- 把整个 `:core`/复合命令或任一 required segment 替换为 `true`；把 `sh -c` body 置空、只留 `env-probe` 或只 `echo` 的空壳。
+- 在前序、build、Prisma generate 或 test segment 后追加 `|| true`，或用 `;`/`set +e` 使失败可继续。
+- 分别删掉任一 `env -u`、把三个固定环境值改错，或从外部注入 DB/provider/secret canary；direct `:env-probe` 必须失败，`:core` 与复合命令必须清理后打印 `RP02B2A2_ENV_CLEAN`，测试/provider payload/日志中 canary 零命中。
+- 用 exit 17 的 synthetic predecessor 替换 `test:rp02b2a1`，断言复合命令非 0 且 A2 core marker/测试进程启动数为 0；再分别让 build、Prisma generate 失败，后续测试启动数也必须为 0。任何“前序失败但 A2 继续执行”的变体都拒绝。
+
+这些命令只运行 mock/deterministic E3；不得在 B2a2 script 中加入 capability、lease/finalize/202 测试或真实 DB/provider/E6 探测。
+
+authoritative admission workflow 只能从 repository-controlled `RP02B2A_AUTHORIZED_PACKAGE_ID` 选择包，并要求唯一 changed B2aN ADR 与该外部 package id 完全一致；还必须从 repository-controlled `RP02B2A_G0_EVIDENCE_SHA` 验证一个 accepted G0 的合法 sibling E1，不能从候选输入或正文推断。不得由候选 ADR 自行决定本次采用哪组授权规则或复合命令。可信 gate 通过后，独立的零 secret 候选 job 才可 checkout 精确 candidate SHA、执行该包固定复合命令；A1 远程复合命令必须实际包含 `test:rp02b2a1:gate`，因此远程始终固定执行 B1、B2a0、全部已完成前序包和当前包。`test:rp02b1` 必须缩窄到 B1 文件，避免未来污染。A2/A3 的 E3 必须经过真实 `NovelService -> taskClaim -> registry -> repository` 生产符号，不得只测 MutableAuthorityStore/probe。
 
 必须使用显式 `ManualClock.set/advance`、`DeferredProvider.entered/resolve/reject`、`MutableAuthorityStore`、`LeaseRepositoryProbe`、`AssetSinkProbe` 和 barrier；禁止固定 sleep。
 
 1. `dispatcher_all_15_actions_and_unknown_handler`
 2. `envelope_reconstructs_provider_and_finalize_inputs`
-3. `source_authority_matrix_all_15_actions`
-4. `stale_before_provider_provider_zero_asset_zero`
+3. `authority_missing_or_changed_before_claim_all_15_actions_eight_side_effects_zero`
+4. `authority_missing_or_changed_after_claim_before_provider_all_15_actions_eight_side_effects_zero`
 5. `stale_before_finalize_provider_one_asset_zero`
 6. `checkpoint_requires_live_lease_and_monotonic_phase`
 7. `provider_dispatch_checkpoint_precedes_provider`
@@ -393,7 +471,7 @@ B2a0 使用独立命令 `test:rp02b2a0`，精确运行 API route、Admin service
 10. `fenced_finalize_fault_injection_rolls_back_all`
 11. `cancelled_task_late_result_zero_write`
 12. `prisma_supported_nine_and_unsupported_six_zero_side_effect`
-13. `worker_context_two_tenants_no_default_fallback`
+13. `trusted_request_context_same_tenant_two_users_and_two_tenants_no_default_fallback`
 14. `worker_error_event_log_secret_canary`
 15. `provider_retry_api_frozen_zero_child`
 16. `existing_retry_child_is_terminally_fenced_before_provider`
@@ -405,13 +483,16 @@ B2a0 使用独立命令 `test:rp02b2a0`，精确运行 API route、Admin service
 22. `provider_backed_task_projection_freezes_retry_and_retry_mutation_zero`：除八类副作用精确为 0 外，逐字段断言 `retryable=false`、固定 `userFailureReason`、disabled `nextAction` 和 retry API 的固定 409 message；公开文案不得包含“稍后重试”。
 23. `authority_changes_during_finalize_is_locked_or_cas_fenced`
 24. `trusted_actor_is_identical_across_claim_and_envelope_no_default_fallback`
+25. `persisted_requested_at_replay_uses_t0_after_manual_clock_advances_to_t1`
+26. `legacy_envelope_missing_empty_placeholder_wrong_tenant_or_novel_fails_closed`
+27. `b2a2_package_scripts_are_exact_env_clean_and_fail_fast`
 
-24 个 deterministic 场景的唯一归属、测试文件与累计回归如下；同一编号除场景 23 的 InMemory/Prisma 两种 repository 证据外不得跨包重复认领，后续包必须运行前序复合命令而不是复制场景：
+27 个 deterministic 场景的唯一归属、测试文件与累计回归如下；同一编号除场景 23 的 InMemory/Prisma 两种 repository 证据外不得跨包重复认领，后续包必须运行前序复合命令而不是复制场景：
 
 | 子包 | 场景编号 | 本包测试文件 | 必须累计回归 |
 | --- | --- | --- | --- |
-| B2a1 | 1、15、20、22；另含 package-gate workflow 正反例 | `registry-provider-abi.test.ts`、`novelRoutes.test.ts`、`scripts/rp02b2a-package-gate.test.mjs` | B1、B2a0；同步 HTTP 200/非 202、公开 retry freeze、固定失败投影与八类零副作用 |
-| B2a2 | 2、3、4、13、18、21、24 | `authority-claim.test.ts`、`novelRoutes.test.ts` | B2a1 全量；可信 actor、action-specific authority/source refs、provider 前 stale、同步 200 |
+| B2a1 | 1、15、20、22；另含 package-gate workflow 正反例 | `apps/api/test/rp02a/rp02a.test.ts`、`apps/api/src/modules/novels/novelRoutes.test.ts`、`scripts/rp02b2a-package-gate.test.mjs` | B1、B2a0；同步 HTTP 200/非 202、公开 retry freeze、固定失败投影与八类零副作用 |
+| B2a2 | 2、3、4、13、18、21、24、25、26、27 | `apps/api/test/rp02b2a/authority-claim.test.ts`、`apps/api/src/modules/novels/novelRoutes.test.ts`、`scripts/rp02b2a-package-gate.test.mjs` | B2a1 全量；T0/T1 replay、可信 actor、action-specific authority/source refs、两阶段 15-action 八类零副作用、legacy fail-closed、candidate-HEAD exact/fail-fast 命令、同步 200 |
 | B2a3 | 6、8、14、16、19 | `lease-dispatch-retry.test.ts` | B2a2 全量；A1 public retry freeze、A2 authority gate、正常 leased action provider=0 |
 | B2a4 | 5、7、9、10、11、17、23（InMemory） | `inmemory-fenced-finalize.test.ts`、`novelRoutes.test.ts` | B2a3 全量；provider dispatch checkpoint 只在 A4 finalize capability 就绪后证明；InMemory 15 action、公开同步 200/非 202、leased result 仅 harness 可见 |
 | B2a5 | 12、23（Prisma） | `prisma-fenced-finalize.test.ts` | B2a4 全量；Prisma 9 enabled/6 unsupported、deterministic transaction/CAS、无 transport/UI 扩张 |
@@ -505,7 +586,6 @@ B2a0/B2a1-B2a5/B2b/B2c E3 可证明：风险参数同步链、单进程 determin
 
 - 硬门禁：`18 files / 1,900 net additions`。
 - `packages/shared/src/api.ts`
-- `packages/shared/src/novels.ts`
 - `apps/api/src/modules/novels/services/actionExecutionPlan.ts`
 - `apps/api/src/modules/novels/services/novelService.ts`
 - `apps/api/src/modules/tasks/services/taskService.ts`
@@ -515,19 +595,49 @@ B2a0/B2a1-B2a5/B2b/B2c E3 可证明：风险参数同步链、单进程 determin
 - `apps/api/src/modules/novels/providers/mockBodyProvider.ts`
 - `apps/api/src/modules/novels/providers/mockFullReviewProvider.ts`
 - `apps/api/src/modules/novels/providers/deepseekNovelProvider.ts`
-- `apps/api/test/rp02b2a/registry-provider-abi.test.ts`
+- `apps/api/test/rp01c/fixtureFactory.test.ts`
+- `apps/api/test/rp02a/rp02a.test.ts`
 - `apps/api/src/modules/novels/novelRoutes.test.ts`
 - `scripts/rp02b2a-package-gate.mjs`
 - `scripts/rp02b2a-package-gate.test.mjs`
 - `.github/workflows/rp01c-fixtures.yml`
 - `docs/adr/rp-02b2a1-registry-abi-budget.md`
 - `package.json`
-- E3：真实 `NovelService -> registry -> provider spy` 覆盖 15 action、unknown action、逐 action exact keys/nullable 字段/raw canary；provider public ABI 与调用点 raw entity/cast 扫描为零。15 action 同步 HTTP 保持 `200`，不出现 `202/queued`。provider-backed projection/retry API 固定 `retryable=false + 409 RETRY_NOT_AVAILABLE`，mutation/event/log/child=0。production workflow 必须调用同一 package-gate 脚本；测试执行真实脚本的 PR merge-base、push、manual 显式 SHA、ADR/manifest/count 失败分支，不得复制 helper。
+- E3：真实 `NovelService -> registry -> provider spy` 覆盖 15 action、unknown action、逐 action exact keys/nullable 字段/raw canary；证据实际位于 `apps/api/src/modules/novels/novelRoutes.test.ts`，RP-02A 兼容/AST 回归位于 `apps/api/test/rp02a/rp02a.test.ts`，不存在独立 `registry-provider-abi.test.ts`。provider public ABI 与调用点 raw entity/cast 扫描为零。15 action 同步 HTTP 保持 `200`，不出现 `202/queued`。provider-backed projection/retry API 固定 `retryable=false + 409 RETRY_NOT_AVAILABLE`，mutation/event/log/child=0。G0 bootstrap/普通 CI 与 default-branch authoritative admission 必须最终调用 accepted G0 的同一 gate 语义；测试执行真实脚本与真实 workflow wiring 的 PR base/candidate、push post-merge、dispatch audit、ADR/manifest/count 失败分支，不得复制 helper。该句描述目标合同，不追加 A1 已验收范围。
+
+### RP-02B2a2-G0 Gate Prep
+
+- 硬门禁：`15 files / 2,000 net additions`，固定基线 `6eaf60af4155a8b95ff77d53261f5896d3a8f77d`。除 `.github/workflows/rp02b2a-admission.yml` 外，manifest 还纳入 `.github/workflows/rp01a-e2e.yml`、`.github/workflows/rp01b-dom.yml`、`.github/workflows/remediation-governance.yml` 与 `apps/api/test/rp01c/fixtureFactory.test.ts`，只允许把 E1 父工作流使用的第三方 action 固定到完整 SHA、根 permissions 收紧为只读，并让 checkout 使用 `persist-credentials: false`；`--worktree` 只接受固定基线或其唯一直接子提交 pending atomic amend，最终 commit-mode 继续强制固定基线的唯一原子直接子提交。当前未提交差异为 `1,993` net additions，main 必须在最终差异冻结后重算回填，净增量上限不因文件数增加而扩大。
+- 仅允许上一条冻结 15-file manifest 中的路径：`.github/workflows/rp01a-e2e.yml`、`.github/workflows/rp01b-dom.yml`、`.github/workflows/rp01c-fixtures.yml`、`.github/workflows/remediation-governance.yml`、`.github/workflows/rp02b2a-admission.yml`、`apps/api/test/rp01c/fixtureFactory.test.ts`、本实现包、上位验收矩阵、三份主控/证据文档、`docs/adr/rp-02b2a2-gate-prep-budget.md`、package-gate script/test 及根 `package.json`。根脚本改动只限 A1 `env-probe`、`:gate`、`:core`、复合命令补齐两个 deployment actor 环境清理；可信 gate 必须冻结其余继承脚本、禁止新增脚本和 root lifecycle。
+- G0 必须先独立 TEST/QUALITY/治理清零并提交推送。最终 G0 必须经过人工/独立复核，并且是固定基线 `6eaf60af4155a8b95ff77d53261f5896d3a8f77d` 的唯一原子直接子提交；禁止把旧 G0 后续修订累计成新 G0，也禁止在 G0 内出现任一 E1 `g0_evidence_*` 字段、remote-accepted 事件或 verification 7.3。G0 是一次性 bootstrap exception，不能由自己新增的 workflow 或候选 gate 自我验收。A2 必须在 MC 显式授权后，从 accepted G0 code head 新建 sibling 实现分支，不得从 E1 evidence commit 开始；A2 diff 不得重复修改 G0-only 文件。根 `package.json` 是唯一允许的显式重叠文件：A2 只能新增第 443-445 行冻结的三条精确脚本，G0 已固定的 A1 四条安全脚本及其他继承脚本必须逐字不变。G0 不授权业务实现。
+- `.github/workflows/rp01c-fixtures.yml` 只承担 G0 bootstrap、普通 CI、G0 远程验收和 post-merge 回归，对 A2-A5 admission 明确为 non-authoritative。只有 accepted G0 已进入默认分支后，默认分支版本的 `.github/workflows/rp02b2a-admission.yml` 才是 A2-A5 唯一 authoritative admission；固定触发 `pull_request_target` 的 `opened/synchronize/reopened/ready_for_review`，并通过 repository API 默认分支、事件 `base.ref`、`github.ref` 与 live PR `base.ref` 双阶段校验拒绝任何非默认分支目标，不得让候选分支 workflow 或同名 status check 替代。
+- authoritative workflow 必须先 checkout repository-controlled accepted G0 到可信目录并确认其 SHA/父提交，再只把 `github.event.pull_request.head.sha` 作为 Git object fetch，交给 accepted G0 的可信 gate 静态检查。在 gate 成功前，禁止 checkout 候选工作树、执行候选 Node/script/action、运行 `npm ci`、读取并执行候选 package command、启用 cache 或把 credential/secret 暴露给候选。所有 action 固定完整 commit SHA，权限只允许显式 `contents: read`、`actions: read`，并仅为 live PR 身份校验增加 `pull-requests: read`；候选 job 使用 hosted runner、`persist-credentials: false`、零 secret。
+- A2-A5 的唯一授权来源是 repository-controlled 元组 `RP02B2A_AUTHORIZED_PACKAGE_ID` + `RP02B2A_AUTHORIZED_PREDECESSOR_SHA`，并强制绑定 repository-controlled `RP02B2A_G0_EVIDENCE_SHA`；未授权时 package/predecessor 固定 `NOT_AUTHORIZED` / `not_authorized`。前序链严格固定为 `A2 <- accepted G0 code head`、`A3 <- independently accepted A2 code head`、`A4 <- independently accepted A3 code head`、`A5 <- independently accepted A4 code head`。候选 ADR、分支、提交/evidence 文本、workflow dispatch input、caller env 或候选 workflow 均不能自授权、伪造 E1 或选择较后的包绕过较前包。
+- 外部 package id 决定唯一允许变化的业务 ADR；外部 predecessor 必须是完整非零 40 位、可解析、可达且为 candidate 的祖先，ADR `baseline_sha` 必须与其逐字相同。比较区间固定为 `<authorized predecessor>..candidate` 的累计区间，禁止 event direct diff 隐藏早期改动。package/ADR 不一致、缺失/错误/陈旧 predecessor、指向 E1、同区间多个业务 ADR、跨包 manifest 或 A2 历史触碰三份 E1 evidence 文件时，必须在候选 install/test 前 fail closed。
+- `push` 仅用于 post-merge CI，不能产生 authoritative admission；`workflow_dispatch` 仅用于 replay/audit，不能授权候选。authoritative evidence 必须绑定 workflow path/id、`event=pull_request_target`、`github.workflow_sha`、PR number、PR base SHA、authorized predecessor SHA、accepted G0-E1 SHA/digest、candidate SHA、gate source SHA、package id、绑定策略与 candidate blob 的 manifest digest、固定 test command；任一漂移均拒绝，并输出可下载 JSON artifact。
+- 两个 workflow 的根键、job、runner、timeout、permissions、env 和全部步骤都是精确白名单。任一步骤的 `if`、`continue-on-error`、自定义 shell、额外 job/step、步骤重排、触发器/branch filter 扩展、授权变量改绑或 retired 变量复用均视为绕过并拒绝。本节定义待实现和待复验合同，不宣称 workflow、gate、测试或远程验收已经通过。
+
+#### RP-02B2a2-G0-E1 一次性证据发布
+
+- G0 最终代码提交必须先取得同一 HEAD 的 `RP-01A backend E2E`、`RP-01B admin DOM tests`、`RP-01C deterministic fixtures`、`Remediation governance` 四路远程成功。之后仅允许在专用 evidence 分支创建一个 package id 为 `RP-02B2a2-G0-E1` 的原子提交；它是该 evidence lineage 中唯一的 E1 提交，且直接父提交必须为 accepted G0 code head。该提交不得是 merge，不得与 G0 或 A2 合批，也不得存在第二个 E1。A2 实现分支必须从 accepted G0 code head 独立创建，与 E1 evidence 分支互为 sibling；生产 gate 必须显式拒绝 `E1 -> A2`。
+- E1 只允许修改 `docs/reviews/main-control-status.md`、`docs/reviews/main-control-event-ledger.md`、`docs/reviews/remediation-rmd-task-002-003-rp-02b2a1-verification-2026-07-15.md`，硬预算为 `3 files / additions <= 64 / deletions <= 16 / net additions <= 64`。这三个文件属于 E1 固定 evidence scope，不扩充或改写 G0 的 15-file manifest。
+- 三份 evidence 文档必须各自且仅出现一次并保持完全一致的精确九字段：`g0_evidence_parent_sha`、`g0_evidence_rp01a_run`、`g0_evidence_rp01b_run`、`g0_evidence_rp01c_run`、`g0_evidence_governance_run`、`g0_evidence_a2_authorization`、`g0_evidence_issue_closed_count`、`g0_evidence_rmd_task_002`、`g0_evidence_rmd_task_003`。这是完整白名单；任一字段重复，或新增 self/publication SHA、E1 run 及任何其他 `g0_evidence_*` 字段，均必须 fail closed。每个字段值必须非空并与字段名位于同一行，不能跨行借用下一字段或正文。
+- `g0_evidence_parent_sha` 必须是 E1 直接父提交的完整 G0 SHA；四个 run id 必须为互不相同的数字，并分别绑定父提交四个指定 workflow 的成功 run；其余状态字段必须精确为 `g0_evidence_a2_authorization=not_authorized`、`g0_evidence_issue_closed_count=9/42`、`g0_evidence_rmd_task_002=partial`、`g0_evidence_rmd_task_003=open`。E1 不得记录自身 SHA、E1 自身 run id、A2 实现或任何真实 DB/provider/media/E6 证据；三份 evidence 正文也不得正向宣称 A2/B2a2 已授权、授权通过或允许开始/进入业务实现。每个正向授权语句必须独立阻断，同句、邻句或其他位置出现 `not_authorized` 都不能掩蔽它。
+- `main-control-status.md` 必须原位更新“总体关闭进度”内的当前整改包和当前状态、`RP-02B2a2-G0 整改后最终复核` 行以及唯一编号 1 推荐动作：三处均绑定 accepted code head 与四路远程成功；最终复核行必须为已完成并记录最终 `15 files / <final actual_net_additions> net additions` 与最终实际 package-gate 计数，推荐动作不得继续出现待提交/pending。最终净增量和 gate 计数只在冻结差异并重新运行完整矩阵后由 main 回填，本合同不预判其值。
+- `main-control-event-ledger.md` 必须恰好追加一个标题为 `### MCE-RP02B2A2-G0-E1-REMOTE-ACCEPTED` 的事件，包含 `event_type: governance_bootstrap_remote_accepted`、`package_id: RP-02B2a2-G0-E1`、完整 `accepted_code_head`，并明确 `RP-02B2a2-G0` 已关闭而 B2a2 继续 `not_authorized`。
+- verification 文档必须恰好新增一个 `### 7.3 G0 accepted code head 与远程关闭证据` 小节，逐项列出完整 accepted code head、最终 `15 files / <net> net additions`、最终实际 package-gate 计数、四个远程 run 及 B2a2 `not_authorized`。
+- E1 只追加九字段、保留任一当前状态为 pending/待提交、保留旧 net 或 gate 计数、缺失上述任一原位替换/唯一事件/唯一 7.3，均必须 fail closed。
+- G0 evidence workflow 必须在任何 install/test 前以只读权限和 `gh api` 校验四个 run 的 workflow name、repository workflow path、run path（精确 path 或受限 `path@ref`）、workflow id、event、`head_sha`、`status=completed`、`conclusion=success`；任一 run 不存在、身份错配、不同头、未完成或非成功均 fail closed。future A2-A5 authoritative admission evidence 还必须逐字绑定可信 `workflow_sha`、PR number、PR base、authorized predecessor 与 candidate SHA。fake `gh` 验收必须分别覆盖父 run 的 name/repository path/run path/id/event/head/status/conclusion，以及 authoritative admission 的 workflow SHA/PR/base/candidate 错配。
+- E1 通过只完成 G0 外部证据闭环，不自动授权 A2。未来 A2 仍须由 MC 显式授权，并从 accepted G0 code head 新建 sibling 实现分支，独立满足下一节 A2 合同；E1 commit 不得成为 A2 baseline，但 authoritative admission 必须通过独立 repository-controlled SHA 验证该 sibling E1 已合法存在。
+- 可执行负例至少覆盖：E1 `additions=64`、`deletions=16`、`net=64` 边界通过及任一维度超限；九字段重复或出现额外字段；G0+E1 合批；旧 G0 后追加 incremental G0；`E1 -> A2` 误拓扑；候选把 gate/workflow 改成 `exit 0` 仍不能获得准入；fake `gh` 的父 run name/repository path/精确或受限 `path@ref`/id/event/head/status/conclusion，以及 authoritative admission 的 workflow SHA/PR/base/candidate 失败矩阵。
 
 ### RP-02B2a2 Authoritative Claim And Pre-provider Gate
 
-- 硬门禁：`15 files / 1,900 net additions`。
+- 硬门禁：`18 files / 1,900 net additions`。
+- `docs/adr/rp-02b2a2-authority-claim-budget.md` 当前 `template_not_authorized` 中的 `15 files` 是未授权旧模板值，不构成有效预算声明，也不得由 G0 跨包改写。未来 A2 必须在同一累计实现 diff 中原子改为 `status=ready`、`hard_max_files=18`、`baseline_sha=<verified G0 commit>` 与真实计数；保留 15 时生产 gate 必须失败。
+- `packages/shared/src/api.ts`（新增 `UNAUTHORIZED` 与 `DEPENDENCY_UNAVAILABLE` 的公开错误定义）
 - `packages/shared/src/novels.ts`
+- `apps/api/src/config/env.ts`
 - `apps/api/src/modules/novels/domain/executionContract.ts`
 - `apps/api/src/modules/novels/domain/novelDomain.ts`
 - `apps/api/src/modules/novels/services/actionExecutionPlan.ts`
@@ -537,12 +647,13 @@ B2a0/B2a1-B2a5/B2b/B2c E3 可证明：风险参数同步链、单进程 determin
 - `apps/api/src/modules/novels/repositories/inMemoryNovelRepository.ts`
 - `apps/api/src/modules/novels/repositories/prismaNovelRepository.ts`
 - `apps/api/src/app.ts`
+- `apps/api/src/main.ts`
 - `apps/api/test/rp02b2a/fixtures.ts`
 - `apps/api/test/rp02b2a/authority-claim.test.ts`
 - `apps/api/src/modules/novels/novelRoutes.test.ts`
 - `docs/adr/rp-02b2a2-authority-claim-budget.md`
 - `package.json`
-- E3：真实 `NovelService -> taskClaim -> registry -> repository authority loader` 使用 ManualClock/MutableAuthorityStore 证明可信 actor、authoritative clock、persisted requestedAt replay、canonical envelope、preferences/ordered chapters/body continuity/full-review identity、跨租户隔离和 provider 前 stale；任一 authority 缺失/变化均 `provider/asset/receipt/current=0`，15 action 同步 HTTP 继续 `200` 且非 queued/202。
+- E3：真实 `NovelService -> taskClaim -> registry -> repository authority loader` 使用 `buildApp` 注入的 authenticated `RequestContextResolver`、ManualClock/MutableAuthorityStore 和 deterministic barrier，证明同租户不同 user、双租户、resolver 缺失/失败、伪造身份无效、task/envelope actor 一致、default context 不生成 B2 envelope；生产 `main.ts` 只接受服务端校验 actor 配置，缺失时 fail closed。按 T0 首次 claim、T1 replay 逐字节证明持久化 `requestedAt`/canonical envelope/requestHash 不漂移；对 15 action 的 claim 前及 claim 后/provider 前 authority `missing|changed` 全矩阵逐项断言八类增量为 0；legacy 初始 task=1、八类增量=0。A2 `env-probe/core/composite` 必须等于第 11 节精确命令并通过空壳、环境泄漏和前序失败继续执行的负例。15 action 同步 HTTP 继续 `200` 且非 queued/202；本包不新增 capability、lease、checkpoint、finalize、202、真实 DB/provider/media 或 E6。
 
 ### RP-02B2a3 Lease Phase CAS And Existing Retry Child Fence
 
@@ -597,16 +708,19 @@ B2a0/B2a1-B2a5/B2b/B2c E3 可证明：风险参数同步链、单进程 determin
 - E3：repository-owned capability 为 Prisma 9 action 放行、6 action 返回 unsupported；可注入 deterministic Prisma transaction/CAS fixture 证明 9 action 的 authority lock/CAS、资产/receipt/task/event/oplog 原子写，以及 6 unsupported 新 claim 在 preclaim/provider 前 `task/provider/asset=0`、历史 leased task 原子失败且 `provider/asset/receipt/current=0`；最终复合命令按 B1 -> B2a0 -> B2a1 -> B2a2 -> B2a3 -> B2a4 -> B2a5 fail-fast。
 - 只有本包经独立 TEST/QUALITY P0/P1=0、commit/push、远程 clean checkout 后，MC 才能判断原 B2a 阶段完成。真实 MySQL 行锁/事务时钟/P2002、多进程 fencing、真实 provider 和 E6 继续为 `not_proven`。
 
-每包的测试必须与对应生产能力同包交付，禁止把断言集中到最后补齐。每包只能从前一包已独立验收并提交的 clean commit 开始，禁止跨包累计 dirty diff。五个包当前全部 `not_authorized`。
+每包的测试必须与对应生产能力同包交付，禁止把断言集中到最后补齐。每包只能从前一包已独立验收并提交的 clean commit 开始，禁止跨包累计 dirty diff。A2-A5 当前全部 `not_authorized`；A1 的既有关闭状态不因本次 G0 合同修订被重写。
 
 ### B2a1-B2a5 通用 package gate
 
-- A1 同包新增 `scripts/rp02b2a-package-gate.mjs`，脚本内预置五个 packageId 的 allowed-path manifest、required production/test/ADR 类别和硬预算；A2-A5 复用同一脚本与 workflow，不得复制或修改另一套判断。
-- PR 使用目标分支 merge-base 与 head SHA；push 只使用 event `before/after`；manual 必须要求显式 base/head SHA。零 SHA、缺 SHA、无法解析 SHA、相同 SHA、无参和 `HEAD~1...HEAD` fallback 全部 fail closed。
-- 同一 BASE/HEAD 以 NUL-safe 路径发现唯一 changed `rp-02b2aN-*` ADR；旧 superseded ADR、多 ADR、缺 ADR、packageId 不匹配、status 非 ready、baseline 不匹配、实际计数不符、manifest 外路径或缺少 required 类别全部失败。
-- 五个 ADR 使用机器字段 `package_id/manifest_id/baseline_sha/hard_max_files/hard_max_net_additions/actual_files/actual_net_additions`。通用 20/2000 预算通过不能覆盖包级硬预算；例如 A2 第 15 个以外的文件必须失败。
-- `workflow_dispatch.inputs.base_sha/head_sha` 必须都为 required；PR/push `paths` 必须覆盖 `scripts/rp02b2a-package-gate.*`、五个 `docs/adr/rp-02b2a1-*` 至 `rp-02b2a5-*`、`apps/api/test/rp02b2a/**` 以及所有 manifest 生产路径，ADR-only、gate-only、test-only diff 不得跳过 workflow。
-- workflow 先清空 DB/provider/secret 环境，再调用真实 package gate 和由 packageId 选择的复合测试命令。`scripts/rp02b2a-package-gate.test.mjs` 必须读取生产 workflow，证明 PR merge-base、push before/after、manual required SHA 均传给同一 gate 脚本和选定复合命令；还必须执行 ADR-only、gate-only、test-only、零 before SHA、错误 package-command、伪造旧 ADR ready、错误计数、额外路径、缺 required path 和 A2-A5 选择错误命令等 workflow 级反例。禁止 generic budget、无参 fallback、正则或复制 helper 冒充。
+- A1 同包新增 `scripts/rp02b2a-package-gate.mjs`；G0 独立承载 A2-A5 准入前的可信 gate、authoritative workflow 与 mutation tests。A2-A5 只能复用 accepted G0 在默认分支上的同一可信脚本与 `.github/workflows/rp02b2a-admission.yml`，不得复制、修改、降级或让候选版本替代判断。可信 gate 必须证明最终 G0 是固定 `6eaf60af4155a8b95ff77d53261f5896d3a8f77d` 的唯一原子直接子提交，并拒绝 incremental G0 与 G0+E1 合批；E1 仅位于 sibling evidence 分支，不能进入 A2 累计 range。gate 不得从 ADR、分支或提交文本推断 accepted predecessor 或授权包。
+- A2-A5 外部准入元组固定为 `RP02B2A_AUTHORIZED_PACKAGE_ID` + `RP02B2A_AUTHORIZED_PREDECESSOR_SHA`，并固定绑定 `RP02B2A_G0_EVIDENCE_SHA`；严格顺序为 `A2<-G0`、`A3<-A2`、`A4<-A3`、`A5<-A4`。只有 MC 在前一包独立验收、提交推送、远程 clean-checkout 与关闭证据齐备后才能更新 package/predecessor；缺失、空值、`NOT_AUTHORIZED`、短/零/不可达/非祖先/E1/陈旧 predecessor、缺失/伪造/错误父 G0-E1 或 package 不匹配全部在 candidate install/test 前 fail closed。
+- authoritative PR 使用默认分支 `pull_request_target` workflow 的 `github.event.pull_request.base.ref/base.sha` 与 `github.event.pull_request.head.sha`，先确认 `base.ref` 等于 repository API 返回的默认分支并绑定 `github.ref`，再在产出 artifact 前复查 live PR 的 `base.ref/base.sha/head.sha`，同时始终检查 `<authorized predecessor>..candidate` 累计区间。`push` 只做 post-merge CI；`workflow_dispatch` 只做显式 base/head 的 replay/audit，二者都不能输出 authoritative admission。零 SHA、缺 SHA、无法解析、相同 SHA、创建/删除 ref、非祖先、无参或 `HEAD~1...HEAD` fallback 全部 fail closed。
+- 同一 authorized predecessor/candidate 以 NUL-safe 路径发现唯一 changed `rp-02b2aN-*` 业务 ADR，且其 package id 必须等于外部授权 package id；旧 superseded ADR、多 ADR、缺 ADR、predecessor/successor ADR、packageId 不匹配、status 非 ready、`baseline_sha` 不等于外部 predecessor、实际计数不符、manifest 外路径或缺少 required 类别全部失败。候选不得以 A3-A5 ADR 包装 A2 重叠生产改动绕过 A2 授权。
+- G0 与五个业务 ADR 都使用机器字段 `package_id/manifest_id/baseline_sha/hard_max_files/hard_max_net_additions/actual_files/actual_net_additions`。通用 20/2000 预算通过不能覆盖包级硬预算；例如 A2 出现第 19 个文件必须失败。
+- `.github/workflows/rp02b2a-admission.yml` 固定在默认分支上执行，并拒绝目标分支不是 repository default branch 的 PR；所有 action pin 完整 commit SHA，workflow/job 只读权限、hosted runner、零 secret、禁 cache、候选 checkout `persist-credentials: false`。可信 gate 通过前只允许 fetch candidate Git object，不得 checkout 或执行候选代码。workflow contract 必须拒绝 manual input、候选 env、ADR/commit 文本、硬编码值、变量调换或 retired `RP02B2A2_AUTHORIZED_G0_SHA` 作为授权来源。
+- authoritative evidence 必须绑定 workflow path/id、`event=pull_request_target`、`github.workflow_sha`、PR number、PR base SHA、authorized predecessor SHA、accepted G0-E1 SHA/digest、candidate SHA、gate source SHA、package id、candidate-bound manifest digest 和固定 test command，并以耐久 JSON artifact 发布。required check 同名、push/manual 成功或候选 workflow 成功都不能替代这些身份字段。
+- `workflow_dispatch.inputs.base_sha/head_sha` 在 audit workflow 中必须都为 required；普通 PR/push `paths` 必须覆盖 `scripts/rp02b2a-package-gate.*`、两个 workflow、五个 `docs/adr/rp-02b2a1-*` 至 `rp-02b2a5-*`、`apps/api/test/rp02b2a/**` 以及所有 manifest 生产路径，ADR-only、gate-only、test-only diff 不得跳过普通 CI，但普通 CI 成功不产生准入。
+- workflow 在可信 gate 通过后才清空 DB/provider/secret 环境、checkout 精确 candidate SHA、执行由外部 package id 选择的固定复合测试命令。`scripts/rp02b2a-package-gate.test.mjs` 必须读取两个 production workflow，证明默认分支 gate source、PR base/candidate、外部授权元组与固定复合命令全部进入同一可信判断；还必须执行 ADR-only、gate-only、test-only、候选 gate/workflow `exit 0`、零/错误 predecessor、跨包 package/ADR 全排列、incremental push 隐藏早期改动、错误 package-command、伪造旧 ADR ready、错误计数、额外路径、缺 required path、job/step `if` 或 `continue-on-error`、额外 job/step、trigger/filter 漂移、G0+A2 同区间以及 A2 history 触碰 evidence 文件等反例。准入失败时 install/test/candidate marker 必须全为 0；禁止 generic budget、无参 fallback、正则或复制 helper 冒充。
 
 ### RP-02B2b
 
