@@ -1164,3 +1164,51 @@ evidence: docs/reviews/rp-02b2-multi-agent-admission-review-2026-07-13.md sectio
 mc_decision: 拆包治理合同准入清零，只允许进入 14 个治理路径的 commit/push 与远程治理；不视为 B2a1 研发授权或总账关闭。
 next_action: 全量 stage 后以显式 BASE/HEAD 运行权威预算/manifest 门禁，提交推送并确认远程治理成功；此前 B2a1-B2a5 均 not_authorized。
 ```
+
+### MCE-20260715-RP02B2A1-IMPLEMENTATION-VERIFIED
+
+```text
+event_id: MCE-20260715-RP02B2A1-IMPLEMENTATION-VERIFIED
+occurred_at: 2026-07-15 10:47:00 CST
+event_type: implementation_acceptance_approved
+source_thread: RP-02B2a1 governance evidence handoff
+package_id: RP-02B2a1
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TASK-PRECLAIM-01, TASK-WORKER-01, TASK-RETRY-01, GOV-GIT-01
+summary: RP-02B2a1 实现提交 eee5568 已推送；实现阶段正式验收智能体 APPROVED，composite 170/170 + DeepSeek provider 12/12，总计 182/182；QUALITY APPROVED，P0/P1/P2=0/0/0。阶段范围为 15-action registry、strict provider ABI、同步调用点和公开 retry freeze。
+evidence: implementation commit eee55689ef5f071c8cb7e15b718aa95d1843efe4; origin/codex/rp-02b2a1-registry-abi-20260714; docs/reviews/remediation-rmd-task-002-003-rp-02b2a1-verification-2026-07-15.md; typecheck/build/Prisma mock schema validate/diff check passed; initial package evidence pending compatibility fixes and remote CI
+mc_decision: 记录 RP-02B2a1 实现阶段验收通过，但在兼容修复、accepted head 远程 CI、最终 TEST/QUALITY 和 clean checkout 形成前保持 pending_remote_ci；RMD-TASK-002 保持 partial，RMD-TASK-003 保持 open，总览保持 9/42。
+next_action: 修复兼容测试并将远端、最终 SHA 复核和 clean-checkout 证据追加为独立事件；不得用本事件授权 RP-02B2a2 或任何后续包。
+```
+
+### MCE-20260715-RP02B2A1-REMOTE-CI-VERIFIED
+
+```text
+event_id: MCE-20260715-RP02B2A1-REMOTE-CI-VERIFIED
+occurred_at: 2026-07-15 12:18:07 CST
+event_type: remote_ci_result
+source_thread: main-control direct-agent closeout
+package_id: RP-02B2a1
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TASK-PRECLAIM-01, TASK-WORKER-01, TASK-RETRY-01, GOV-GIT-01
+summary: 实现 eee5568 后以 ec8278e 对齐 RP-01C retry fixture，并以 0a583c8 将 RP-02A direct-provider 旧文本断言替换为结构化 AST registry 断言。该头四路远程工作流虽 completed/success，但后续独立 QUALITY 发现两个 P1，故该事件只记录当时远端结果，不构成最终 accepted head。
+evidence: implementation eee55689ef5f071c8cb7e15b718aa95d1843efe4; package compatibility ec8278ee53c252faa4cc658e1e0dc161ae8ecf84; post-package test 0a583c8c270c16d7e2a36c644a3ee2798ec5da22; B2a1 package gate 501a3cf..ec8278e = 18 files/1893 net; RP-01C fallback ec8278e..0a583c8 = 1 file/45 net; governance run 29388424629; RP-01C run 29388424613; RP-01A run 29388622071; RP-01B run 29388623413
+mc_decision: 最终独立 QUALITY 以 package resolver 累计范围绕过和 RP02A AST 绕过两个 P1 拒绝 `0a583c8`；该头状态改为 rejected/superseded。RMD-TASK-002 保持 partial、RMD-TASK-003 保持 open、总览 9/42 不变。
+next_action: 修复两个 P1，并在新的精确 SHA 上重新执行 TEST/QUALITY/clean-checkout 和四路远程 CI；B2a2-B2a5/B2b/B2c/B3、真实 DB/provider/media/E6 不自动授权。
+```
+
+### MCE-20260715-RP02B2A1-FINAL-ACCEPTED
+
+```text
+event_id: MCE-20260715-RP02B2A1-FINAL-ACCEPTED
+occurred_at: 2026-07-15 17:43:28 CST
+event_type: implementation_acceptance_final
+source_thread: main-control direct-agent closeout
+package_id: RP-02B2a1
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TASK-PRECLAIM-01, TASK-WORKER-01, TASK-RETRY-01, GOV-GIT-01
+summary: 在拒绝 0a583c8 后，以 072b9be 修复累计 package gate、f342297 补强 fail-closed 与 AST oracle、4817abc 关闭剩余 A1-A5/AST 绕过。最终 TEST/QUALITY/clean-checkout 全部 APPROVED，accepted code head 与远端分支头为 4817abc。
+evidence: accepted_head 4817abc67cf916772b317aff027403b97ab4df76; tree ad3d36cb128989080289b5842a115d3d92776314; composite 192/192; RP-01C 13/13; API 119/119; root RP02A 11/11; AST mutations 14/14 rejected; fixed gate 501a3cf..4817abc = 18 files/1898 net; workflow required_files=35; governance 29405557756; RP-01A 29405557734; RP-01B 29405557763; RP-01C 29405557764
+mc_decision: RP-02B2a1 仅在 registry/strict ABI/public retry freeze 的 E3 范围阶段通过。RMD-TASK-002 保持 partial、RMD-TASK-003 保持 open、总览 9/42 不变；不证明真实 DB/provider/media/E6。
+next_action: 发布治理证据提交；B2a2-B2a5/B2b/B2c/B3 仍需单独 MC 裁决，不因本事件自动授权。
+```

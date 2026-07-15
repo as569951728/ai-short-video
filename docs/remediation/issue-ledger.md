@@ -1,6 +1,6 @@
 # AIShortvideo 整改唯一问题总账
 
-更新时间：2026-07-14
+更新时间：2026-07-15
 
 状态：frozen_for_remediation
 
@@ -44,8 +44,8 @@
 | ID | 类别/级别 | 问题与影响 | 状态 | 主要证据 | Owner | 整改包 | 验收 ID |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | RMD-TASK-001 | PB/P0 | AI 动作没有统一持久任务 SSOT；部分动作在 provider 返回后才建任务，存在重复调用竞态 | partial | `novelService.ts`；N-06/N-07；N-AI-01 | DEV | RP-02A | TASK-PRECLAIM-01, TASK-CONCURRENCY-01 |
-| RMD-TASK-002 | PB/P0 | 请求内 await 长 provider，没有独立 worker、心跳和进程重启恢复 | partial | RP-02B1 `415d03a` 已通过；RP-02B2a0 `2da6d31` 已完成实现、TEST/QUALITY 双验收、远程四路 CI 和 clean checkout。原 B2a 23/2000 单包交付被正式拒绝且授权失效，当前拆为 B2a1-B2a5，五包均未授权；原 13-path partial diff 禁止提交。B2b/B2c/B3、worker/restart E6 未实现 | DEV | RP-02B | TASK-WORKER-01, TASK-RESTART-01 |
-| RMD-TASK-003 | RB/P1 | 通用重试只创建 queued 记录，没有消费者实际重新执行 | open | RP-02B1 `415d03a` 只建立 root budget/attempt/recovery 合同；真实 retry child 消费仍未实现 | DEV + TEST | RP-02B | TASK-RETRY-01 |
+| RMD-TASK-002 | PB/P0 | 请求内 await 长 provider，没有独立 worker、心跳和进程重启恢复 | partial | RP-02B1 `415d03a` 与 RP-02B2a0 `2da6d31` 已通过限定阶段验收；RP-02B2a1 accepted head `4817abc` 已完成 15-action registry、strict provider ABI 和公开 retry freeze 的 E3 阶段，最终 TEST/QUALITY/clean-checkout 通过且四路远程 CI 全绿。`0a583c8` 因最终质量 P1 已拒绝，不是 accepted 证据。B2a2-B2a5 未由本记录授权；B2b/B2c/B3、独立 worker/restart、真实 DB/provider/media/E6 未实现或未证明 | DEV | RP-02B | TASK-WORKER-01, TASK-RESTART-01 |
+| RMD-TASK-003 | RB/P1 | 通用重试只创建 queued 记录，没有消费者实际重新执行 | open | RP-02B1 `415d03a` 只建立 root budget/attempt/recovery 合同；RP-02B2a1 accepted head `4817abc` 只冻结 provider-backed 公开重试为 `409 RETRY_NOT_AVAILABLE`、`retryable=false` 和零副作用，证据见 `docs/reviews/remediation-rmd-task-002-003-rp-02b2a1-verification-2026-07-15.md`。真实 retry child 创建、预算/lineage、消费者执行与 restart/unknown outcome 仍未实现 | DEV + TEST | RP-02B | TASK-RETRY-01 |
 | RMD-TASK-004 | RB/P1 | “停止本页等待”“取消后端任务”“放弃并重生成”语义与状态不一致 | partial | N-06/N-07/N-21 | PRODUCT + DEV | RP-02C | TASK-CANCEL-01 |
 | RMD-TASK-005 | QG/P1 | 主卡片、最近任务、任务抽屉、本地 pending 与阶段状态缺统一投影 | implemented_pending_verification | N-07；试写阶段旧任务案例 | DEV + TEST | RP-02C | TASK-SURFACE-01 |
 

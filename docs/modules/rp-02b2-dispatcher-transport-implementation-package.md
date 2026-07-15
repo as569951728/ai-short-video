@@ -687,6 +687,20 @@ B2a0/B2a1-B2a5/B2b/B2c E3 可证明：风险参数同步链、单进程 determin
 当前门禁：
 
 1. 原 13-path partial diff 保留在原工作树，禁止 stage/commit/push；治理资产在 `c673eaf` 的 clean worktree 单独修订。
-2. B2a1-B2a5 仍均为 `not_authorized`。第六轮四角色已全部 `approved` 且 P0/P1=0，当前只允许提交推送治理资产并执行远程治理；远程成功后 MC 才能最多单独裁决 B2a1，不得联动授权后续包。
+2. B2a1 已完成限定 E3 实现、独立验收、同 SHA 四路远程 CI 和兼容测试跟进；B2a2-B2a5 仍均为 `not_authorized`，不得联动授权后续包。
 3. 任一包实现后都必须独立 DEV 自测、TEST、QUALITY、commit/push、远程 CI 与 clean checkout；不得把未提交代码带入下一包。
 4. 总账仍为 9/42，`RMD-TASK-002=partial`、`RMD-TASK-003=open`。B2b/B2c/B3、202/Admin transport、真实 DB/provider/media/E6 继续冻结。
+
+## 18. RP-02B2a1 阶段完成门禁
+
+截至 2026-07-15 17:43 CST，`RP-02B2a1` 已满足本实现包要求的独立阶段证据：
+
+1. 初始实现 `eee5568`、兼容修复 `ec8278e` 和结构测试 `0a583c8` 虽曾获得远端绿灯，但最终独立 QUALITY 发现 package resolver 累计范围和 RP02A AST 仍各有一个 P1，因此 `0a583c8` 明确标记为 `rejected/superseded`，不得作为 accepted head。
+2. 后续门禁修复链为 `072b9be -> f342297 -> 4817abc`；accepted code head 和远端分支头均为 `4817abc67cf916772b317aff027403b97ab4df76`，code tree 为 `ad3d36cb128989080289b5842a115d3d92776314`。
+3. 最终独立 TEST、QUALITY 和临时 clean checkout 均为 `APPROVED`：复合链 192/192、RP-01C 13/13、API 119/119、根 RP02A 11/11；14/14 AST 负向变异被拒绝，QUALITY P1/P2=0/0。
+4. typecheck、build、Prisma generate/validate、diff check 全部通过；全程 mock-only，未连接真实 DB/provider/media。
+5. 固定基线 `501a3cf..4817abc` 的单一累计 package gate 通过：18 files / 1,898 net additions；不再使用拆分门禁或 test-only 回退包解释。workflow contract 通过，`required_files=35`。
+6. 阶段证据为 `docs/reviews/remediation-rmd-task-002-003-rp-02b2a1-verification-2026-07-15.md`。
+7. accepted head `4817abc` 的治理 `29405557756`、RP-01A `29405557734`、RP-01B `29405557763`、RP-01C `29405557764` 均为 `completed/success`。
+
+本节只确认 15-action registry、strict provider ABI、同步调用点和公开 retry freeze 的 RP-02B2a1 E3 阶段。`RMD-TASK-002` 继续为 `partial`，`RMD-TASK-003` 继续为 `open`，总体关闭数保持 9/42；本节不自动授权 RP-02B2a2-B2a5/B2b/B2c/B3，不证明真实 DB/provider/media 或 E6。
