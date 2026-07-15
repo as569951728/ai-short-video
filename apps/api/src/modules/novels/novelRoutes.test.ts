@@ -39,7 +39,6 @@ describe('novel package 1 routes', () => {
       novelRepository: repository,
       now: () => new Date('2026-06-17T10:00:00.000Z')
     });
-
     const createResponse = await app.inject({
       method: 'POST',
       url: '/novels/drafts',
@@ -78,7 +77,6 @@ describe('novel package 1 routes', () => {
     assert.equal(created.data.statusSummary.recommendedAction.target, 'detail');
     assert.equal(created.data.preferences.creationSourceType, 'system_recommendation');
     assert.equal(created.data.creationSource.label, '系统推荐');
-
     const listResponse = await app.inject({
       method: 'GET',
       url: '/novels?page=1&pageSize=20&keyword=%E7%B3%BB%E7%BB%9F'
@@ -93,11 +91,9 @@ describe('novel package 1 routes', () => {
     assert.equal(list.data.items[0].statusSummary.displayStatusText, '草稿已创建');
     assert.equal(list.data.items[0].statusSummary.recommendedAction.reasonText, '暂无 AI 结果，下一步需要进入详情后生成小说方向。');
     assert.equal(list.data.items[0].creationSource.type, 'system_recommendation');
-
     assert.equal(repository.getOperationLogs()[0]?.action, 'create_novel_draft');
     await app.close();
   });
-
   it('returns detail and row summary for an existing draft', async () => {
     const repository = createInMemoryNovelRepository();
     const app = await buildApp({
@@ -105,7 +101,6 @@ describe('novel package 1 routes', () => {
       novelRepository: repository,
       now: () => new Date('2026-06-17T10:00:00.000Z')
     });
-
     const createResponse = await app.inject({
       method: 'POST',
       url: '/novels/drafts',
@@ -136,7 +131,6 @@ describe('novel package 1 routes', () => {
     assert.equal(detail.data.chapterStats.plannedChapterCount, 60);
     assert.equal(detail.data.currentAssets.direction, null);
     assert.equal(detail.data.statusSummary.recommendedAction.disabled, false);
-
     const summaryResponse = await app.inject({
       method: 'GET',
       url: `/novels/${novelId}/summary`
@@ -147,7 +141,6 @@ describe('novel package 1 routes', () => {
     assert.equal(summary.data.recentTask, null);
     assert.deepEqual(summary.data.riskTips, ['暂无 AI 结果，尚未进入内容风险判断。']);
     assert.equal(summary.data.recommendedAction.label, '进入详情');
-
     await app.close();
   });
   it('defaults old clients to system recommendation but keeps historical missing preferences as legacy unknown', async () => {
@@ -157,7 +150,6 @@ describe('novel package 1 routes', () => {
       novelRepository: repository,
       now: () => new Date('2026-06-17T10:00:00.000Z')
     });
-
     const createResponse = await app.inject({
       method: 'POST',
       url: '/novels/drafts',
@@ -170,12 +162,10 @@ describe('novel package 1 routes', () => {
         }
       }
     });
-
     assert.equal(createResponse.statusCode, 201);
     assert.equal(createResponse.json().data.preferences.creationSourceType, 'system_recommendation');
     await app.close();
   });
-
   it('rejects unavailable hotspot references without creating a draft', async () => {
     const repository = createInMemoryNovelRepository();
     const app = await buildApp({
@@ -183,7 +173,6 @@ describe('novel package 1 routes', () => {
       novelRepository: repository,
       now: () => new Date('2026-06-17T10:00:00.000Z')
     });
-
     const response = await app.inject({
       method: 'POST',
       url: '/novels/drafts',
@@ -201,10 +190,8 @@ describe('novel package 1 routes', () => {
     assert.equal(body.success, false);
     assert.equal(body.error.code, ErrorCode.ValidationError);
     assert.equal(body.error.details.issues[0].path, 'creationSourceType');
-
     const listResponse = await app.inject({ method: 'GET', url: '/novels?page=1&pageSize=20' });
     assert.equal(listResponse.json().data.total, 0);
-
     await app.close();
   });
   it('validates hotspot references through an injected gateway and persists safe source summary', async () => {
@@ -215,7 +202,6 @@ describe('novel package 1 routes', () => {
       hotspotReferenceGateway: new FakeHotspotReferenceGateway(),
       now: () => new Date('2026-06-17T10:00:00.000Z')
     });
-
     const createResponse = await app.inject({
       method: 'POST',
       url: '/novels/drafts',
@@ -231,7 +217,6 @@ describe('novel package 1 routes', () => {
         }
       }
     });
-
     assert.equal(createResponse.statusCode, 201);
     const created = createResponse.json().data;
     assert.equal(created.preferences.creationSourceType, 'hotspot_reference');
@@ -242,10 +227,8 @@ describe('novel package 1 routes', () => {
     const detailResponse = await app.inject({ method: 'GET', url: `/novels/${created.id}` });
     assert.equal(detailResponse.statusCode, 200);
     assert.equal(detailResponse.json().data.preferences.creationSourceType, 'hotspot_reference');
-
     await app.close();
   });
-
   it('returns field-level validation errors for manual and hotspot source conflicts', async () => {
     const app = await buildApp({
       logger: false,
@@ -265,7 +248,6 @@ describe('novel package 1 routes', () => {
     });
     assert.equal(manualTooShort.statusCode, 400);
     assert.equal(manualTooShort.json().error.details.issues[0].path, 'preferences.customIdea');
-
     const systemConflict = await app.inject({
       method: 'POST',
       url: '/novels/drafts',
@@ -278,7 +260,6 @@ describe('novel package 1 routes', () => {
     });
     assert.equal(systemConflict.statusCode, 400);
     assert.equal(systemConflict.json().error.details.issues[0].path, 'hotspotReportId');
-
     const crossTenant = await app.inject({
       method: 'POST',
       url: '/novels/drafts',
@@ -304,10 +285,8 @@ describe('novel package 1 routes', () => {
     });
     assert.equal(wrongOpportunity.statusCode, 400);
     assert.equal(wrongOpportunity.json().error.details.reasonCode, 'opportunity_not_in_report');
-
     await app.close();
   });
-
   it('returns NOT_FOUND for missing novel detail', async () => {
     const app = await buildApp({
       logger: false,
@@ -320,7 +299,6 @@ describe('novel package 1 routes', () => {
         'x-request-id': 'missing-novel'
       }
     });
-
     assert.equal(response.statusCode, 404);
     assert.deepEqual(response.json(), {
       success: false,
@@ -331,7 +309,6 @@ describe('novel package 1 routes', () => {
       },
       requestId: 'missing-novel'
     });
-
     await app.close();
   });
 });
@@ -344,14 +321,12 @@ describe('novel package 2 direction routes', () => {
       now: () => new Date('2026-06-17T11:00:00.000Z')
     });
     const novelId = await createDraft(app, '方向生成互斥测试');
-
     const generateResponse = await app.inject({
       method: 'POST',
       url: `/novels/${novelId}/directions/generate`,
       headers: { 'x-request-id': 'direction-generate-1' },
       payload: {}
     });
-
     assert.equal(generateResponse.statusCode, 200);
     const generated = generateResponse.json();
     assert.equal(generated.success, true);
@@ -375,7 +350,6 @@ describe('novel package 2 direction routes', () => {
     assert.notEqual(repeated.data.task.id, generated.data.task.id);
     assert.equal((repository as any).getCreativeVersions().filter((version: any) => version.objectType === 'direction').length, generated.data.candidates.length * 2);
     assert.equal((repository as any).getGenerationTasks().filter((task: any) => task.taskType === 'novel_direction_generate').length, 2);
-
     const detailResponse = await app.inject({
       method: 'GET',
       url: `/novels/${novelId}`

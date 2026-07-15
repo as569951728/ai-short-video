@@ -52,13 +52,23 @@ function analyzeProviderContract(source: string): { claimed: number; registryCal
   `${binding.localName} calls must bind to the named import, not a same-name shadow`);
   const serviceClass = file.statements.find((statement): statement is ts.ClassDeclaration => ts.isClassDeclaration(statement) && statement.name?.text === 'NovelService');
   assert.ok(serviceClass, 'NovelService class is required');
-  const literalBoolean = (input: ts.Expression): boolean | undefined => {
+  const literalBoolean = (input: ts.Expression, seen = new Set<ts.Symbol>()): boolean | undefined => {
     let expression = input;
     while (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression) || ts.isNonNullExpression(expression)) expression = expression.expression;
     if (expression.kind === ts.SyntaxKind.TrueKeyword) return true;
     if (expression.kind === ts.SyntaxKind.FalseKeyword) return false;
-    return ts.isPrefixUnaryExpression(expression) && expression.operator === ts.SyntaxKind.ExclamationToken
-      ? literalBoolean(expression.operand) === undefined ? undefined : !literalBoolean(expression.operand) : undefined;
+    if (ts.isNumericLiteral(expression)) return Number(expression.text) !== 0;
+    if (ts.isIdentifier(expression)) {
+      const item = checker.getSymbolAtLocation(expression), declaration = item?.valueDeclaration;
+      if (item && !seen.has(item) && declaration && ts.isVariableDeclaration(declaration) && declaration.initializer
+        && ts.isVariableDeclarationList(declaration.parent) && (declaration.parent.flags & ts.NodeFlags.Const)) {
+        const next = new Set(seen); next.add(item); return literalBoolean(declaration.initializer, next);
+      }
+    }
+    if (ts.isPrefixUnaryExpression(expression) && expression.operator === ts.SyntaxKind.ExclamationToken) {
+      const value = literalBoolean(expression.operand, seen); return value === undefined ? undefined : !value;
+    }
+    return undefined;
   };
   const isDead = (node: ts.Node, boundary: ts.Node): boolean => {
     for (let child = node, parent = node.parent; parent && parent !== boundary; child = parent, parent = parent.parent) {
@@ -90,12 +100,18 @@ function analyzeProviderContract(source: string): { claimed: number; registryCal
   const propertyName = (node: ts.PropertyName | ts.Expression): string | undefined => ts.isIdentifier(node) || ts.isStringLiteralLike(node) ? node.text
     : ts.isComputedPropertyName(node) && ts.isStringLiteralLike(node.expression) ? node.expression.text : undefined;
   const directCalls = (callback: ts.ArrowFunction | ts.FunctionExpression): number => {
-    const nodes = all(callback, (node): node is ts.Node => true), tainted = new Set<ts.Symbol>();
+    const nodes = all(callback, (node): node is ts.Node => true), tainted = new Set<ts.Symbol>(), thisAliases = new Set<ts.Symbol>();
     const symbol = (identifier: ts.Identifier) => checker.getSymbolAtLocation(identifier);
+    const isThisValue = (expression: ts.Expression) => {
+      const value = unwrap(expression);
+      return value.kind === ts.SyntaxKind.ThisKeyword || (ts.isIdentifier(value) && !!symbol(value) && thisAliases.has(symbol(value)!));
+    };
     const isThisProvider = (expression: ts.Expression) => {
       const value = unwrap(expression);
-      return (ts.isPropertyAccessExpression(value) && value.expression.kind === ts.SyntaxKind.ThisKeyword && DIRECT_PROVIDER_NAMES.has(value.name.text))
-        || (ts.isElementAccessExpression(value) && value.expression.kind === ts.SyntaxKind.ThisKeyword && value.argumentExpression && DIRECT_PROVIDER_NAMES.has(propertyName(value.argumentExpression) ?? ''));
+      if (ts.isPropertyAccessExpression(value)) return isThisValue(value.expression) && DIRECT_PROVIDER_NAMES.has(value.name.text);
+      if (!ts.isElementAccessExpression(value) || !isThisValue(value.expression) || !value.argumentExpression) return false;
+      const key = unwrap(value.argumentExpression);
+      return !ts.isStringLiteralLike(key) || DIRECT_PROVIDER_NAMES.has(key.text);
     };
     const isTainted = (expression: ts.Expression): boolean => {
       const value = unwrap(expression);
@@ -103,18 +119,24 @@ function analyzeProviderContract(source: string): { claimed: number; registryCal
       if (isThisProvider(value)) return true;
       return (ts.isPropertyAccessExpression(value) || ts.isElementAccessExpression(value)) && isTainted(value.expression);
     };
-    const mark = (name: ts.BindingName): boolean => {
+    const mark = (name: ts.BindingName, target = tainted): boolean => {
       let changed = false;
-      for (const identifier of all(name, ts.isIdentifier)) { const item = symbol(identifier); if (item && !tainted.has(item)) { tainted.add(item); changed = true; } }
+      for (const identifier of all(name, ts.isIdentifier)) { const item = symbol(identifier); if (item && !target.has(item)) { target.add(item); changed = true; } }
       return changed;
     };
     let changed: boolean;
     do {
       changed = false;
       for (const node of nodes) {
+        if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer && isThisValue(node.initializer)) changed = mark(node.name, thisAliases) || changed;
         if (ts.isVariableDeclaration(node) && node.initializer && isTainted(node.initializer)) changed = mark(node.name) || changed;
-        if (ts.isVariableDeclaration(node) && node.initializer?.kind === ts.SyntaxKind.ThisKeyword && ts.isObjectBindingPattern(node.name)) for (const element of node.name.elements) if (DIRECT_PROVIDER_NAMES.has(propertyName(element.propertyName ?? element.name) ?? '')) changed = mark(element.name) || changed;
+        if (ts.isVariableDeclaration(node) && node.initializer && isThisValue(node.initializer) && ts.isObjectBindingPattern(node.name)) for (const element of node.name.elements) if (DIRECT_PROVIDER_NAMES.has(propertyName(element.propertyName ?? element.name) ?? '')) changed = mark(element.name) || changed;
+        if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isIdentifier(node.left) && isThisValue(node.right)) changed = mark(node.left, thisAliases) || changed;
         if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isIdentifier(node.left) && isTainted(node.right)) { const item = symbol(node.left); if (item && !tainted.has(item)) { tainted.add(item); changed = true; } }
+        if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken && isThisValue(node.right) && ts.isObjectLiteralExpression(unwrap(node.left))) for (const property of unwrap(node.left).properties) {
+          if (ts.isPropertyAssignment(property) && DIRECT_PROVIDER_NAMES.has(propertyName(property.name) ?? '') && ts.isIdentifier(unwrap(property.initializer))) changed = mark(unwrap(property.initializer) as ts.Identifier) || changed;
+          if (ts.isShorthandPropertyAssignment(property) && DIRECT_PROVIDER_NAMES.has(property.name.text)) changed = mark(property.name) || changed;
+        }
       }
     } while (changed);
     return all(callback, ts.isCallExpression).filter((call) => isTainted(call.expression)).length;
@@ -360,10 +382,14 @@ describe('RP-02A generation task SSOT and provider preclaim', () => {
       ['registry shadow', valid.replace(callback, 'provider: () => { const executeNovelProviderAction = () => undefined; return executeNovelProviderAction(); }'), /same-name shadow/],
       ['dead claimed padding', valid.replace(CONTRACT_CALL, `if (false) { ${CONTRACT_CALL} }`), /must be reachable/],
       ['dead registry padding', valid.replace(callback, 'provider: () => { if (false) return executeNovelProviderAction(); return undefined; }'), /registry dispatch must be reachable/],
+      ['numeric dead registry', valid.replace(callback, 'provider: () => { if (0) return executeNovelProviderAction(); return undefined; }'), /registry dispatch must be reachable/],
       ['direct alias', valid.replace(callback, 'provider: () => { const provider = this.directionProvider; return provider.generate(); }'), /must not call a direct provider/],
       ['direct destructure', valid.replace(callback, 'provider: () => { const { directionProvider: provider } = this; return provider.generate(); }'), /must not call a direct provider/],
       ['direct assignment', valid.replace(callback, 'provider: () => { let provider; provider = this.directionProvider; return provider.generate(); }'), /must not call a direct provider/],
-      ['computed direct', valid.replace(callback, "provider: () => this['directionProvider']['generate']()"), /must not call a direct provider/]
+      ['computed direct', valid.replace(callback, "provider: () => this['directionProvider']['generate']()"), /must not call a direct provider/],
+      ['registry padding + this alias', valid.replace(callback, 'provider: () => { executeNovelProviderAction(); const self = this; return self.directionProvider.generate(); }'), /must not call a direct provider/],
+      ['destructuring assignment', valid.replace(callback, 'provider: () => { executeNovelProviderAction(); let provider; ({ directionProvider: provider } = this); return provider.generate(); }'), /must not call a direct provider/],
+      ['dynamic computed direct', valid.replace(callback, "provider: () => { executeNovelProviderAction(); const key = 'directionProvider'; return this[key].generate(); }"), /must not call a direct provider/]
     ];
     for (const [name, mutation, expected] of mutations) assert.throws(() => analyzeProviderContract(mutation), expected, name);
   });
