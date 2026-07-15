@@ -1,18 +1,17 @@
 import { RiskLevel, type ScoringDimensionDTO } from '@ai-shortvideo/shared';
-import type { FullReviewDraft, NovelChapterRecord, NovelRecord } from '../domain/novelDomain.js';
+import type { FullReviewDraft } from '../domain/novelDomain.js';
+import type { NovelProviderActionInputFor, NovelProviderInputV1 } from '../services/actionExecutionPlan.js';
+
+type FullReviewProviderInput = NovelProviderActionInputFor<'novel_full_review'>;
 
 const FULL_REVIEW_POLICY_VERSION = 'full-review-policy-v1';
 
 export interface FullReviewProvider {
-  generateFullReview(input: {
-    novel: NovelRecord;
-    chapters: NovelChapterRecord[];
-    sourceVersionRefs: unknown;
-  }): Promise<FullReviewDraft>;
+  generateFullReview(input: FullReviewProviderInput): Promise<FullReviewDraft>;
 }
 
 export class MockFullReviewProvider implements FullReviewProvider {
-  async generateFullReview(input: { novel: NovelRecord; chapters: NovelChapterRecord[]; sourceVersionRefs: unknown }): Promise<FullReviewDraft> {
+  async generateFullReview(input: FullReviewProviderInput): Promise<FullReviewDraft> {
     const lowScore = input.novel.title.includes('低分全书审稿');
     const videoReadinessFail = input.novel.title.includes('视频化检查失败');
     const totalScore = lowScore ? 66 : 84;
@@ -70,7 +69,7 @@ function createDimensions(totalScore: number, lowScore: boolean): ScoringDimensi
   }));
 }
 
-function createIssues(novel: NovelRecord, lowScore: boolean, videoReadinessFail: boolean) {
+function createIssues(novel: NovelProviderInputV1, lowScore: boolean, videoReadinessFail: boolean) {
   if (!lowScore && !videoReadinessFail) {
     return [
       {

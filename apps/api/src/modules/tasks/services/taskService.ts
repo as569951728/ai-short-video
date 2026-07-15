@@ -18,6 +18,7 @@ import type {
   NovelRepository,
   RequestContext
 } from '../../novels/domain/novelDomain.js';
+import { listActionExecutionPlans } from '../../novels/services/actionExecutionPlan.js';
 
 export interface TaskServiceOptions {
   repository: NovelRepository;
@@ -25,6 +26,11 @@ export interface TaskServiceOptions {
 }
 
 const ACTIVE_TASK_STATUSES = [TaskStatus.Queued, TaskStatus.Processing, TaskStatus.WaitingConfirmation];
+const PROVIDER_BACKED_TASK_TYPES = new Set(listActionExecutionPlans().map((plan) => plan.taskType));
+const PROVIDER_FAILURE_PUBLIC_CURRENT_STEP = '生成任务失败，暂不支持直接重试';
+const PROVIDER_FAILURE_PUBLIC_MESSAGE = '任务执行失败，未写入新的候选或正式内容。';
+const PROVIDER_FAILURE_PUBLIC_ERROR_CODE = 'PROVIDER_ERROR';
+const RETRY_FREEZE_REASON = '当前阶段暂不支持任务重试，请返回业务页面查看当前内容。';
 
 export class TaskService {
   private readonly now: () => Date;
@@ -44,14 +50,21 @@ export class TaskService {
   async getTaskEvents(taskId: string, context: RequestContext): Promise<TaskEventListDTO> {
     const task = await this.findTaskOrThrow(taskId, context);
     const events = await this.options.repository.listTaskEvents(context.tenantId, task.id);
+    const providerBackedFailed = isProviderBackedFailedTask(task);
 
     return {
-      items: events.map(toTaskEventDTO)
+      items: events.map((event) => toTaskEventDTO(event, providerBackedFailed))
     };
   }
 
   async retryTask(taskId: string, request: RetryTaskRequest, context: RequestContext): Promise<RetryTaskResultDTO> {
     const task = await this.findTaskOrThrow(taskId, context);
+    if (PROVIDER_BACKED_TASK_TYPES.has(task.taskType)) {
+      throw new BusinessError(ErrorCode.RetryNotAvailable, '当前阶段暂不支持任务重试，未创建新任务。', {
+        taskId: task.id,
+        taskType: task.taskType
+      });
+    }
 
     if (task.status !== TaskStatus.Failed) {
       throw new BusinessError(ErrorCode.TaskNotRetryable, '只有失败任务可以重试', {
@@ -137,7 +150,8 @@ export class TaskService {
   }
 
   private toTaskDetailDTO(task: GenerationTaskRecord, events: GenerationTaskEventRecord[], sourceStale: boolean): TaskDetailDTO {
-    const retryable = task.status === TaskStatus.Failed && !sourceStale;
+    const providerBackedFailed = isProviderBackedFailedTask(task);
+    const retryable = task.status === TaskStatus.Failed && !sourceStale && !providerBackedFailed;
     const cancellable = ACTIVE_TASK_STATUSES.includes(task.status);
     const traceRequestId = getRequestId(task.metadata);
 
@@ -147,11 +161,11 @@ export class TaskService {
       status: task.status,
       statusText: getTaskStatusText(task.status),
       progress: task.progress,
-      currentStep: task.currentStep,
+      currentStep: providerBackedFailed ? PROVIDER_FAILURE_PUBLIC_CURRENT_STEP : task.currentStep,
       novelId: task.novelId,
       objectType: task.objectType,
       objectId: task.objectId,
-      statusNote: task.statusNote,
+      statusNote: providerBackedFailed ? PROVIDER_FAILURE_PUBLIC_MESSAGE : task.statusNote,
       sourceVersionRefs: task.sourceVersionRefs,
       conflictScope: task.conflictScope,
       conflictKey: task.conflictKey,
@@ -159,8 +173,8 @@ export class TaskService {
       retryOfTaskId: task.retryOfTaskId,
       failureCategory: task.failureCategory,
       failureCategoryText: getFailureCategoryText(task.failureCategory),
-      errorCode: task.errorCode,
-      errorMessage: task.errorMessage,
+      errorCode: providerBackedFailed ? PROVIDER_FAILURE_PUBLIC_ERROR_CODE : task.errorCode,
+      errorMessage: providerBackedFailed ? PROVIDER_FAILURE_PUBLIC_MESSAGE : task.errorMessage,
       userFailureReason: getUserFailureReason(task, sourceStale),
       retryable,
       cancellable,
@@ -173,27 +187,28 @@ export class TaskService {
       nextAction: getTaskNextAction(task, retryable, cancellable, sourceStale),
       createdAt: task.createdAt.toISOString(),
       updatedAt: task.updatedAt.toISOString(),
-      events: events.map(toTaskEventDTO)
+      events: events.map((event) => toTaskEventDTO(event, providerBackedFailed))
     };
   }
 }
 
 export function toRecentTaskSummaryDTO(task: GenerationTaskRecord) {
+  const providerBackedFailed = isProviderBackedFailedTask(task);
   return {
     id: task.id,
     taskType: task.taskType,
     status: task.status,
     statusText: getTaskStatusText(task.status),
     progress: task.progress,
-    currentStep: task.currentStep,
-    errorCode: task.errorCode,
-    errorMessage: task.errorMessage,
+    currentStep: providerBackedFailed ? PROVIDER_FAILURE_PUBLIC_CURRENT_STEP : task.currentStep,
+    errorCode: providerBackedFailed ? PROVIDER_FAILURE_PUBLIC_ERROR_CODE : task.errorCode,
+    errorMessage: providerBackedFailed ? PROVIDER_FAILURE_PUBLIC_MESSAGE : task.errorMessage,
     createdAt: task.createdAt.toISOString(),
     updatedAt: task.updatedAt.toISOString()
   };
 }
 
-function toTaskEventDTO(event: GenerationTaskEventRecord): TaskEventDTO {
+function toTaskEventDTO(event: GenerationTaskEventRecord, providerBackedFailed = false): TaskEventDTO {
   return {
     id: event.id,
     taskId: event.taskId,
@@ -201,7 +216,7 @@ function toTaskEventDTO(event: GenerationTaskEventRecord): TaskEventDTO {
     statusText: getTaskStatusText(event.status),
     eventType: event.eventType,
     eventTypeText: getEventTypeText(event.eventType),
-    message: event.message ?? '',
+    message: providerBackedFailed ? PROVIDER_FAILURE_PUBLIC_MESSAGE : event.message ?? '',
     progress: event.progress,
     requestId: getRequestId(event.payload),
     createdAt: event.createdAt.toISOString()
@@ -248,6 +263,7 @@ function getFailureCategoryText(category: string | null) {
 }
 
 function getUserFailureReason(task: GenerationTaskRecord, sourceStale: boolean) {
+  if (isProviderBackedFailedTask(task)) return PROVIDER_FAILURE_PUBLIC_MESSAGE;
   if (sourceStale) return '上游内容已经变化，旧任务不能直接重试，请基于最新版本重新生成。';
   if (task.status === TaskStatus.Failed) {
     return task.errorMessage || task.statusNote || '任务失败，请稍后重试或调整输入后重新生成。';
@@ -264,6 +280,9 @@ function getTaskNextAction(
   cancellable: boolean,
   sourceStale: boolean
 ): RecommendedActionDTO {
+  if (isProviderBackedFailedTask(task)) {
+    return createAction('disabled', '暂不支持任务重试', RETRY_FREEZE_REASON, 'disabled', true);
+  }
   if (sourceStale) return createAction('regenerate', '重新生成', '上游内容已经变化，旧任务不能直接重试，请基于最新版本重新生成。', 'detail', false);
   if (retryable) return createAction('retry_task', '重试任务', '失败任务可创建一个新的重试任务，原任务会保留。', 'task', false);
   if (task.status === TaskStatus.WaitingConfirmation) return createAction('view_result', '查看候选结果', '候选已生成，采用后才会成为当前正式资产。', 'detail', false);
@@ -316,4 +335,8 @@ function isVersionRefChanged(refs: Record<string, unknown>, key: string, current
   if (!(key in refs)) return false;
 
   return (refs[key] ?? null) !== currentValue;
+}
+
+function isProviderBackedFailedTask(task: GenerationTaskRecord) {
+  return task.status === TaskStatus.Failed && PROVIDER_BACKED_TASK_TYPES.has(task.taskType);
 }

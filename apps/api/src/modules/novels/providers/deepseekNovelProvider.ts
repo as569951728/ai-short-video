@@ -11,24 +11,37 @@ import {
 import { LlmProviderError, type LlmClient } from '../../ai/llmClient.js';
 import { requestJsonOutput } from '../../ai/jsonOutput.js';
 import type {
-  BodyChapterDraft,
-  ChapterContentVersionRecord,
   DirectionCandidateDraft,
   FullReviewDraft,
   ImpactAssessmentDraft,
-  NovelChapterRecord,
-  NovelPreferencesRecord,
-  NovelRecord,
   StructureAssetDraft,
   TrialChapterCandidateDraft,
-  TrialFollowupChapterDraft,
   TrialReviewDraft
 } from '../domain/novelDomain.js';
+import {
+  projectStructureCurrentAssetsPrompt,
+  type BodyChapterProviderDraft,
+  type ChapterProviderInputV1,
+  type NovelProviderActionInputFor,
+  type NovelProviderInputV1,
+  type TrialFollowupChapterProviderDraft
+} from '../services/actionExecutionPlan.js';
 import type { BodyProvider } from './mockBodyProvider.js';
 import type { DirectionProvider } from './mockDirectionProvider.js';
 import type { FullReviewProvider } from './mockFullReviewProvider.js';
 import type { StructureProvider } from './mockStructureProvider.js';
 import type { TrialChapterCandidateDraftLike, TrialProvider } from './mockTrialProvider.js';
+
+type DirectionGenerateInput = NovelProviderActionInputFor<'direction_generate'>;
+type DirectionFuseInput = NovelProviderActionInputFor<'direction_fuse'>;
+type DirectionOptimizeInput = NovelProviderActionInputFor<'direction_optimize'>;
+type StructureProviderInput = NovelProviderActionInputFor<'setting_generate' | 'outline_generate' | 'stage_outline_generate' | 'chapter_plan_generate'>;
+type TrialChapterOneInput = NovelProviderActionInputFor<'trial_chapter_one_generate'>;
+type TrialFollowupInput = NovelProviderActionInputFor<'trial_followup_generate'>;
+type BodyGenerateInput = NovelProviderActionInputFor<'body_batch_generate' | 'chapter_body_generate'>;
+type BodyRewriteInput = NovelProviderActionInputFor<'chapter_rewrite'>;
+type BodyImpactInput = NovelProviderActionInputFor<'chapter_impact_assess' | 'chapter_adopt_impact_assess'>;
+type FullReviewProviderInput = NovelProviderActionInputFor<'novel_full_review'>;
 
 interface DeepSeekNovelProviderOptions {
   client: LlmClient;
@@ -69,7 +82,7 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
     return `deepseek:${model}:route-v1`;
   }
 
-  async generateCandidates(input: { novel: NovelRecord; preferences: NovelPreferencesRecord }): Promise<DirectionCandidateDraft[]> {
+  async generateCandidates(input: DirectionGenerateInput): Promise<DirectionCandidateDraft[]> {
     return requestJsonOutput(this.options.client, {
       taskName: 'novel_direction_generate',
       model: this.model,
@@ -78,7 +91,7 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
     });
   }
 
-  async fuseCandidates(input: { sources: DirectionCandidateDraft[]; reason?: string | null }): Promise<DirectionCandidateDraft> {
+  async fuseCandidates(input: DirectionFuseInput): Promise<DirectionCandidateDraft> {
     return requestJsonOutput(this.options.client, {
       taskName: 'novel_direction_fuse',
       model: this.model,
@@ -90,7 +103,7 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
     });
   }
 
-  async optimizeCandidate(input: { source: DirectionCandidateDraft; instruction?: string | null }): Promise<DirectionCandidateDraft> {
+  async optimizeCandidate(input: DirectionOptimizeInput): Promise<DirectionCandidateDraft> {
     return requestJsonOutput(this.options.client, {
       taskName: 'novel_direction_optimize',
       model: this.model,
@@ -102,12 +115,7 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
     });
   }
 
-  async generateAsset(input: {
-    objectType: StructureAssetType;
-    novel: NovelRecord;
-    preferences: NovelPreferencesRecord;
-    currentAssets: Record<string, unknown>;
-  }): Promise<StructureAssetDraft> {
+  async generateAsset(input: StructureProviderInput): Promise<StructureAssetDraft> {
     if (input.objectType === 'chapter_plan') {
       return this.generateChapterPlanAsset(input);
     }
@@ -117,20 +125,15 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
       model: this.getStructureTaskModel(input.objectType),
       messages: createMessages(getStructureInstruction(input.objectType), input.novel, {
         preferences: input.preferences,
-        currentAssets: summarizeCurrentAssets(input.currentAssets)
+        currentAssets: structurePromptAssets(input)
       }, getStructureSchemaHint(input.objectType)),
       maxTokens: getStructureMaxTokens(input.objectType),
       validate: (value) => toStructureDraft(input.objectType, unwrapPayload(value, ['candidate', 'asset', input.objectType, 'result']))
     });
   }
 
-  private async generateChapterPlanAsset(input: {
-    objectType: StructureAssetType;
-    novel: NovelRecord;
-    preferences: NovelPreferencesRecord;
-    currentAssets: Record<string, unknown>;
-  }): Promise<StructureAssetDraft> {
-    const currentAssets = summarizeCurrentAssets(input.currentAssets);
+  private async generateChapterPlanAsset(input: StructureProviderInput): Promise<StructureAssetDraft> {
+    const currentAssets = structurePromptAssets(input);
     const chapterCount = Math.max(1, Math.min(input.novel.chapterLimit, 1000));
     const batchSize = 10;
     const chapters: StructureAssetContentDTO['chapters'] = [];
@@ -161,12 +164,7 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
     return this.structureModel;
   }
 
-  async generateChapterOneCandidates(input: {
-    novel: NovelRecord;
-    preferences: NovelPreferencesRecord;
-    chapters: NovelChapterRecord[];
-    chapterCount: number;
-  }): Promise<TrialChapterCandidateDraft[]> {
+  async generateChapterOneCandidates(input: TrialChapterOneInput): Promise<TrialChapterCandidateDraft[]> {
     const firstChapter = input.chapters[0];
     if (!firstChapter) {
       throw new Error('chapter one is required');
@@ -203,11 +201,7 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
     });
   }
 
-  async generateFollowup(input: {
-    novel: NovelRecord;
-    selectedCandidate: TrialChapterCandidateDraftLike;
-    chapters: NovelChapterRecord[];
-  }): Promise<{ chapters: TrialFollowupChapterDraft[]; review: TrialReviewDraft }> {
+  async generateFollowup(input: TrialFollowupInput): Promise<{ chapters: TrialFollowupChapterProviderDraft[]; review: TrialReviewDraft }> {
     return requestJsonOutput(this.options.client, {
       taskName: 'novel_trial_followup',
       model: this.model,
@@ -224,7 +218,7 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
         });
         const chapterOne = input.chapters[0];
         const chapters = chapterOne
-          ? [toSelectedChapterOneFollowup(input.selectedCandidate, chapterOne), ...generatedChapters.filter((item) => item.chapter.chapterNo !== 1)]
+          ? [toSelectedChapterOneFollowup(input.selectedCandidate, chapterOne), ...generatedChapters.filter((item) => item.chapter.id !== chapterOne.id)]
           : generatedChapters;
         return {
           chapters,
@@ -234,15 +228,7 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
     });
   }
 
-  async generateBodyChapter(input: {
-    novel: NovelRecord;
-    chapter: NovelChapterRecord;
-    strategySnapshot: unknown;
-    previousContent: ChapterContentVersionRecord | null;
-    previousMemory: unknown;
-    previousBatchNotes: string[];
-    enhancedReview: boolean;
-  }): Promise<BodyChapterDraft> {
+  async generateBodyChapter(input: BodyGenerateInput): Promise<BodyChapterProviderDraft> {
     const wordTargetPolicy = createWordTargetPolicy(input.novel, input.chapter.wordTarget ?? undefined);
     return requestJsonOutput(this.options.client, {
       taskName: 'novel_body_chapter_generate',
@@ -250,8 +236,9 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
       messages: createMessages('生成单章正文、特性卡、单章审稿和长篇记忆摘要，只返回 JSON。', input.novel, {
         chapter: pickChapter(input.chapter),
         wordTargetPolicy,
-        strategySnapshotId: (input.strategySnapshot as { id?: string })?.id,
+        strategySnapshotId: input.strategySnapshot.id,
         previousContentSummary: input.previousContent?.summary,
+        previousMemory: input.previousMemory,
         previousBatchNotes: input.previousBatchNotes,
         enhancedReview: input.enhancedReview
       }, M1_OUTPUT_SCHEMA_HINT.body),
@@ -260,12 +247,7 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
     });
   }
 
-  async rewriteChapter(input: {
-    novel: NovelRecord;
-    chapter: NovelChapterRecord;
-    currentContent: ChapterContentVersionRecord;
-    instruction: string;
-  }): Promise<{ candidate: BodyChapterDraft; summaryCompare: ChapterSummaryCompareDTO }> {
+  async rewriteChapter(input: BodyRewriteInput): Promise<{ candidate: BodyChapterProviderDraft; summaryCompare: ChapterSummaryCompareDTO }> {
     return requestJsonOutput(this.options.client, {
       taskName: 'novel_chapter_rewrite',
       model: this.model,
@@ -286,13 +268,7 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
     });
   }
 
-  async assessImpact(input: {
-    novel: NovelRecord;
-    chapter: NovelChapterRecord;
-    oldContent: ChapterContentVersionRecord | null;
-    newContent: ChapterContentVersionRecord;
-    instruction?: string | null;
-  }): Promise<ImpactAssessmentDraft> {
+  async assessImpact(input: BodyImpactInput): Promise<ImpactAssessmentDraft> {
     return requestJsonOutput(this.options.client, {
       taskName: 'novel_impact_assess',
       model: this.reasonerModel,
@@ -306,7 +282,7 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
     });
   }
 
-  async generateFullReview(input: { novel: NovelRecord; chapters: NovelChapterRecord[]; sourceVersionRefs: unknown }): Promise<FullReviewDraft> {
+  async generateFullReview(input: FullReviewProviderInput): Promise<FullReviewDraft> {
     return requestJsonOutput(this.options.client, {
       taskName: 'novel_full_review',
       model: this.reasonerModel,
@@ -319,7 +295,7 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
   }
 }
 
-function createMessages(instruction: string, novel: NovelRecord | null, payload: unknown, outputSchemaHint: string) {
+function createMessages(instruction: string, novel: NovelProviderInputV1 | null, payload: unknown, outputSchemaHint: string) {
   return [
     {
       role: 'system' as const,
@@ -327,12 +303,12 @@ function createMessages(instruction: string, novel: NovelRecord | null, payload:
     },
     {
       role: 'user' as const,
-      content: JSON.stringify({
+      content: JSON.stringify(boundPromptValue({
         instruction,
         outputSchemaHint,
         novel: novel ? { id: novel.id, title: novel.title, genres: novel.genres, chapterLimit: novel.chapterLimit } : null,
         payload
-      })
+      }))
     }
   ];
 }
@@ -353,7 +329,7 @@ const M1_OUTPUT_SCHEMA_HINT = {
   impact:
     '影响评估返回 {"impactLevel":"none|minor|medium|severe","summary","changedFacts":[],"affectedChapterIds":[],"affectedVideoReferenceIds":[],"recommendedHandling","suggestedActions":[],"blocksFullReview":false}',
   fullReview:
-    '全书审稿返回 {"totalScore":0-100,"rating":"A|B|C","gateResult":"pass|warning|blocked","summary","strengths":[],"problems":[],"suggestions":[],"dimensionScores":[{"key","label","score","weight","evidence","penaltyPoints"}],"issues":[],"videoSuggestion","firstVideoSuggestion":{"chapterRange","openingSlice","narrationHook","firstScreenSubtitle","titleHook","endingSuspense","suggestedFormat","riskTips":[]},"platformRisks":[],"originalityRisks":[],"aiFlavorRisks":[],"lowScoreContinueRisks":[],"reviewPolicyVersionId"}'
+    '全书审稿返回 {"totalScore":0-100,"rating":"A|B|C","gateResult":"pass|warning|blocked","summary","strengths":[],"problems":[],"suggestions":[],"dimensionScores":[{"key","label","score","weight","evidence","penaltyPoints"}],"issues":[],"videoSuggestion","firstVideoSuggestion":{"chapterRange","openingSlice","narrationHook","firstScreenSubtitle","titleHook","endingSuspense","suggestedFormat","riskTips":[]},"platformRisks":[],"originalityRisks":[],"aiFlavorRisks":[],"lowScoreContinueRisks":[],"reviewPolicyVersionId":"deepseek-full-review-v1"}'
 };
 
 function toDirectionDraft(value: unknown): DirectionCandidateDraft {
@@ -512,64 +488,41 @@ function getStructureMaxTokens(objectType: StructureAssetType): number {
   return limits[objectType];
 }
 
+function structurePromptAssets(input: StructureProviderInput): Record<string, unknown> {
+  const action = (input as { action?: StructureProviderInput['action'] }).action;
+  const assets = action ? projectStructureCurrentAssetsPrompt(action, input.currentAssets) : input.currentAssets;
+  return summarizeCurrentAssets(assets);
+}
+
+const STRUCTURE_PROMPT_SLOTS = ['direction', 'setting', 'outline', 'stageOutline'] as const;
 function summarizeCurrentAssets(assets: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(assets).map(([key, value]) => [key, summarizeAssetValue(value)]));
+  return Object.fromEntries(STRUCTURE_PROMPT_SLOTS.filter((slot) => Object.hasOwn(assets, slot)).map((slot) => [slot, summarizeAssetValue(assets[slot])]));
 }
 
 function summarizeAssetValue(value: unknown): unknown {
-  if (value === null || value === undefined) {
-    return null;
-  }
+  if (value === null || value === undefined) return null;
   const record = asRecord(value);
   const directionContent = readOptionalString(record, 'content');
-  if (directionContent) {
-    return {
-      title: readOptionalString(record, 'title'),
-      summary: truncateText(readOptionalString(record, 'summary'), 160),
-      content: truncateText(directionContent, 260),
-      score: readOptionalNumber(record, 'score'),
-      riskLevel: readOptionalString(record, 'riskLevel'),
-      recommendedReason: truncateText(readOptionalString(record, 'recommendedReason'), 160)
-    };
-  }
-  const content = asRecord(record.content ?? {});
+  if (directionContent) return { title: readOptionalString(record, 'title'), summary: truncateText(readOptionalString(record, 'summary'), 160), content: truncateText(directionContent, 260), score: readOptionalNumber(record, 'score'), riskLevel: readOptionalString(record, 'riskLevel'), recommendedReason: truncateText(readOptionalString(record, 'recommendedReason'), 160) };
+  const content = record.content && typeof record.content === 'object' ? asRecord(record.content) : record;
+  const logline = readOptionalString(content, 'logline'), coreHook = readOptionalString(content, 'coreHook');
+  if (logline || coreHook) return { title: readOptionalString(record, 'title'), summary: truncateText(readOptionalString(record, 'summary'), 160), score: readOptionalNumber(record, 'score'), riskLevel: readOptionalString(record, 'riskLevel'), logline: truncateText(logline, 260), coreHook: truncateText(coreHook, 260) };
   const sections = readPlainArray(content, 'sections').slice(0, 4).map((section) => {
     const item = asRecord(section);
-    return {
-      title: readOptionalString(item, 'title'),
-      body: truncateText(readOptionalString(item, 'body') ?? readOptionalString(item, 'summary'), 120),
-      items: readStringArray(item, 'items').slice(0, 4).map((entry) => truncateText(entry, 80))
-    };
+    return { title: readOptionalString(item, 'title'), body: truncateText(readOptionalString(item, 'body') ?? readOptionalString(item, 'summary'), 120), items: readStringArray(item, 'items').slice(0, 4).map((entry) => truncateText(entry, 80)) };
   });
   const stages = readPlainArray(content, 'stages').slice(0, 5).map((stage) => {
     const item = asRecord(stage);
-    return {
-      stageIndex: readOptionalNumber(item, 'stageIndex'),
-      title: readOptionalString(item, 'title'),
-      goal: truncateText(readOptionalString(item, 'goal') ?? readOptionalString(item, 'summary'), 100)
-    };
+    return { stageIndex: readOptionalNumber(item, 'stageIndex'), title: readOptionalString(item, 'title'), chapterRange: truncateText(readOptionalString(item, 'chapterRange'), 40), goal: truncateText(readOptionalString(item, 'goal') ?? readOptionalString(item, 'summary'), 100), conflict: truncateText(readOptionalString(item, 'conflict'), 100), payoff: truncateText(readOptionalString(item, 'payoff'), 100) };
   });
   const chapters = readPlainArray(content, 'chapters').slice(0, 8).map((chapter) => {
     const item = asRecord(chapter);
-    return {
-      chapterNo: readOptionalNumber(item, 'chapterNo'),
-      title: readOptionalString(item, 'title'),
-      goal: truncateText(readOptionalString(item, 'goal') ?? readOptionalString(item, 'summary'), 100)
-    };
+    return { chapterNo: readOptionalNumber(item, 'chapterNo'), stageIndex: readOptionalNumber(item, 'stageIndex'), title: readOptionalString(item, 'title'), wordTarget: readOptionalNumber(item, 'wordTarget'), goal: truncateText(readOptionalString(item, 'goal') ?? readOptionalString(item, 'summary'), 100), conflict: truncateText(readOptionalString(item, 'conflict'), 100), hook: truncateText(readOptionalString(item, 'hook'), 100) };
   });
-
-  return {
-    title: readOptionalString(record, 'title') ?? readOptionalString(content, 'title'),
-    summary: truncateText(readOptionalString(record, 'summary') ?? readOptionalString(content, 'summary'), 180),
-    score: readOptionalNumber(record, 'score'),
-    riskLevel: readOptionalString(record, 'riskLevel'),
-    logline: truncateText(readOptionalString(content, 'logline'), 120),
-    coreHook: truncateText(readOptionalString(content, 'coreHook'), 120),
-    sections,
-    stages,
-    chapters
-  };
+  return { title: readOptionalString(record, 'title') ?? readOptionalString(content, 'title'), summary: truncateText(readOptionalString(record, 'summary') ?? readOptionalString(content, 'summary'), 180), score: readOptionalNumber(record, 'score'), riskLevel: readOptionalString(record, 'riskLevel'), sections, stages, chapters };
 }
+
+function boundPromptValue(value: unknown, depth = 0): unknown { if (typeof value === 'string') return value.slice(0, 4000); if (Array.isArray(value)) return value.slice(0, 100).map((item) => boundPromptValue(item, depth + 1)); if (value && typeof value === 'object' && depth < 8) return Object.fromEntries(Object.entries(value).slice(0, 100).map(([key, item]) => [key, boundPromptValue(item, depth + 1)])); return value === null || typeof value === 'number' || typeof value === 'boolean' ? value : null; }
 
 function truncateText(value: string | undefined | null, maxLength: number): string | undefined {
   if (!value) return undefined;
@@ -591,11 +544,11 @@ function toStructureChapterDraft(value: unknown, fallbackChapterNo: number, summ
 }
 
 function createChapterPlanStructureDraft(
-  novel: NovelRecord,
+  novel: NovelProviderInputV1,
   currentAssets: Record<string, unknown>,
   chapters: StructureAssetContentDTO['chapters']
 ): StructureAssetDraft {
-  const stageOutline = asRecord(currentAssets.stageOutline ?? currentAssets.stage_outline ?? {});
+  const stageOutline = asRecord(currentAssets.stageOutline ?? {});
   const stageSummary = readOptionalString(stageOutline, 'summary') ?? `${novel.title} 章节目录已生成。`;
   const stages = readPlainArray(stageOutline, 'stages').map((stage, index) => {
     const record = asRecord(stage);
@@ -648,7 +601,7 @@ function createStageChapterRange(stageIndex: number, chapterCount: number, stage
   return `${start}-${end}`;
 }
 
-function toTrialCandidateDraft(value: unknown, chapter: NovelChapterRecord, recommendedFallback: boolean): TrialChapterCandidateDraft {
+function toTrialCandidateDraft(value: unknown, chapter: ChapterProviderInputV1, recommendedFallback: boolean): TrialChapterCandidateDraft {
   const item = asRecord(value);
   const content = readString(item, 'content');
   return {
@@ -670,19 +623,18 @@ function toTrialCandidateDraft(value: unknown, chapter: NovelChapterRecord, reco
   };
 }
 
-function toFollowupDraft(value: unknown, chapter: NovelChapterRecord): TrialFollowupChapterDraft {
-  return {
-    ...toBodyDraft(value, null, chapter),
-    chapter
-  };
+function toFollowupDraft(value: unknown, chapter: ChapterProviderInputV1): TrialFollowupChapterProviderDraft {
+  const draft = toBodyDraft(value, null, chapter);
+  delete (draft as { memory?: unknown }).memory;
+  return draft;
 }
 
-function toSelectedChapterOneFollowup(candidate: TrialChapterCandidateDraftLike, chapter: NovelChapterRecord): TrialFollowupChapterDraft {
+function toSelectedChapterOneFollowup(candidate: TrialChapterCandidateDraftLike, chapter: ChapterProviderInputV1): TrialFollowupChapterProviderDraft {
   const content = candidate.content;
   const summary = candidate.summary ?? content.slice(0, 120);
   const score = candidate.reviewScore ?? 82;
   return {
-    chapter,
+    chapter: { id: chapter.id, chapterNo: chapter.chapterNo },
     content,
     summary,
     openingStrategy: '沿用用户选择的第1章开篇策略',
@@ -695,13 +647,13 @@ function toSelectedChapterOneFollowup(candidate: TrialChapterCandidateDraftLike,
     aiRecommendedReason: '用户已选择该候选继续试写。',
     scoring: toScoring({}, 'trial-chapter-score-v1', score, false),
     featureCard: toFeatureCard({}, chapter, summary),
-    review: toChapterReview({}, null, score, summary, false),
+    review: toChapterReview({}, null, score, summary, false, 'trial-chapter-score-v1'),
     hardFailed: false,
     hardFailureReasons: []
   };
 }
 
-function toBodyDraft(value: unknown, novel: NovelRecord | null, chapter: NovelChapterRecord): BodyChapterDraft {
+function toBodyDraft(value: unknown, novel: NovelProviderInputV1 | null, chapter: ChapterProviderInputV1): BodyChapterProviderDraft {
   const item = asRecord(value);
   const content = readString(item, 'content');
   const hardFailed = readOptionalBoolean(item, 'hardFailed') ?? false;
@@ -709,7 +661,7 @@ function toBodyDraft(value: unknown, novel: NovelRecord | null, chapter: NovelCh
   const summary = readOptionalString(item, 'summary') ?? content.slice(0, 120);
 
   return {
-    chapter,
+    chapter: { id: chapter.id, chapterNo: chapter.chapterNo },
     content,
     summary,
     openingStrategy: readOptionalString(item, 'openingStrategy') ?? '承接上一章钩子',
@@ -722,7 +674,7 @@ function toBodyDraft(value: unknown, novel: NovelRecord | null, chapter: NovelCh
     aiRecommendedReason: readOptionalString(item, 'aiRecommendedReason') ?? '符合当前策略快照。',
     scoring: toScoring(item.scoring, 'body-chapter-score-v1', score, hardFailed),
     featureCard: toFeatureCard(item.featureCard, chapter, summary),
-    review: toChapterReview(item.review, novel, score, summary, hardFailed),
+    review: toChapterReview(item.review, novel, score, summary, hardFailed, 'body-chapter-score-v1'),
     memory: toMemory(item.memory, summary),
     hardFailed,
     hardFailureReasons: readStringArray(item, 'hardFailureReasons')
@@ -769,6 +721,8 @@ function toImpactDraft(value: unknown): ImpactAssessmentDraft {
 
 function toFullReviewDraft(value: unknown): FullReviewDraft {
   const item = asRecord(value);
+  const reviewPolicyVersionId = readString(item, 'reviewPolicyVersionId');
+  if (!['deepseek-full-review-v1', 'policy-full-review-v1'].includes(reviewPolicyVersionId)) throw new Error('reviewPolicyVersionId is invalid');
   return {
     totalScore: readNumber(item, 'totalScore'),
     rating: readString(item, 'rating'),
@@ -785,7 +739,7 @@ function toFullReviewDraft(value: unknown): FullReviewDraft {
     originalityRisks: readStringArray(item, 'originalityRisks'),
     aiFlavorRisks: readStringArray(item, 'aiFlavorRisks'),
     lowScoreContinueRisks: readStringArray(item, 'lowScoreContinueRisks'),
-    reviewPolicyVersionId: readOptionalString(item, 'reviewPolicyVersionId') ?? 'deepseek-full-review-v1'
+    reviewPolicyVersionId
   };
 }
 
@@ -805,7 +759,7 @@ function toScoring(value: unknown, version: string, fallbackScore?: number, hard
   }
 
   return {
-    scoringStrategyVersion: readOptionalString(item, 'scoringStrategyVersion') ?? version,
+    scoringStrategyVersion: version,
     totalScore,
     gateResult: hardFailure ? 'hard_fail' : totalScore >= 70 ? 'pass' : 'warning',
     gateResultText: hardFailure ? '硬失败' : totalScore >= 70 ? '通过' : '需关注',
@@ -831,7 +785,7 @@ function toDimension(value: unknown, index: number): ScoringDimensionDTO {
   };
 }
 
-function toFeatureCard(value: unknown, chapter: NovelChapterRecord, summary: string) {
+function toFeatureCard(value: unknown, chapter: ChapterProviderInputV1, summary: string) {
   const item = asRecord(value ?? {});
   return {
     chapterId: chapter.id,
@@ -851,12 +805,12 @@ function toFeatureCard(value: unknown, chapter: NovelChapterRecord, summary: str
   };
 }
 
-function toChapterReview(value: unknown, novel: NovelRecord | null, score: number, summary: string, hardFailed: boolean) {
+function toChapterReview(value: unknown, novel: NovelProviderInputV1 | null, score: number, summary: string, hardFailed: boolean, scoringStrategyVersion: string) {
   const item = asRecord(value ?? {});
   return {
     reviewLevel: 'chapter',
     totalScore: readOptionalNumber(item, 'totalScore') ?? score,
-    subScores: { scoringStrategyVersion: 'deepseek-chapter-review-v1' },
+    subScores: { scoringStrategyVersion },
     rating: hardFailed ? 'blocked' : score >= 70 ? 'pass' : 'warning',
     summary: readOptionalString(item, 'summary') ?? summary,
     strengths: readStringArray(item, 'strengths', ['主线承接清楚']),
@@ -878,7 +832,7 @@ function toChapterReview(value: unknown, novel: NovelRecord | null, score: numbe
     resolvedStatus: hardFailed ? 'open' : 'resolved',
     promptTemplateVersionId: null,
     policyProfileVersionId: novel?.policyProfileVersionId ?? null,
-    metadata: {}
+    metadata: { scoringStrategyVersion, hardFailed }
   };
 }
 
@@ -935,7 +889,7 @@ function summarizeSelectedCandidate(candidate: TrialChapterCandidateDraftLike) {
   };
 }
 
-function pickChapter(chapter: NovelChapterRecord) {
+function pickChapter(chapter: ChapterProviderInputV1) {
   return {
     id: chapter.id,
     chapterNo: chapter.chapterNo,
@@ -955,7 +909,7 @@ interface WordTargetPolicy {
   instruction: string;
 }
 
-function createWordTargetPolicy(novel: NovelRecord, chapterTarget?: number): WordTargetPolicy {
+function createWordTargetPolicy(novel: NovelProviderInputV1, chapterTarget?: number): WordTargetPolicy {
   const min = clampInteger(novel.chapterWordMin ?? 1800, 100, 30000);
   const max = clampInteger(Math.max(novel.chapterWordMax ?? 2600, min), min, 30000);
   const defaultTarget = Math.round((min + max) / 2);

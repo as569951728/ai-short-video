@@ -1,32 +1,15 @@
-import { RiskLevel, type StructureAssetContentDTO, type StructureAssetType } from '@ai-shortvideo/shared';
-import type { CreativeVersionRecord, NovelPreferencesRecord, NovelRecord, StructureAssetDraft } from '../domain/novelDomain.js';
+import { RiskLevel, type StructureAssetContentDTO } from '@ai-shortvideo/shared';
+import type { StructureAssetDraft } from '../domain/novelDomain.js';
+import type { NovelPreferencesProviderInputV1, NovelProviderActionInputFor, NovelProviderInputV1 } from '../services/actionExecutionPlan.js';
+
+type StructureProviderInput = NovelProviderActionInputFor<'setting_generate' | 'outline_generate' | 'stage_outline_generate' | 'chapter_plan_generate'>;
 
 export interface StructureProvider {
-  generateAsset(input: {
-    objectType: StructureAssetType;
-    novel: NovelRecord;
-    preferences: NovelPreferencesRecord;
-    currentAssets: {
-      direction: CreativeVersionRecord | null;
-      setting: CreativeVersionRecord | null;
-      outline: CreativeVersionRecord | null;
-      stageOutline: CreativeVersionRecord | null;
-    };
-  }): Promise<StructureAssetDraft>;
+  generateAsset(input: StructureProviderInput): Promise<StructureAssetDraft>;
 }
 
 export class MockStructureProvider implements StructureProvider {
-  async generateAsset(input: {
-    objectType: StructureAssetType;
-    novel: NovelRecord;
-    preferences: NovelPreferencesRecord;
-    currentAssets: {
-      direction: CreativeVersionRecord | null;
-      setting: CreativeVersionRecord | null;
-      outline: CreativeVersionRecord | null;
-      stageOutline: CreativeVersionRecord | null;
-    };
-  }) {
+  async generateAsset(input: StructureProviderInput) {
     if (input.objectType === 'setting') return createSettingAsset(input.novel, input.preferences);
     if (input.objectType === 'outline') return createOutlineAsset(input.novel, input.preferences);
     if (input.objectType === 'stage_outline') return createStageOutlineAsset(input.novel, input.preferences);
@@ -34,7 +17,7 @@ export class MockStructureProvider implements StructureProvider {
   }
 }
 
-function createSettingAsset(novel: NovelRecord, preferences: NovelPreferencesRecord): StructureAssetDraft {
+function createSettingAsset(novel: NovelProviderInputV1, preferences: NovelPreferencesProviderInputV1): StructureAssetDraft {
   const genre = novel.genres[0] ?? '都市逆袭';
   const appeal = preferences.appealPoints[0] ?? '低谷翻盘';
   const title = `${genre}设定档：${appeal}成长线`;
@@ -76,7 +59,7 @@ function createSettingAsset(novel: NovelRecord, preferences: NovelPreferencesRec
   };
 }
 
-function createOutlineAsset(novel: NovelRecord, preferences: NovelPreferencesRecord): StructureAssetDraft {
+function createOutlineAsset(novel: NovelProviderInputV1, preferences: NovelPreferencesProviderInputV1): StructureAssetDraft {
   const stageCount = preferences.stageCount ?? 4;
   const title = `${novel.title} 全书大纲`;
   const content: StructureAssetContentDTO = {
@@ -112,7 +95,7 @@ function createOutlineAsset(novel: NovelRecord, preferences: NovelPreferencesRec
   };
 }
 
-function createStageOutlineAsset(novel: NovelRecord, preferences: NovelPreferencesRecord): StructureAssetDraft {
+function createStageOutlineAsset(novel: NovelProviderInputV1, preferences: NovelPreferencesProviderInputV1): StructureAssetDraft {
   const stageCount = preferences.stageCount ?? 4;
   const title = `${novel.title} 阶段大纲`;
   const stages = createStageItems(stageCount, novel.chapterLimit);
@@ -142,7 +125,7 @@ function createStageOutlineAsset(novel: NovelRecord, preferences: NovelPreferenc
   };
 }
 
-function createChapterPlanAsset(novel: NovelRecord, preferences: NovelPreferencesRecord): StructureAssetDraft {
+function createChapterPlanAsset(novel: NovelProviderInputV1, preferences: NovelPreferencesProviderInputV1): StructureAssetDraft {
   const title = `${novel.title} 章节目录`;
   const stages = createStageItems(preferences.stageCount ?? 4, novel.chapterLimit);
   const chapters = Array.from({ length: novel.chapterLimit }, (_, index) => {

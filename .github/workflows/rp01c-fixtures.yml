@@ -2,12 +2,20 @@ name: RP-01C deterministic fixtures
 
 on:
   workflow_dispatch:
+    inputs:
+      base_sha:
+        description: Explicit base SHA for package gate
+        required: true
+      head_sha:
+        description: Explicit head SHA for package gate
+        required: true
   push:
-    paths:
+    paths: &rp02b2a_paths
       - '.github/workflows/rp01c-fixtures.yml'
       - 'apps/api/test/rp01c/**'
       - 'apps/api/test/rp02a/**'
       - 'apps/api/test/rp02b/**'
+      - 'apps/api/test/rp02b2a/**'
       - 'apps/api/src/**'
       - 'apps/api/prisma/**'
       - 'apps/api/package.json'
@@ -17,25 +25,16 @@ on:
       - 'packages/shared/tsconfig.json'
       - 'scripts/e2e/**'
       - 'scripts/remediation-governance.*'
+      - 'scripts/rp02b2a-package-gate.*'
+      - 'docs/adr/rp-02b2a1-registry-abi-budget.md'
+      - 'docs/adr/rp-02b2a2-authority-claim-budget.md'
+      - 'docs/adr/rp-02b2a3-lease-retry-budget.md'
+      - 'docs/adr/rp-02b2a4-inmemory-finalize-budget.md'
+      - 'docs/adr/rp-02b2a5-prisma-nine-six-budget.md'
       - 'package.json'
       - 'package-lock.json'
   pull_request:
-    paths:
-      - '.github/workflows/rp01c-fixtures.yml'
-      - 'apps/api/test/rp01c/**'
-      - 'apps/api/test/rp02a/**'
-      - 'apps/api/test/rp02b/**'
-      - 'apps/api/src/**'
-      - 'apps/api/prisma/**'
-      - 'apps/api/package.json'
-      - 'apps/api/tsconfig.json'
-      - 'packages/shared/src/**'
-      - 'packages/shared/package.json'
-      - 'packages/shared/tsconfig.json'
-      - 'scripts/e2e/**'
-      - 'scripts/remediation-governance.*'
-      - 'package.json'
-      - 'package-lock.json'
+    paths: *rp02b2a_paths
 
 jobs:
   rp01c-fixtures:
@@ -48,15 +47,42 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.head_sha || github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.event.after }}
       - uses: actions/setup-node@v4
         with:
           node-version: 24.14.0
           cache: npm
       - run: npm ci
       - run: ./node_modules/.bin/playwright install chromium
+      - name: Resolve B2a1 package gate range
+        id: b2a1-range
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            git fetch --no-tags --prune origin "+refs/heads/${{ github.event.pull_request.base.ref }}:refs/remotes/origin/${{ github.event.pull_request.base.ref }}"
+            env -u DATABASE_URL -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL -u DEEPSEEK_MODEL -u DEEPSEEK_STRUCTURE_MODEL -u DEEPSEEK_REASONER_MODEL -u DEEPSEEK_TIMEOUT_MS -u DEEPSEEK_MAX_RETRIES NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=/dev/null node scripts/rp02b2a-package-gate.mjs --print-range --event pull_request --pr-base-ref "origin/${{ github.event.pull_request.base.ref }}" --pr-head "${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.event_name }}" == "push" ]]; then
+            git fetch --no-tags --prune origin "+refs/heads/${{ github.event.repository.default_branch }}:refs/remotes/origin/${{ github.event.repository.default_branch }}"; env -u DATABASE_URL -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL -u DEEPSEEK_MODEL -u DEEPSEEK_STRUCTURE_MODEL -u DEEPSEEK_REASONER_MODEL -u DEEPSEEK_TIMEOUT_MS -u DEEPSEEK_MAX_RETRIES NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=/dev/null node scripts/rp02b2a-package-gate.mjs --print-range --event push --push-base-ref "origin/${{ github.event.repository.default_branch }}" --push-before "${{ github.event.before }}" --push-head "${{ github.event.after }}" >> "$GITHUB_OUTPUT"
+          else
+            env -u DATABASE_URL -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL -u DEEPSEEK_MODEL -u DEEPSEEK_STRUCTURE_MODEL -u DEEPSEEK_REASONER_MODEL -u DEEPSEEK_TIMEOUT_MS -u DEEPSEEK_MAX_RETRIES NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=/dev/null node scripts/rp02b2a-package-gate.mjs --print-range --event workflow_dispatch --manual-base "${{ inputs.base_sha }}" --manual-head "${{ inputs.head_sha }}" >> "$GITHUB_OUTPUT"
+          fi
+          BASE="$(grep '^base=' "$GITHUB_OUTPUT" | tail -n1 | cut -d= -f2-)"
+          HEAD="$(grep '^head=' "$GITHUB_OUTPUT" | tail -n1 | cut -d= -f2-)"
+          if [[ -z "$BASE" || -z "$HEAD" || "$BASE" =~ ^0+$ || "$HEAD" =~ ^0+$ ]]; then
+            echo "B2a1 package gate requires explicit non-zero BASE/HEAD" >&2
+            exit 1
+          fi
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "$HEAD")"
+      - name: Resolve B2a package command
+        id: b2a-package
+        run: |
+          set -euo pipefail
+          env -u DATABASE_URL -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL -u DEEPSEEK_MODEL -u DEEPSEEK_STRUCTURE_MODEL -u DEEPSEEK_REASONER_MODEL -u DEEPSEEK_TIMEOUT_MS -u DEEPSEEK_MAX_RETRIES NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=/dev/null node scripts/rp02b2a-package-gate.mjs --github-output --base "${{ steps.b2a1-range.outputs.base }}" --head "${{ steps.b2a1-range.outputs.head }}" >> "$GITHUB_OUTPUT"
+      - name: Verify B2a workflow contract
+        run: env -u DATABASE_URL -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL -u DEEPSEEK_MODEL -u DEEPSEEK_STRUCTURE_MODEL -u DEEPSEEK_REASONER_MODEL -u DEEPSEEK_TIMEOUT_MS -u DEEPSEEK_MAX_RETRIES NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=/dev/null node scripts/rp02b2a-package-gate.mjs --verify-workflow .github/workflows/rp01c-fixtures.yml --package-id "${{ steps.b2a-package.outputs.package_id }}" --test-command "${{ steps.b2a-package.outputs.test_command }}"
       - run: npm run test:rp01c
       - run: npm run test:rp02a
-      - run: npm run test:rp02b1
+      - run: env -u DATABASE_URL -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL -u DEEPSEEK_MODEL -u DEEPSEEK_STRUCTURE_MODEL -u DEEPSEEK_REASONER_MODEL -u DEEPSEEK_TIMEOUT_MS -u DEEPSEEK_MAX_RETRIES NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=/dev/null npm run "${{ steps.b2a-package.outputs.test_command }}"
       - run: npm test -w @ai-shortvideo/api
       - run: npm run test:e2e:rp01a
       - run: npm run test:governance

@@ -1,14 +1,19 @@
 import { RiskLevel, type DirectionCandidateContentDTO } from '@ai-shortvideo/shared';
-import type { DirectionCandidateDraft, NovelPreferencesRecord, NovelRecord } from '../domain/novelDomain.js';
+import type { DirectionCandidateDraft } from '../domain/novelDomain.js';
+import type { NovelProviderActionInputFor } from '../services/actionExecutionPlan.js';
+
+type DirectionGenerateInput = NovelProviderActionInputFor<'direction_generate'>;
+type DirectionFuseInput = NovelProviderActionInputFor<'direction_fuse'>;
+type DirectionOptimizeInput = NovelProviderActionInputFor<'direction_optimize'>;
 
 export interface DirectionProvider {
-  generateCandidates(input: { novel: NovelRecord; preferences: NovelPreferencesRecord }): Promise<DirectionCandidateDraft[]>;
-  fuseCandidates(input: { sources: DirectionCandidateDraft[]; reason?: string | null }): Promise<DirectionCandidateDraft>;
-  optimizeCandidate(input: { source: DirectionCandidateDraft; instruction?: string | null }): Promise<DirectionCandidateDraft>;
+  generateCandidates(input: DirectionGenerateInput): Promise<DirectionCandidateDraft[]>;
+  fuseCandidates(input: DirectionFuseInput): Promise<DirectionCandidateDraft>;
+  optimizeCandidate(input: DirectionOptimizeInput): Promise<DirectionCandidateDraft>;
 }
 
 export class MockDirectionProvider implements DirectionProvider {
-  async generateCandidates(input: { novel: NovelRecord; preferences: NovelPreferencesRecord }) {
+  async generateCandidates(input: DirectionGenerateInput) {
     const genre = input.novel.genres[0] ?? '都市逆袭';
     const appeal = input.preferences.appealPoints[0] ?? '低谷翻盘';
     const audience = input.preferences.targetAudience ?? '18-35 岁爽文用户';
@@ -73,7 +78,7 @@ export class MockDirectionProvider implements DirectionProvider {
     ];
   }
 
-  async fuseCandidates(input: { sources: DirectionCandidateDraft[]; reason?: string | null }) {
+  async fuseCandidates(input: DirectionFuseInput) {
     const [first, second] = input.sources;
 
     return createCandidate({
@@ -92,7 +97,7 @@ export class MockDirectionProvider implements DirectionProvider {
     });
   }
 
-  async optimizeCandidate(input: { source: DirectionCandidateDraft; instruction?: string | null }) {
+  async optimizeCandidate(input: DirectionOptimizeInput) {
     return createCandidate({
       title: `${input.source.title}（优化版）`,
       audienceAppeal: input.source.content.audienceAppeal,

@@ -11,6 +11,7 @@ export enum ErrorCode {
   IdempotencyConflict = 'IDEMPOTENCY_CONFLICT',
   ConfigMissing = 'CONFIG_MISSING',
   TaskNotRetryable = 'TASK_NOT_RETRYABLE',
+  RetryNotAvailable = 'RETRY_NOT_AVAILABLE',
   ContentRiskBlocking = 'CONTENT_RISK_BLOCKING',
   VideoReferenceBlocking = 'VIDEO_REFERENCE_BLOCKING',
   PublishGateBlocked = 'PUBLISH_GATE_BLOCKED',
@@ -114,6 +115,11 @@ export const errorDefinitions: Record<ErrorCode, ErrorDefinition> = {
     code: ErrorCode.TaskNotRetryable,
     httpStatus: 409,
     message: '当前失败不可重试'
+  },
+  [ErrorCode.RetryNotAvailable]: {
+    code: ErrorCode.RetryNotAvailable,
+    httpStatus: 409,
+    message: '当前阶段暂不支持任务重试'
   },
   [ErrorCode.ContentRiskBlocking]: {
     code: ErrorCode.ContentRiskBlocking,
