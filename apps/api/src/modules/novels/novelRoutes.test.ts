@@ -31,7 +31,6 @@ import { MockTrialProvider } from './providers/mockTrialProvider.js';
 import { DeepSeekNovelProvider } from './providers/deepseekNovelProvider.js';
 type MockBodyChapter = Awaited<ReturnType<MockBodyProvider['generateBodyChapter']>>;
 type MockTrialFollowup = Awaited<ReturnType<MockTrialProvider['generateFollowup']>>;
-
 describe('novel package 1 routes', () => {
   it('creates a draft and returns it in the list with a status summary', async () => {
     const repository = createInMemoryNovelRepository();
@@ -65,7 +64,6 @@ describe('novel package 1 routes', () => {
         }
       }
     });
-
     assert.equal(createResponse.statusCode, 201);
     const created = createResponse.json();
     assert.equal(created.success, true);
@@ -97,7 +95,6 @@ describe('novel package 1 routes', () => {
     assert.equal(list.data.items[0].creationSource.type, 'system_recommendation');
 
     assert.equal(repository.getOperationLogs()[0]?.action, 'create_novel_draft');
-
     await app.close();
   });
 
@@ -128,7 +125,6 @@ describe('novel package 1 routes', () => {
       }
     });
     const novelId = createResponse.json().data.id;
-
     const detailResponse = await app.inject({
       method: 'GET',
       url: `/novels/${novelId}`
@@ -154,7 +150,6 @@ describe('novel package 1 routes', () => {
 
     await app.close();
   });
-
   it('defaults old clients to system recommendation but keeps historical missing preferences as legacy unknown', async () => {
     const repository = createInMemoryNovelRepository();
     const app = await buildApp({
@@ -178,7 +173,6 @@ describe('novel package 1 routes', () => {
 
     assert.equal(createResponse.statusCode, 201);
     assert.equal(createResponse.json().data.preferences.creationSourceType, 'system_recommendation');
-
     await app.close();
   });
 
@@ -202,7 +196,6 @@ describe('novel package 1 routes', () => {
         genres: ['都市逆袭']
       }
     });
-
     assert.equal(response.statusCode, 400);
     const body = response.json();
     assert.equal(body.success, false);
@@ -214,7 +207,6 @@ describe('novel package 1 routes', () => {
 
     await app.close();
   });
-
   it('validates hotspot references through an injected gateway and persists safe source summary', async () => {
     const repository = createInMemoryNovelRepository();
     const app = await buildApp({
@@ -247,7 +239,6 @@ describe('novel package 1 routes', () => {
     assert.equal(created.preferences.hotspotOpportunityTitle, '短视频机会点');
     assert.equal(created.creationSource.type, 'hotspot_reference');
     assert.equal(created.creationSource.hotspotTitle, '同租户热点报告');
-
     const detailResponse = await app.inject({ method: 'GET', url: `/novels/${created.id}` });
     assert.equal(detailResponse.statusCode, 200);
     assert.equal(detailResponse.json().data.preferences.creationSourceType, 'hotspot_reference');
@@ -262,7 +253,6 @@ describe('novel package 1 routes', () => {
       hotspotReferenceGateway: new FakeHotspotReferenceGateway(),
       now: () => new Date('2026-06-17T10:00:00.000Z')
     });
-
     const manualTooShort = await app.inject({
       method: 'POST',
       url: '/novels/drafts',
@@ -301,7 +291,6 @@ describe('novel package 1 routes', () => {
     });
     assert.equal(crossTenant.statusCode, 400);
     assert.equal(crossTenant.json().error.details.reasonCode, 'cross_tenant');
-
     const wrongOpportunity = await app.inject({
       method: 'POST',
       url: '/novels/drafts',
@@ -324,7 +313,6 @@ describe('novel package 1 routes', () => {
       logger: false,
       novelRepository: createInMemoryNovelRepository()
     });
-
     const response = await app.inject({
       method: 'GET',
       url: '/novels/not-exists',
@@ -347,7 +335,6 @@ describe('novel package 1 routes', () => {
     await app.close();
   });
 });
-
 describe('novel package 2 direction routes', () => {
   it('generates direction candidates once and keeps them as candidates', async () => {
     const repository = createInMemoryNovelRepository();
@@ -378,7 +365,6 @@ describe('novel package 2 direction routes', () => {
     assert.equal(generated.data.statusSummary.creationStage, 'direction');
     assert.equal(generated.data.statusSummary.stageStatus, 'waiting_user');
     assert.equal(generated.data.statusSummary.displayStatusText, '待选择方向');
-
     const repeatedResponse = await app.inject({
       method: 'POST',
       url: `/novels/${novelId}/directions/generate`,
@@ -401,7 +387,6 @@ describe('novel package 2 direction routes', () => {
 
     await app.close();
   });
-
   it('fuses and optimizes direction candidates without adopting them', async () => {
     const repository = createInMemoryNovelRepository();
     const app = await buildApp({
@@ -439,7 +424,6 @@ describe('novel package 2 direction routes', () => {
     assert.equal(optimized.data.task.taskType, 'novel_direction_optimize');
     assert.equal(optimized.data.candidate.status, 'candidate');
     assert.equal(optimized.data.currentDirection, null);
-
     const detailResponse = await app.inject({
       method: 'GET',
       url: `/novels/${novelId}`
@@ -461,7 +445,6 @@ describe('novel package 2 direction routes', () => {
     const novelId = await createDraft(app, '方向手动编辑测试');
     const generated = await generateDirections(app, novelId);
     const source = generated.candidates[0];
-
     const editResponse = await app.inject({
       method: 'POST',
       url: `/novels/${novelId}/directions/${source.id}/edit`,
@@ -495,7 +478,6 @@ describe('novel package 2 direction routes', () => {
 
     await app.close();
   });
-
   it('adopts a direction, writes decision records, and advances to setting', async () => {
     const repository = createInMemoryNovelRepository();
     const app = await buildApp({
@@ -528,7 +510,6 @@ describe('novel package 2 direction routes', () => {
     assert.equal(adopted.data.statusSummary.stageStatus, 'not_started');
     assert.equal(adopted.data.statusSummary.displayStatusText, '待生成设定');
     assert.equal(adopted.data.nextAction.label, '生成设定');
-
     const detailResponse = await app.inject({
       method: 'GET',
       url: `/novels/${novelId}`
@@ -547,7 +528,6 @@ describe('novel package 2 direction routes', () => {
 
     await app.close();
   });
-
   it('requires confirmation and reason when adopting a low score direction', async () => {
     const repository = createInMemoryNovelRepository();
     const app = await buildApp({
@@ -578,7 +558,6 @@ describe('novel package 2 direction routes', () => {
     });
     assert.equal(missingReasonResponse.statusCode, 409);
     assert.equal(missingReasonResponse.json().error.code, 'GATE_BLOCKED');
-
     const adoptResponse = await app.inject({
       method: 'POST',
       url: `/novels/${novelId}/directions/${lowScoreCandidate.id}/adopt`,
@@ -598,7 +577,6 @@ describe('novel package 2 direction routes', () => {
     await app.close();
   });
 });
-
 describe('novel package 3 structure routes', () => {
   it('blocks setting generation before a direction is adopted', async () => {
     const repository = createInMemoryNovelRepository();
@@ -621,7 +599,6 @@ describe('novel package 3 structure routes', () => {
     assert.equal(body.success, false);
     assert.equal(body.error.code, 'GATE_BLOCKED');
     assert.equal(body.requestId, 'setting-gate-1');
-
     await app.close();
   });
 
@@ -642,7 +619,6 @@ describe('novel package 3 structure routes', () => {
     assert.equal(settingGenerated.statusSummary.creationStage, 'setting');
     assert.equal(settingGenerated.statusSummary.stageStatus, 'waiting_user');
     assert.equal(settingGenerated.statusSummary.displayStatusText, '待确认设定');
-
     const settingAdopted = await postStructure(app, novelId, 'settings', 'adopt', settingGenerated.candidate.id, {
       reason: '设定完整，采用为全书大纲输入。'
     });
@@ -664,7 +640,6 @@ describe('novel package 3 structure routes', () => {
     assert.equal(outlineAdopted.statusSummary.creationStage, 'outline');
     assert.equal(outlineAdopted.statusSummary.displayStatusText, '待生成阶段大纲');
     assert.equal(outlineAdopted.nextAction.label, '生成阶段大纲');
-
     const stageOutlineGenerated = await postStructure(app, novelId, 'stage-outlines', 'generate');
     assert.equal(stageOutlineGenerated.task.taskType, 'stage_outline_generate');
     assert.equal(stageOutlineGenerated.candidate.objectType, 'stage_outline');
@@ -682,7 +657,6 @@ describe('novel package 3 structure routes', () => {
     assert.equal(chapterPlanGenerated.candidate.objectType, 'chapter_plan');
     assert.equal(chapterPlanGenerated.candidate.content.chapters.length, 80);
     assert.equal(chapterPlanGenerated.statusSummary.displayStatusText, '待确认章节目录');
-
     const chapterPlanAdopted = await postStructure(app, novelId, 'chapter-plans', 'adopt', chapterPlanGenerated.candidate.id, {
       reason: '章节目录完整，进入试写前置状态。'
     });
@@ -712,7 +686,6 @@ describe('novel package 3 structure routes', () => {
     assert.ok(actionTypes.includes('adopt_outline'));
     assert.ok(actionTypes.includes('adopt_stage_outline'));
     assert.ok(actionTypes.includes('adopt_chapter_plan'));
-
     await app.close();
   });
 
@@ -760,7 +733,6 @@ describe('novel package 3 structure routes', () => {
       now: () => new Date('2026-06-17T12:12:00.000Z')
     });
     const { novelId } = await createNovelWithAdoptedDirection(app);
-
     const firstRequest = app.inject({
       method: 'POST',
       url: `/novels/${novelId}/settings/generate`,
@@ -787,7 +759,6 @@ describe('novel package 3 structure routes', () => {
       [TaskStatus.Processing, TaskStatus.WaitingConfirmation].includes(task.status)
     );
     assert.equal(activeTasks.length, 1);
-
     releaseFirstStructureCall?.();
     const firstResponse = await firstRequest;
     assert.equal(firstResponse.statusCode, 200);
@@ -821,7 +792,6 @@ describe('novel package 3 structure routes', () => {
               releaseFirstStructureCall = resolve;
             });
           }
-
           return {
             content: JSON.stringify(createFakeDeepSeekPayload(request.taskName ?? 'unknown_task')),
             model: request.model,
@@ -860,7 +830,6 @@ describe('novel package 3 structure routes', () => {
       }
     });
     assert.equal(cancelResponse.statusCode, 200);
-
     releaseFirstStructureCall?.();
     const firstResponse = await firstRequest;
     assert.equal(firstResponse.statusCode, 409);
@@ -883,7 +852,6 @@ describe('novel package 3 structure routes', () => {
       now: () => new Date('2026-06-17T12:20:00.000Z')
     });
     const { novelId } = await createNovelWithAdoptedDirection(app);
-
     const firstSetting = await postStructure(app, novelId, 'settings', 'generate');
     await postStructure(app, novelId, 'settings', 'adopt', firstSetting.candidate.id, {
       reason: '先采用第一版设定。'
@@ -898,7 +866,6 @@ describe('novel package 3 structure routes', () => {
     const staleOutline = (repository as any).getCreativeVersions().find((version: any) => version.id === outline.candidate.id);
     assert.equal(staleOutline.status, 'stale');
     assert.equal(staleOutline.staleLevel, 'hard_stale');
-
     const blockedAdopt = await app.inject({
       method: 'POST',
       url: `/novels/${novelId}/outlines/${outline.candidate.id}/adopt`,
@@ -922,7 +889,6 @@ describe('novel package 4 task center routes', () => {
       now: () => new Date('2026-06-17T13:00:00.000Z')
     });
     const novelId = await createDraft(app, '任务详情测试');
-
     const generateResponse = await app.inject({
       method: 'POST',
       url: `/novels/${novelId}/directions/generate`,
@@ -960,7 +926,6 @@ describe('novel package 4 task center routes', () => {
       ['task_claimed', 'preparing_context', 'calling_model']
     );
     assert.equal(events.at(-1).requestId, 'task-generate-1');
-
     await app.close();
   });
 
@@ -1008,7 +973,6 @@ describe('novel package 4 task center routes', () => {
       assert.equal(retry.json().error.code, ErrorCode.RetryNotAvailable, task.taskType);
     }
     assert.deepEqual(snapshotTaskRetrySideEffects(repository), before);
-
     Object.assign(template, { currentStep: 'provider current', statusNote: 'provider note', errorCode: 'PROVIDER_DIAGNOSTIC', errorMessage: 'provider diagnostic' });
     for (const event of repository.getGenerationTaskEvents().filter((item) => item.taskId === template.id)) event.message = 'provider event';
     const providerDetail = (await app.inject({ method: 'GET', url: `/tasks/${template.id}` })).json().data;
@@ -1039,7 +1003,6 @@ describe('novel package 4 task center routes', () => {
     activeTask.status = TaskStatus.Processing;
     activeTask.progress = 60;
     activeTask.currentStep = 'mock provider 正在生成方向';
-
     const cancelResponse = await app.inject({
       method: 'POST',
       url: `/tasks/${activeTask.id}/cancel`,
@@ -1063,7 +1026,6 @@ describe('novel package 4 task center routes', () => {
 
     await app.close();
   });
-
   it('blocks conflicting generation tasks with a unified error', async () => {
     const repository = createInMemoryNovelRepository();
     const app = await buildApp({
@@ -1097,7 +1059,6 @@ describe('novel package 4 task center routes', () => {
     assert.equal(conflict.error.code, 'CONFLICT_TASK_EXISTS');
     assert.equal(conflict.error.details.activeTaskId, activeTaskId);
     assert.equal(conflict.requestId, 'conflict-task-1');
-
     await app.close();
   });
 
@@ -1117,7 +1078,6 @@ describe('novel package 4 task center routes', () => {
     });
     assert.equal(firstResponse.statusCode, 200);
     assert.equal(firstResponse.json().data.task.status, 'waiting_confirmation');
-
     const optimizeResponse = await app.inject({
       method: 'POST',
       url: `/novels/${novelId}/settings/generate`,
@@ -1160,7 +1120,6 @@ describe('novel package 4 task center routes', () => {
     const failedDirectionTask = repository.getGenerationTasks().find((task) => task.taskType === 'novel_direction_generate')!; Object.assign(failedDirectionTask, { status: TaskStatus.Failed, failureCategory: 'provider_error', currentStep: 'RAW_DIRECTION_PROVIDER_CANARY', statusNote: 'RAW_DIRECTION_PROVIDER_CANARY', errorCode: 'RAW_DIRECTION_PROVIDER_CANARY', errorMessage: '生成服务暂时没有响应，请稍后重试。' });
     const directionBefore = snapshotTaskRetrySideEffects(repository, providerCalls); const directionReplay = (await app.inject({ method: 'POST', url: `/novels/${novelId}/directions/generate`, payload: { idempotencyKey: failedDirectionTask.idempotencyToken } })).json().data.task;
     assert.deepEqual([directionReplay.id, directionReplay.status, directionReplay.currentStep, directionReplay.statusNote, directionReplay.errorCode, directionReplay.errorMessage], [failedDirectionTask.id, 'failed', '生成任务失败，暂不支持直接重试', '任务执行失败，未写入新的候选或正式内容。', 'PROVIDER_ERROR', '任务执行失败，未写入新的候选或正式内容。']); assert.doesNotMatch(JSON.stringify(directionReplay), /RAW_DIRECTION_PROVIDER_CANARY|稍后重试/); assert.deepEqual(snapshotTaskRetrySideEffects(repository, providerCalls), directionBefore);
-
     const firstSetting = await postStructure(app, novelId, 'settings', 'generate');
     await postStructure(app, novelId, 'settings', 'adopt', firstSetting.candidate.id, {
       reason: '先采用设定。'
@@ -1201,7 +1160,6 @@ describe('novel package 4 task center routes', () => {
     assert.equal(retryResponse.json().error.code, ErrorCode.RetryNotAvailable);
     assert.deepEqual(snapshotTaskRetrySideEffects(repository, providerCalls), before);
     assert.equal(JSON.stringify(failedOutlineTask), taskBefore);
-
     await app.close();
   });
 });
@@ -1222,7 +1180,6 @@ describe('novel package 5 trial writing routes', () => {
       headers: { 'x-request-id': 'trial-gate-1' },
       payload: {}
     });
-
     assert.equal(response.statusCode, 409);
     assert.equal(response.json().success, false);
     assert.equal(response.json().error.code, 'GATE_BLOCKED');
@@ -1239,7 +1196,6 @@ describe('novel package 5 trial writing routes', () => {
       now: () => new Date('2026-06-17T14:10:00.000Z')
     });
     const { novelId } = await createNovelReadyForTrial(app);
-
     const response = await app.inject({
       method: 'POST',
       url: `/novels/${novelId}/trial/generate`,
@@ -1273,7 +1229,6 @@ describe('novel package 5 trial writing routes', () => {
     assert.equal(generated.statusSummary.creationStage, 'trial');
     assert.equal(generated.statusSummary.stageStatus, 'waiting_user');
     assert.equal(generated.nextAction.label, '选择第1章候选');
-
     const detailResponse = await app.inject({
       method: 'GET',
       url: `/novels/${novelId}`
@@ -1295,7 +1250,6 @@ describe('novel package 5 trial writing routes', () => {
     });
     const { novelId } = await createNovelReadyForTrial(app);
     const firstStep = await postTrialGenerate(app, novelId);
-
     const blockedResponse = await app.inject({
       method: 'POST',
       url: `/novels/${novelId}/trial/generate`,
@@ -1319,7 +1273,6 @@ describe('novel package 5 trial writing routes', () => {
     const { novelId } = await createNovelReadyForTrial(app);
     const firstStep = await postTrialGenerate(app, novelId);
     const selectedCandidate = firstStep.trialRun.chapterOneCandidates.find((candidate: any) => candidate.isAiRecommended);
-
     const followupResponse = await app.inject({
       method: 'POST',
       url: `/novels/${novelId}/trial/generate`,
@@ -1356,7 +1309,6 @@ describe('novel package 5 trial writing routes', () => {
     assert.ok(workbench.reviewIssues.length >= 1);
     assert.equal(workbench.candidateVersions.length, 3);
     assert.equal(workbench.recommendedAction.label, '查看试写总评');
-
     assert.ok(repository.getOperationLogs().some((log) => log.action === 'select_trial_chapter1_candidate'));
 
     await app.close();
@@ -1393,7 +1345,6 @@ describe('novel package 5 trial writing routes', () => {
     const storedCandidate = repository.getChapterContentVersions().find((version) => version.id === riskyCandidate.id);
     assert.ok(storedCandidate);
     const before = captureTrialFollowupSideEffects(repository, novelId);
-
     const secretCanaries = [
       { name: 'api-key', value: 'api_key=should-not-leak-api-key' },
       { name: 'authorization-bearer', value: 'Authorization: Bearer should-not-leak-authorization-bearer' },
@@ -1447,7 +1398,6 @@ describe('novel package 5 trial writing routes', () => {
         assert.equal(followupProviderCalls, 0);
       }
     }
-
     storedCandidate.metadata = { ...(storedCandidate.metadata as Record<string, unknown>), riskLevel: RiskLevel.High };
     const repeatedMissingResponse = await app.inject({
       method: 'POST',
@@ -1481,7 +1431,6 @@ describe('novel package 5 trial writing routes', () => {
 
     await app.close();
   });
-
   it('keeps trial assets unchanged through provider processing and atomic finalize', async () => {
     const repository = createInMemoryNovelRepository();
     const delayedClient = createDelayedFollowupFakeLlmClient();
@@ -1525,7 +1474,6 @@ describe('novel package 5 trial writing routes', () => {
     assert.equal(during.statusSummary.displayStatus, 'trial_followup_processing');
     assert.equal(during.statusSummary.recommendedAction.type, 'view_task');
     assert.equal(during.latestTrialRun.chapterOneCandidates.find((candidate: any) => candidate.id === selectedCandidate.id).status, 'candidate');
-
     const duplicateResponse = await app.inject({
       method: 'POST',
       url: `/novels/${novelId}/trial/generate`,
@@ -1566,7 +1514,6 @@ describe('novel package 5 trial writing routes', () => {
     assert.equal(conflictResponse.statusCode, 409);
     assert.equal(conflictResponse.json().error.code, ErrorCode.IdempotencyConflict);
     assert.doesNotMatch(conflictResponse.body, /trial-followup-replay-1/);
-
     await app.close();
   });
 
@@ -1589,7 +1536,6 @@ describe('novel package 5 trial writing routes', () => {
         selectedCandidateId: selectedCandidate.id
       }
     });
-
     assert.equal(response.statusCode, 200);
     const blocked = response.json().data;
     assert.equal(blocked.trialRun.status, 'blocked');
@@ -1636,7 +1582,6 @@ describe('novel package 5 trial writing routes', () => {
     });
     assert.equal(blockedConfirm.statusCode, 409);
     assert.equal(blockedConfirm.json().error.code, 'GATE_BLOCKED');
-
     const confirmResponse = await app.inject({
       method: 'POST',
       url: `/novels/${novelId}/trial/confirm`,
@@ -1672,7 +1617,6 @@ describe('novel package 5 trial writing routes', () => {
     await app.close();
   });
 });
-
 describe('novel package 6 body generation routes', () => {
   it('guides users to confirm the trial review once follow-up trial chapters are ready', async () => {
     const repository = createInMemoryNovelRepository();
@@ -1704,7 +1648,6 @@ describe('novel package 6 body generation routes', () => {
     });
     assert.equal(listResponse.statusCode, 200);
     assert.equal(listResponse.json().data.items[0].statusSummary.recommendedAction.label, '确认试写总评');
-
     await app.close();
   });
 
@@ -1737,7 +1680,6 @@ describe('novel package 6 body generation routes', () => {
     assert.equal(response.statusCode, 409);
     assert.equal(response.json().error.code, 'GATE_BLOCKED');
     assert.equal(response.json().requestId, 'body-no-snapshot-1');
-
     await app.close();
   });
 
@@ -1761,7 +1703,6 @@ describe('novel package 6 body generation routes', () => {
         expectedStrategySnapshotVersion: strategySnapshot.versionNo
       }
     });
-
     assert.equal(response.statusCode, 200, response.body);
     assert.equal(response.json().success, true);
     assert.equal(response.json().requestId, 'body-batch-missing-key');
@@ -1793,7 +1734,6 @@ describe('novel package 6 body generation routes', () => {
       expectedStrategySnapshotVersion: strategySnapshot.versionNo,
       idempotencyKey: 'body-batch-processing-1'
     };
-
     const firstRequest = app.inject({
       method: 'POST',
       url: `/novels/${novelId}/chapters/batch-generate`,
@@ -1829,7 +1769,6 @@ describe('novel package 6 body generation routes', () => {
     assert.equal(duplicate.batch, null);
     assert.equal(repository.getGenerationTasks().filter((task) => task.taskType === 'body_batch_generate').length, 1);
     assert.equal(delayedClient.getBodyCallCount(), 1);
-
     const fingerprintConflictResponse = await app.inject({
       method: 'POST',
       url: `/novels/${novelId}/chapters/batch-generate`,
@@ -1865,7 +1804,6 @@ describe('novel package 6 body generation routes', () => {
     assert.equal(generated.task.status, TaskStatus.Completed);
     assert.equal(generated.batch.startChapterNo, 4);
     assert.equal(generated.batch.endChapterNo, 5);
-
     await app.close();
   });
 
@@ -1899,7 +1837,6 @@ describe('novel package 6 body generation routes', () => {
     assert.equal(response.json().success, false);
     assert.equal(response.json().error.code, 'INTERNAL_ERROR');
     assert.equal(response.json().requestId, 'body-batch-failing-model');
-
     const detailResponse = await app.inject({
       method: 'GET',
       url: `/novels/${novelId}`
@@ -1935,7 +1872,6 @@ describe('novel package 6 body generation routes', () => {
       } finally { MockBodyProvider.prototype.generateBodyChapter = generateBodyChapter; MockBodyProvider.prototype.rewriteChapter = rewriteChapter; await app.close(); }
     }
   });
-
   it('blocks unsupported Prisma-like body write path before preclaiming tasks or calling the provider', async () => {
     const repository = createInMemoryNovelRepository();
     const guardedRepository = Object.create(repository) as NovelRepository & ReturnType<typeof createInMemoryNovelRepository>;
@@ -1981,7 +1917,6 @@ describe('novel package 6 body generation routes', () => {
 
     await app.close();
   });
-
   it('keeps the preclaimed body batch task failed with save_failed when repository saving fails after provider success', async () => {
     const repository = createInMemoryNovelRepository();
     const guardedRepository = Object.create(repository) as NovelRepository & ReturnType<typeof createInMemoryNovelRepository>;
@@ -2034,7 +1969,6 @@ describe('novel package 6 body generation routes', () => {
     assert.equal(repository.getBodyBatches().length, batchCountBefore);
     assert.equal(repository.getChapterContentVersions().length, contentCountBefore);
     assert.equal(repository.getNovelChapters().find((chapter) => chapter.novelId === novelId && chapter.chapterNo === 4)?.currentContentVersionId, null);
-
     const taskDetailResponse = await app.inject({
       method: 'GET',
       url: `/tasks/${failedTask.id}`,
@@ -2075,7 +2009,6 @@ describe('novel package 6 body generation routes', () => {
 
     await app.close();
   });
-
   it('generates a default five-chapter body batch with per-chapter content, feature card, review, memory, and summary', async () => {
     const repository = createInMemoryNovelRepository();
     const app = await buildApp({
@@ -2109,7 +2042,6 @@ describe('novel package 6 body generation routes', () => {
     assert.equal(generated.statusSummary.displayStatusText, '待全书审稿');
     assert.equal(generated.nextAction.taskType, 'novel_full_review');
     assert.equal(generated.nextAction.label, '全书 AI 审稿');
-
     const eventsResponse = await app.inject({
       method: 'GET',
       url: `/tasks/${generated.task.id}/events`
@@ -2140,7 +2072,6 @@ describe('novel package 6 body generation routes', () => {
     assert.ok(chapter.featureCard.oneLineSummary.length > 0);
     assert.ok(chapter.reviewReport.totalScore >= 60);
     assert.ok(chapter.longTermMemory.summary.length > 0);
-
     await app.close();
   });
 
@@ -2162,7 +2093,6 @@ describe('novel package 6 body generation routes', () => {
         idempotencyKey: 'body-batch-hard-failure-1'
       }
     });
-
     assert.equal(response.statusCode, 200);
     const paused = response.json().data;
     assert.equal(paused.batch.status, 'paused');
@@ -2183,7 +2113,6 @@ describe('novel package 6 body generation routes', () => {
 
     await app.close();
   });
-
   it('returns the original body batch for repeated idempotency keys without advancing the next range', async () => {
     const repository = createInMemoryNovelRepository();
     const app = await buildApp({
@@ -2224,7 +2153,6 @@ describe('novel package 6 body generation routes', () => {
     assert.equal(repository.getGenerationTasks().filter((task) => task.taskType === 'body_batch_generate').length, bodyTaskCountAfterFirst);
     assert.equal(repository.getBodyBatches().length, bodyBatchCountAfterFirst);
     assert.equal(repository.getNovelChapters().find((chapter) => chapter.novelId === novelId && chapter.chapterNo === 9)?.currentContentVersionId, null);
-
     await app.close();
   });
 
@@ -2266,7 +2194,6 @@ describe('novel package 6 body generation routes', () => {
     assert.equal(repository.getGenerationTasks().filter((task) => task.taskType === 'body_batch_generate').length, bodyTaskCountAfterFirst);
     assert.equal(repository.getBodyBatches().length, bodyBatchCountAfterFirst);
     assert.equal(repository.getNovelChapters().find((chapter) => chapter.novelId === novelId && chapter.chapterNo === 9)?.currentContentVersionId, null);
-
     await app.close();
   });
 
@@ -2312,7 +2239,6 @@ describe('novel package 6 body generation routes', () => {
     });
     assert.equal(nullVersionConflict.statusCode, 409);
     assert.equal(nullVersionConflict.json().error.code, ErrorCode.IdempotencyConflict);
-
     const conflict = await app.inject({
       method: 'POST',
       url: `/novels/${novelId}/chapters/${chapter4.id}/impact-assessments`,
@@ -2354,7 +2280,6 @@ describe('novel package 6 body generation routes', () => {
     assert.equal(rewrite.candidate.status, 'candidate');
     assert.equal(rewrite.currentContent.id, originalCurrentVersionId);
     assert.ok(rewrite.summaryCompare.possibleImpact.includes('后续'));
-
     const rewriteReplay = await app.inject({
       method: 'POST',
       url: `/novels/${novelId}/chapters/${chapter4.id}/rewrite`,
@@ -2408,7 +2333,6 @@ describe('novel package 6 body generation routes', () => {
     assert.equal(rewriteAfterAdopt.statusCode, 200, rewriteAfterAdopt.body);
     assert.equal(rewriteAfterAdopt.json().data.task.id, rewrite.task.id);
     assert.equal(rewriteAfterAdopt.json().data.candidate.id, rewrite.candidate.id);
-
     const adoptReplay = await app.inject({
       method: 'POST',
       url: `/novels/${novelId}/chapters/${chapter4.id}/content-versions/${rewrite.candidate.id}/adopt`,
@@ -2457,7 +2381,6 @@ describe('novel package 6 body generation routes', () => {
     });
     assert.equal(blockedNextBatch.statusCode, 409);
     assert.equal(blockedNextBatch.json().error.code, 'GATE_BLOCKED');
-
     const caseResponse = await app.inject({
       method: 'GET',
       url: `/novels/${novelId}/impact-cases/${adopted.impactCase.id}`
@@ -2479,7 +2402,6 @@ describe('novel package 6 body generation routes', () => {
     const nextBatch = await postBodyBatch(app, novelId, strategySnapshot);
     assert.equal(nextBatch.batch.startChapterNo, 9);
     assert.equal(nextBatch.batch.endChapterNo, 12);
-
     await app.close();
   });
 });
@@ -2505,7 +2427,6 @@ describe('novel package 7 full review and video readiness routes', () => {
         expectedNovelVersion: detail.updatedAt
       }
     });
-
     assert.equal(response.statusCode, 409);
     assert.equal(response.json().error.code, 'GATE_BLOCKED');
     assert.equal(response.json().requestId, 'full-review-blocked-1');
@@ -2525,7 +2446,6 @@ describe('novel package 7 full review and video readiness routes', () => {
     await postBodyBatch(app, novelId, strategySnapshot);
     const detailBeforeReview = (await app.inject({ method: 'GET', url: `/novels/${novelId}` })).json().data;
     assert.equal(detailBeforeReview.statusSummary.recommendedAction.label, '全书 AI 审稿');
-
     const reviewResponse = await app.inject({
       method: 'POST',
       url: `/novels/${novelId}/full-review`,
@@ -2569,7 +2489,6 @@ describe('novel package 7 full review and video readiness routes', () => {
     assert.equal(reviewConflictResponse.statusCode, 409);
     assert.equal(reviewConflictResponse.json().error.code, ErrorCode.IdempotencyConflict);
     assert.doesNotMatch(reviewConflictResponse.body, /full-review-pass-1/);
-
     const latestReviewResponse = await app.inject({
       method: 'GET',
       url: `/novels/${novelId}/full-review/latest`
@@ -2602,7 +2521,6 @@ describe('novel package 7 full review and video readiness routes', () => {
     assert.equal(readinessResponse.statusCode, 200);
     assert.equal(readinessResponse.json().data.status, 'candidate');
     assert.equal(readinessResponse.json().data.checkItems.every((item: any) => item.passed), true);
-
     const confirmVideoResponse = await app.inject({
       method: 'POST',
       url: `/novels/${novelId}/video-readiness/confirm`,
@@ -2653,7 +2571,6 @@ describe('novel package 7 full review and video readiness routes', () => {
     });
     assert.equal(conflictingConfirmVideoResponse.statusCode, 409);
     assert.equal(conflictingConfirmVideoResponse.json().error.code, 'IDEMPOTENCY_CONFLICT');
-
     await app.close();
   });
 
@@ -2683,7 +2600,6 @@ describe('novel package 7 full review and video readiness routes', () => {
     assert.equal(reviewResult.fullReview.gate.forcePassAllowed, true);
     assert.equal(reviewResult.statusSummary.creationStage, 'full_review');
     assert.equal(reviewResult.statusSummary.stageStatus, 'blocked');
-
     const blockedCompletion = await app.inject({
       method: 'POST',
       url: `/novels/${novelId}/completion/confirm`,
@@ -2727,7 +2643,6 @@ describe('novel package 7 full review and video readiness routes', () => {
     assert.equal(forced.fullReview.gateResult, 'forced_pass');
     assert.equal(forced.statusSummary.creationStage, 'completion_confirm');
     assert.equal(repository.getOperationLogs().some((log) => log.action === 'force_pass_full_review' && log.requestId === 'force-low-review-1'), true);
-
     const completionResponse = await app.inject({
       method: 'POST',
       url: `/novels/${novelId}/completion/confirm`,
@@ -2765,7 +2680,6 @@ describe('novel package 7 full review and video readiness routes', () => {
     });
     assert.equal(reviewResponse.statusCode, 200);
     const reviewResult = reviewResponse.json().data;
-
     const completionResponse = await app.inject({
       method: 'POST',
       url: `/novels/${novelId}/completion/confirm`,
@@ -2800,7 +2714,6 @@ describe('novel package 7 full review and video readiness routes', () => {
     assert.equal(detailAfterFailure.creationStage, 'completion_confirm');
     assert.equal(detailAfterFailure.videoReadiness.status, 'not_ready');
     assert.equal(detailAfterFailure.videoReadiness.snapshot, null);
-
     await app.close();
   });
 });
@@ -2824,7 +2737,6 @@ describe('model integration M1 DeepSeek provider routes', () => {
       headers: { 'x-request-id': 'deepseek-missing-key-1' },
       payload: {}
     });
-
     assert.equal(response.statusCode, 500);
     const body = response.json();
     assert.equal(body.success, false);
@@ -2850,7 +2762,6 @@ describe('model integration M1 DeepSeek provider routes', () => {
       },
       llmClient: fakeClient.client
     });
-
     const novelId = await createDraft(app, 'DeepSeek fake E2E 短篇', 5);
     const directions = await generateDirections(app, novelId);
     assert.equal(directions.candidates.length >= 3, true);
@@ -2871,7 +2782,6 @@ describe('model integration M1 DeepSeek provider routes', () => {
     await postStructure(app, novelId, 'stage-outlines', 'adopt', stageOutline.candidate.id, { reason: '采用阶段大纲。' });
     const chapterPlan = await postStructure(app, novelId, 'chapter-plans', 'generate');
     await postStructure(app, novelId, 'chapter-plans', 'adopt', chapterPlan.candidate.id, { reason: '采用章节目录。' });
-
     const firstTrial = await postTrialGenerate(app, novelId);
     assert.equal(firstTrial.trialRun.chapterOneCandidates.length, 3);
     assert.equal(firstTrial.trialRun.chapterOneCandidates.some((candidate: any) => candidate.isSelected), false);
@@ -2897,7 +2807,6 @@ describe('model integration M1 DeepSeek provider routes', () => {
     assert.equal(bodyBatch.batch.startChapterNo, 4);
     assert.equal(bodyBatch.batch.endChapterNo, 5); for (const chapter of repository.getNovelChapters().filter((item) => item.novelId === novelId && item.chapterNo >= 4)) { const content = repository.getChapterContentVersions().find((item) => item.id === chapter.currentContentVersionId), report = await repository.findReviewReportById('tenant_default', chapter.currentReviewReportId!); assert.ok(content && report); const version = ((content.metadata as Record<string, unknown>).scoring as { scoringStrategyVersion: string }).scoringStrategyVersion; assert.deepEqual([(report.subScores as Record<string, unknown>).scoringStrategyVersion, (report.metadata as Record<string, unknown>).scoringStrategyVersion], [version, version]); }
     assert.equal(bodyBatch.statusSummary.recommendedAction.label, '全书 AI 审稿');
-
     const detailBeforeReview = (await app.inject({ method: 'GET', url: `/novels/${novelId}` })).json().data;
     const reviewLogsBefore = repository.getOperationLogs().length;
     const rejectedReview = await app.inject({ method: 'POST', url: `/novels/${novelId}/full-review`, payload: { idempotencyKey: 'm1-fake-full-review-poison', expectedNovelVersion: detailBeforeReview.updatedAt } });
@@ -2931,7 +2840,6 @@ describe('model integration M1 DeepSeek provider routes', () => {
     const readinessResponse = await app.inject({ method: 'GET', url: `/novels/${novelId}/video-readiness` });
     assertUnifiedSuccess(readinessResponse);
     assert.equal(readinessResponse.json().data.status, 'candidate');
-
     const confirmVideoResponse = await app.inject({
       method: 'POST',
       url: `/novels/${novelId}/video-readiness/confirm`,
@@ -2960,7 +2868,6 @@ describe('model integration M1 DeepSeek provider routes', () => {
     assert.doesNotMatch(serializedEvidence, /test-deepseek-key-should-not-leak/);
     assert.doesNotMatch(serializedEvidence, /FULL_PROMPT_SHOULD_NOT_LEAK/);
     assert.doesNotMatch(serializedEvidence, /FULL_MODEL_RESPONSE_SHOULD_NOT_LEAK/);
-
     await app.close();
   });
 });
@@ -2992,7 +2899,6 @@ async function createDraft(app: Awaited<ReturnType<typeof buildApp>>, title: str
   assert.equal(response.statusCode, 201);
   return response.json().data.id as string;
 }
-
 class FakeHotspotReferenceGateway implements HotspotReferenceGateway {
   async getCapability() {
     return {
@@ -3021,7 +2927,6 @@ class FakeHotspotReferenceGateway implements HotspotReferenceGateway {
         opportunity: null
       };
     }
-
     if (input.opportunityId && input.opportunityId !== 'opportunity-001') {
       return {
         ok: false,
@@ -3048,7 +2953,6 @@ async function generateDirections(app: Awaited<ReturnType<typeof buildApp>>, nov
     url: `/novels/${novelId}/directions/generate`,
     payload: {}
   });
-
   assert.equal(response.statusCode, 200);
   return response.json().data;
 }
@@ -3065,7 +2969,6 @@ async function createNovelWithAdoptedDirection(app: Awaited<ReturnType<typeof bu
       reason: '采用高分方向，进入设定阶段。'
     }
   });
-
   assert.equal(response.statusCode, 200);
 
   return { novelId, directionId: candidate.id as string };
@@ -3089,7 +2992,6 @@ async function createNovelReadyForTrial(app: Awaited<ReturnType<typeof buildApp>
   await postStructure(app, novelId, 'chapter-plans', 'adopt', chapterPlan.candidate.id, {
     reason: '章节目录完整，进入试写。'
   });
-
   return { novelId };
 }
 
@@ -3117,7 +3019,6 @@ async function createNovelReadyForBody(app: Awaited<ReturnType<typeof buildApp>>
     strategySnapshot: confirmResponse.json().data.bodyStrategySnapshot
   };
 }
-
 let bodyBatchHelperSequence = 1;
 
 async function postBodyBatch(app: Awaited<ReturnType<typeof buildApp>>, novelId: string, strategySnapshot: any) {
@@ -3131,7 +3032,6 @@ async function postTrialGenerate(app: Awaited<ReturnType<typeof buildApp>>, nove
   assert.equal(response.statusCode, 200); assert.equal(response.json().success, true);
   return response.json().data;
 }
-
 function captureTrialFollowupSideEffects(repository: ReturnType<typeof createInMemoryNovelRepository>, novelId: string) {
   const tasks = repository.getGenerationTasks().filter((task) => task.novelId === novelId);
   return {
@@ -3175,7 +3075,6 @@ async function postStructure(
     url,
     payload
   });
-
   assert.equal(response.statusCode, 200);
   assert.equal(response.json().success, true);
   return response.json().data;
@@ -3211,7 +3110,6 @@ function createM1E2EFakeLlmClient(): { client: LlmClient; allowFullReview: () =>
     }
   }, allowFullReview: () => { poisonFullReview = false; } };
 }
-
 function createDelayedFollowupFakeLlmClient(): { client: LlmClient; waitForFollowup: () => Promise<void>; releaseFollowup: () => void } {
   let releaseFollowup!: () => void;
   let markFollowupStarted!: () => void;
@@ -3250,7 +3148,6 @@ function createDelayedFollowupFakeLlmClient(): { client: LlmClient; waitForFollo
     releaseFollowup
   };
 }
-
 function createDelayedBodyFakeLlmClient(): { client: LlmClient; waitForBody: () => Promise<void>; releaseBody: () => void; getBodyCallCount: () => number } {
   let releaseBody!: () => void;
   let markBodyStarted!: () => void;
@@ -3294,7 +3191,6 @@ function createDelayedBodyFakeLlmClient(): { client: LlmClient; waitForBody: () 
     getBodyCallCount: () => bodyCallCount
   };
 }
-
 function createFailingBodyFakeLlmClient(): LlmClient {
   return {
     async chat(request) {
@@ -3320,7 +3216,6 @@ function createFailingBodyFakeLlmClient(): LlmClient {
 
 function createCountingBodyFakeLlmClient(): { client: LlmClient; getBodyCallCount: () => number } {
   let bodyCallCount = 0;
-
   return {
     client: {
       async chat(request) {
@@ -3361,7 +3256,6 @@ function createFakeDeepSeekPayload(taskName: string): Record<string, unknown> {
       }))
     };
   }
-
   if (taskName.startsWith('novel_structure_chapter_plan_')) {
     return {
       chapters: [1, 2, 3, 4, 5].map((chapterNo) => ({
@@ -3417,7 +3311,6 @@ function createFakeDeepSeekPayload(taskName: string): Record<string, unknown> {
       }))
     };
   }
-
   if (taskName === 'novel_trial_followup') {
     return {
       chapters: [2, 3].map((chapterNo) => ({
@@ -3496,7 +3389,6 @@ function createFakeDeepSeekPayload(taskName: string): Record<string, unknown> {
       blocksFullReview: false
     };
   }
-
   if (taskName === 'novel_full_review') {
     return {
       totalScore: 88,
@@ -3547,7 +3439,6 @@ function createFakeScoring(totalScore: number) {
     ]
   };
 }
-
 function createFakeFeatureCard(chapterNo: number) {
   return {
     highlights: [`第${chapterNo}章反击点`],

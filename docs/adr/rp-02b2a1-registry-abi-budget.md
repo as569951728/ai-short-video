@@ -8,7 +8,7 @@ hard_max_files: 18
 hard_max_net_additions: 1900
 exceeded_budget: package_specific_budget
 actual_files: 18
-actual_net_additions: 1893
+actual_net_additions: 1898
 split_reason: Registry, strict provider ABI, public retry freeze, exact call-site tests, and the reusable workflow package gate must land together so neither user-visible retry nor governance can bypass the same contract.
 owner: MC
 valid_until: 2026-08-31
