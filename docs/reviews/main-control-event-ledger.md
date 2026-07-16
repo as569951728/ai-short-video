@@ -557,3 +557,19 @@ evidence: GitHub Actions run 29209311021; status completed/success; headSha bdfa
 mc_decision: 关闭提交远程验证完成，RP-01C 保持 closed，总账保持 9/42。
 next_action: 按依赖进入 RP-02A；RP-01D 继续等待真实 MySQL 独立授权。
 ```
+
+### MCE-20260713-RP02A-REQUIREMENT-REVIEW
+
+```text
+event_id: MCE-20260713-RP02A-REQUIREMENT-REVIEW
+occurred_at: 2026-07-13 05:31:00 CST
+event_type: requirement_review
+source_thread: 019ed4a5-a2f5-7d13-86d0-0c28381af555
+package_id: RP-02A
+issue_ids: RMD-TASK-001
+acceptance_ids: TASK-PRECLAIM-01, TASK-CONCURRENCY-01
+summary: 后端架构、独立测试和质量安全三路预审确认 RP-02A 可实现，但原验收矩阵把原子 preclaim 与 RP-02B 的快速返回/worker 混为一条；主控拆分阶段责任并冻结实现包。
+evidence: agents 019f5833-44fe-7210-82f3-a1c0d43300ad, 019f5832-a670-70f3-a047-856b03b0145b, 019f5833-e2fa-7032-8279-84ecf561c078; docs/modules/rp-02a-task-ssot-preclaim-implementation-package.md
+mc_decision: RP-02A 只做 E3 单进程 Task SSOT/provider 前 preclaim；首请求快速返回、worker 和真实 DB 并发继续 not_proven，不得关闭 RMD-TASK-001。
+next_action: 提交并推送需求资产后，派发受控实现 agent；写集不得超过 15 个实现文件/1,700 净新增行。
+```

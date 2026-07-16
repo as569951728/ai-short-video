@@ -75,8 +75,8 @@ conclusion: approved | needs_revision | blocked
 
 | 验收 ID | 核心操作与断言 | 最低证据 | 阻塞条件 |
 | --- | --- | --- | --- |
-| TASK-PRECLAIM-01 | 请求在 provider 前原子创建/复用 processing task，并快速返回 taskId | E3 | provider 先调用、失败后才建任务 |
-| TASK-CONCURRENCY-01 | 10 个相同并发请求只触发一次 provider；不同指纹冲突 | E3/E6 | 重复调用或产生多个候选 |
+| TASK-PRECLAIM-01 | 分阶段验收：RP-02A 证明 provider 前原子创建/复用 processing task、处理中可查询且副请求复用同一 taskId；RP-02B 再证明首请求快速返回 taskId、worker 执行 `queued→processing→terminal` | RP-02A E3 + RP-02B E3/E6 | provider 先调用、失败后才建任务；或在 RP-02A 用 fire-and-forget 伪装 worker/快速返回 |
+| TASK-CONCURRENCY-01 | 分阶段验收：RP-02A 在单进程 deterministic repository 下验证 10 个同租户/同键/同指纹请求只触发一次 provider，同键异指纹和同域异键冲突、跨租户隔离；真实 MySQL/多进程原子性待 RP-01D/RP-02B 补 E6 | RP-02A E3 + 最终 E6 | 重复调用、多个候选、跨租户复用；或用 in-memory 结果宣称真实数据库并发已证明 |
 | TASK-WORKER-01 | HTTP 返回后 worker 执行；状态 queued→processing→terminal | E3 | 请求线程内长期 await、无消费者 |
 | TASK-RESTART-01 | processing 时重启 API/worker；任务恢复或明确失败并可重试 | E3/E6 | 永久 processing、状态丢失 |
 | TASK-RETRY-01 | failed 任务重试后真实执行并完成/再次失败，关联原任务 | E3 | 只新增 queued 记录 |
