@@ -1,6 +1,6 @@
 # AIShortvideo 主控统一状态
 
-更新时间：2026-07-13 18:33 CST
+更新时间：2026-07-13 22:24 CST
 
 本文件是需求主控的当前状态入口。历史过程和详细证据仍保留在各模块设计、验收和工程质量文档中；发生冲突时，以当前代码、最新正式验收结论和本文件列出的证据为准。
 
@@ -35,9 +35,9 @@
 ```text
 总体关闭进度  [████░░░░░░░░░░░░░░░░]  9 / 42（21%）
 剩余问题      33
-当前整改包    RP-02B2
-当前包门禁进度 [█████████████░░░░░░░]  5 / 8（63%）
-当前状态      MC 已单独授权 RP-02B2a0，研发执行中；后续 B2 包继续冻结
+当前整改包    RP-02B2a0
+当前包门禁进度 [████████████████████]  8 / 8（100%）
+当前状态      RP-02B2a0 已完成实现、双验收、远程 CI 与 clean checkout；B2a 仍待 MC 单独裁决
 ```
 
 当前包阶段：
@@ -52,9 +52,9 @@
 | 第十轮拒绝项修订 | 已完成 | 3 路 approved；TEST 的 202/200 宽松断言 P1 已拆成第十一轮两个精确子例；`git diff --check` 与 15/15 governance 通过 |
 | 四路 P0/P1 清零 | 已完成 | 第十一轮后端/产品/TEST/QUALITY 均 approved，四路 P0/P1/P2=0 |
 | 需求提交与远程治理 | 已完成 | 需求合同 `42a3f18` 已推送；Remediation governance run `29246455165` success |
-| RP-02B2a0 研发 | 进行中 | MC 于 2026-07-13 19:45:10 CST 单独授权；8 files/700 additions 硬预算，B2a/B2b/B2c/B3 不联动开工 |
-| 独立验收 | 待开始 | DEV 自测不能替代 TEST/QUALITY |
-| 关闭证据与总账更新 | 待开始 | 只有正式 closure 才可能推动 9/42 |
+| RP-02B2a0 研发 | 已完成 | 实现提交 `2da6d31`；严格 8 files / 319 net additions；未进入 B2a+ |
+| 独立验收 | 已完成 | TEST 与 QUALITY 最终均 approved，P0/P1/P2=0；四类 canary 与日志/DOM 返工闭合 |
+| 关闭证据与总账更新 | 已完成 | 阶段证据已形成；`RMD-TASK-002` 保持 partial，总体关闭数仍为 9/42 |
 
 ## 2. 小说模块
 
@@ -84,7 +84,7 @@
 ### 下一触发动作
 
 - 暂缓 `P10-R1`，不得按编号自动继续。
-- `RP-02B1` 已完成实现、返工、独立验收、远程 CI 和干净检出，提交 `415d03a`。原 B2 已拆为 B2a0 风险参数前置修复、B2a 执行核心、B2b API transport/lifecycle 和 B2c admin transport；第十一轮后端/产品/TEST/QUALITY 四路均 approved 且 P0/P1/P2=0，需求合同 `42a3f18` 已推送且远程治理 run `29246455165` 通过，当前等待 MC 单独授权 B2a0。RMD-TASK-002 保持 partial、003 保持 open；真实 MySQL 继续等待独立授权。
+- `RP-02B1` 已完成实现、返工、独立验收、远程 CI 和干净检出，提交 `415d03a`。`RP-02B2a0` 已以 `2da6d31` 完成风险参数前置修复，TEST/QUALITY 最终 P0/P1/P2=0，远程四路 CI 与 clean checkout 通过。RMD-TASK-002 保持 partial、003 保持 open；B2a 仍待 MC 单独裁决，真实 MySQL 继续等待独立授权。
 
 ## 3. 视频模块
 
@@ -158,6 +158,7 @@
 - `docs/reviews/remediation-rp-01c-dispatch-receipt-2026-07-13.md`
 - `docs/reviews/remediation-rmd-task-001-rp-02a-verification-2026-07-13.md`
 - `docs/reviews/remediation-rmd-task-002-003-rp-02b1-verification-2026-07-13.md`
+- `docs/reviews/remediation-rmd-task-002-rp-02b2a0-verification-2026-07-13.md`
 - `docs/reviews/worktree-attribution-checkpoint-2026-07-11.md`
 - `docs/reviews/video-p9e-acceptance-closure-2026-07-10.md`
 
@@ -173,7 +174,7 @@
 
 ## 7. 当前唯一推荐动作
 
-1. `RP-02B1` 已完成 E3。B2 专属包第十一轮四路准入、需求合同提交/push 与远程治理均已通过；MC 已单独授权 B2a0，下一步等待研发交付后独立验收。B2a、B2b、B2c、B3、真实 DB/provider/media 继续冻结。
+1. `RP-02B2a0` 已完成 E3 实现、独立双验收、远程 CI 和 clean checkout。下一依赖包为 B2a，但必须由 MC 单独核对合同、写集和冻结边界后再授权；B2b、B2c、B3、真实 DB/provider/media 继续冻结。
 2. `RP-01D` 涉及真实 MySQL，只能在安全环境和用户独立授权后执行；管理分组不得整体派发。每个子包独立研发、测试、关闭、commit 和 push。
 3. 小说真实完本金丝雀通过后，再执行 P9-real；P10-R1 只在 `RP-10` 重新决策。
 4. 继续保持真实 DB/provider、外部媒体和平台发布的独立授权门禁。

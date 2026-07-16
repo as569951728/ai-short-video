@@ -547,3 +547,15 @@ B2a0/B2a/B2b/B2c E3 可证明：风险参数同步链、单进程 deterministic 
 4. MC 只授权 `RP-02B2a0`；B2a/B2b/B2c/B3、真实 DB/provider/media 继续冻结。
 
 本节不授权任何后续包。B2a0 研发必须遵守第 2.1、11、14 节的范围、验收命令和 `8 files / 700 net additions` 硬预算；交付后仍须独立 TEST/QUALITY 验收和主控关闭证据，才能决定下一道门禁。
+
+## 16. RP-02B2a0 阶段完成门禁
+
+截至 2026-07-13 22:24 CST，`RP-02B2a0` 已满足独立子包完成条件：
+
+1. 实现提交 `2da6d31` 严格为授权 8 文件，净新增 319 行。
+2. `test:rp02b2a0` 为 API 50/50、Admin service 17/17、Vue DOM 6/6；typecheck、diff check 和 8/700 预算通过。
+3. TEST 与 QUALITY 最终均 `approved`，P0/P1/P2 = 0；四类 canary、High/Blocking、普通日志与浏览器持久化证据闭合。
+4. GitHub runs `29256298426`、`29256298444`、`29256298360`、`29256298392` 全部成功；远程干净检出 `2da6d31` 后专属测试再次通过。
+5. 阶段证据为 `docs/reviews/remediation-rmd-task-002-rp-02b2a0-verification-2026-07-13.md`。
+
+`RMD-TASK-002` 继续为 `partial`，总体关闭数保持 9/42。本文不自动授权 B2a/B2b/B2c/B3 或真实 DB/provider/media；下一包必须由 MC 重新核对依赖、预算和授权边界后单独裁决。
