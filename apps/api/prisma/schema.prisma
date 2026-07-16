@@ -480,6 +480,7 @@ model GenerationTask {
   retryOfTaskId            String?    @map("retry_of_task_id") @db.VarChar(32)
   idempotencyToken         String?    @map("idempotency_token") @db.VarChar(120)
   requestHash              String?    @map("request_hash") @db.VarChar(128)
+  activeClaimKey           String?    @map("active_claim_key") @db.VarChar(64)
   resultObjectType         String?    @map("result_object_type") @db.VarChar(80)
   resultObjectId           String?    @map("result_object_id") @db.VarChar(80)
   resultVersionId          String?    @map("result_version_id") @db.VarChar(32)
@@ -497,7 +498,8 @@ model GenerationTask {
   @@index([tenantId, status, createdAt])
   @@index([tenantId, novelId, taskType, status])
   @@index([tenantId, conflictScope, conflictKey, status])
-  @@unique([tenantId, idempotencyToken])
+  @@unique([tenantId, taskType, idempotencyToken])
+  @@unique([tenantId, activeClaimKey])
   @@map("generation_task")
 }
 

@@ -60,6 +60,8 @@ import {
   type NovelRepository,
   type OperationLogRecord,
   type CancelledTaskRecord,
+  type ClaimGenerationTaskInput,
+  type ClaimGenerationTaskResult,
   type ChapterContentVersionRecord,
   type ChapterFeatureCardRecord,
   type ChapterWorkbenchRecord,
@@ -264,12 +266,18 @@ export function createInMemoryNovelRepository(): NovelRepository & {
           task.tenantId === tenantId &&
           task.novelId === novelId &&
           task.taskType === 'novel_direction_generate' &&
-          [TaskStatus.Queued, TaskStatus.Processing, TaskStatus.WaitingConfirmation].includes(task.status)
+          [TaskStatus.Queued, TaskStatus.Processing].includes(task.status)
       ) ?? null;
     },
 
     async findTaskById(tenantId: string, taskId: string) {
       return generationTasks.find((task) => task.tenantId === tenantId && task.id === taskId) ?? null;
+    },
+
+    async findTaskByIdempotencyToken(tenantId: string, taskType: string, idempotencyToken: string) {
+      return generationTasks.find(
+        (task) => task.tenantId === tenantId && task.taskType === taskType && task.idempotencyToken === idempotencyToken
+      ) ?? null;
     },
 
     async listTaskEvents(tenantId: string, taskId: string) {
@@ -285,13 +293,87 @@ export function createInMemoryNovelRepository(): NovelRepository & {
         .slice(0, limit);
     },
 
+    async assertProviderActionSupported(_taskType: string) {},
+
+    async claimGenerationTask(input: ClaimGenerationTaskInput): Promise<ClaimGenerationTaskResult> {
+      const idempotentTask = generationTasks.find(
+        (task) =>
+          task.tenantId === input.tenantId &&
+          task.taskType === input.taskType &&
+          task.idempotencyToken === input.idempotencyToken
+      );
+      if (idempotentTask) {
+        return {
+          outcome: idempotentTask.requestHash === input.requestHash ? 'reused' : 'idempotency_conflict',
+          task: idempotentTask
+        };
+      }
+
+      const activeTask = generationTasks.find(
+        (task) => task.tenantId === input.tenantId && task.activeClaimKey === input.activeClaimKey
+      );
+      if (activeTask) return { outcome: 'active_conflict', task: activeTask };
+
+      const task: GenerationTaskRecord = {
+        id: nextId('task'),
+        tenantId: input.tenantId,
+        novelId: input.novelId,
+        taskType: input.taskType,
+        objectType: input.objectType,
+        objectId: input.objectId,
+        status: TaskStatus.Processing,
+        statusNote: '生成任务已创建，正在调用模型。',
+        progress: 0,
+        currentStep: '正在调用模型',
+        triggerSource: 'manual',
+        sourceVersionRefs: input.sourceVersionRefs,
+        conflictScope: input.conflictScope,
+        conflictKey: input.conflictKey,
+        idempotencyToken: input.idempotencyToken,
+        requestHash: input.requestHash,
+        activeClaimKey: input.activeClaimKey,
+        inputSummary: input.inputSummary,
+        outputSummary: null,
+        resultVersionIds: [],
+        retryOfTaskId: null,
+        failureCategory: null,
+        errorCode: null,
+        errorMessage: null,
+        resultObjectType: null,
+        resultObjectId: null,
+        userAcceptedResult: false,
+        cancelRequestedAt: null,
+        cancelReason: null,
+        startedAt: input.now,
+        finishedAt: null,
+        createdBy: input.context.userId,
+        createdAt: input.now,
+        updatedAt: input.now,
+        metadata: { requestId: input.context.requestId }
+      };
+      const event: GenerationTaskEventRecord = {
+        id: nextId('event'),
+        tenantId: input.tenantId,
+        taskId: task.id,
+        status: TaskStatus.Processing,
+        eventType: 'task_claimed',
+        message: '生成任务已创建，正在调用模型。',
+        progress: 0,
+        payload: { requestId: input.context.requestId },
+        createdAt: input.now
+      };
+      generationTasks.unshift(task);
+      generationTaskEvents.push(event);
+      return { outcome: 'created', task };
+    },
+
     async findActiveTaskByConflict(tenantId: string, conflictScope: string, conflictKey: string) {
       return generationTasks.find(
         (task) =>
           task.tenantId === tenantId &&
           task.conflictScope === conflictScope &&
           task.conflictKey === conflictKey &&
-          [TaskStatus.Queued, TaskStatus.Processing, TaskStatus.WaitingConfirmation].includes(task.status)
+          [TaskStatus.Queued, TaskStatus.Processing].includes(task.status)
       ) ?? null;
     },
 
@@ -325,13 +407,9 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async createDirectionCandidates(input: DirectionCreationInput): Promise<CreatedDirectionCandidatesRecord> {
-      const task = createTask({
-        input,
-        taskId: nextId('task'),
-        status: TaskStatus.WaitingConfirmation,
-        progress: 100,
-        currentStep: '方向候选已生成，等待选择'
-      });
+      const task = input.task
+        ? requireClaimedTask(input.task, input.context.tenantId)
+        : createTask({ input, taskId: nextId('task'), status: TaskStatus.WaitingConfirmation, progress: 100, currentStep: getDirectionRevisionTaskStep(input.taskType) });
       const versions = input.candidates.map((candidate, index) =>
         createCreativeVersion({
           id: nextId('cv'),
@@ -345,8 +423,14 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       task.resultObjectType = 'creative_version';
       task.resultObjectId = versions[0]?.id ?? null;
       task.outputSummary = `${versions.length} 个方向候选已生成，等待用户采用。`;
+      task.status = TaskStatus.WaitingConfirmation;
+      task.statusNote = '模型服务已生成方向候选，等待用户确认。';
+      task.progress = 100;
+      task.currentStep = '方向候选已生成，等待选择';
+      task.updatedAt = input.now;
+      task.activeClaimKey = null;
 
-      generationTasks.unshift(task);
+      if (!generationTasks.some((item) => item.id === task.id)) generationTasks.unshift(task);
       appendTaskProgressEvents(task, input.context.requestId, input.now);
       creativeVersions.unshift(...versions);
       mutateNovel(input.novel.id, {
@@ -361,13 +445,9 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async createDirectionRevision(input: DirectionRevisionInput): Promise<CreatedDirectionRevisionRecord> {
-      const task = createTask({
-        input,
-        taskId: nextId('task'),
-        status: TaskStatus.WaitingConfirmation,
-        progress: 100,
-        currentStep: getDirectionRevisionTaskStep(input.taskType)
-      });
+      const task = input.task
+        ? requireClaimedTask(input.task, input.context.tenantId)
+        : createTask({ input, taskId: nextId('task'), status: TaskStatus.WaitingConfirmation, progress: 100, currentStep: getDirectionRevisionTaskStep(input.taskType) });
       const version = createCreativeVersion({
         id: nextId('cv'),
         input,
@@ -382,8 +462,14 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       task.resultObjectType = 'creative_version';
       task.resultObjectId = version.id;
       task.outputSummary = getDirectionRevisionOutputSummary(input.taskType);
+      task.status = TaskStatus.WaitingConfirmation;
+      task.statusNote = '模型服务已生成方向候选，等待用户确认。';
+      task.progress = 100;
+      task.currentStep = getDirectionRevisionTaskStep(input.taskType);
+      task.updatedAt = input.now;
+      task.activeClaimKey = null;
 
-      generationTasks.unshift(task);
+      if (!generationTasks.some((item) => item.id === task.id)) generationTasks.unshift(task);
       appendTaskProgressEvents(task, input.context.requestId, input.now);
       creativeVersions.unshift(version);
       mutateNovel(input.novel.id, {
@@ -451,6 +537,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
           task.status === TaskStatus.WaitingConfirmation
         ) {
           task.status = TaskStatus.Completed;
+          task.activeClaimKey = null;
           task.statusNote = '用户已采用方向';
           task.currentStep = '方向已采用';
           task.userAcceptedResult = true;
@@ -529,17 +616,9 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async createStructureCandidate(input: StructureCreationInput): Promise<CreatedStructureAssetRecord> {
-      const task = input.reservedTaskId
-        ? generationTasks.find((item) => item.id === input.reservedTaskId && item.tenantId === input.context.tenantId) ?? null
-        : null;
-      const effectiveTask = task ?? createTask({
-        input,
-        objectType: input.asset.objectType,
-        taskId: nextId('task'),
-        status: TaskStatus.WaitingConfirmation,
-        progress: 100,
-        currentStep: getStructureGenerateStep(input.asset.objectType)
-      });
+      const effectiveTask = input.task
+        ? requireClaimedTask(input.task, input.context.tenantId)
+        : createTask({ input, objectType: input.asset.objectType, taskId: nextId('task'), status: TaskStatus.WaitingConfirmation, progress: 100, currentStep: getStructureGenerateStep(input.asset.objectType) });
       const version = createStructureVersion({
         id: nextId('cv'),
         input,
@@ -555,8 +634,9 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       effectiveTask.resultObjectId = version.id;
       effectiveTask.outputSummary = `${getStructureObjectText(input.asset.objectType)}候选已生成，等待用户采用。`;
       effectiveTask.updatedAt = input.now;
+      effectiveTask.activeClaimKey = null;
 
-      if (!task) generationTasks.unshift(effectiveTask);
+      if (!generationTasks.some((item) => item.id === effectiveTask.id)) generationTasks.unshift(effectiveTask);
       appendTaskProgressEvents(effectiveTask, input.context.requestId, input.now);
       creativeVersions.unshift(version);
       mutateNovel(input.novel.id, {
@@ -572,6 +652,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     async failTask(input: TaskFailureInput): Promise<GenerationTaskRecord> {
       const task = generationTasks.find((item) => item.id === input.task.id && item.tenantId === input.context.tenantId);
       if (!task) return input.task;
+      if (task.status === TaskStatus.Cancelled) return task;
 
       task.status = TaskStatus.Failed;
       task.statusNote = input.statusNote ?? '模型生成失败，请查看原因后重试。';
@@ -582,6 +663,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       task.errorMessage = input.errorMessage;
       task.finishedAt = input.now;
       task.updatedAt = input.now;
+      task.activeClaimKey = null;
       appendTaskEvent(task, {
         eventType: 'failed',
         message: input.errorMessage,
@@ -683,6 +765,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
           task.status === TaskStatus.WaitingConfirmation
         ) {
           task.status = TaskStatus.Completed;
+          task.activeClaimKey = null;
           task.statusNote = '用户已采用结构资产';
           task.currentStep = getStructureAdoptStep(input.objectType);
           task.userAcceptedResult = true;
@@ -800,7 +883,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
           item.tenantId === tenantId &&
           item.novelId === novelId &&
           item.taskType === 'novel_full_review' &&
-          (item.metadata as Record<string, unknown>).idempotencyKey === idempotencyKey
+          item.idempotencyToken === idempotencyKey
       );
       if (!task?.resultObjectId) return null;
       const reviewReport = reviewReports.find((report) => report.tenantId === tenantId && report.id === task.resultObjectId) ?? null;
@@ -855,17 +938,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
 
     async createTrialChapterOneCandidates(input: TrialCandidateCreationInput): Promise<CreatedTrialCandidatesRecord> {
       const trialRunId = nextId('trial');
-      const task = createTrialTask({
-        novel: input.novel,
-        context: input.context,
-        now: input.now,
-        taskId: nextId('task'),
-        trialRunId,
-        taskType: 'trial_writing_generate',
-        currentStep: '第1章候选已生成，等待选择',
-        sourceVersionRefs: input.sourceVersionRefs,
-        resultVersionIds: []
-      });
+      const task = requireClaimedTask(input.task, input.context.tenantId);
       const versions = input.candidates.map((candidate) => {
         const version: ChapterContentVersionRecord = {
           id: nextId('ccv'),
@@ -910,6 +983,12 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       task.resultObjectType = 'trial_run';
       task.resultObjectId = trialRunId;
       task.outputSummary = `${versions.length} 个第1章试写候选已生成，等待用户选择。`;
+      task.status = TaskStatus.WaitingConfirmation;
+      task.statusNote = '模型服务已生成试写结果，等待用户确认。';
+      task.progress = 100;
+      task.currentStep = '第1章候选已生成，等待选择';
+      task.updatedAt = input.now;
+      task.activeClaimKey = null;
       const trialRun: TrialRunRecord = {
         id: trialRunId,
         tenantId: input.context.tenantId,
@@ -935,7 +1014,6 @@ export function createInMemoryNovelRepository(): NovelRepository & {
         }
       };
 
-      generationTasks.unshift(task);
       appendTaskProgressEvents(task, input.context.requestId, input.now);
       trialRuns.unshift(trialRun);
       chapterContentVersions.unshift(...versions);
@@ -982,6 +1060,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       const existingTask = generationTasks.find((task) => task.id === input.trialRun.sourceTaskId);
       if (existingTask && existingTask.status === TaskStatus.WaitingConfirmation) {
         existingTask.status = TaskStatus.Completed;
+        existingTask.activeClaimKey = null;
         existingTask.statusNote = '用户已选择第1章候选';
         existingTask.currentStep = '第1章候选已选择，继续试写';
         existingTask.userAcceptedResult = true;
@@ -997,17 +1076,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       }
 
       const sourceVersionRefs = createTrialFollowupSourceVersionRefs(input.novel, input.selectedCandidate.id);
-      const task = createTrialTask({
-        novel: input.novel,
-        context: input.context,
-        now: input.now,
-        taskId: nextId('task'),
-        trialRunId: input.trialRun.id,
-        taskType: 'trial_followup_generate',
-        currentStep: '已选择第1章候选，正在生成第2-3章和试写总评',
-        sourceVersionRefs,
-        resultVersionIds: [input.selectedCandidate.id]
-      });
+      const task = requireClaimedTask(input.task, input.context.tenantId);
       task.status = TaskStatus.Processing;
       task.statusNote = '正在调用模型继续试写第2-3章并生成试写总评，可能需要 1-3 分钟，可以稍后回来查看。';
       task.progress = 18;
@@ -1015,7 +1084,6 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       task.resultObjectType = 'trial_run';
       task.resultObjectId = input.trialRun.id;
 
-      generationTasks.unshift(task);
       appendTaskEvent(task, {
         eventType: 'calling_model',
         message: task.statusNote,
@@ -1077,6 +1145,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       const existingTask = generationTasks.find((task) => task.id === input.trialRun.sourceTaskId);
       if (existingTask && existingTask.status === TaskStatus.WaitingConfirmation) {
         existingTask.status = TaskStatus.Completed;
+        existingTask.activeClaimKey = null;
         existingTask.statusNote = '用户已选择第1章候选';
         existingTask.currentStep = '第1章候选已选择，继续试写';
         existingTask.userAcceptedResult = true;
@@ -1098,6 +1167,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       task.currentStep = input.review.trialResult === 'blocked' ? '第2章硬门槛未通过，试写暂停' : '前三章试写总评已生成，等待确认';
       task.sourceVersionRefs = createTrialFollowupSourceVersionRefs(input.novel, input.selectedCandidate.id);
       task.updatedAt = input.now;
+      task.activeClaimKey = null;
       const createdContentVersions: ChapterContentVersionRecord[] = [];
       const createdFeatureCards: ChapterFeatureCardRecord[] = [];
       const createdReviewReports: ReviewReportRecord[] = [];
@@ -1182,6 +1252,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       input.trialRun.totalScore = input.review.totalScore;
       input.trialRun.trialResult = input.review.trialResult;
       input.trialRun.reviewReportId = trialReviewReport.id;
+      input.trialRun.sourceTaskId = task.id;
       input.trialRun.updatedAt = input.now;
       input.trialRun.metadata = {
         ...toMutableMetadata(input.trialRun.metadata),
@@ -1475,66 +1546,13 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async createBodyBatchTask(input: BodyBatchTaskCreationInput): Promise<CreatedBodyBatchTaskRecord> {
-      const existingTask = generationTasks.find((task) => {
-        const metadata = toMutableMetadata(task.metadata);
-        return (
-          task.tenantId === input.context.tenantId &&
-          task.novelId === input.novel.id &&
-          task.taskType === 'body_batch_generate' &&
-          metadata.idempotencyKey === input.idempotencyKey
-        );
-      });
-      if (existingTask) {
-        const metadata = toMutableMetadata(existingTask.metadata);
-        if (!isSameRepositoryFingerprint(metadata.requestFingerprint, input.requestFingerprint)) {
-          throw new BusinessError(ErrorCode.IdempotencyConflict, '同一个幂等键已绑定到不同的批量正文请求，请刷新后重新提交。', {
-            idempotencyKey: input.idempotencyKey,
-            taskType: 'body_batch_generate',
-            existingTaskId: existingTask.id
-          });
-        }
-
-        return {
-          novel: cloneNovel(input.novel.id),
-          task: existingTask,
-          reused: true
-        };
-      }
-
-      const activeTask = generationTasks.find(
-        (task) =>
-          task.tenantId === input.context.tenantId &&
-          task.conflictScope === 'novel_body_batch' &&
-          task.conflictKey === input.novel.id &&
-          [TaskStatus.Queued, TaskStatus.Processing, TaskStatus.WaitingConfirmation].includes(task.status)
-      );
-      if (activeTask) {
-        throw new BusinessError(ErrorCode.ConflictTaskExists, '同一小说已有批量正文任务正在处理，请先处理当前任务。', {
-          activeTaskId: activeTask.id,
-          taskType: activeTask.taskType,
-          status: activeTask.status
-        });
-      }
-
-      const task = createBodyTask({
-        input,
-        taskId: nextId('task'),
-        status: TaskStatus.Processing,
-        progress: 8,
-        currentStep: `正在生成第 ${input.startChapterNo}-${input.endChapterNo} 章正文`
-      });
+      const task = requireClaimedTask(input.task, input.context.tenantId);
+      task.progress = 8;
+      task.currentStep = `正在生成第 ${input.startChapterNo}-${input.endChapterNo} 章正文`;
       task.statusNote = '正在调用模型生成本批正文，可能需要 1-3 分钟，可以稍后回来查看。';
       task.outputSummary = null;
       task.resultObjectType = 'body_batch';
-
-      generationTasks.unshift(task);
-      appendTaskEvent(task, {
-        eventType: 'calling_model',
-        message: task.statusNote,
-        progress: task.progress,
-        requestId: input.context.requestId,
-        createdAt: input.now
-      });
+      task.updatedAt = input.now;
 
       mutateNovel(input.novel.id, {
         creationStage: NovelCreationStage.Body,
@@ -1551,18 +1569,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async createFullReview(input: FullReviewCreationInput): Promise<CreatedFullReviewRecord> {
-      const task = createNovelLevelTask({
-        novel: input.novel,
-        context: input.context,
-        now: input.now,
-        taskId: nextId('task'),
-        taskType: 'novel_full_review',
-        objectType: 'full_review',
-        currentStep: '全书审稿报告已生成',
-        sourceVersionRefs: input.sourceVersionRefs,
-        idempotencyKey: input.idempotencyKey,
-        requestFingerprint: input.requestFingerprint
-      });
+      const task = requireClaimedTask(input.task, input.context.tenantId);
       const reviewId = nextId('review');
       const issueCards = input.draft.issues.map((issue) => ({
         ...issue,
@@ -1602,7 +1609,8 @@ export function createInMemoryNovelRepository(): NovelRepository & {
           originalityRisks: input.draft.originalityRisks,
           aiFlavorRisks: input.draft.aiFlavorRisks,
           lowScoreContinueRisks: input.draft.lowScoreContinueRisks,
-          sourceVersionRefs: input.sourceVersionRefs
+          sourceVersionRefs: input.sourceVersionRefs,
+          requestFingerprint: input.requestFingerprint
         }
       };
       const gate = createFullReviewGateRecord({
@@ -1613,7 +1621,6 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       });
       reviewReports.unshift(reviewReport);
       fullReviewGates.unshift(gate);
-      generationTasks.unshift(task);
       task.status = TaskStatus.Completed;
       task.statusNote = '全书审稿完成，已生成完成门禁。';
       task.progress = 100;
@@ -1622,6 +1629,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       task.resultObjectId = reviewReport.id;
       task.finishedAt = input.now;
       task.updatedAt = input.now;
+      task.activeClaimKey = null;
       appendNovelTaskEvents(task, input.context.requestId, input.now, '全书审稿任务已创建。', '全书审稿完成，完成门禁已生成。');
       mutateNovel(input.novel.id, {
         creationStage: gate.allowCompletion ? NovelCreationStage.CompletionConfirm : NovelCreationStage.FullReview,
@@ -2083,6 +2091,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       task.errorMessage = failedChapterNo ? `第 ${failedChapterNo} 章硬失败，后续章节已暂停。` : null;
       task.finishedAt = input.now;
       task.updatedAt = input.now;
+      task.activeClaimKey = null;
       task.metadata = {
         ...(task.metadata as Record<string, unknown>),
         batch
@@ -2113,16 +2122,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async rewriteChapter(input: ChapterRewriteInput): Promise<RewrittenChapterRecord> {
-      const task = createChapterTask({
-        novel: input.novel,
-        chapter: input.chapter,
-        context: input.context,
-        now: input.now,
-        taskId: nextId('task'),
-        taskType: 'chapter_body_rewrite',
-        currentStep: '章节重写候选已生成，等待采用',
-        sourceVersionRefs: input.currentContent.sourceVersionRefs
-      });
+      const task = requireClaimedTask(input.task, input.context.tenantId);
       const candidate = createBodyContentVersion({
         input: {
           novel: input.novel,
@@ -2153,7 +2153,12 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       task.resultObjectType = 'chapter_content_version';
       task.resultObjectId = candidate.id;
       task.outputSummary = input.summaryCompare.candidateSummary;
-      generationTasks.unshift(task);
+      task.status = TaskStatus.WaitingConfirmation;
+      task.statusNote = '章节重写候选已生成，等待采用';
+      task.progress = 100;
+      task.currentStep = '章节重写候选已生成，等待采用';
+      task.updatedAt = input.now;
+      task.activeClaimKey = null;
       appendTaskProgressEvents(task, input.context.requestId, input.now);
       chapterContentVersions.unshift(candidate);
 
@@ -2175,21 +2180,15 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       }
       input.candidate.status = VersionStatus.Current;
       input.candidate.decisionRecordId = null;
-      const task = createChapterTask({
-        novel: input.novel,
-        chapter: input.chapter,
-        context: input.context,
-        now: input.now,
-        taskId: nextId('task'),
-        taskType: 'chapter_impact_assess',
-        currentStep: '影响评估已生成，等待处理',
-        sourceVersionRefs: input.candidate.sourceVersionRefs
-      });
+      const task = requireClaimedTask(input.task, input.context.tenantId);
       task.status = TaskStatus.Completed;
       task.progress = 100;
       task.outputSummary = input.impact.summary;
       task.resultVersionIds = [input.candidate.id];
       task.resultObjectType = 'impact_case';
+      task.finishedAt = input.now;
+      task.updatedAt = input.now;
+      task.activeClaimKey = null;
 
       const decisionRecord: AssetDecisionRecord = {
         id: nextId('decision'),
@@ -2222,7 +2221,6 @@ export function createInMemoryNovelRepository(): NovelRepository & {
         requestId: input.context.requestId,
         impactCaseId: impactCase.id
       };
-      generationTasks.unshift(task);
       appendTaskProgressEvents(task, input.context.requestId, input.now);
       assetDecisionRecords.unshift(decisionRecord);
       impactCases.unshift(impactCase);
@@ -2283,22 +2281,19 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async createImpactAssessment(input: ImpactAssessmentInput): Promise<CreatedImpactAssessmentRecord> {
-      const task = createChapterTask({
-        novel: input.novel,
-        chapter: input.chapter,
-        context: input.context,
-        now: input.now,
-        taskId: nextId('task'),
-        taskType: 'chapter_impact_assess',
-        currentStep: '影响评估已生成',
-        sourceVersionRefs: input.currentContent.sourceVersionRefs
-      });
+      const task = requireClaimedTask(input.task, input.context.tenantId);
       task.status = TaskStatus.Completed;
       task.progress = 100;
       task.outputSummary = input.impact.summary;
+      task.statusNote = '影响评估已生成';
+      task.currentStep = '影响评估已生成';
+      task.finishedAt = input.now;
+      task.updatedAt = input.now;
+      task.activeClaimKey = null;
       const impactCase = createImpactCaseRecord({
         input: {
           novel: input.novel,
+          task: input.task,
           chapter: input.chapter,
           currentContent: input.currentContent,
           candidate: input.currentContent,
@@ -2320,7 +2315,6 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       });
       task.resultObjectType = 'impact_case';
       task.resultObjectId = impactCase.id;
-      generationTasks.unshift(task);
       appendTaskProgressEvents(task, input.context.requestId, input.now);
       impactCases.unshift(impactCase);
 
@@ -2511,7 +2505,9 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async cancelTask(input: TaskCancelInput): Promise<CancelledTaskRecord> {
+      const previousStatus = input.task.status;
       input.task.status = TaskStatus.Cancelled;
+      input.task.activeClaimKey = null;
       input.task.statusNote = '任务已取消，不会写入正式资产。';
       input.task.currentStep = '任务已取消';
       input.task.cancelRequestedAt = input.now;
@@ -2535,7 +2531,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
         objectId: input.task.objectId,
         beforeSnapshot: {
           taskId: input.task.id,
-          status: TaskStatus.Processing
+          status: previousStatus
         },
         afterSnapshot: {
           taskId: input.task.id,
@@ -2629,6 +2625,9 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       sourceVersionRefs: getTaskSourceVersionRefs(options.input, objectType),
       conflictScope: `novel_${objectType}`,
       conflictKey: options.input.novel.id,
+      idempotencyToken: null,
+      requestHash: null,
+      activeClaimKey: null,
       inputSummary: getTaskInputSummary(options.input.taskType, objectType),
       outputSummary: null,
       resultVersionIds: [],
@@ -2678,6 +2677,9 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       sourceVersionRefs: options.sourceVersionRefs,
       conflictScope: 'novel_trial',
       conflictKey: options.novel.id,
+      idempotencyToken: null,
+      requestHash: null,
+      activeClaimKey: null,
       inputSummary: '根据已确认章节目录和上游资产生成试写候选。',
       outputSummary: null,
       resultVersionIds: options.resultVersionIds,
@@ -2735,6 +2737,9 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       sourceVersionRefs: options.input.sourceVersionRefs,
       conflictScope: 'novel_body_batch',
       conflictKey: options.input.novel.id,
+      idempotencyToken: null,
+      requestHash: null,
+      activeClaimKey: null,
       inputSummary: `基于策略快照 ${options.input.strategySnapshot.id} 生成第 ${options.input.startChapterNo}-${options.input.endChapterNo} 章。`,
       outputSummary: null,
       resultVersionIds: [],
@@ -2791,6 +2796,9 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       sourceVersionRefs: options.sourceVersionRefs,
       conflictScope: 'chapter',
       conflictKey: options.chapter.id,
+      idempotencyToken: null,
+      requestHash: null,
+      activeClaimKey: null,
       inputSummary: `${options.taskType} for chapter ${options.chapter.chapterNo}`,
       outputSummary: null,
       resultVersionIds: [],
@@ -3659,6 +3667,9 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       sourceVersionRefs: options.sourceVersionRefs,
       conflictScope: options.taskType === 'novel_full_review' ? 'novel_full_review' : 'novel_video_readiness',
       conflictKey: options.novel.id,
+      idempotencyToken: null,
+      requestHash: null,
+      activeClaimKey: null,
       inputSummary: options.taskType === 'novel_full_review' ? '基于全书正文和审稿策略执行全书审稿。' : '基于完成决策执行待视频化检查。',
       outputSummary: null,
       resultVersionIds: [],
@@ -3813,6 +3824,9 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       sourceVersionRefs: check.sourceVersionRefs,
       conflictScope: 'novel_video_readiness',
       conflictKey: novel.id,
+      idempotencyToken: null,
+      requestHash: null,
+      activeClaimKey: null,
       inputSummary: '待视频化检查。',
       outputSummary: check.blockingReasons.join('；') || '待视频化检查通过。',
       resultVersionIds: [],
@@ -3953,6 +3967,12 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     const novel = novels.find((item) => item.id === novelId);
     if (!novel) return;
     Object.assign(novel, patch);
+  }
+
+  function requireClaimedTask(task: GenerationTaskRecord, tenantId: string) {
+    const stored = generationTasks.find((item) => item.id === task.id && item.tenantId === tenantId);
+    if (!stored) throw new Error('Claimed generation task is missing');
+    return stored;
   }
 
   function cloneNovel(novelId: string): NovelRecord {

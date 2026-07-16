@@ -4,6 +4,19 @@ import { LlmProviderError, type ChatCompletionRequest, type LlmClient } from '..
 import { DeepSeekNovelProvider } from './deepseekNovelProvider.js';
 
 describe('DeepSeek novel provider', () => {
+  it('exposes a safe action-specific model routing version for task fingerprints', () => {
+    const provider = new DeepSeekNovelProvider({
+      client: createQueueClient([]),
+      model: 'deepseek-general-test',
+      structureModel: 'deepseek-structure-test',
+      reasonerModel: 'deepseek-reasoner-test'
+    });
+
+    assert.equal(provider.getModelRoutingVersion('direction_generate'), 'deepseek:deepseek-general-test:route-v1');
+    assert.equal(provider.getModelRoutingVersion('chapter_plan_generate'), 'deepseek:deepseek-structure-test:route-v1');
+    assert.equal(provider.getModelRoutingVersion('chapter_impact_assess'), 'deepseek:deepseek-reasoner-test:route-v1');
+  });
+
   it('maps fake DeepSeek JSON into direction, structure, trial, body, impact, and full-review drafts', async () => {
     const provider = new DeepSeekNovelProvider({
       client: createQueueClient([

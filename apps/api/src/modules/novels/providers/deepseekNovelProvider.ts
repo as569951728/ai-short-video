@@ -48,6 +48,27 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
     this.reasonerModel = options.reasonerModel ?? this.model;
   }
 
+  getModelRoutingVersion(action: string): string {
+    const structureActions = new Set([
+      'setting_generate',
+      'outline_generate',
+      'stage_outline_generate',
+      'chapter_plan_generate',
+      'trial_chapter_one_generate'
+    ]);
+    const reasonerActions = new Set([
+      'chapter_impact_assess',
+      'chapter_adopt_impact_assess',
+      'novel_full_review'
+    ]);
+    const model = structureActions.has(action)
+      ? this.structureModel
+      : reasonerActions.has(action)
+        ? this.reasonerModel
+        : this.model;
+    return `deepseek:${model}:route-v1`;
+  }
+
   async generateCandidates(input: { novel: NovelRecord; preferences: NovelPreferencesRecord }): Promise<DirectionCandidateDraft[]> {
     return requestJsonOutput(this.options.client, {
       taskName: 'novel_direction_generate',

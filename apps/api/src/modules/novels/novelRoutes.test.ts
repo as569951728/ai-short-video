@@ -4,9 +4,10 @@ import { ErrorCode, TaskStatus } from '@ai-shortvideo/shared';
 import { buildApp } from '../../app.js';
 import type { LlmClient } from '../ai/llmClient.js';
 import { createInMemoryNovelRepository } from './repositories/inMemoryNovelRepository.js';
-import type { BodyBatchTaskCreationInput, NovelRepository } from './domain/novelDomain.js';
+import type { NovelRepository } from './domain/novelDomain.js';
 import type { HotspotReferenceGateway, HotspotReferenceValidationInput } from './integrations/hotspotReferenceGateway.js';
 import { BusinessError } from '../../shared/errors.js';
+import { hashCanonicalJson } from './services/taskClaim.js';
 
 describe('novel package 1 routes', () => {
   it('creates a draft and returns it in the list with a status summary', async () => {
@@ -362,9 +363,9 @@ describe('novel package 2 direction routes', () => {
     });
     assert.equal(repeatedResponse.statusCode, 200);
     const repeated = repeatedResponse.json();
-    assert.equal(repeated.data.task.id, generated.data.task.id);
-    assert.equal(repeated.data.candidates.length, generated.data.candidates.length);
-    assert.equal((repository as any).getGenerationTasks().filter((task: any) => task.taskType === 'novel_direction_generate').length, 1);
+    assert.notEqual(repeated.data.task.id, generated.data.task.id);
+    assert.equal((repository as any).getCreativeVersions().filter((version: any) => version.objectType === 'direction').length, generated.data.candidates.length * 2);
+    assert.equal((repository as any).getGenerationTasks().filter((task: any) => task.taskType === 'novel_direction_generate').length, 2);
 
     const detailResponse = await app.inject({
       method: 'GET',
@@ -372,7 +373,7 @@ describe('novel package 2 direction routes', () => {
     });
     const detail = detailResponse.json();
     assert.equal(detail.data.currentAssets.direction, null);
-    assert.equal(detail.data.directionCandidates.length, generated.data.candidates.length);
+    assert.equal(detail.data.directionCandidates.length, (repository as any).getCreativeVersions().filter((version: any) => version.objectType === 'direction').length);
     assert.equal(detail.data.statusSummary.recommendedAction.label, '选择方向');
 
     await app.close();
@@ -933,7 +934,7 @@ describe('novel package 4 task center routes', () => {
     assert.ok(events.length >= 3);
     assert.deepEqual(
       events.map((event: any) => event.eventType).slice(0, 3),
-      ['preparing_context', 'calling_model', 'parsing_output']
+      ['task_claimed', 'preparing_context', 'calling_model']
     );
     assert.equal(events.at(-1).requestId, 'task-generate-1');
 
@@ -1047,6 +1048,7 @@ describe('novel package 4 task center routes', () => {
     const activeTask = repository.getGenerationTasks().find((task) => task.id === activeTaskId)!;
     activeTask.status = TaskStatus.Processing;
     activeTask.progress = 45;
+    activeTask.activeClaimKey = hashCanonicalJson({ conflictScope: activeTask.conflictScope, conflictKey: activeTask.conflictKey });
 
     const conflictResponse = await app.inject({
       method: 'POST',
@@ -1326,10 +1328,12 @@ describe('novel package 5 trial writing routes', () => {
     const firstStep = await postTrialGenerate(app, novelId);
     const selectedCandidate = firstStep.trialRun.chapterOneCandidates.find((candidate: any) => candidate.isAiRecommended);
 
-    const followupPromise = postTrialGenerate(app, novelId, {
+    const followupPayload = {
       trialRunId: firstStep.trialRun.id,
-      selectedCandidateId: selectedCandidate.id
-    });
+      selectedCandidateId: selectedCandidate.id,
+      idempotencyKey: 'trial-followup-replay-1'
+    };
+    const followupPromise = postTrialGenerate(app, novelId, followupPayload);
     await delayedClient.waitForFollowup();
 
     const duringResponse = await app.inject({
@@ -1348,10 +1352,7 @@ describe('novel package 5 trial writing routes', () => {
     const duplicateResponse = await app.inject({
       method: 'POST',
       url: `/novels/${novelId}/trial/generate`,
-      payload: {
-        trialRunId: firstStep.trialRun.id,
-        selectedCandidateId: selectedCandidate.id
-      }
+      payload: followupPayload
     });
     assert.equal(duplicateResponse.statusCode, 200);
     const duplicate = duplicateResponse.json().data;
@@ -1364,6 +1365,27 @@ describe('novel package 5 trial writing routes', () => {
     assert.equal(followup.task.id, during.latestTrialRun.task.id);
     assert.equal(followup.task.status, TaskStatus.WaitingConfirmation);
     assert.equal(repository.getGenerationTasks().filter((task) => task.taskType === 'trial_followup_generate').length, 1);
+
+    const terminalReplay = await postTrialGenerate(app, novelId, followupPayload);
+    assert.equal(terminalReplay.task.id, followup.task.id);
+    assert.equal(repository.getGenerationTasks().filter((task) => task.taskType === 'trial_followup_generate').length, 1);
+    const differentTokenResponse = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/trial/generate`,
+      payload: { ...followupPayload, idempotencyKey: 'trial-followup-new-token-2' }
+    });
+    assert.equal(differentTokenResponse.statusCode, 409);
+    assert.equal(differentTokenResponse.json().error.code, ErrorCode.ConflictTaskExists);
+    assert.equal(repository.getGenerationTasks().filter((task) => task.taskType === 'trial_followup_generate').length, 1);
+    const differentCandidate = firstStep.trialRun.chapterOneCandidates.find((candidate: any) => candidate.id !== selectedCandidate.id);
+    const conflictResponse = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/trial/generate`,
+      payload: { ...followupPayload, selectedCandidateId: differentCandidate.id }
+    });
+    assert.equal(conflictResponse.statusCode, 409);
+    assert.equal(conflictResponse.json().error.code, ErrorCode.IdempotencyConflict);
+    assert.doesNotMatch(conflictResponse.body, /trial-followup-replay-1/);
 
     await app.close();
   });
@@ -1531,7 +1553,7 @@ describe('novel package 6 body generation routes', () => {
     await app.close();
   });
 
-  it('rejects batch body generation without an idempotency key before creating tasks or content', async () => {
+  it('maps a missing batch idempotency key to the request id for legacy callers', async () => {
     const repository = createInMemoryNovelRepository();
     const app = await buildApp({
       logger: false,
@@ -1552,13 +1574,12 @@ describe('novel package 6 body generation routes', () => {
       }
     });
 
-    assert.equal(response.statusCode, 400);
-    assert.equal(response.json().success, false);
-    assert.equal(response.json().error.code, 'VALIDATION_ERROR');
+    assert.equal(response.statusCode, 200, response.body);
+    assert.equal(response.json().success, true);
     assert.equal(response.json().requestId, 'body-batch-missing-key');
-    assert.equal(repository.getGenerationTasks().filter((task) => task.taskType === 'body_batch_generate').length, taskCountBefore);
-    assert.equal(repository.getBodyBatches().length, 0);
-    assert.equal(repository.getChapterContentVersions().length, contentCountBefore);
+    assert.equal(repository.getGenerationTasks().filter((task) => task.taskType === 'body_batch_generate').length, taskCountBefore + 1);
+    assert.equal(repository.getBodyBatches().length, 1);
+    assert.ok(repository.getChapterContentVersions().length > contentCountBefore);
 
     await app.close();
   });
@@ -1703,8 +1724,8 @@ describe('novel package 6 body generation routes', () => {
     assert.equal(detail.recentTask.status, TaskStatus.Failed);
     assert.equal(detail.chapters.find((chapter: any) => chapter.chapterNo === 4).currentContentVersionId, null);
     const task = repository.getGenerationTasks().find((item) => item.id === detail.recentTask.id);
-    assert.equal(task?.errorCode, 'Error');
-    assert.equal(task?.errorMessage, '正文模型测试失败');
+    assert.equal(task?.errorCode, 'PROVIDER_ERROR');
+    assert.equal(task?.errorMessage, '模型服务调用失败。');
     assert.equal(task?.failureCategory, 'provider_error');
     assert.equal(repository.getBodyBatches().length, 0);
 
@@ -1714,7 +1735,8 @@ describe('novel package 6 body generation routes', () => {
   it('blocks unsupported Prisma-like body write path before preclaiming tasks or calling the provider', async () => {
     const repository = createInMemoryNovelRepository();
     const guardedRepository = Object.create(repository) as NovelRepository & ReturnType<typeof createInMemoryNovelRepository>;
-    guardedRepository.createBodyBatchTask = async (_input: BodyBatchTaskCreationInput) => {
+    guardedRepository.assertProviderActionSupported = async (taskType) => {
+      if (taskType !== 'body_batch_generate') return;
       throw new BusinessError(ErrorCode.ConfigMissing, 'Prisma 正文批量写路径尚未实现，不能创建正文批次预占任务。', {
         taskType: 'body_batch_generate',
         capability: 'prisma_body_batch_write'
@@ -1798,13 +1820,13 @@ describe('novel package 6 body generation routes', () => {
 
     const bodyTasks = repository.getGenerationTasks().filter((task) => task.taskType === 'body_batch_generate');
     assert.equal(bodyTasks.length, taskCountBefore + 1);
-    const failedTasksForRequest = bodyTasks.filter((task) => (task.metadata as Record<string, unknown>).idempotencyKey === 'body-batch-save-failed-1');
+    const failedTasksForRequest = bodyTasks.filter((task) => task.idempotencyToken === 'body-batch-save-failed-1');
     assert.equal(failedTasksForRequest.length, 1);
     const failedTask = failedTasksForRequest[0];
     assert.equal(failedTask.status, TaskStatus.Failed);
     assert.equal(failedTask.failureCategory, 'save_failed');
-    assert.equal(failedTask.statusNote, '正文保存失败，请查看原因后重试。');
-    assert.equal(failedTask.errorMessage, '正文保存阶段测试失败：写入正文版本失败');
+    assert.equal(failedTask.statusNote, '生成结果保存失败，请联系管理员处理。');
+    assert.equal(failedTask.errorMessage, '生成结果保存失败。');
     assert.equal(repository.getBodyBatches().length, batchCountBefore);
     assert.equal(repository.getChapterContentVersions().length, contentCountBefore);
     assert.equal(repository.getNovelChapters().find((chapter) => chapter.novelId === novelId && chapter.chapterNo === 4)?.currentContentVersionId, null);
@@ -1819,7 +1841,7 @@ describe('novel package 6 body generation routes', () => {
     assert.equal(taskDetail.id, failedTask.id);
     assert.equal(taskDetail.status, TaskStatus.Failed);
     assert.equal(taskDetail.failureCategory, 'save_failed');
-    assert.equal(taskDetail.userFailureReason, '正文保存阶段测试失败：写入正文版本失败');
+    assert.equal(taskDetail.userFailureReason, '生成结果保存失败。');
     assert.equal(taskDetail.retryable, true);
     assert.equal(taskDetail.nextAction.type, 'retry_task');
     assert.equal(taskDetail.nextAction.label, '重试任务');
@@ -1843,7 +1865,7 @@ describe('novel package 6 body generation routes', () => {
     assert.equal(
       repository
         .getGenerationTasks()
-        .filter((task) => task.taskType === 'body_batch_generate' && (task.metadata as Record<string, unknown>).idempotencyKey === 'body-batch-save-failed-1').length,
+        .filter((task) => task.taskType === 'body_batch_generate' && task.idempotencyToken === 'body-batch-save-failed-1').length,
       1
     );
 
@@ -1890,7 +1912,7 @@ describe('novel package 6 body generation routes', () => {
     });
     assert.equal(eventsResponse.statusCode, 200);
     const eventTypes = eventsResponse.json().data.items.map((event: any) => event.eventType);
-    assert.deepEqual(eventTypes.slice(0, 6), ['calling_model', 'preparing_context', 'calling_model', 'parsing_output', 'quality_checking', 'saving_result']);
+    assert.deepEqual(eventTypes.slice(0, 6), ['task_claimed', 'preparing_context', 'calling_model', 'parsing_output', 'quality_checking', 'saving_result']);
     assert.equal(eventsResponse.json().data.items.some((event: any) => /正在生成第 1\/5 章/.test(event.message)), true);
 
     const detailResponse = await app.inject({
@@ -2044,6 +2066,60 @@ describe('novel package 6 body generation routes', () => {
     await app.close();
   });
 
+  it('replays a completed impact assessment and rejects the same token with a different fingerprint', async () => {
+    const repository = createInMemoryNovelRepository();
+    const app = await buildApp({ logger: false, novelRepository: repository });
+    const { novelId, strategySnapshot } = await createNovelReadyForBody(app, '影响评估终态重放测试', 8);
+    await postBodyBatch(app, novelId, strategySnapshot);
+    const detail = (await app.inject({ method: 'GET', url: `/novels/${novelId}` })).json().data;
+    const chapter4 = detail.chapters.find((chapter: any) => chapter.chapterNo === 4);
+    const chapter5 = detail.chapters.find((chapter: any) => chapter.chapterNo === 5);
+    const payload = {
+      idempotencyKey: 'impact-assessment-replay-1',
+      currentContentVersionId: chapter4.currentContentVersionId,
+      reason: '核对当前章节对后续线索的影响。'
+    };
+    const first = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/chapters/${chapter4.id}/impact-assessments`,
+      payload
+    });
+    assert.equal(first.statusCode, 200, first.body);
+    const replay = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/chapters/${chapter4.id}/impact-assessments`,
+      payload
+    });
+    assert.equal(replay.statusCode, 200, replay.body);
+    assert.equal(replay.json().data.task.id, first.json().data.task.id);
+    assert.equal(replay.json().data.impactCase.id, first.json().data.impactCase.id);
+
+    const versionConflict = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/chapters/${chapter4.id}/impact-assessments`,
+      payload: { ...payload, currentContentVersionId: chapter5.currentContentVersionId }
+    });
+    assert.equal(versionConflict.statusCode, 409);
+    assert.equal(versionConflict.json().error.code, ErrorCode.IdempotencyConflict);
+    const nullVersionConflict = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/chapters/${chapter4.id}/impact-assessments`,
+      payload: { ...payload, currentContentVersionId: null }
+    });
+    assert.equal(nullVersionConflict.statusCode, 409);
+    assert.equal(nullVersionConflict.json().error.code, ErrorCode.IdempotencyConflict);
+
+    const conflict = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/chapters/${chapter4.id}/impact-assessments`,
+      payload: { ...payload, reason: '使用不同的评估目标。' }
+    });
+    assert.equal(conflict.statusCode, 409);
+    assert.equal(conflict.json().error.code, ErrorCode.IdempotencyConflict);
+    assert.doesNotMatch(conflict.body, /impact-assessment-replay-1/);
+    await app.close();
+  });
+
   it('creates rewrite candidates, adopts with audit records, triggers impact assessment, and blocks next batch until impact is closed', async () => {
     const repository = createInMemoryNovelRepository();
     const app = await buildApp({
@@ -2057,14 +2133,16 @@ describe('novel package 6 body generation routes', () => {
     const chapter4 = detailBefore.chapters.find((chapter: any) => chapter.chapterNo === 4);
     const originalCurrentVersionId = chapter4.currentContentVersionId;
 
+    const rewritePayload = {
+      idempotencyKey: 'chapter-rewrite-replay-1',
+      instruction: '强化结尾，并加入会影响后续旧码头线索的改动。',
+      reason: '批次总结建议优化第4章结尾',
+      currentContentVersionId: originalCurrentVersionId
+    };
     const rewriteResponse = await app.inject({
       method: 'POST',
       url: `/novels/${novelId}/chapters/${chapter4.id}/rewrite`,
-      payload: {
-        instruction: '强化结尾，并加入会影响后续旧码头线索的改动。',
-        reason: '批次总结建议优化第4章结尾',
-        currentContentVersionId: originalCurrentVersionId
-      }
+      payload: rewritePayload
     });
     assert.equal(rewriteResponse.statusCode, 200);
     const rewrite = rewriteResponse.json().data;
@@ -2073,14 +2151,41 @@ describe('novel package 6 body generation routes', () => {
     assert.equal(rewrite.currentContent.id, originalCurrentVersionId);
     assert.ok(rewrite.summaryCompare.possibleImpact.includes('后续'));
 
+    const rewriteReplay = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/chapters/${chapter4.id}/rewrite`,
+      payload: rewritePayload
+    });
+    assert.equal(rewriteReplay.statusCode, 200, rewriteReplay.body);
+    assert.equal(rewriteReplay.json().data.task.id, rewrite.task.id);
+    assert.equal(rewriteReplay.json().data.candidate.id, rewrite.candidate.id);
+    assert.deepEqual(rewriteReplay.json().data.affectedObjects, []);
+    const rewriteConflict = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/chapters/${chapter4.id}/rewrite`,
+      payload: { ...rewritePayload, instruction: '改成完全不同的结尾。' }
+    });
+    assert.equal(rewriteConflict.statusCode, 409);
+    assert.equal(rewriteConflict.json().error.code, ErrorCode.IdempotencyConflict);
+    assert.doesNotMatch(rewriteConflict.body, /chapter-rewrite-replay-1/);
+    const rewriteNullVersionConflict = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/chapters/${chapter4.id}/rewrite`,
+      payload: { ...rewritePayload, currentContentVersionId: null }
+    });
+    assert.equal(rewriteNullVersionConflict.statusCode, 409);
+    assert.equal(rewriteNullVersionConflict.json().error.code, ErrorCode.IdempotencyConflict);
+
+    const adoptPayload = {
+      idempotencyKey: 'chapter-adopt-replay-1',
+      reason: '候选提升结尾钩子，接受影响评估后再继续。',
+      currentContentVersionId: originalCurrentVersionId
+    };
     const adoptResponse = await app.inject({
       method: 'POST',
       url: `/novels/${novelId}/chapters/${chapter4.id}/content-versions/${rewrite.candidate.id}/adopt`,
       headers: { 'x-request-id': 'adopt-chapter-content-1' },
-      payload: {
-        reason: '候选提升结尾钩子，接受影响评估后再继续。',
-        currentContentVersionId: originalCurrentVersionId
-      }
+      payload: adoptPayload
     });
     assert.equal(adoptResponse.statusCode, 200);
     const adopted = adoptResponse.json().data;
@@ -2090,6 +2195,40 @@ describe('novel package 6 body generation routes', () => {
     assert.equal(adopted.impactCase.blocksFullReview, true);
     assert.ok(repository.getAssetDecisionRecords().some((record: any) => record.actionType === 'adopt_chapter_content' && record.candidateVersionId === rewrite.candidate.id));
     assert.ok(repository.getOperationLogs().some((log) => log.action === 'adopt_chapter_content' && log.requestId === 'adopt-chapter-content-1'));
+
+    const rewriteAfterAdopt = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/chapters/${chapter4.id}/rewrite`,
+      payload: rewritePayload
+    });
+    assert.equal(rewriteAfterAdopt.statusCode, 200, rewriteAfterAdopt.body);
+    assert.equal(rewriteAfterAdopt.json().data.task.id, rewrite.task.id);
+    assert.equal(rewriteAfterAdopt.json().data.candidate.id, rewrite.candidate.id);
+
+    const adoptReplay = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/chapters/${chapter4.id}/content-versions/${rewrite.candidate.id}/adopt`,
+      payload: adoptPayload
+    });
+    assert.equal(adoptReplay.statusCode, 200, adoptReplay.body);
+    assert.equal(adoptReplay.json().data.task.id, adopted.task.id);
+    assert.equal(adoptReplay.json().data.impactCase.id, adopted.impactCase.id);
+    assert.deepEqual(adoptReplay.json().data.affectedObjects, []);
+    const adoptConflict = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/chapters/${chapter4.id}/content-versions/${rewrite.candidate.id}/adopt`,
+      payload: { ...adoptPayload, reason: '改用另一套风险理由。' }
+    });
+    assert.equal(adoptConflict.statusCode, 409);
+    assert.equal(adoptConflict.json().error.code, ErrorCode.IdempotencyConflict);
+    assert.doesNotMatch(adoptConflict.body, /chapter-adopt-replay-1/);
+    const adoptNullVersionConflict = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/chapters/${chapter4.id}/content-versions/${rewrite.candidate.id}/adopt`,
+      payload: { ...adoptPayload, currentContentVersionId: null }
+    });
+    assert.equal(adoptNullVersionConflict.statusCode, 409);
+    assert.equal(adoptNullVersionConflict.json().error.code, ErrorCode.IdempotencyConflict);
 
     const blockedDetailResponse = await app.inject({
       method: 'GET',
@@ -2200,6 +2339,32 @@ describe('novel package 7 full review and video readiness routes', () => {
     assert.equal(reviewResult.statusSummary.creationStage, 'completion_confirm');
     assert.equal(reviewResult.statusSummary.stageStatus, 'waiting_user');
     assert.equal(reviewResult.statusSummary.recommendedAction.label, '确认小说完成');
+
+    const reviewReplayResponse = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/full-review`,
+      payload: {
+        idempotencyKey: 'full-review-pass-1',
+        expectedNovelVersion: detailBeforeReview.updatedAt
+      }
+    });
+    assert.equal(reviewReplayResponse.statusCode, 200, reviewReplayResponse.body);
+    assert.equal(reviewReplayResponse.json().data.task.id, reviewResult.task.id);
+    assert.equal(reviewReplayResponse.json().data.fullReview.id, reviewResult.fullReview.id);
+    assert.deepEqual(reviewReplayResponse.json().data.affectedObjects, []);
+
+    const reviewConflictResponse = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/full-review`,
+      payload: {
+        idempotencyKey: 'full-review-pass-1',
+        expectedNovelVersion: detailBeforeReview.updatedAt,
+        reviewPolicyVersionId: 'policy-full-review-v2'
+      }
+    });
+    assert.equal(reviewConflictResponse.statusCode, 409);
+    assert.equal(reviewConflictResponse.json().error.code, ErrorCode.IdempotencyConflict);
+    assert.doesNotMatch(reviewConflictResponse.body, /full-review-pass-1/);
 
     const latestReviewResponse = await app.inject({
       method: 'GET',

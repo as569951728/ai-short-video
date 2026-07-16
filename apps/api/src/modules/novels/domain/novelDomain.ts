@@ -502,6 +502,9 @@ export interface GenerationTaskRecord {
   sourceVersionRefs: unknown;
   conflictScope: string | null;
   conflictKey: string | null;
+  idempotencyToken: string | null;
+  requestHash: string | null;
+  activeClaimKey: string | null;
   inputSummary: string | null;
   outputSummary: string | null;
   resultVersionIds: string[];
@@ -521,6 +524,29 @@ export interface GenerationTaskRecord {
   updatedAt: Date;
   metadata: unknown;
 }
+
+export interface ClaimGenerationTaskInput {
+  tenantId: string;
+  novelId: string;
+  taskType: string;
+  objectType: string;
+  objectId: string;
+  conflictScope: string;
+  conflictKey: string;
+  activeClaimKey: string;
+  idempotencyToken: string;
+  requestHash: string;
+  sourceVersionRefs: unknown;
+  inputSummary: string;
+  context: RequestContext;
+  now: Date;
+}
+
+export type ClaimGenerationTaskResult =
+  | { outcome: 'created'; task: GenerationTaskRecord }
+  | { outcome: 'reused'; task: GenerationTaskRecord }
+  | { outcome: 'idempotency_conflict'; task: GenerationTaskRecord }
+  | { outcome: 'active_conflict'; task: GenerationTaskRecord };
 
 export interface GenerationTaskEventRecord {
   id: string;
@@ -616,6 +642,7 @@ export interface CreatedDraftRecord {
 
 export interface DirectionCreationInput {
   novel: NovelRecord;
+  task: GenerationTaskRecord;
   candidates: DirectionCandidateDraft[];
   taskType: string;
   changeReason: string;
@@ -631,6 +658,7 @@ export interface CreatedDirectionCandidatesRecord {
 
 export interface DirectionRevisionInput {
   novel: NovelRecord;
+  task?: GenerationTaskRecord;
   candidate: DirectionCandidateDraft;
   taskType: string;
   changeReason: string;
@@ -665,11 +693,11 @@ export interface AdoptedDirectionRecord {
 
 export interface StructureCreationInput {
   novel: NovelRecord;
+  task?: GenerationTaskRecord;
   asset: StructureAssetDraft;
   taskType: string;
   changeReason: string;
   sourceVersionRefs: unknown;
-  reservedTaskId?: string;
   context: RequestContext;
   now: Date;
 }
@@ -749,6 +777,7 @@ export interface CancelledTaskRecord {
 
 export interface TrialCandidateCreationInput {
   novel: NovelRecord;
+  task: GenerationTaskRecord;
   chapters: NovelChapterRecord[];
   candidates: TrialChapterCandidateDraft[];
   chapterCount: number;
@@ -768,6 +797,7 @@ export interface CreatedTrialCandidatesRecord {
 export interface TrialFollowupTaskCreationInput {
   novel: NovelRecord;
   trialRun: TrialRunRecord;
+  task: GenerationTaskRecord;
   selectedCandidate: ChapterContentVersionRecord;
   context: RequestContext;
   now: Date;
@@ -822,6 +852,7 @@ export interface ConfirmedTrialRecord {
 
 export interface BodyBatchTaskCreationInput {
   novel: NovelRecord;
+  task: GenerationTaskRecord;
   strategySnapshot: CreativeVersionRecord;
   idempotencyKey: string;
   requestFingerprint: unknown;
@@ -874,6 +905,7 @@ export interface FullReviewDraft {
 
 export interface FullReviewCreationInput {
   novel: NovelRecord;
+  task: GenerationTaskRecord;
   chapters: NovelChapterRecord[];
   draft: FullReviewDraft;
   idempotencyKey: string;
@@ -993,6 +1025,7 @@ export interface GeneratedBodyBatchRecord {
 
 export interface ChapterRewriteInput {
   novel: NovelRecord;
+  task: GenerationTaskRecord;
   chapter: NovelChapterRecord;
   currentContent: ChapterContentVersionRecord;
   candidate: BodyChapterDraft;
@@ -1014,6 +1047,7 @@ export interface RewrittenChapterRecord {
 
 export interface ChapterContentAdoptionInput {
   novel: NovelRecord;
+  task: GenerationTaskRecord;
   chapter: NovelChapterRecord;
   currentContent: ChapterContentVersionRecord | null;
   candidate: ChapterContentVersionRecord;
@@ -1038,6 +1072,7 @@ export interface AdoptedChapterContentRecord {
 
 export interface ImpactAssessmentInput {
   novel: NovelRecord;
+  task: GenerationTaskRecord;
   chapter: NovelChapterRecord;
   currentContent: ChapterContentVersionRecord;
   impact: ImpactAssessmentDraft;
@@ -1122,8 +1157,11 @@ export interface NovelRepository {
   listStructureVersionsByType(tenantId: string, novelId: string, objectType: StructureAssetType): Promise<CreativeVersionRecord[]>;
   listNovelChapters(tenantId: string, novelId: string): Promise<NovelChapterRecord[]>;
   findTaskById(tenantId: string, taskId: string): Promise<GenerationTaskRecord | null>;
+  findTaskByIdempotencyToken(tenantId: string, taskType: string, idempotencyToken: string): Promise<GenerationTaskRecord | null>;
   listTaskEvents(tenantId: string, taskId: string): Promise<GenerationTaskEventRecord[]>;
   listRecentTasksForNovel(tenantId: string, novelId: string, limit: number): Promise<GenerationTaskRecord[]>;
+  assertProviderActionSupported(taskType: string): Promise<void>;
+  claimGenerationTask(input: ClaimGenerationTaskInput): Promise<ClaimGenerationTaskResult>;
   findActiveTaskByConflict(tenantId: string, conflictScope: string, conflictKey: string): Promise<GenerationTaskRecord | null>;
   createDirectionCandidates(input: DirectionCreationInput): Promise<CreatedDirectionCandidatesRecord>;
   createDirectionRevision(input: DirectionRevisionInput): Promise<CreatedDirectionRevisionRecord>;

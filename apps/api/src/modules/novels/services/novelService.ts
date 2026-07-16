@@ -124,6 +124,7 @@ import { MockFullReviewProvider, type FullReviewProvider } from '../providers/mo
 import { UnavailableHotspotReferenceGateway, type HotspotReferenceGateway } from '../integrations/hotspotReferenceGateway.js';
 import { NovelStatusService } from './novelStatusService.js';
 import { toRecentTaskSummaryDTO } from '../../tasks/services/taskService.js';
+import { executeClaimedGeneration, type NovelProviderAction } from './taskClaim.js';
 
 export interface NovelServiceOptions {
   repository: NovelRepository;
@@ -279,35 +280,54 @@ export class NovelService {
   }
 
   async generateDirections(novelId: string, request: GenerateDirectionsRequest, context: RequestContext): Promise<DirectionActionResultDTO> {
-    const novel = await this.findNovelOrThrow(novelId);
-    this.ensureLifecycleActive(novel);
-    this.ensureDirectionGenerationStage(novel);
-
-    const activeTask = await this.options.repository.findActiveDirectionGenerationTask(context.tenantId, novelId);
-    if (activeTask) {
-      const candidates = await this.options.repository.listDirectionVersions(context.tenantId, novelId);
-      return this.toDirectionActionResult(novel, activeTask, candidates, null);
+    const novel = await this.findNovelOrThrow(context.tenantId, novelId);
+    const idempotencyToken = request.idempotencyKey?.trim() || `request:${context.requestId}`.slice(0, 120);
+    const existingTask = await this.options.repository.findTaskByIdempotencyToken(
+      context.tenantId,
+      'novel_direction_generate',
+      idempotencyToken
+    );
+    if (!existingTask) {
+      this.ensureLifecycleActive(novel);
+      this.ensureDirectionGenerationStage(novel);
     }
-
     const preferences = await this.options.repository.findPreferencesByNovelId(context.tenantId, novelId);
-    const candidates = await this.directionProvider.generateCandidates({
+    const sourceVersionRefs = existingTask?.sourceVersionRefs ?? { currentDirectionVersionId: novel.currentDirectionVersionId };
+    const execution = await executeClaimedGeneration({
+      action: 'direction_generate',
+      repository: this.options.repository,
       novel,
-      preferences: preferences ?? createEmptyPreferences(novel)
-    });
-    const result = await this.options.repository.createDirectionCandidates({
-      novel,
-      candidates,
-      taskType: 'novel_direction_generate',
-      changeReason: request.regenerateReason ?? '模型服务生成方向候选',
+      idempotencyKey: request.idempotencyKey,
+      effectiveRequest: { regenerateReason: request.regenerateReason?.trim() || null },
+      sourceVersionRefs,
       context,
-      now: this.now()
+      now: this.now,
+      providerCapability: this.directionProvider,
+      provider: () => this.directionProvider.generateCandidates({
+        novel,
+        preferences: preferences ?? createEmptyPreferences(novel)
+      }),
+      finalize: (task, candidates) => this.options.repository.createDirectionCandidates({
+        novel,
+        task,
+        candidates,
+        taskType: 'novel_direction_generate',
+        changeReason: request.regenerateReason ?? '模型服务生成方向候选',
+        context,
+        now: this.now()
+      })
     });
+    if (execution.reused) {
+      const candidates = await this.options.repository.listDirectionVersions(context.tenantId, novelId);
+      return this.toDirectionActionResult(novel, execution.task, candidates, null);
+    }
+    const result = execution.value;
 
     return this.toDirectionActionResult(result.novel, result.task, result.versions, null);
   }
 
   async fuseDirections(novelId: string, request: FuseDirectionsRequest, context: RequestContext): Promise<DirectionActionResultDTO> {
-    const novel = await this.findNovelOrThrow(novelId);
+    const novel = await this.findNovelOrThrow(context.tenantId, novelId);
     this.ensureLifecycleActive(novel);
     this.ensureDirectionWorkStage(novel);
 
@@ -316,43 +336,66 @@ export class NovelService {
     }
 
     const sources = await this.findDirectionVersionsOrThrow(context.tenantId, novelId, request.versionIds);
-    const candidate = await this.directionProvider.fuseCandidates({
-      sources: sources.map(toDirectionDraft),
-      reason: request.reason
-    });
-    const result = await this.options.repository.createDirectionRevision({
+    const execution = await executeClaimedGeneration({
+      action: 'direction_fuse',
+      repository: this.options.repository,
       novel,
-      candidate,
-      taskType: 'novel_direction_fuse',
-      changeReason: request.reason ?? '融合方向候选',
-      sourceVersionIds: request.versionIds,
+      idempotencyKey: request.idempotencyKey,
+      effectiveRequest: { versionIds: [...request.versionIds].sort(), reason: request.reason?.trim() || null },
+      sourceVersionRefs: { sourceVersionIds: request.versionIds },
       context,
-      now: this.now()
+      now: this.now,
+      providerCapability: this.directionProvider,
+      provider: () => this.directionProvider.fuseCandidates({ sources: sources.map(toDirectionDraft), reason: request.reason }),
+      finalize: (task, candidate) => this.options.repository.createDirectionRevision({
+        novel,
+        task,
+        candidate,
+        taskType: 'novel_direction_fuse',
+        changeReason: request.reason ?? '融合方向候选',
+        sourceVersionIds: request.versionIds,
+        context,
+        now: this.now()
+      })
     });
     const versions = await this.options.repository.listDirectionVersions(context.tenantId, novelId);
+    if (execution.reused) return this.toDirectionActionResult(novel, execution.task, versions, null);
+    const result = execution.value;
 
     return this.toDirectionActionResult(result.novel, result.task, versions, result.version);
   }
 
   async optimizeDirection(novelId: string, versionId: string, request: OptimizeDirectionRequest, context: RequestContext): Promise<DirectionActionResultDTO> {
-    const novel = await this.findNovelOrThrow(novelId);
+    const novel = await this.findNovelOrThrow(context.tenantId, novelId);
     this.ensureLifecycleActive(novel);
     this.ensureDirectionWorkStage(novel);
     const source = await this.findDirectionVersionOrThrow(context.tenantId, novelId, versionId);
-    const candidate = await this.directionProvider.optimizeCandidate({
-      source: toDirectionDraft(source),
-      instruction: request.instruction
-    });
-    const result = await this.options.repository.createDirectionRevision({
+    const execution = await executeClaimedGeneration({
+      action: 'direction_optimize',
+      repository: this.options.repository,
       novel,
-      candidate,
-      taskType: 'novel_direction_optimize',
-      changeReason: request.instruction ?? '优化方向候选',
-      sourceVersionIds: [versionId],
+      objectId: versionId,
+      idempotencyKey: request.idempotencyKey,
+      effectiveRequest: { versionId, instruction: request.instruction?.trim() || null },
+      sourceVersionRefs: { sourceVersionIds: [versionId] },
       context,
-      now: this.now()
+      now: this.now,
+      providerCapability: this.directionProvider,
+      provider: () => this.directionProvider.optimizeCandidate({ source: toDirectionDraft(source), instruction: request.instruction }),
+      finalize: (task, candidate) => this.options.repository.createDirectionRevision({
+        novel,
+        task,
+        candidate,
+        taskType: 'novel_direction_optimize',
+        changeReason: request.instruction ?? '优化方向候选',
+        sourceVersionIds: [versionId],
+        context,
+        now: this.now()
+      })
     });
     const versions = await this.options.repository.listDirectionVersions(context.tenantId, novelId);
+    if (execution.reused) return this.toDirectionActionResult(novel, execution.task, versions, null);
+    const result = execution.value;
 
     return this.toDirectionActionResult(result.novel, result.task, versions, result.version);
   }
@@ -576,43 +619,47 @@ export class NovelService {
   }
 
   async generateTrial(novelId: string, request: GenerateTrialRequest, context: RequestContext): Promise<TrialActionResultDTO> {
-    const novel = await this.findNovelOrThrow(novelId);
+    const novel = await this.findNovelOrThrow(context.tenantId, novelId);
     this.ensureLifecycleActive(novel);
     const chapters = await this.ensureTrialGate(novel, context.tenantId);
 
     if (!request.trialRunId) {
-      const activeTask = await this.options.repository.findActiveTaskByConflict(context.tenantId, 'novel_trial', novelId);
-      if (activeTask) {
-        const latestRun = await this.options.repository.findLatestTrialRun(context.tenantId, novelId);
-        if (latestRun && activeTask.taskType === 'trial_writing_generate') {
-          return this.toTrialActionResult(novel, activeTask, latestRun);
-        }
-
-        throw new BusinessError(ErrorCode.ConflictTaskExists, '已有同一小说试写任务正在处理或等待确认，请先处理当前任务。', {
-          activeTaskId: activeTask.id,
-          taskType: activeTask.taskType,
-          status: activeTask.status
-        });
-      }
-
       const chapterCount = normalizeTrialChapterCount(request.chapterCount);
       const preferences = await this.options.repository.findPreferencesByNovelId(context.tenantId, novelId);
-      const candidates = await this.trialProvider.generateChapterOneCandidates({
+      const sourceVersionRefs = createTrialSourceRefs(novel);
+      const execution = await executeClaimedGeneration({
+        action: 'trial_chapter_one_generate',
+        repository: this.options.repository,
         novel,
-        preferences: preferences ?? createEmptyPreferences(novel),
-        chapters,
-        chapterCount
-      });
-      const result = await this.options.repository.createTrialChapterOneCandidates({
-        novel,
-        chapters,
-        candidates,
-        chapterCount,
-        changeReason: request.regenerateReason ?? '模型服务生成第1章试写候选',
-        sourceVersionRefs: createTrialSourceRefs(novel),
+        idempotencyKey: request.idempotencyKey,
+        effectiveRequest: { chapterCount, regenerateReason: request.regenerateReason?.trim() || null },
+        sourceVersionRefs,
         context,
-        now: this.now()
+        now: this.now,
+        providerCapability: this.trialProvider,
+        provider: () => this.trialProvider.generateChapterOneCandidates({
+          novel,
+          preferences: preferences ?? createEmptyPreferences(novel),
+          chapters,
+          chapterCount
+        }),
+        finalize: (task, candidates) => this.options.repository.createTrialChapterOneCandidates({
+          novel,
+          task,
+          chapters,
+          candidates,
+          chapterCount,
+          changeReason: request.regenerateReason ?? '模型服务生成第1章试写候选',
+          sourceVersionRefs,
+          context,
+          now: this.now()
+        })
       });
+      if (execution.reused) {
+        const latestRun = await this.options.repository.findLatestTrialRun(context.tenantId, novelId);
+        return this.toTrialActionResult(novel, execution.task, latestRun ?? createProcessingTrialRun(execution.task, novel, chapterCount));
+      }
+      const result = execution.value;
 
       return this.toTrialActionResult(result.novel, result.task, result.trialRun);
     }
@@ -625,66 +672,61 @@ export class NovelService {
     if (!trialRun) {
       throw new BusinessError(ErrorCode.NotFound, '试写记录不存在');
     }
-    if (trialRun.status !== 'waiting_chapter1_selection') {
-      const existingTask = trialRun.sourceTaskId ? await this.options.repository.findTaskById(context.tenantId, trialRun.sourceTaskId) : null;
-      return this.toTrialActionResult(novel, existingTask ?? createVirtualTrialTask(trialRun, novel), trialRun);
-    }
-
-    const activeTask = await this.options.repository.findActiveTaskByConflict(context.tenantId, 'novel_trial', novelId);
-    if (activeTask && activeTask.id !== trialRun.sourceTaskId) {
-      const latestRun = await this.options.repository.findLatestTrialRun(context.tenantId, novelId);
-      if (latestRun && activeTask.taskType === 'trial_followup_generate') {
-        return this.toTrialActionResult(novel, activeTask, latestRun);
-      }
-
-      throw new BusinessError(ErrorCode.ConflictTaskExists, '已有同一小说试写任务正在处理或等待确认，请先处理当前任务。', {
-        activeTaskId: activeTask.id,
-        taskType: activeTask.taskType,
-        status: activeTask.status
+    const followupToken = request.idempotencyKey?.trim() || `request:${context.requestId}`.slice(0, 120);
+    const existingFollowupTask = await this.options.repository.findTaskByIdempotencyToken(
+      context.tenantId,
+      'trial_followup_generate',
+      followupToken
+    );
+    if (trialRun.status !== 'waiting_chapter1_selection' && !existingFollowupTask) {
+      throw new BusinessError(ErrorCode.ConflictTaskExists, '本次试写结果正在等待确认，不能用新的幂等键重复生成。', {
+        taskType: 'trial_followup_generate',
+        status: trialRun.status
       });
     }
-
     const selectedCandidate = await this.options.repository.findChapterContentVersionById(context.tenantId, novelId, request.selectedCandidateId);
     if (!selectedCandidate || getMetadataString(selectedCandidate.metadata, 'trialRunId') !== trialRun.id) {
       throw new BusinessError(ErrorCode.NotFound, '第1章候选不存在');
     }
 
-    const reserved = await this.options.repository.createTrialFollowupTask({
+    const sourceVersionRefs = createTrialSourceRefs(novel);
+    const execution = await executeClaimedGeneration({
+      action: 'trial_followup_generate',
+      repository: this.options.repository,
       novel,
-      trialRun,
-      selectedCandidate,
+      objectId: trialRun.id,
+      idempotencyKey: request.idempotencyKey,
+      effectiveRequest: { trialRunId: trialRun.id, selectedCandidateId: selectedCandidate.id },
+      sourceVersionRefs: { ...sourceVersionRefs, selectedChapterOneCandidateId: selectedCandidate.id },
       context,
-      now: this.now()
-    });
-
-    let followup: Awaited<ReturnType<TrialProvider['generateFollowup']>>;
-    try {
-      followup = await this.trialProvider.generateFollowup({
-        novel: reserved.novel,
+      now: this.now,
+      providerCapability: this.trialProvider,
+      prepare: (task) => this.options.repository.createTrialFollowupTask({
+        novel,
+        trialRun,
+        task,
         selectedCandidate,
-        chapters: chapters.slice(0, reserved.trialRun.trialChapterCount)
-      });
-    } catch (error) {
-      await this.options.repository.failTask({
-        task: reserved.task,
-        errorCode: getTaskErrorCode(error),
-        errorMessage: getTaskErrorMessage(error),
         context,
         now: this.now()
-      });
-      throw error;
-    }
-
-    const result = await this.options.repository.selectTrialChapterOneAndGenerateFollowup({
-      novel: reserved.novel,
-      trialRun: reserved.trialRun,
-      task: reserved.task,
-      selectedCandidate,
-      chapters: followup.chapters,
-      review: followup.review,
-      context,
-      now: this.now()
+      }).then(() => undefined),
+      provider: () => this.trialProvider.generateFollowup({
+        novel,
+        selectedCandidate,
+        chapters: chapters.slice(0, trialRun.trialChapterCount)
+      }),
+      finalize: (task, followup) => this.options.repository.selectTrialChapterOneAndGenerateFollowup({
+        novel,
+        trialRun,
+        task,
+        selectedCandidate,
+        chapters: followup.chapters,
+        review: followup.review,
+        context,
+        now: this.now()
+      })
     });
+    if (execution.reused) return this.toTrialActionResult(novel, execution.task, trialRun);
+    const result = execution.value;
 
     return this.toTrialActionResult(result.novel, result.task, result.trialRun);
   }
@@ -755,23 +797,20 @@ export class NovelService {
     return toChapterWorkbenchDTO(record, novel);
   }
 
-  async generateBodyBatch(novelId: string, request: GenerateBodyBatchRequest, context: RequestContext): Promise<BodyBatchActionResultDTO> {
-    const novel = await this.findNovelOrThrow(novelId);
+  async generateBodyBatch(
+    novelId: string,
+    request: GenerateBodyBatchRequest,
+    context: RequestContext,
+    action: 'body_batch_generate' | 'chapter_body_generate' = 'body_batch_generate'
+  ): Promise<BodyBatchActionResultDTO> {
+    const novel = await this.findNovelOrThrow(context.tenantId, novelId);
     this.ensureLifecycleActive(novel);
-    const idempotencyKey = normalizeBodyBatchIdempotencyKey(request.idempotencyKey);
+    const idempotencyKey = request.idempotencyKey?.trim() || createInternalBodyIdempotencyKey(action, novelId, context.requestId);
     const strategySnapshot = await this.ensureBodyBatchGate(novel, request, context);
     const sourceVersionRefs = createBodySourceRefs(novel, strategySnapshot);
     const existingBatch = await this.options.repository.findBodyBatchByIdempotencyKey(context.tenantId, novelId, idempotencyKey);
     if (existingBatch) {
-      return this.returnExistingBodyBatch({
-        novel,
-        request,
-        context,
-        strategySnapshot,
-        sourceVersionRefs,
-        existingBatch,
-        idempotencyKey
-      });
+      return this.returnExistingBodyBatch({ novel, request, context, strategySnapshot, sourceVersionRefs, existingBatch, idempotencyKey });
     }
     const chapters = await this.options.repository.listNovelChapters(context.tenantId, novelId);
     const range = calculateBodyBatchRange(chapters, request);
@@ -788,76 +827,77 @@ export class NovelService {
     const targetChapters = chapters.filter((chapter) => chapter.chapterNo >= range.startChapterNo! && chapter.chapterNo <= range.endChapterNo!);
     const previousBatchNotes = latestBatch?.summary.nextBatchNotes ?? [];
     const enhancedReview = isEnhancedReviewEnabled(strategySnapshot) && range.startChapterNo <= 10;
-    const reserved = await this.options.repository.createBodyBatchTask({
+    const objectId = action === 'chapter_body_generate' ? targetChapters[0]?.id ?? novelId : novelId;
+    const execution = await executeClaimedGeneration({
+      action,
+      repository: this.options.repository,
       novel,
-      strategySnapshot,
+      objectId,
       idempotencyKey,
-      requestFingerprint,
-      startChapterNo: range.startChapterNo,
-      endChapterNo: range.endChapterNo,
+      effectiveRequest: requestFingerprint,
       sourceVersionRefs,
       context,
-      now: this.now()
-    });
-    if (reserved.reused) {
-      return this.returnReservedBodyBatchTask({
-        novel: reserved.novel,
+      now: this.now,
+      providerCapability: this.bodyProvider,
+      prepare: (task) => this.options.repository.createBodyBatchTask({
+        novel,
+        task,
+        strategySnapshot,
+        idempotencyKey,
+        requestFingerprint,
+        startChapterNo: range.startChapterNo!,
+        endChapterNo: range.endChapterNo!,
+        sourceVersionRefs,
         context,
-        strategySnapshot,
-        task: reserved.task
-      });
-    }
-
-    let result: GeneratedBodyBatchRecord;
-    let providerCompleted = false;
-    try {
-      const drafts = [];
-      let previousContent = await findPreviousContentVersion(this.options.repository, context.tenantId, novelId, chapters, range.startChapterNo);
-
-      for (const chapter of targetChapters) {
-        const draft = await this.bodyProvider.generateBodyChapter({
-          novel: reserved.novel,
-          chapter,
-          strategySnapshot,
-          previousContent,
-          previousMemory,
-          previousBatchNotes,
-          enhancedReview: enhancedReview && chapter.chapterNo <= 10
-        });
-        drafts.push(draft);
-        if (draft.hardFailed) {
-          break;
+        now: this.now()
+      }).then(() => undefined),
+      provider: async () => {
+        const drafts: BodyChapterDraft[] = [];
+        let previousContent = await findPreviousContentVersion(this.options.repository, context.tenantId, novelId, chapters, range.startChapterNo!);
+        for (const chapter of targetChapters) {
+          const draft = await this.bodyProvider.generateBodyChapter({
+            novel,
+            chapter,
+            strategySnapshot,
+            previousContent,
+            previousMemory,
+            previousBatchNotes,
+            enhancedReview: enhancedReview && chapter.chapterNo <= 10
+          });
+          drafts.push(draft);
+          if (draft.hardFailed) break;
+          previousContent = createDraftLikeContentVersion(chapter, draft);
         }
-        previousContent = createDraftLikeContentVersion(chapter, draft);
-      }
-      providerCompleted = true;
-
-      result = await this.options.repository.generateBodyBatch({
-        novel: reserved.novel,
+        return drafts;
+      },
+      finalize: (task, drafts) => this.options.repository.generateBodyBatch({
+        novel,
         strategySnapshot,
-        task: reserved.task,
+        task,
         chapters: drafts,
         idempotencyKey,
         requestFingerprint,
-        startChapterNo: range.startChapterNo,
-        endChapterNo: range.endChapterNo,
+        startChapterNo: range.startChapterNo!,
+        endChapterNo: range.endChapterNo!,
         sourceVersionRefs,
         previousBatchSummary: latestBatch?.summary ?? null,
         context,
         now: this.now()
-      });
-    } catch (error) {
-      await this.options.repository.failTask({
-        task: reserved.task,
-        errorCode: getTaskErrorCode(error),
-        errorMessage: getTaskErrorMessage(error),
-        failureCategory: getBodyBatchFailureCategory(error, providerCompleted),
-        statusNote: providerCompleted ? '正文保存失败，请查看原因后重试。' : undefined,
+      })
+    });
+    if (execution.reused) {
+      const existingBatch = await this.options.repository.findBodyBatchByIdempotencyKey(context.tenantId, novelId, idempotencyKey);
+      if (existingBatch) {
+        return this.returnExistingBodyBatch({ novel, request, context, strategySnapshot, sourceVersionRefs, existingBatch, idempotencyKey });
+      }
+      return this.returnReservedBodyBatchTask({
+        novel,
         context,
-        now: this.now()
+        strategySnapshot,
+        task: execution.task
       });
-      throw error;
     }
+    const result = execution.value;
 
     const statusSummary = this.statusService.calculate(result.novel);
     const bodyGeneration = await this.getBodyGenerationState(result.novel, result.chapters, strategySnapshot);
@@ -909,9 +949,10 @@ export class NovelService {
         expectedStrategySnapshotVersion: request.expectedStrategySnapshotVersion,
         startChapterNo: chapter.chapterNo,
         endChapterNo: chapter.chapterNo,
-        idempotencyKey: createInternalBodyIdempotencyKey('chapter-body', chapter.id, context.requestId)
+        idempotencyKey: request.idempotencyKey ?? null
       },
-      context
+      context,
+      'chapter_body_generate'
     );
   }
 
@@ -928,9 +969,8 @@ export class NovelService {
       startChapterNo: input.existingBatch.startChapterNo,
       endChapterNo: input.existingBatch.endChapterNo
     });
-    if (!isSameFingerprint(input.existingBatch.requestFingerprint, expectedFingerprint)) {
+    if (!isSameBodyRequestFingerprint(input.existingBatch.requestFingerprint, expectedFingerprint)) {
       throw new BusinessError(ErrorCode.IdempotencyConflict, '同一个幂等键已绑定到不同的批量正文请求，请刷新后重新提交。', {
-        idempotencyKey: input.idempotencyKey,
         taskType: 'body_batch_generate',
         existingBatchId: input.existingBatch.id,
         existingTaskId: input.existingBatch.taskId
@@ -962,7 +1002,7 @@ export class NovelService {
   }
 
   async rewriteChapter(novelId: string, chapterId: string, request: RewriteChapterRequest, context: RequestContext): Promise<ChapterRewriteResultDTO> {
-    const novel = await this.findNovelOrThrow(novelId);
+    const novel = await this.findNovelOrThrow(context.tenantId, novelId);
     this.ensureLifecycleActive(novel);
     const chapter = await this.options.repository.findChapterById(context.tenantId, novelId, chapterId);
     if (!chapter) {
@@ -971,36 +1011,87 @@ export class NovelService {
     if (!chapter.currentContentVersionId) {
       throw new BusinessError(ErrorCode.GateBlocked, '当前章节没有正式正文，不能生成重写候选');
     }
-    if (request.currentContentVersionId !== undefined && request.currentContentVersionId !== chapter.currentContentVersionId) {
+    const existingTask = request.idempotencyKey?.trim()
+      ? await this.options.repository.findTaskByIdempotencyToken(context.tenantId, 'chapter_body_rewrite', request.idempotencyKey.trim())
+      : null;
+    if (!existingTask && request.currentContentVersionId !== undefined && request.currentContentVersionId !== chapter.currentContentVersionId) {
       throw new BusinessError(ErrorCode.VersionConflict, '当前章节正文版本已变化，请刷新后重试');
     }
-    const activeTask = await this.options.repository.findActiveTaskByConflict(context.tenantId, 'chapter', chapterId);
-    if (activeTask) {
-      throw new BusinessError(ErrorCode.ConflictTaskExists, '同一章节已有正文生成或重写任务，请先处理当前任务。', {
-        activeTaskId: activeTask.id
-      });
-    }
-    const currentContent = await this.options.repository.findChapterContentVersionById(context.tenantId, novelId, chapter.currentContentVersionId);
+    const existingSourceRefs = toRecord(existingTask?.sourceVersionRefs);
+    const existingContentVersionId = typeof existingSourceRefs.currentContentVersionId === 'string'
+      ? existingSourceRefs.currentContentVersionId
+      : chapter.currentContentVersionId;
+    const fingerprintContentVersionId = request.currentContentVersionId !== undefined
+      ? request.currentContentVersionId
+      : existingContentVersionId;
+    const sourceContentVersionId = typeof fingerprintContentVersionId === 'string'
+      ? fingerprintContentVersionId
+      : existingContentVersionId;
+    const currentContent = await this.options.repository.findChapterContentVersionById(context.tenantId, novelId, sourceContentVersionId);
     if (!currentContent) {
       throw new BusinessError(ErrorCode.NotFound, '当前章节正文不存在');
     }
-    const rewrite = await this.bodyProvider.rewriteChapter({
+    const sourceVersionRefs = { currentContentVersionId: fingerprintContentVersionId };
+    const execution = await executeClaimedGeneration({
+      action: 'chapter_rewrite',
+      repository: this.options.repository,
       novel,
-      chapter,
-      currentContent,
-      instruction: request.instruction?.trim() || '基于审稿建议优化本章'
-    });
-    const result = await this.options.repository.rewriteChapter({
-      novel,
-      chapter,
-      currentContent,
-      candidate: rewrite.candidate,
-      instruction: request.instruction?.trim() || '',
-      reason: request.reason?.trim() || '生成章节重写候选',
-      summaryCompare: rewrite.summaryCompare,
+      objectId: chapter.id,
+      idempotencyKey: request.idempotencyKey,
+      effectiveRequest: {
+        currentContentVersionId: fingerprintContentVersionId,
+        instruction: request.instruction?.trim() || null,
+        reason: request.reason?.trim() || null
+      },
+      sourceVersionRefs,
       context,
-      now: this.now()
+      now: this.now,
+      providerCapability: this.bodyProvider,
+      provider: () => this.bodyProvider.rewriteChapter({
+        novel,
+        chapter,
+        currentContent,
+        instruction: request.instruction?.trim() || '基于审稿建议优化本章'
+      }),
+      finalize: (task, rewrite) => this.options.repository.rewriteChapter({
+        novel,
+        task,
+        chapter,
+        currentContent,
+        candidate: rewrite.candidate,
+        instruction: request.instruction?.trim() || '',
+        reason: request.reason?.trim() || '生成章节重写候选',
+        summaryCompare: rewrite.summaryCompare,
+        context,
+        now: this.now()
+      })
     });
+    if (execution.reused) {
+      const candidateId = execution.task.resultObjectId ?? execution.task.resultVersionIds[0];
+      const candidate = candidateId
+        ? await this.options.repository.findChapterContentVersionById(context.tenantId, novelId, candidateId)
+        : null;
+      if (!candidate) throw reusedTaskInProgress(execution.task);
+      const summaryCompare = toSummaryCompare(toRecord(candidate.metadata).summaryCompare, currentContent, candidate);
+      const statusSummary = this.statusService.calculate(novel);
+      return {
+        novelId,
+        statusSummary,
+        task: toDirectionTaskDTO(execution.task),
+        chapter: toNovelChapterDTO(chapter),
+        currentContent: toTrialChapterCandidateDTO(currentContent, chapter),
+        candidate: toTrialChapterCandidateDTO(candidate, chapter),
+        summaryCompare,
+        affectedObjects: [],
+        nextAction: createLocalRecommendedAction({
+          type: 'adopt_chapter_candidate',
+          label: '采用候选版本',
+          reasonText: '重写候选已生成，采用前请查看摘要对比和影响提示。',
+          taskType: 'chapter_impact_assess'
+        })
+      };
+    }
+    const result = execution.value;
     const statusSummary = this.statusService.calculate(result.novel);
 
     return {
@@ -1028,50 +1119,107 @@ export class NovelService {
     request: AdoptChapterContentVersionRequest,
     context: RequestContext
   ): Promise<ChapterContentAdoptionResultDTO> {
-    const novel = await this.findNovelOrThrow(novelId);
+    const novel = await this.findNovelOrThrow(context.tenantId, novelId);
     this.ensureLifecycleActive(novel);
     const chapter = await this.options.repository.findChapterById(context.tenantId, novelId, chapterId);
     if (!chapter) {
       throw new BusinessError(ErrorCode.NotFound, '章节不存在');
     }
-    if (request.currentContentVersionId !== undefined && request.currentContentVersionId !== chapter.currentContentVersionId) {
+    const existingTask = request.idempotencyKey?.trim()
+      ? await this.options.repository.findTaskByIdempotencyToken(context.tenantId, 'chapter_impact_assess', request.idempotencyKey.trim())
+      : null;
+    if (!existingTask && request.currentContentVersionId !== undefined && request.currentContentVersionId !== chapter.currentContentVersionId) {
       throw new BusinessError(ErrorCode.VersionConflict, '当前章节正文版本已变化，请刷新后重试');
     }
     const candidate = await this.options.repository.findChapterContentVersionById(context.tenantId, novelId, versionId);
     if (!candidate || candidate.chapterId !== chapterId) {
       throw new BusinessError(ErrorCode.NotFound, '章节候选正文不存在');
     }
-    if (candidate.status !== VersionStatus.Candidate) {
+    if (!existingTask && candidate.status !== VersionStatus.Candidate) {
       throw new BusinessError(ErrorCode.VersionConflict, '该章节正文版本当前不可采用');
     }
-    const currentContent = chapter.currentContentVersionId
-      ? await this.options.repository.findChapterContentVersionById(context.tenantId, novelId, chapter.currentContentVersionId)
+    const existingSourceRefs = toRecord(existingTask?.sourceVersionRefs);
+    const existingContentVersionId = typeof existingSourceRefs.currentContentVersionId === 'string'
+      ? existingSourceRefs.currentContentVersionId
+      : chapter.currentContentVersionId;
+    const fingerprintContentVersionId = request.currentContentVersionId !== undefined
+      ? request.currentContentVersionId
+      : existingContentVersionId;
+    const sourceContentVersionId = typeof fingerprintContentVersionId === 'string'
+      ? fingerprintContentVersionId
+      : existingContentVersionId;
+    const currentContent = sourceContentVersionId
+      ? await this.options.repository.findChapterContentVersionById(context.tenantId, novelId, sourceContentVersionId)
       : null;
     const candidateMetadata = toRecord(candidate.metadata);
     const summaryCompare = toSummaryCompare(candidateMetadata.summaryCompare, currentContent, candidate);
-    const impact = await this.bodyProvider.assessImpact({
-      novel,
-      chapter,
-      oldContent: currentContent,
-      newContent: candidate,
-      instruction: candidate.rewriteReason
-    });
     const reason = request.reason?.trim() ?? '';
-    if ((impact.impactLevel === 'medium' || impact.impactLevel === 'severe') && !reason) {
-      throw new BusinessError(ErrorCode.GateBlocked, '采用可能影响后续章节的候选必须填写原因');
-    }
-    const result = await this.options.repository.adoptChapterContent({
+    const execution = await executeClaimedGeneration({
+      action: 'chapter_adopt_impact_assess',
+      repository: this.options.repository,
       novel,
-      chapter,
-      currentContent,
-      candidate,
-      reason: reason || '采用章节候选正文',
-      summaryCompare,
-      impact,
-      pageVersionSnapshot: request.pageVersionSnapshot,
+      objectId: chapter.id,
+      idempotencyKey: request.idempotencyKey,
+      effectiveRequest: { candidateVersionId: candidate.id, currentContentVersionId: fingerprintContentVersionId, reason: reason || null },
+      sourceVersionRefs: { currentContentVersionId: fingerprintContentVersionId, candidateVersionId: candidate.id },
       context,
-      now: this.now()
+      now: this.now,
+      providerCapability: this.bodyProvider,
+      provider: () => this.bodyProvider.assessImpact({
+        novel,
+        chapter,
+        oldContent: currentContent,
+        newContent: candidate,
+        instruction: candidate.rewriteReason
+      }),
+      finalize: (task, impact) => {
+        if ((impact.impactLevel === 'medium' || impact.impactLevel === 'severe') && !reason) {
+          throw new BusinessError(ErrorCode.GateBlocked, '采用可能影响后续章节的候选必须填写原因');
+        }
+        return this.options.repository.adoptChapterContent({
+          novel,
+          task,
+          chapter,
+          currentContent,
+          candidate,
+          reason: reason || '采用章节候选正文',
+          summaryCompare,
+          impact,
+          pageVersionSnapshot: request.pageVersionSnapshot,
+          context,
+          now: this.now()
+        });
+      }
     });
+    if (execution.reused) {
+      const impactCase = execution.task.resultObjectId
+        ? await this.options.repository.findImpactCaseById(context.tenantId, novelId, execution.task.resultObjectId)
+        : null;
+      const adoptedContentId = execution.task.resultVersionIds[0] ?? candidate.id;
+      const adoptedContent = await this.options.repository.findChapterContentVersionById(context.tenantId, novelId, adoptedContentId);
+      const updatedChapter = await this.options.repository.findChapterById(context.tenantId, novelId, chapterId);
+      if (!impactCase || !adoptedContent || !updatedChapter) throw reusedTaskInProgress(execution.task);
+      const statusSummary = this.statusService.calculate(novel);
+      return {
+        novelId,
+        statusSummary,
+        task: toDirectionTaskDTO(execution.task),
+        chapter: toNovelChapterDTO(updatedChapter),
+        previousContentVersionId: typeof existingSourceRefs.currentContentVersionId === 'string'
+          ? existingSourceRefs.currentContentVersionId
+          : null,
+        currentContent: toTrialChapterCandidateDTO(adoptedContent, updatedChapter),
+        impactCase: toImpactCaseDTO(impactCase),
+        affectedObjects: [],
+        nextAction: createLocalRecommendedAction({
+          type: impactCase.status === 'waiting_decision' ? 'resolve_impact_case' : 'continue_body_batch',
+          label: impactCase.status === 'waiting_decision' ? '处理影响案例' : '继续批量正文',
+          reasonText: impactCase.summary ?? '候选已采用，影响评估已记录。',
+          taskType: impactCase.status === 'waiting_decision' ? 'chapter_impact_assess' : 'body_batch_generate'
+        })
+      };
+    }
+    const result = execution.value;
     const statusSummary = this.statusService.calculate(result.novel);
 
     return {
@@ -1098,31 +1246,75 @@ export class NovelService {
     request: CreateImpactAssessmentRequest,
     context: RequestContext
   ): Promise<ImpactAssessmentActionResultDTO> {
-    const novel = await this.findNovelOrThrow(novelId);
+    const novel = await this.findNovelOrThrow(context.tenantId, novelId);
     const chapter = await this.options.repository.findChapterById(context.tenantId, novelId, chapterId);
     if (!chapter || !chapter.currentContentVersionId) {
       throw new BusinessError(ErrorCode.GateBlocked, '当前章节没有正式正文，不能发起影响评估');
     }
-    const currentContent = await this.options.repository.findChapterContentVersionById(context.tenantId, novelId, chapter.currentContentVersionId);
+    const existingTask = request.idempotencyKey?.trim()
+      ? await this.options.repository.findTaskByIdempotencyToken(context.tenantId, 'chapter_impact_assess', request.idempotencyKey.trim())
+      : null;
+    if (!existingTask && request.currentContentVersionId !== undefined && request.currentContentVersionId !== chapter.currentContentVersionId) {
+      throw new BusinessError(ErrorCode.VersionConflict, '当前章节正文版本已变化，请刷新后重试');
+    }
+    const existingSourceRefs = toRecord(existingTask?.sourceVersionRefs);
+    const existingContentVersionId = typeof existingSourceRefs.currentContentVersionId === 'string'
+      ? existingSourceRefs.currentContentVersionId
+      : chapter.currentContentVersionId;
+    const fingerprintContentVersionId = request.currentContentVersionId !== undefined
+      ? request.currentContentVersionId
+      : existingContentVersionId;
+    const sourceContentVersionId = typeof fingerprintContentVersionId === 'string'
+      ? fingerprintContentVersionId
+      : existingContentVersionId;
+    const currentContent = await this.options.repository.findChapterContentVersionById(context.tenantId, novelId, sourceContentVersionId);
     if (!currentContent) {
       throw new BusinessError(ErrorCode.NotFound, '当前章节正文不存在');
     }
-    const impact = await this.bodyProvider.assessImpact({
+    const execution = await executeClaimedGeneration({
+      action: 'chapter_impact_assess',
+      repository: this.options.repository,
       novel,
-      chapter,
-      oldContent: currentContent,
-      newContent: currentContent,
-      instruction: request.reason
-    });
-    const result = await this.options.repository.createImpactAssessment({
-      novel,
-      chapter,
-      currentContent,
-      impact,
-      reason: request.reason?.trim() || '手动发起章节影响评估',
+      objectId: chapter.id,
+      idempotencyKey: request.idempotencyKey,
+      effectiveRequest: { currentContentVersionId: fingerprintContentVersionId, reason: request.reason?.trim() || null },
+      sourceVersionRefs: { currentContentVersionId: fingerprintContentVersionId },
       context,
-      now: this.now()
+      now: this.now,
+      providerCapability: this.bodyProvider,
+      provider: () => this.bodyProvider.assessImpact({
+        novel,
+        chapter,
+        oldContent: currentContent,
+        newContent: currentContent,
+        instruction: request.reason
+      }),
+      finalize: (task, impact) => this.options.repository.createImpactAssessment({
+        novel,
+        task,
+        chapter,
+        currentContent,
+        impact,
+        reason: request.reason?.trim() || '手动发起章节影响评估',
+        context,
+        now: this.now()
+      })
     });
+    if (execution.reused) {
+      const impactCase = execution.task.resultObjectId
+        ? await this.options.repository.findImpactCaseById(context.tenantId, novelId, execution.task.resultObjectId)
+        : null;
+      if (!impactCase) throw reusedTaskInProgress(execution.task);
+      const statusSummary = this.statusService.calculate(novel);
+      return {
+        novelId,
+        statusSummary,
+        task: toDirectionTaskDTO(execution.task),
+        impactCase: toImpactCaseDTO(impactCase),
+        nextAction: statusSummary.recommendedAction
+      };
+    }
+    const result = execution.value;
     const statusSummary = this.statusService.calculate(result.novel);
 
     return {
@@ -1172,33 +1364,28 @@ export class NovelService {
   }
 
   async startFullReview(novelId: string, request: StartFullReviewRequest, context: RequestContext): Promise<FullReviewActionResultDTO> {
-    const novel = await this.findNovelOrThrow(novelId);
+    const novel = await this.findNovelOrThrow(context.tenantId, novelId);
     this.ensureLifecycleActive(novel);
-    const idempotencyKey = normalizeActionIdempotencyKey(request.idempotencyKey, '全书审稿');
-    if (request.expectedNovelVersion && request.expectedNovelVersion !== novel.updatedAt.toISOString()) {
-      throw new BusinessError(ErrorCode.VersionConflict, '小说版本已变化，请刷新后重新发起全书审稿');
-    }
-
-    const chapters = await this.ensureFullReviewGate(novel, context);
-    const sourceVersionRefs = createFullReviewSourceRefs(novel, chapters);
+    const idempotencyKey = request.idempotencyKey?.trim() || createInternalBodyIdempotencyKey('full-review', novelId, context.requestId);
+    const currentChapters = await this.options.repository.listNovelChapters(context.tenantId, novel.id);
+    const currentSourceVersionRefs = createFullReviewSourceRefs(novel, currentChapters);
     const requestFingerprint = {
       taskType: 'novel_full_review',
       reviewPolicyVersionId: request.reviewPolicyVersionId ?? novel.policyProfileVersionId ?? DEFAULT_POLICY_PROFILE_VERSION_ID,
       expectedNovelVersion: request.expectedNovelVersion ?? null,
-      sourceVersionRefs
+      sourceVersionRefs: currentSourceVersionRefs
     };
     const existing = await this.options.repository.findFullReviewByIdempotencyKey(context.tenantId, novelId, idempotencyKey);
     if (existing) {
-      const metadata = toRecord(existing.task.metadata);
-      if (!isSameFingerprint(metadata.requestFingerprint, requestFingerprint)) {
+      const existingFingerprint = toRecord(existing.reviewReport.metadata).requestFingerprint;
+      if (existingFingerprint && !isSameFingerprint(existingFingerprint, requestFingerprint)) {
         throw new BusinessError(ErrorCode.IdempotencyConflict, '同一个幂等键已绑定到不同的全书审稿请求，请刷新后重新提交。', {
-          idempotencyKey,
           taskType: 'novel_full_review',
-          existingTaskId: existing.task.id
+          existingTaskId: existing.task.id,
+          existingReviewReportId: existing.reviewReport.id
         });
       }
       const statusSummary = this.statusService.calculate(novel);
-
       return {
         novelId,
         statusSummary,
@@ -1208,25 +1395,52 @@ export class NovelService {
         nextAction: statusSummary.recommendedAction
       };
     }
+    if (request.expectedNovelVersion && request.expectedNovelVersion !== novel.updatedAt.toISOString()) {
+      throw new BusinessError(ErrorCode.VersionConflict, '小说版本已变化，请刷新后重新发起全书审稿');
+    }
 
-    const draft = await this.fullReviewProvider.generateFullReview({
+    const chapters = await this.ensureFullReviewGate(novel, context);
+    const sourceVersionRefs = createFullReviewSourceRefs(novel, chapters);
+    const execution = await executeClaimedGeneration({
+      action: 'novel_full_review',
+      repository: this.options.repository,
       novel,
-      chapters,
-      sourceVersionRefs
-    });
-    const result = await this.options.repository.createFullReview({
-      novel,
-      chapters,
-      draft: {
-        ...draft,
-        reviewPolicyVersionId: request.reviewPolicyVersionId?.trim() || draft.reviewPolicyVersionId
-      },
       idempotencyKey,
-      requestFingerprint,
+      effectiveRequest: requestFingerprint,
       sourceVersionRefs,
       context,
-      now: this.now()
+      now: this.now,
+      providerCapability: this.fullReviewProvider,
+      provider: () => this.fullReviewProvider.generateFullReview({ novel, chapters, sourceVersionRefs }),
+      finalize: (task, draft) => this.options.repository.createFullReview({
+        novel,
+        task,
+        chapters,
+        draft: {
+          ...draft,
+          reviewPolicyVersionId: request.reviewPolicyVersionId?.trim() || draft.reviewPolicyVersionId
+        },
+        idempotencyKey,
+        requestFingerprint,
+        sourceVersionRefs,
+        context,
+        now: this.now()
+      })
     });
+    if (execution.reused) {
+      const existing = await this.options.repository.findFullReviewByIdempotencyKey(context.tenantId, novelId, idempotencyKey);
+      if (!existing) throw reusedTaskInProgress(execution.task);
+      const statusSummary = this.statusService.calculate(novel);
+      return {
+        novelId,
+        statusSummary,
+        task: toDirectionTaskDTO(existing.task),
+        fullReview: toFullReviewReportDTO(existing.reviewReport, existing.gate),
+        affectedObjects: [],
+        nextAction: statusSummary.recommendedAction
+      };
+    }
+    const result = execution.value;
     const statusSummary = this.statusService.calculate(result.novel);
 
     return {
@@ -1518,12 +1732,6 @@ export class NovelService {
     if (novel.creationStage !== NovelCreationStage.Body || novel.stageStatus !== StageStatus.Completed) {
       throw new BusinessError(ErrorCode.GateBlocked, '正文生成阶段尚未完成，不能发起正式全书审稿');
     }
-    const activeTask = await this.options.repository.findActiveTaskByConflict(context.tenantId, 'novel_full_review', novel.id);
-    if (activeTask) {
-      throw new BusinessError(ErrorCode.ConflictTaskExists, '同一小说已有全书审稿任务正在处理，请先查看任务进度。', {
-        activeTaskId: activeTask.id
-      });
-    }
     const chapters = await this.options.repository.listNovelChapters(context.tenantId, novel.id);
     if (chapters.length === 0) {
       throw new BusinessError(ErrorCode.GateBlocked, '没有已确认章节目录，不能全书审稿');
@@ -1681,17 +1889,9 @@ export class NovelService {
     request: GenerateStructureAssetRequest,
     context: RequestContext
   ): Promise<StructureActionResultDTO> {
-    const novel = await this.findNovelOrThrow(novelId);
+    const novel = await this.findNovelOrThrow(context.tenantId, novelId);
     this.ensureLifecycleActive(novel);
     await this.ensureStructureGenerationGate(novel, objectType);
-    const conflictTask = await this.options.repository.findActiveTaskByConflict(context.tenantId, `novel_${objectType}`, novelId);
-    if (conflictTask && [TaskStatus.Queued, TaskStatus.Processing].includes(conflictTask.status)) {
-      throw new BusinessError(ErrorCode.ConflictTaskExists, '已有同一对象的生成任务正在处理，请先查看当前任务。', {
-        activeTaskId: conflictTask.id,
-        taskType: conflictTask.taskType,
-        status: conflictTask.status
-      });
-    }
 
     const preferences = await this.options.repository.findPreferencesByNovelId(context.tenantId, novelId);
     const allStructureVersions = await this.options.repository.listStructureVersions(context.tenantId, novelId);
@@ -1700,55 +1900,40 @@ export class NovelService {
     const taskType = getStructureTaskType(objectType);
     const changeReason = request.regenerateReason ?? `模型服务生成 ${objectType} 候选`;
     const sourceVersionRefs = createStructureSourceRefs(novel, objectType);
-    const reservedTask = await this.options.repository.createStructureGenerationTask({
+    const execution = await executeClaimedGeneration({
+      action: `${objectType}_generate` as NovelProviderAction,
+      repository: this.options.repository,
       novel,
-      objectType,
-      taskType,
-      changeReason,
+      idempotencyKey: request.idempotencyKey,
+      effectiveRequest: { objectType, regenerateReason: request.regenerateReason?.trim() || null },
       sourceVersionRefs,
       context,
-      now: this.now()
-    });
-
-    let asset: StructureAssetDraft;
-    try {
-      asset = await this.structureProvider.generateAsset({
+      now: this.now,
+      providerCapability: this.structureProvider,
+      provider: () => this.structureProvider.generateAsset({
         objectType,
         novel,
         preferences: preferences ?? createEmptyPreferences(novel),
         currentAssets
-      });
-    } catch (error) {
-      await this.options.repository.failTask({
-        task: reservedTask,
-        errorCode: getTaskErrorCode(error),
-        errorMessage: getTaskErrorMessage(error),
+      }),
+      finalize: (task, asset) => this.options.repository.createStructureCandidate({
+        novel,
+        task,
+        asset,
+        taskType,
+        changeReason,
+        sourceVersionRefs,
         context,
         now: this.now()
-      });
-      throw error;
-    }
-
-    const latestReservedTask = await this.options.repository.findTaskById(context.tenantId, reservedTask.id);
-    if (latestReservedTask?.status === TaskStatus.Cancelled) {
-      throw new BusinessError(ErrorCode.GateBlocked, '生成任务已取消，模型返回结果已丢弃。', {
-        taskId: reservedTask.id,
-        taskType: reservedTask.taskType
-      });
-    }
-
-    const result = await this.options.repository.createStructureCandidate({
-      novel,
-      asset,
-      taskType,
-      changeReason,
-      sourceVersionRefs,
-      reservedTaskId: reservedTask.id,
-      context,
-      now: this.now()
+      })
     });
     const versions = await this.options.repository.listStructureVersions(context.tenantId, novelId);
     const chapters = await this.options.repository.listNovelChapters(context.tenantId, novelId);
+    if (execution.reused) {
+      const version = versions.find((item) => execution.task.resultVersionIds.includes(item.id)) ?? null;
+      return this.toStructureActionResult(novel, execution.task, versions, version, chapters, directionVersions);
+    }
+    const result = execution.value;
 
     return this.toStructureActionResult(result.novel, result.task, versions, result.version, chapters, directionVersions);
   }
@@ -1800,8 +1985,10 @@ export class NovelService {
     return this.toStructureActionResult(result.novel, createStructureAdoptedTask(result.currentAsset), result.versions, result.currentAsset, result.chapters, directionVersions);
   }
 
-  private async findNovelOrThrow(novelId: string) {
-    const novel = await this.options.repository.findById(DEFAULT_TENANT_ID, novelId);
+  private async findNovelOrThrow(tenantIdOrNovelId: string, scopedNovelId?: string) {
+    const tenantId = scopedNovelId ? tenantIdOrNovelId : DEFAULT_TENANT_ID;
+    const novelId = scopedNovelId ?? tenantIdOrNovelId;
+    const novel = await this.options.repository.findById(tenantId, novelId);
 
     if (!novel) {
       throw new BusinessError(ErrorCode.NotFound, '小说不存在');
@@ -2380,6 +2567,9 @@ function createAdoptedTask(currentDirection: CreativeVersionRecord): GenerationT
     sourceVersionRefs: currentDirection.sourceVersionRefs,
     conflictScope: 'novel_direction',
     conflictKey: currentDirection.novelId,
+    idempotencyToken: null,
+    requestHash: null,
+    activeClaimKey: null,
     inputSummary: '采用方向候选。',
     outputSummary: '方向已采用，小说进入设定阶段。',
     resultVersionIds: [currentDirection.id],
@@ -2419,6 +2609,9 @@ function createStructureAdoptedTask(currentAsset: CreativeVersionRecord): Genera
     sourceVersionRefs: currentAsset.sourceVersionRefs,
     conflictScope: `novel_${currentAsset.objectType}`,
     conflictKey: currentAsset.novelId,
+    idempotencyToken: null,
+    requestHash: null,
+    activeClaimKey: null,
     inputSummary: '采用结构资产候选。',
     outputSummary: '结构资产已采用，小说阶段已推进。',
     resultVersionIds: [currentAsset.id],
@@ -3025,6 +3218,22 @@ function isSameFingerprint(left: unknown, right: unknown) {
   return stableStringify(left) === stableStringify(right);
 }
 
+function isSameBodyRequestFingerprint(left: unknown, right: unknown) {
+  const selectIdentity = (value: unknown) => {
+    const record = toRecord(value);
+    return {
+      taskType: record.taskType,
+      strategySnapshotId: record.strategySnapshotId,
+      expectedStrategySnapshotVersion: record.expectedStrategySnapshotVersion,
+      actualStrategySnapshotId: record.actualStrategySnapshotId,
+      actualStrategySnapshotVersion: record.actualStrategySnapshotVersion,
+      requestedStartChapterNo: record.requestedStartChapterNo ?? null,
+      requestedEndChapterNo: record.requestedEndChapterNo ?? null
+    };
+  };
+  return isSameFingerprint(selectIdentity(left), selectIdentity(right));
+}
+
 function stableStringify(value: unknown): string {
   if (Array.isArray(value)) {
     return `[${value.map((item) => stableStringify(item)).join(',')}]`;
@@ -3556,6 +3765,28 @@ function createBodyStrategySnapshotContent(
   };
 }
 
+function createProcessingTrialRun(task: GenerationTaskRecord, novel: NovelRecord, chapterCount: number): TrialRunRecord {
+  return {
+    id: `pending_${task.id}`,
+    tenantId: task.tenantId,
+    novelId: novel.id,
+    chapterPlanVersionId: novel.currentChapterPlanVersionId,
+    trialChapterCount: chapterCount,
+    status: 'generating_chapter1_candidates',
+    totalScore: null,
+    trialResult: null,
+    reviewReportId: null,
+    policyProfileVersionId: novel.policyProfileVersionId,
+    sourceTaskId: task.id,
+    confirmedAt: null,
+    confirmedBy: null,
+    forceReason: null,
+    createdAt: task.createdAt,
+    updatedAt: task.updatedAt,
+    metadata: { currentStep: task.currentStep }
+  };
+}
+
 function createVirtualTrialTask(trialRun: TrialRunRecord, novel: NovelRecord): GenerationTaskRecord {
   const status =
     trialRun.status === 'blocked' || trialRun.status === 'followup_failed'
@@ -3579,6 +3810,9 @@ function createVirtualTrialTask(trialRun: TrialRunRecord, novel: NovelRecord): G
     sourceVersionRefs: createTrialSourceRefs(novel),
     conflictScope: 'novel_trial',
     conflictKey: novel.id,
+    idempotencyToken: null,
+    requestHash: null,
+    activeClaimKey: null,
     inputSummary: '试写任务',
     outputSummary: trialRun.trialResult,
     resultVersionIds: [],
@@ -3612,6 +3846,14 @@ function getMetadataString(value: unknown, key: string) {
   const record = toRecord(value);
 
   return typeof record[key] === 'string' ? record[key] : null;
+}
+
+function reusedTaskInProgress(task: GenerationTaskRecord) {
+  return new BusinessError(ErrorCode.ConflictTaskExists, '该请求已复用原生成任务，请按 taskId 查询当前状态。', {
+    existingTaskId: task.id,
+    taskType: task.taskType,
+    status: task.status
+  });
 }
 
 function toQualityScoring(value: unknown, fallbackScore: number): QualityScoringDTO {

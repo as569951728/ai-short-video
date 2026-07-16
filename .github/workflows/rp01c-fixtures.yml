@@ -6,6 +6,7 @@ on:
     paths:
       - '.github/workflows/rp01c-fixtures.yml'
       - 'apps/api/test/rp01c/**'
+      - 'apps/api/test/rp02a/**'
       - 'apps/api/src/**'
       - 'apps/api/prisma/**'
       - 'apps/api/package.json'
@@ -21,6 +22,7 @@ on:
     paths:
       - '.github/workflows/rp01c-fixtures.yml'
       - 'apps/api/test/rp01c/**'
+      - 'apps/api/test/rp02a/**'
       - 'apps/api/src/**'
       - 'apps/api/prisma/**'
       - 'apps/api/package.json'
@@ -51,9 +53,12 @@ jobs:
       - run: npm ci
       - run: ./node_modules/.bin/playwright install chromium
       - run: npm run test:rp01c
+      - run: npm run test:rp02a
       - run: npm test -w @ai-shortvideo/api
       - run: npm run test:e2e:rp01a
       - run: npm run test:governance
       - run: npm run typecheck
       - run: npm run build -w @ai-shortvideo/api
+      - run: npm run prisma:validate -w @ai-shortvideo/api
+      - run: git diff --check
       - run: npm run governance:git-budget

@@ -45,6 +45,10 @@ export function createNovelProvidersFromEnv(options: NovelProviderFactoryOptions
 }
 
 class MissingDeepSeekConfigProvider {
+  assertAvailable(): never {
+    throwMissingDeepSeekConfig();
+  }
+
   async generateCandidates(): Promise<never> {
     throwMissingDeepSeekConfig();
   }
