@@ -10,11 +10,12 @@
 | severity | P1 |
 | owner | DEV + TEST |
 | dev_thread | `019ed4ee-441a-7fa2-894d-393c7d4c527b` |
-| test_thread | 待主控正式派发 |
+| test_thread | `019f57b9-7e22-7fe3-b7a6-bd9552b75d55` |
+| quality_thread | `019f57ba-1be6-7111-b860-8122cc6665f5` |
 | acceptance_ids | TEST-DOM-01 |
 | environment | local Node 24.14.0 / admin-web Vitest DOM / happy-dom 20.10.6 |
 | target_evidence_level | E2 + DOM runner |
-| actual_evidence_level | E2 local DEV, pending independent test |
+| actual_evidence_level | E2 + Vue DOM runner + remote clean-checkout CI |
 
 ## 2. 原始问题
 
@@ -47,37 +48,37 @@
 
 | 证据桶 | 命令/证据 | 结果 | not_proven |
 | --- | --- | --- | --- |
-| contract | `docs/remediation/acceptance-matrix.md` TEST-DOM-01 | DOM runner 覆盖 click 参数、disabled、dialog、focus、scroll target | 独立验收待执行 |
-| unit | `npm run test:dom:admin` | shared build passed; old admin Node tests 77 passed; DOM tests 3 files / 10 tests passed | 独立验收待执行 |
+| contract | `docs/remediation/acceptance-matrix.md` TEST-DOM-01 | DOM runner 覆盖 click 参数、disabled、dialog、focus、scroll target | 真实浏览器行为不在本包证据内 |
+| unit | `npm run test:dom:admin` | shared build passed; old admin Node tests 77 passed; DOM tests 3 files / 10 tests passed | 原触发按钮焦点恢复未证明 |
 | API | N/A | N/A | 本包不触 API |
 | DB/MySQL/Prisma | N/A | N/A | 本包不触真实 DB |
 | browser | DOM runner 使用 happy-dom，不是 Playwright 浏览器 | 真实 Vue DOM/event runner passed | 真实浏览器 E2E 不属于 RP-01B |
 | provider | N/A | N/A | 本包不触 provider |
 | media | N/A | N/A | 本包不触媒体 |
-| typecheck | `npm run typecheck` | passed | 独立验收待执行 |
-| build | `npm run build -w admin-web`; `npm run build:budget -w admin-web` | passed; budget passed; existing vueuse annotation and large chunk warnings remain | 独立验收待执行 |
+| typecheck | `npm run typecheck` | passed | N/A |
+| build | `npm run build -w admin-web`; `npm run build:budget -w admin-web` | passed; budget passed; existing vueuse annotation and large chunk warnings remain | 已知 warning 继续由现有预算门禁管理 |
 | failure injection | DOM 负向断言：disabled/loading 不触发、四个视频生成入口完整 payload 无 MouseEvent 额外字段、小说采用请求完整对象、dialog 确认/取消后不保持可见 modal 状态、scroll/focus 不是空断言 | passed | 焦点恢复到触发按钮未在 happy-dom 中稳定证明 |
 | concurrency/restart | N/A | N/A | 本包不涉及后端任务 |
 
 研发自测结论：
 
 ```text
-user_goal_status: partial
-environment: local Node 24 / admin-web DOM runner
-evidence_level: E2 local DEV
-not_proven: independent TEST, remote CI, Element Plus dialog close focus restoration to trigger button in happy-dom
+user_goal_status: passed
+environment: local Node 24.14.0 + GitHub Ubuntu clean checkout / admin-web DOM runner
+evidence_level: E2 + Vue DOM runner + remote clean-checkout CI
+not_proven: real-browser rendering/focus behavior, Element Plus dialog close focus restoration to trigger button, DB/provider/media
 ```
 
 ## 5. 独立测试证据
 
 - 执行 acceptance ids：TEST-DOM-01
-- 最新独立 TEST 反馈：`95a62d4` 返回 needs_revision / P1；本草稿仅记录 DEV 定向返工，正式 TEST 字段仍待主控再次派发后填写。
-- environment：待 TEST 填写
-- evidence_level：待 TEST 填写
-- 命令：待 TEST 填写
+- 首轮独立 TEST：`95a62d4` 返回 needs_revision / P1，要求完整 payload、关闭生命周期和证据状态返工；DEV 已在 `efd3851` 完成定向修正。
+- environment：local Node 24.14.0 + GitHub Actions Ubuntu/Node 24.14.0 clean checkout
+- evidence_level：E2 + Vue DOM runner + remote clean-checkout CI
+- 命令：`npm run test:dom:admin`；commit/diff/status 检查；远程 run `29205130419`
 - fixture：生产组件 DOM 测试
-- contract：待 TEST 填写
-- unit：待 TEST 填写
+- contract：TEST-DOM-01 passed
+- unit：shared build、旧 admin 77/77、DOM 10/10 passed
 - API：N/A
 - 浏览器 trace：N/A，RP-01B 是 Vue DOM runner
 - DB/MySQL/Prisma：N/A
@@ -92,49 +93,50 @@ not_proven: independent TEST, remote CI, Element Plus dialog close focus restora
 测试结论：
 
 ```text
-conclusion: pending
-user_goal_status: pending
-environment:
-evidence_level:
-not_proven:
+conclusion: approved
+user_goal_status: passed
+environment: local Node 24.14.0 + GitHub Actions clean checkout
+evidence_level: E2 + Vue DOM runner + remote clean-checkout CI
+not_proven: real-browser rendering/focus behavior; focus restoration to trigger; DB/provider/media
 ```
 
 ## 6. 产品与质量复核
 
 产品复核：
 
-- 原问题场景是否可理解：pending
-- 结果是否可见：pending
-- 下一动作是否明确：pending
-- 是否仍有误导性能力表述：pending
+- 原问题场景是否可理解：N/A，本包为测试基础设施与真实事件缺陷修复。
+- 结果是否可见：通过；MouseEvent 污染、disabled、dialog、focus 与 scroll target 均有可执行回归证据。
+- 下一动作是否明确：通过；测试失败直接阻断 RP-01B CI。
+- 是否仍有误导性能力表述：通过；happy-dom、真实浏览器和真实环境边界已分列。
 
 质量复核：
 
-- 范围是否越界：pending
-- 真实环境边界：pending
-- 租户/权限/敏感信息：pending
-- Git 和工作树：pending
-- 是否存在未归因文件：pending
+- 范围是否越界：approved；仅 DOM runner、测试、CI 与被测试暴露的显式零参数点击修复。
+- 真实环境边界：approved；未执行 DB/provider/media，未外推真实浏览器。
+- 租户/权限/敏感信息：N/A；本包不访问真实服务或密钥。
+- Git 和工作树：approved；实现/返工提交已推送，关闭前工作树干净。
+- 是否存在未归因文件：否；12 个实现文件均归属 RP-01B。
 
 ## 7. Git 与远程
 
 | 字段 | 内容 |
 | --- | --- |
 | branch | `codex/aishortvideo-checkpoint-20260711` |
-| commit | 未提交 |
+| commit | `95a62d4`（实现）、`efd3851`（独立 TEST P1 返工） |
 | upstream | `origin/codex/aishortvideo-checkpoint-20260711` |
-| changed_files | 3 worktree files after TEST needs_revision rework; `npm run governance:git-budget -- --worktree` reported files=3, netAdditions=94 |
+| remote_ci | implementation governance `29205130421`; admin DOM `29205130419`; closure governance `29205701139`; all success |
+| changed_files | 相对 `23fd119` 共 12 files / 1,988 net additions，未越过 20/2,000 门禁 |
 | diff_check | `git diff --check` passed |
-| worktree_remaining | RP-01B uncommitted files only; no commit/push performed |
+| worktree_remaining | 正式关单文档更新前工作树 clean；实现与返工均已 push |
 
 ## 8. 关闭裁决
 
 ```text
 issue_id: RMD-TEST-DOM-001
-final_status: partial
-closed_acceptance_ids:
-residual_risks: independent TEST and remote CI pending
+final_status: closed
+closed_acceptance_ids: TEST-DOM-01
+residual_risks: real-browser rendering/focus behavior and focus restoration to trigger remain not_proven; DB/provider/media are outside scope
 reopen_conditions: DOM runner removed; tests no longer cover TEST-DOM-01 required interactions; workflow no longer runs on admin source/config/package changes
-decided_by: pending MC
-decided_at: pending
+decided_by: MC thread 019ed4a5-a2f5-7d13-86d0-0c28381af555
+decided_at: 2026-07-13 03:16:39 CST
 ```
