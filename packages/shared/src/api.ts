@@ -13,6 +13,9 @@ export enum ErrorCode {
   TaskNotRetryable = 'TASK_NOT_RETRYABLE',
   ContentRiskBlocking = 'CONTENT_RISK_BLOCKING',
   VideoReferenceBlocking = 'VIDEO_REFERENCE_BLOCKING',
+  PublishGateBlocked = 'PUBLISH_GATE_BLOCKED',
+  PublishDuplicate = 'PUBLISH_DUPLICATE',
+  MetricBackfillInvalid = 'METRIC_BACKFILL_INVALID',
   InternalError = 'INTERNAL_ERROR'
 }
 
@@ -121,6 +124,21 @@ export const errorDefinitions: Record<ErrorCode, ErrorDefinition> = {
     code: ErrorCode.VideoReferenceBlocking,
     httpStatus: 409,
     message: '视频引用异常阻塞'
+  },
+  [ErrorCode.PublishGateBlocked]: {
+    code: ErrorCode.PublishGateBlocked,
+    httpStatus: 409,
+    message: '发布登记门禁阻塞'
+  },
+  [ErrorCode.PublishDuplicate]: {
+    code: ErrorCode.PublishDuplicate,
+    httpStatus: 409,
+    message: '发布事实重复'
+  },
+  [ErrorCode.MetricBackfillInvalid]: {
+    code: ErrorCode.MetricBackfillInvalid,
+    httpStatus: 400,
+    message: '回填数据不合法'
   },
   [ErrorCode.InternalError]: {
     code: ErrorCode.InternalError,

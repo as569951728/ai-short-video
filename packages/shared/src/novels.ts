@@ -54,6 +54,10 @@ export interface RecentTaskSummaryDTO {
   statusText: string;
   progress: number;
   currentStep: string | null;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface TaskTraceDTO {
@@ -152,7 +156,6 @@ export interface DirectionTaskDTO extends RecentTaskSummaryDTO {
   resultVersionIds: string[];
   statusNote?: string | null;
   failureCategory?: string | null;
-  errorCode?: string | null;
 }
 
 export interface DirectionActionResultDTO {
@@ -512,7 +515,7 @@ export interface BodyBatchActionResultDTO {
   novelId: string;
   statusSummary: NovelStatusSummaryDTO;
   task: DirectionTaskDTO;
-  batch: BodyBatchDTO;
+  batch: BodyBatchDTO | null;
   bodyGeneration: BodyGenerationStateDTO;
   chapters: NovelChapterDTO[];
   affectedObjects: string[];
@@ -781,6 +784,51 @@ export interface PrimaryActionDTO {
   target: 'detail';
 }
 
+export const NOVEL_CREATION_SOURCE_REQUEST_TYPES = ['system_recommendation', 'hotspot_reference', 'manual_idea'] as const;
+export const NOVEL_CREATION_SOURCE_RESPONSE_TYPES = [...NOVEL_CREATION_SOURCE_REQUEST_TYPES, 'legacy_unknown'] as const;
+
+export type NovelCreationSourceRequestType = (typeof NOVEL_CREATION_SOURCE_REQUEST_TYPES)[number];
+export type NovelCreationSourceType = (typeof NOVEL_CREATION_SOURCE_RESPONSE_TYPES)[number];
+
+export const NOVEL_CREATION_SOURCE_DB_VALUES = {
+  system_recommendation: 'SYSTEM_RECOMMENDATION',
+  hotspot_reference: 'HOTSPOT_REFERENCE',
+  manual_idea: 'MANUAL_IDEA',
+  legacy_unknown: 'LEGACY_UNKNOWN'
+} as const satisfies Record<NovelCreationSourceType, string>;
+
+export function novelCreationSourceFromDb(value: string | null | undefined): NovelCreationSourceType {
+  const normalized = value?.trim().toUpperCase();
+
+  switch (normalized) {
+    case 'SYSTEM_RECOMMENDATION':
+      return 'system_recommendation';
+    case 'HOTSPOT_REFERENCE':
+      return 'hotspot_reference';
+    case 'MANUAL_IDEA':
+      return 'manual_idea';
+    case 'LEGACY_UNKNOWN':
+    default:
+      return 'legacy_unknown';
+  }
+}
+
+export function novelCreationSourceToDb(value: NovelCreationSourceType): string {
+  return NOVEL_CREATION_SOURCE_DB_VALUES[value];
+}
+
+export interface NovelCreationSourceSummaryDTO {
+  type: NovelCreationSourceType;
+  label: string;
+  description: string;
+  hotspotReportId: string | null;
+  hotspotOpportunityId: string | null;
+  hotspotTitle: string | null;
+  hotspotOpportunityTitle: string | null;
+  isLegacyUnknown: boolean;
+  unavailableReason: string | null;
+}
+
 export interface NovelListItemDTO {
   id: string;
   title: string;
@@ -793,6 +841,7 @@ export interface NovelListItemDTO {
   scoreSummary: NovelScoreSummaryDTO;
   chapterProgress: NovelChapterProgressDTO;
   videoReferenceSummary: NovelVideoReferenceSummaryDTO;
+  creationSource: NovelCreationSourceSummaryDTO;
   recentTask: RecentTaskSummaryDTO | null;
   primaryAction: PrimaryActionDTO;
   createdAt: string;
@@ -800,8 +849,13 @@ export interface NovelListItemDTO {
 }
 
 export interface CreateNovelPreferencesDTO {
+  creationSourceType: NovelCreationSourceType;
+  creationSourceLabel: string;
+  creationSourceDescription: string;
   hotspotReportId: string | null;
   hotspotOpportunityId: string | null;
+  hotspotTitle: string | null;
+  hotspotOpportunityTitle: string | null;
   appealPoints: string[];
   genres: string[];
   openingState: string | null;
@@ -852,6 +906,7 @@ export interface NovelRowSummaryDTO {
 export interface CreateNovelDraftRequest {
   title: string;
   channel?: string;
+  creationSourceType?: NovelCreationSourceRequestType;
   genres?: string[];
   hotspotReportId?: string | null;
   hotspotOpportunityId?: string | null;
@@ -885,6 +940,18 @@ export interface OptimizeDirectionRequest {
   instruction?: string | null;
 }
 
+export interface EditDirectionCandidateRequest {
+  title: string;
+  logline: string;
+  coreHook: string;
+  audienceAppeal: string;
+  videoPotential: string;
+  sellingPoints: string[];
+  riskTags: string[];
+  recommendation: string;
+  reason: string;
+}
+
 export interface AdoptDirectionRequest {
   confirmLowScore?: boolean;
   reason?: string | null;
@@ -896,11 +963,31 @@ export interface GenerateStructureAssetRequest {
   regenerateReason?: string | null;
 }
 
+export interface EditStructureAssetRequest {
+  title: string;
+  summary: string;
+  sectionTitle: string;
+  sectionBody: string;
+  sectionItems: string[];
+  riskTags: string[];
+  recommendation: string;
+  reason: string;
+}
+
 export interface AdoptStructureAssetRequest {
   confirmHighRisk?: boolean;
   reason?: string | null;
   pageVersionSnapshot?: unknown;
   currentVersionId?: string | null;
+}
+
+export interface UpdateChapterWordTargetsRequest {
+  updates: Array<{
+    chapterNo: number;
+    wordTarget: number;
+  }>;
+  reason?: string | null;
+  currentChapterPlanVersionId?: string | null;
 }
 
 export interface GenerateTrialRequest {

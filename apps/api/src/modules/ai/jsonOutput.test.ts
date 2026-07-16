@@ -21,6 +21,45 @@ describe('AI JSON output helper', () => {
     assert.equal(result.score, 86);
   });
 
+  it('extracts a JSON object when the provider wraps it with prose', async () => {
+    const client = createFakeClient('可以，以下是 JSON：\n{"title":"设定档案","score":82}\n请确认。');
+
+    const result = await requestJsonOutput(client, {
+      taskName: 'test_structure',
+      model: 'fake-model',
+      messages: [{ role: 'user', content: 'return json' }],
+      validate: (value) => value as { title: string; score: number }
+    });
+
+    assert.equal(result.title, '设定档案');
+    assert.equal(result.score, 82);
+  });
+
+  it('repairs one malformed response by retrying with strict JSON instructions', async () => {
+    const calls: string[] = [];
+    const client: LlmClient = {
+      async chat(request) {
+        calls.push(request.messages.at(-1)?.content ?? '');
+        return {
+          content: calls.length === 1 ? '这次先给说明，不给 JSON' : '{"title":"修复后的大纲","score":88}',
+          model: 'fake-model'
+        };
+      }
+    };
+
+    const result = await requestJsonOutput(client, {
+      taskName: 'test_repair',
+      model: 'fake-model',
+      messages: [{ role: 'user', content: 'return json' }],
+      validate: (value) => value as { title: string; score: number }
+    });
+
+    assert.equal(result.title, '修复后的大纲');
+    assert.equal(result.score, 88);
+    assert.equal(calls.length, 2);
+    assert.match(calls[1], /重新输出一个完整 JSON 对象/);
+  });
+
   it('classifies non-JSON responses without leaking raw model output', async () => {
     const client = createFakeClient('FULL_MODEL_RESPONSE_SHOULD_NOT_LEAK');
 

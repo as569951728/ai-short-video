@@ -1,12 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import {
+  ErrorCode,
   NovelCreationStage,
   NovelLifecycleStatus,
   RiskLevel,
   StaleLevel,
   StageStatus,
   TaskStatus,
-  VersionStatus
+  VersionStatus,
+  type StructureAssetContentDTO
 } from '@ai-shortvideo/shared';
 import { getPrismaClient } from '../../../infrastructure/database/prisma.js';
 import type { Prisma } from '../../../generated/prisma/client.js';
@@ -18,16 +20,20 @@ import {
   type AssetDecisionRecord,
   type BodyBatchGenerationInput,
   type BodyBatchRecord,
+  type BodyBatchTaskCreationInput,
   type ChapterContentAdoptionInput,
   type ChapterRewriteInput,
+  type CreatedBodyBatchTaskRecord,
   type CreatedDirectionCandidatesRecord,
   type CreatedDirectionRevisionRecord,
   type CreatedDraftRecord,
   type CreatedImpactAssessmentRecord,
   type CreatedStructureAssetRecord,
   type CreatedTrialCandidatesRecord,
+  type CreatedTrialFollowupTaskRecord,
   type ChapterContentVersionRecord,
   type ChapterFeatureCardRecord,
+  type ChapterWordTargetUpdateInput,
   type ChapterWorkbenchRecord,
   type CompletionConfirmationInput,
   type CompletionDecisionRecord,
@@ -69,12 +75,15 @@ import {
   type ReviewReportRecord,
   type StructureAdoptionInput,
   type StructureCreationInput,
+  type StructureGenerationTaskCreationInput,
   type TaskCancelInput,
+  type TaskFailureInput,
   type TaskRetryInput,
   type TrialCandidateCreationInput,
   type TrialChapterResultRecord,
   type TrialConfirmationInput,
   type TrialFollowupGenerationInput,
+  type TrialFollowupTaskCreationInput,
   type TrialRunRecord,
   type VideoReadinessCheckInput,
   type VideoReadinessCheckRecord,
@@ -85,6 +94,7 @@ import {
 import {
   ImpactLevel as PrismaImpactLevel,
   NovelCreationStage as PrismaNovelCreationStage,
+  NovelCreationSourceType as PrismaNovelCreationSourceType,
   NovelLifecycleStatus as PrismaNovelLifecycleStatus,
   RiskLevel as PrismaRiskLevel,
   StageStatus as PrismaStageStatus,
@@ -92,6 +102,7 @@ import {
   TaskStatus as PrismaTaskStatus,
   VersionStatus as PrismaVersionStatus
 } from '../../../generated/prisma/enums.js';
+import { BusinessError } from '../../../shared/errors.js';
 
 export class PrismaNovelRepository implements NovelRepository {
   private readonly prisma = getPrismaClient();
@@ -127,8 +138,11 @@ export class PrismaNovelRepository implements NovelRepository {
         data: {
           tenantId: input.context.tenantId,
           novelId: novel.id,
+          creationSourceType: toPrismaCreationSourceType(normalized.creationSourceType),
           hotspotReportId: normalized.hotspotReportId,
           hotspotOpportunityId: normalized.hotspotOpportunityId,
+          hotspotTitle: input.creationSourceContext?.hotspotTitle ?? null,
+          hotspotOpportunityTitle: input.creationSourceContext?.hotspotOpportunityTitle ?? null,
           appealPointsJson: normalized.appealPoints,
           genresJson: normalized.genres,
           openingState: normalized.openingState,
@@ -159,7 +173,10 @@ export class PrismaNovelRepository implements NovelRepository {
           afterSnapshot: {
             lifecycleStatus: NovelLifecycleStatus.Active,
             creationStage: NovelCreationStage.Draft,
-            stageStatus: StageStatus.NotStarted
+            stageStatus: StageStatus.NotStarted,
+            creationSourceType: normalized.creationSourceType,
+            hotspotReportId: normalized.hotspotReportId,
+            hotspotOpportunityId: normalized.hotspotOpportunityId
           },
           reason: '创建小说草稿',
           impactSummary: '新建草稿，不影响既有创作资产。',
@@ -452,7 +469,7 @@ export class PrismaNovelRepository implements NovelRepository {
           input,
           taskType: input.taskType,
           status: PrismaTaskStatus.WAITING_CONFIRMATION,
-          currentStep: input.taskType === 'novel_direction_fuse' ? '融合方向候选已生成' : '优化方向候选已生成',
+          currentStep: getDirectionRevisionTaskStep(input.taskType),
           now: input.now
         })
       });
@@ -466,7 +483,7 @@ export class PrismaNovelRepository implements NovelRepository {
           versionNo,
           status: PrismaVersionStatus.CANDIDATE,
           staleLevel: PrismaStaleLevel.NONE,
-          sourceType: 'mock_ai',
+          sourceType: getDirectionRevisionSourceType(input.taskType),
           sourceTaskId: task.id,
           sourceVersionRefs: {
             sourceVersionIds: input.sourceVersionIds
@@ -493,7 +510,7 @@ export class PrismaNovelRepository implements NovelRepository {
           resultObjectType: 'direction',
           resultObjectId: 'direction',
           resultVersionId: version.id,
-          outputSummary: input.taskType === 'novel_direction_fuse' ? '生成融合方向候选' : '生成优化方向候选',
+          outputSummary: getDirectionRevisionOutputSummary(input.taskType),
           updatedAt: input.now
         }
       });
@@ -672,17 +689,49 @@ export class PrismaNovelRepository implements NovelRepository {
     });
   }
 
+  async createStructureGenerationTask(input: StructureGenerationTaskCreationInput): Promise<GenerationTaskRecord> {
+    const task = await this.prisma.generationTask.create({
+      data: createStructureGenerationTaskData({
+        input,
+        status: PrismaTaskStatus.PROCESSING,
+        currentStep: `${input.objectType} 正在生成中`,
+        now: input.now
+      })
+    });
+    await createTaskEvent(this.prisma, {
+      task,
+      eventType: 'calling_model',
+      message: '正在调用模型生成内容，可能需要 1-3 分钟，可以稍后回来查看。',
+      progress: 0,
+      requestId: input.context.requestId,
+      createdAt: input.now
+    });
+
+    return mapGenerationTask(task);
+  }
+
   async createStructureCandidate(input: StructureCreationInput): Promise<CreatedStructureAssetRecord> {
     return this.prisma.$transaction(async (tx) => {
-      const task = await tx.generationTask.create({
-        data: createStructureTaskData({
-          input,
-          taskType: input.taskType,
-          status: PrismaTaskStatus.WAITING_CONFIRMATION,
-          currentStep: getStructureGenerateStep(input.asset.objectType),
-          now: input.now
-        })
-      });
+      const task = input.reservedTaskId
+        ? await tx.generationTask.update({
+            where: { id: input.reservedTaskId },
+            data: {
+              status: PrismaTaskStatus.WAITING_CONFIRMATION,
+              statusNote: `模型服务已生成 ${input.asset.objectType} 候选`,
+              progress: 100,
+              currentStep: getStructureGenerateStep(input.asset.objectType),
+              updatedAt: input.now
+            }
+          })
+        : await tx.generationTask.create({
+            data: createStructureTaskData({
+              input,
+              taskType: input.taskType,
+              status: PrismaTaskStatus.WAITING_CONFIRMATION,
+              currentStep: getStructureGenerateStep(input.asset.objectType),
+              now: input.now
+            })
+          });
       const versionNo = await getNextVersionNo(tx, input.context.tenantId, input.novel.id, input.asset.objectType);
       const version = await tx.creativeVersion.create({
         data: {
@@ -738,6 +787,76 @@ export class PrismaNovelRepository implements NovelRepository {
         task: mapGenerationTask(updatedTask),
         version: mapCreativeVersion(version)
       };
+    });
+  }
+
+  async failTask(input: TaskFailureInput): Promise<GenerationTaskRecord> {
+    return this.prisma.$transaction(async (tx) => {
+      const task = await tx.generationTask.update({
+        where: { id: input.task.id },
+        data: {
+          status: PrismaTaskStatus.FAILED,
+          statusNote: input.statusNote ?? '模型生成失败，请查看原因后重试。',
+          currentStep: '生成失败',
+          failureCategory: input.failureCategory ?? 'model_generation_failed',
+          errorCode: input.errorCode,
+          errorMessage: input.errorMessage,
+          finishedAt: input.now,
+          updatedAt: input.now
+        }
+      });
+      await createTaskEvent(tx, {
+        task,
+        eventType: 'failed',
+        message: input.errorMessage,
+        progress: task.progress,
+        requestId: input.context.requestId,
+        createdAt: input.now
+      });
+
+      if (task.taskType === 'trial_followup_generate' && task.objectId && task.novelId) {
+        const trialRun = await tx.trialRun.findFirst({
+          where: {
+            id: task.objectId,
+            tenantId: input.context.tenantId
+          }
+        });
+        await tx.trialRun.update({
+          where: { id: task.objectId },
+          data: {
+            status: 'followup_failed',
+            updatedAt: input.now,
+            metadata: toJsonObject({
+              ...toRecord(trialRun?.metadata),
+              currentStep: '继续试写失败',
+              blockingReason: input.errorMessage
+            })
+          }
+        });
+        await tx.novel.update({
+          where: { id: task.novelId },
+          data: {
+            creationStage: PrismaNovelCreationStage.TRIAL,
+            stageStatus: PrismaStageStatus.FAILED,
+            updatedBy: input.context.userId,
+            updatedAt: input.now
+          }
+        });
+      }
+
+      if (task.taskType === 'body_batch_generate' && task.novelId) {
+        await tx.novel.update({
+          where: { id: task.novelId },
+          data: {
+            creationStage: PrismaNovelCreationStage.BODY,
+            stageStatus: PrismaStageStatus.FAILED,
+            updatedBy: input.context.userId,
+            updatedAt: input.now
+          }
+        });
+      }
+
+      return mapGenerationTask(task);
     });
   }
 
@@ -929,6 +1048,83 @@ export class PrismaNovelRepository implements NovelRepository {
     });
   }
 
+  async updateChapterWordTargets(input: ChapterWordTargetUpdateInput) {
+    const currentPlanId = input.novel.currentChapterPlanVersionId;
+    if (!currentPlanId) {
+      throw new Error('current chapter plan asset is required');
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      const currentAsset = await tx.creativeVersion.findFirst({
+        where: {
+          id: currentPlanId,
+          tenantId: input.context.tenantId,
+          novelId: input.novel.id,
+          objectType: 'chapter_plan'
+        }
+      });
+      if (!currentAsset) {
+        throw new Error('current chapter plan asset is required');
+      }
+
+      const updatesByNo = new Map(input.updates.map((update) => [update.chapterNo, update.wordTarget]));
+      const content = normalizePrismaStructureContent(currentAsset.contentJson);
+      const nextContent = {
+        ...content,
+        chapters: content.chapters.map((chapter) => ({
+          ...chapter,
+          wordTarget: updatesByNo.get(chapter.chapterNo) ?? chapter.wordTarget
+        }))
+      };
+
+      await tx.creativeVersion.update({
+        where: { id: currentAsset.id },
+        data: {
+          contentJson: nextContent as unknown as Prisma.InputJsonValue,
+          changeReason: input.reason
+        }
+      });
+
+      for (const update of input.updates) {
+        await tx.novelChapter.updateMany({
+          where: {
+            tenantId: input.context.tenantId,
+            novelId: input.novel.id,
+            chapterNo: update.chapterNo,
+            deletedAt: null
+          },
+          data: {
+            wordTarget: update.wordTarget,
+            statusNote: '目标字数已调整，后续生成将按新目标执行。',
+            updatedAt: input.now
+          }
+        });
+      }
+
+      await tx.novel.update({
+        where: { id: input.novel.id },
+        data: {
+          updatedBy: input.context.userId,
+          updatedAt: input.now
+        }
+      });
+    });
+
+    const novel = await this.findById(input.context.tenantId, input.novel.id);
+    const versions = await this.listStructureVersions(input.context.tenantId, input.novel.id);
+    const currentAsset = versions.find((version) => version.id === currentPlanId);
+    if (!novel || !currentAsset) {
+      throw new Error('updated chapter plan asset is required');
+    }
+
+    return {
+      novel,
+      currentAsset,
+      versions,
+      chapters: await this.listNovelChapters(input.context.tenantId, input.novel.id)
+    };
+  }
+
   async retryTask(input: TaskRetryInput): Promise<RetriedTaskRecord> {
     return this.prisma.$transaction(async (tx) => {
       const newTask = await tx.generationTask.create({
@@ -939,7 +1135,7 @@ export class PrismaNovelRepository implements NovelRepository {
           objectType: input.task.objectType,
           objectId: input.task.objectId,
           status: PrismaTaskStatus.QUEUED,
-          statusNote: '任务已重新加入队列，等待 mock provider 执行。',
+          statusNote: '任务已重新加入队列，等待模型服务执行。',
           progress: 0,
           currentStep: '等待重试执行',
           triggerSource: 'manual_retry',
@@ -1251,14 +1447,19 @@ export class PrismaNovelRepository implements NovelRepository {
     });
   }
 
-  async selectTrialChapterOneAndGenerateFollowup(input: TrialFollowupGenerationInput): Promise<GeneratedTrialFollowupRecord> {
+  async createTrialFollowupTask(input: TrialFollowupTaskCreationInput): Promise<CreatedTrialFollowupTaskRecord> {
     return this.prisma.$transaction(async (tx) => {
-      const selectedMetadata = { ...toRecord(input.selectedCandidate.metadata), trialStatus: 'selected_for_trial', isSelected: true };
-      const selected = await tx.chapterContentVersion.update({
+      const selectedMetadata = {
+        ...toRecord(input.selectedCandidate.metadata),
+        trialStatus: 'selected_for_trial',
+        isSelected: true,
+        followupStatus: 'generating'
+      };
+      await tx.chapterContentVersion.update({
         where: { id: input.selectedCandidate.id },
         data: {
           status: PrismaVersionStatus.CURRENT,
-          metadata: selectedMetadata
+          metadata: toJsonObject(selectedMetadata)
         }
       });
       await tx.chapterContentVersion.updateMany({
@@ -1273,7 +1474,120 @@ export class PrismaNovelRepository implements NovelRepository {
           status: PrismaVersionStatus.HISTORICAL
         }
       });
-      const oldTask = input.trialRun.sourceTaskId
+
+      const sourceTask = input.trialRun.sourceTaskId
+        ? await tx.generationTask.findFirst({
+            where: {
+              id: input.trialRun.sourceTaskId,
+              tenantId: input.context.tenantId
+            }
+          })
+        : null;
+      if (sourceTask?.status === PrismaTaskStatus.WAITING_CONFIRMATION) {
+        const oldTask = await tx.generationTask.update({
+          where: { id: sourceTask.id },
+          data: {
+            status: PrismaTaskStatus.COMPLETED,
+            statusNote: '用户已选择第1章候选',
+            currentStep: '第1章候选已选择，继续试写',
+            userAcceptedResult: true,
+            finishedAt: input.now,
+            updatedAt: input.now
+          }
+        });
+        await createTaskEvent(tx, {
+          task: oldTask,
+          eventType: 'task_completed',
+          message: '用户已选择第1章候选，任务完成。',
+          progress: 100,
+          requestId: input.context.requestId,
+          createdAt: input.now
+        });
+      }
+
+      const sourceVersionRefs = createTrialFollowupSourceVersionRefs(input.novel, input.selectedCandidate.id);
+      const task = await tx.generationTask.create({
+        data: {
+          ...createTrialTaskData({
+            input,
+            taskType: 'trial_followup_generate',
+            trialRunId: input.trialRun.id,
+            currentStep: '已选择第1章候选，正在生成第2-3章和试写总评',
+            sourceVersionRefs
+          }),
+          status: PrismaTaskStatus.PROCESSING,
+          statusNote: '正在调用模型继续试写第2-3章并生成试写总评，可能需要 1-3 分钟，可以稍后回来查看。',
+          progress: 18,
+          resultVersionId: input.selectedCandidate.id,
+          outputSummary: null,
+          updatedAt: input.now
+        }
+      });
+      await createTaskEvent(tx, {
+        task,
+        eventType: 'calling_model',
+        message: '正在调用模型继续试写第2-3章并生成试写总评，可能需要 1-3 分钟，可以稍后回来查看。',
+        progress: 18,
+        requestId: input.context.requestId,
+        createdAt: input.now
+      });
+
+      const updatedTrialRun = await tx.trialRun.update({
+        where: { id: input.trialRun.id },
+        data: {
+          status: 'followup_generating',
+          sourceTaskId: task.id,
+          updatedAt: input.now,
+          metadata: toJsonObject({
+            ...toRecord(input.trialRun.metadata),
+            selectedChapterOneCandidateId: input.selectedCandidate.id,
+            currentStep: '已选择第1章候选，正在生成第2-3章和试写总评',
+            blockingReason: null,
+            sourceVersionRefs
+          })
+        }
+      });
+      const novel = await tx.novel.update({
+        where: { id: input.novel.id },
+        data: {
+          creationStage: PrismaNovelCreationStage.TRIAL,
+          stageStatus: PrismaStageStatus.PROCESSING,
+          updatedBy: input.context.userId,
+          updatedAt: input.now
+        }
+      });
+
+      return {
+        novel: mapNovel(novel),
+        trialRun: mapTrialRun(updatedTrialRun),
+        task: mapGenerationTask(task)
+      };
+    });
+  }
+
+  async selectTrialChapterOneAndGenerateFollowup(input: TrialFollowupGenerationInput): Promise<GeneratedTrialFollowupRecord> {
+    return this.prisma.$transaction(async (tx) => {
+      const selectedMetadata = { ...toRecord(input.selectedCandidate.metadata), trialStatus: 'selected_for_trial', isSelected: true, followupStatus: 'completed' };
+      const selected = await tx.chapterContentVersion.update({
+        where: { id: input.selectedCandidate.id },
+        data: {
+          status: PrismaVersionStatus.CURRENT,
+          metadata: toJsonObject(selectedMetadata)
+        }
+      });
+      await tx.chapterContentVersion.updateMany({
+        where: {
+          tenantId: input.context.tenantId,
+          novelId: input.novel.id,
+          chapterId: input.selectedCandidate.chapterId,
+          id: { not: input.selectedCandidate.id },
+          status: PrismaVersionStatus.CANDIDATE
+        },
+        data: {
+          status: PrismaVersionStatus.HISTORICAL
+        }
+      });
+      const oldTask = input.trialRun.sourceTaskId && input.trialRun.sourceTaskId !== input.task.id
         ? await tx.generationTask.update({
             where: { id: input.trialRun.sourceTaskId },
             data: {
@@ -1297,22 +1611,17 @@ export class PrismaNovelRepository implements NovelRepository {
         });
       }
 
-      const sourceVersionRefs = {
-        currentDirectionVersionId: input.novel.currentDirectionVersionId,
-        currentSettingVersionId: input.novel.currentSettingVersionId,
-        currentOutlineVersionId: input.novel.currentOutlineVersionId,
-        currentStageOutlineVersionId: input.novel.currentStageOutlineVersionId,
-        currentChapterPlanVersionId: input.novel.currentChapterPlanVersionId,
-        selectedChapterOneCandidateId: input.selectedCandidate.id
-      };
-      const task = await tx.generationTask.create({
-        data: createTrialTaskData({
-          input,
-          taskType: 'trial_followup_generate',
-          trialRunId: input.trialRun.id,
+      const sourceVersionRefs = createTrialFollowupSourceVersionRefs(input.novel, input.selectedCandidate.id);
+      const task = await tx.generationTask.update({
+        where: { id: input.task.id },
+        data: {
+          status: PrismaTaskStatus.WAITING_CONFIRMATION,
+          statusNote: '模型服务已生成试写结果，等待用户确认。',
+          progress: 100,
           currentStep: input.review.trialResult === 'blocked' ? '第2章硬门槛未通过，试写暂停' : '前三章试写总评已生成，等待确认',
-          sourceVersionRefs
-        })
+          sourceVersionRefs: toJsonObject(sourceVersionRefs),
+          updatedAt: input.now
+        }
       });
       const contentVersions = [mapChapterContentVersion(selected)];
       const featureCards = [];
@@ -1613,6 +1922,36 @@ export class PrismaNovelRepository implements NovelRepository {
           }
         }
       });
+      const sourceTask = input.trialRun.sourceTaskId
+        ? await tx.generationTask.findFirst({
+            where: {
+              id: input.trialRun.sourceTaskId,
+              tenantId: input.context.tenantId,
+              novelId: input.novel.id
+            }
+          })
+        : null;
+      if (sourceTask?.status === PrismaTaskStatus.WAITING_CONFIRMATION) {
+        const completedTask = await tx.generationTask.update({
+          where: { id: sourceTask.id },
+          data: {
+            status: PrismaTaskStatus.COMPLETED,
+            statusNote: isReturnUpstream ? '用户已退回试写' : '用户已确认试写',
+            currentStep: isReturnUpstream ? '试写已退回上游调整' : '试写已确认，正文策略快照已生成',
+            userAcceptedResult: !isReturnUpstream,
+            finishedAt: input.now,
+            updatedAt: input.now
+          }
+        });
+        await createTaskEvent(tx, {
+          task: completedTask,
+          eventType: 'task_completed',
+          message: isReturnUpstream ? '试写已退回上游调整，任务完成。' : '试写已确认并生成正文策略快照，任务完成。',
+          progress: 100,
+          requestId: input.context.requestId,
+          createdAt: input.now
+        });
+      }
       const novel = await tx.novel.update({
         where: { id: input.novel.id },
         data: {
@@ -1800,6 +2139,13 @@ export class PrismaNovelRepository implements NovelRepository {
     return null;
   }
 
+  async createBodyBatchTask(_input: BodyBatchTaskCreationInput): Promise<CreatedBodyBatchTaskRecord> {
+    throw new BusinessError(ErrorCode.ConfigMissing, 'Prisma 正文批量写路径尚未实现，不能创建正文批次预占任务；请使用 in-memory 验收路径或先补齐真实数据库写入。', {
+      taskType: 'body_batch_generate',
+      capability: 'prisma_body_batch_write'
+    });
+  }
+
   async createFullReview(_input: FullReviewCreationInput): Promise<CreatedFullReviewRecord> {
     throw new Error('Package 7 Prisma full-review write path is not implemented; use in-memory mock provider for current package verification.');
   }
@@ -1911,8 +2257,11 @@ function mapPreferences(preferences: {
   id: string;
   tenantId: string;
   novelId: string;
+  creationSourceType: string;
   hotspotReportId: string | null;
   hotspotOpportunityId: string | null;
+  hotspotTitle: string | null;
+  hotspotOpportunityTitle: string | null;
   appealPointsJson: unknown;
   genresJson: unknown;
   openingState: string | null;
@@ -1932,8 +2281,11 @@ function mapPreferences(preferences: {
     id: preferences.id,
     tenantId: preferences.tenantId,
     novelId: preferences.novelId,
+    creationSourceType: fromPrismaCreationSourceType(preferences.creationSourceType),
     hotspotReportId: preferences.hotspotReportId,
     hotspotOpportunityId: preferences.hotspotOpportunityId,
+    hotspotTitle: preferences.hotspotTitle,
+    hotspotOpportunityTitle: preferences.hotspotOpportunityTitle,
     appealPoints: toStringArray(preferences.appealPointsJson),
     genres: toStringArray(preferences.genresJson),
     openingState: preferences.openingState,
@@ -1949,6 +2301,38 @@ function mapPreferences(preferences: {
     createdBy: preferences.createdBy,
     createdAt: preferences.createdAt
   };
+}
+
+function toPrismaCreationSourceType(value: string): PrismaNovelCreationSourceType {
+  switch (value) {
+    case 'hotspot_reference':
+      return PrismaNovelCreationSourceType.HOTSPOT_REFERENCE;
+    case 'manual_idea':
+      return PrismaNovelCreationSourceType.MANUAL_IDEA;
+    case 'legacy_unknown':
+      return PrismaNovelCreationSourceType.LEGACY_UNKNOWN;
+    case 'system_recommendation':
+    default:
+      return PrismaNovelCreationSourceType.SYSTEM_RECOMMENDATION;
+  }
+}
+
+function fromPrismaCreationSourceType(value: string) {
+  switch (value) {
+    case 'HOTSPOT_REFERENCE':
+    case 'hotspot_reference':
+      return 'hotspot_reference';
+    case 'MANUAL_IDEA':
+    case 'manual_idea':
+      return 'manual_idea';
+    case 'SYSTEM_RECOMMENDATION':
+    case 'system_recommendation':
+      return 'system_recommendation';
+    case 'LEGACY_UNKNOWN':
+    case 'legacy_unknown':
+    default:
+      return 'legacy_unknown';
+  }
 }
 
 function mapOperationLog(operationLog: {
@@ -2412,7 +2796,7 @@ function createDirectionTaskData(options: {
     objectType: 'direction',
     objectId: 'direction',
     status: options.status,
-    statusNote: 'mock provider 已生成结构化方向候选',
+    statusNote: '模型服务已生成结构化方向候选',
     progress: 100,
     currentStep: options.currentStep,
     triggerSource: 'manual',
@@ -2447,7 +2831,7 @@ function createStructureTaskData(options: {
     objectType: options.input.asset.objectType,
     objectId: options.input.asset.objectType,
     status: options.status,
-    statusNote: `mock provider 已生成 ${options.input.asset.objectType} 候选`,
+    statusNote: `模型服务已生成 ${options.input.asset.objectType} 候选`,
     progress: 100,
     currentStep: options.currentStep,
     triggerSource: 'manual',
@@ -2468,8 +2852,43 @@ function createStructureTaskData(options: {
   };
 }
 
+function createStructureGenerationTaskData(options: {
+  input: StructureGenerationTaskCreationInput;
+  status: keyof typeof PrismaTaskStatus;
+  currentStep: string;
+  now: Date;
+}) {
+  return {
+    tenantId: options.input.context.tenantId,
+    novelId: options.input.novel.id,
+    taskType: options.input.taskType,
+    objectType: options.input.objectType,
+    objectId: options.input.objectType,
+    status: options.status,
+    statusNote: '正在调用模型生成内容，可能需要 1-3 分钟，可以稍后回来查看。',
+    progress: 0,
+    currentStep: options.currentStep,
+    triggerSource: 'manual',
+    sourceVersionRefs: toJsonObject(options.input.sourceVersionRefs),
+    conflictScope: `novel_${options.input.objectType}`,
+    conflictKey: options.input.novel.id,
+    policyProfileVersionId: options.input.novel.policyProfileVersionId,
+    inputSummary: `基于上游正式资产生成 ${options.input.objectType} 候选`,
+    outputSummary: null,
+    userAcceptedResult: false,
+    startedAt: options.now,
+    createdBy: options.input.context.userId,
+    createdAt: options.now,
+    updatedAt: options.now,
+    metadata: {
+      requestId: options.input.context.requestId,
+      changeReason: options.input.changeReason
+    }
+  };
+}
+
 function createTrialTaskData(options: {
-  input: TrialCandidateCreationInput | TrialFollowupGenerationInput;
+  input: TrialCandidateCreationInput | TrialFollowupTaskCreationInput | TrialFollowupGenerationInput;
   taskType: string;
   trialRunId: string;
   currentStep: string;
@@ -2482,7 +2901,7 @@ function createTrialTaskData(options: {
     objectType: 'trial_run',
     objectId: options.trialRunId,
     status: PrismaTaskStatus.WAITING_CONFIRMATION,
-    statusNote: 'mock provider 已生成试写结果，等待用户确认。',
+    statusNote: '模型服务已生成试写结果，等待用户确认。',
     progress: 100,
     currentStep: options.currentStep,
     triggerSource: 'manual',
@@ -2501,6 +2920,17 @@ function createTrialTaskData(options: {
       requestId: options.input.context.requestId,
       trialRunId: options.trialRunId
     }
+  };
+}
+
+function createTrialFollowupSourceVersionRefs(novel: NovelRecord, selectedChapterOneCandidateId: string) {
+  return {
+    currentDirectionVersionId: novel.currentDirectionVersionId,
+    currentSettingVersionId: novel.currentSettingVersionId,
+    currentOutlineVersionId: novel.currentOutlineVersionId,
+    currentStageOutlineVersionId: novel.currentStageOutlineVersionId,
+    currentChapterPlanVersionId: novel.currentChapterPlanVersionId,
+    selectedChapterOneCandidateId
   };
 }
 
@@ -2595,6 +3025,22 @@ function getDirectionTaskSourceRefs(input: DirectionCreationInput | DirectionRev
   return {
     currentDirectionVersionId: input.novel.currentDirectionVersionId
   };
+}
+
+function getDirectionRevisionTaskStep(taskType: string) {
+  if (taskType === 'novel_direction_fuse') return '融合方向候选已生成';
+  if (taskType === 'novel_direction_manual_edit') return '手动编辑方向候选已保存';
+  return '优化方向候选已生成';
+}
+
+function getDirectionRevisionOutputSummary(taskType: string) {
+  if (taskType === 'novel_direction_fuse') return '生成融合方向候选';
+  if (taskType === 'novel_direction_manual_edit') return '保存手动编辑方向候选';
+  return '生成优化方向候选';
+}
+
+function getDirectionRevisionSourceType(taskType: string) {
+  return taskType === 'novel_direction_manual_edit' ? 'manual_edit' : 'mock_ai';
 }
 
 async function createTaskProgressEvents(
@@ -2856,6 +3302,29 @@ async function refreshPrismaChapters(tx: any, input: StructureAdoptionInput) {
       }
     });
   }
+}
+
+function normalizePrismaStructureContent(value: unknown): StructureAssetContentDTO {
+  const content = typeof value === 'object' && value !== null ? (value as Partial<StructureAssetContentDTO>) : {};
+  return {
+    title: typeof content.title === 'string' ? content.title : '',
+    summary: typeof content.summary === 'string' ? content.summary : '',
+    sections: Array.isArray(content.sections) ? content.sections : [],
+    stages: Array.isArray(content.stages) ? content.stages : [],
+    chapters: Array.isArray(content.chapters)
+      ? content.chapters.map((chapter) => ({
+          chapterNo: Number(chapter.chapterNo ?? 0),
+          stageIndex: Number(chapter.stageIndex ?? 0),
+          title: typeof chapter.title === 'string' ? chapter.title : '',
+          wordTarget: Number(chapter.wordTarget ?? 0),
+          goal: typeof chapter.goal === 'string' ? chapter.goal : '',
+          conflict: typeof chapter.conflict === 'string' ? chapter.conflict : '',
+          hook: typeof chapter.hook === 'string' ? chapter.hook : ''
+        }))
+      : [],
+    riskTags: Array.isArray(content.riskTags) ? content.riskTags : [],
+    recommendation: typeof content.recommendation === 'string' ? content.recommendation : ''
+  };
 }
 
 function mapImpactCase(record: {

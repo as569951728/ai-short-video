@@ -185,7 +185,11 @@ export function toRecentTaskSummaryDTO(task: GenerationTaskRecord) {
     status: task.status,
     statusText: getTaskStatusText(task.status),
     progress: task.progress,
-    currentStep: task.currentStep
+    currentStep: task.currentStep,
+    errorCode: task.errorCode,
+    errorMessage: task.errorMessage,
+    createdAt: task.createdAt.toISOString(),
+    updatedAt: task.updatedAt.toISOString()
   };
 }
 

@@ -31,6 +31,7 @@ export function createNovelProvidersFromEnv(options: NovelProviderFactoryOptions
   const provider = new DeepSeekNovelProvider({
     client,
     model: config.model,
+    structureModel: config.structureModel,
     reasonerModel: config.reasonerModel
   });
 

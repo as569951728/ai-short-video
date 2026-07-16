@@ -91,6 +91,15 @@ enum ImpactLevel {
   @@map("impact_level")
 }
 
+enum NovelCreationSourceType {
+  SYSTEM_RECOMMENDATION @map("system_recommendation")
+  HOTSPOT_REFERENCE     @map("hotspot_reference")
+  MANUAL_IDEA           @map("manual_idea")
+  LEGACY_UNKNOWN        @map("legacy_unknown")
+
+  @@map("novel_creation_source_type")
+}
+
 model Tenant {
   id        String    @id @default(cuid()) @db.VarChar(32)
   name      String    @db.VarChar(100)
@@ -269,8 +278,11 @@ model CreateNovelPreferences {
   id                        String   @id @default(cuid()) @db.VarChar(32)
   tenantId                  String   @map("tenant_id") @db.VarChar(32)
   novelId                   String   @unique @map("novel_id") @db.VarChar(32)
+  creationSourceType        NovelCreationSourceType @default(SYSTEM_RECOMMENDATION) @map("creation_source_type")
   hotspotReportId           String?  @map("hotspot_report_id") @db.VarChar(32)
   hotspotOpportunityId      String?  @map("hotspot_opportunity_id") @db.VarChar(80)
+  hotspotTitle              String?  @map("hotspot_title") @db.VarChar(200)
+  hotspotOpportunityTitle   String?  @map("hotspot_opportunity_title") @db.VarChar(200)
   appealPointsJson          Json?    @map("appeal_points_json")
   genresJson                Json?    @map("genres_json")
   openingState              String?  @map("opening_state") @db.Text
@@ -287,6 +299,7 @@ model CreateNovelPreferences {
   createdAt                 DateTime @default(now()) @map("created_at")
   metadata                  Json?
 
+  @@index([tenantId, creationSourceType])
   @@index([tenantId, hotspotReportId])
   @@map("create_novel_preferences")
 }
@@ -703,23 +716,76 @@ model VideoReadinessSnapshot {
   @@map("video_readiness_snapshot")
 }
 
+model VideoProject {
+  id                               String    @id @default(cuid()) @db.VarChar(32)
+  tenantId                         String    @map("tenant_id") @db.VarChar(32)
+  novelId                          String    @map("novel_id") @db.VarChar(32)
+  novelTitle                       String    @map("novel_title") @db.VarChar(200)
+  title                            String    @db.VarChar(200)
+  projectType                      String    @map("project_type") @db.VarChar(50)
+  lifecycleStatus                  String    @default("active") @map("lifecycle_status") @db.VarChar(50)
+  referenceStatus                  String    @default("normal") @map("reference_status") @db.VarChar(50)
+  productionStatus                 String    @default("not_started") @map("production_status") @db.VarChar(50)
+  sourceVideoReadinessSnapshotId   String    @map("source_video_readiness_snapshot_id") @db.VarChar(32)
+  chapterRangeText                 String    @map("chapter_range_text") @db.VarChar(120)
+  chapterCount                     Int       @default(0) @map("chapter_count")
+  currentVideoReferenceId          String?   @map("current_video_reference_id") @db.VarChar(32)
+  defaultVideoUnitId               String?   @map("default_video_unit_id") @db.VarChar(32)
+  createdBy                        String?   @map("created_by") @db.VarChar(32)
+  updatedBy                        String?   @map("updated_by") @db.VarChar(32)
+  createdAt                        DateTime  @default(now()) @map("created_at")
+  updatedAt                        DateTime  @updatedAt @map("updated_at")
+  deletedAt                        DateTime? @map("deleted_at")
+  metadata                         Json?
+
+  @@index([tenantId, novelId, lifecycleStatus, updatedAt])
+  @@index([tenantId, referenceStatus, updatedAt])
+  @@map("video_project")
+}
+
 model VideoReference {
   id                         String   @id @default(cuid()) @db.VarChar(32)
   tenantId                   String   @map("tenant_id") @db.VarChar(32)
   videoProjectId             String   @map("video_project_id") @db.VarChar(32)
   novelId                    String   @map("novel_id") @db.VarChar(32)
   videoReadinessSnapshotId   String   @map("video_readiness_snapshot_id") @db.VarChar(32)
+  versionNo                  Int      @default(1) @map("version_no")
   chapterIdsJson             Json?    @map("chapter_ids_json")
   chapterContentVersionIdsJson Json?  @map("chapter_content_version_ids_json")
   reviewReportId             String?  @map("review_report_id") @db.VarChar(32)
+  chapterRangeText           String?  @map("chapter_range_text") @db.VarChar(120)
+  chapterCount               Int      @default(0) @map("chapter_count")
+  referenceSummary           String?  @map("reference_summary") @db.Text
   riskSummary                String?  @map("risk_summary") @db.Text
   status                     String   @default("normal") @db.VarChar(50)
   createdAt                  DateTime @default(now()) @map("created_at")
+  updatedAt                  DateTime @updatedAt @map("updated_at")
   metadata                   Json?
 
   @@index([tenantId, novelId, status])
   @@index([tenantId, videoProjectId])
   @@map("video_reference")
+}
+
+model VideoReferenceChapterSnapshot {
+  id                      String   @id @default(cuid()) @db.VarChar(32)
+  tenantId                String   @map("tenant_id") @db.VarChar(32)
+  videoProjectId          String   @map("video_project_id") @db.VarChar(32)
+  videoReferenceId        String   @map("video_reference_id") @db.VarChar(32)
+  novelId                 String   @map("novel_id") @db.VarChar(32)
+  chapterId               String   @map("chapter_id") @db.VarChar(32)
+  chapterNo               Int      @map("chapter_no")
+  chapterTitle            String   @map("chapter_title") @db.VarChar(200)
+  contentVersionId        String   @map("content_version_id") @db.VarChar(32)
+  wordCount               Int      @default(0) @map("word_count")
+  summary                 String?  @db.Text
+  riskLevel               String   @default("none") @map("risk_level") @db.VarChar(50)
+  createdAt               DateTime @default(now()) @map("created_at")
+  metadata                Json?
+
+  @@unique([tenantId, videoReferenceId, chapterId])
+  @@index([tenantId, novelId, chapterId])
+  @@map("video_reference_chapter_snapshot")
 }
 
 model VideoReferenceIssue {
@@ -728,17 +794,184 @@ model VideoReferenceIssue {
   videoProjectId           String      @map("video_project_id") @db.VarChar(32)
   videoReferenceId         String      @map("video_reference_id") @db.VarChar(32)
   novelId                  String      @map("novel_id") @db.VarChar(32)
-  issueLevel               ImpactLevel @default(MINOR) @map("issue_level")
+  issueLevel               String      @default("info") @map("issue_level") @db.VarChar(50)
+  issueType                String?     @map("issue_type") @db.VarChar(80)
   issueReason              String      @map("issue_reason") @db.Text
   affectedChapterIdsJson   Json?       @map("affected_chapter_ids_json")
+  affectedChapterNumbersJson Json?     @map("affected_chapter_numbers_json")
   sourceChangeObjectType   String?     @map("source_change_object_type") @db.VarChar(80)
   sourceChangeObjectId     String?     @map("source_change_object_id") @db.VarChar(80)
   status                   String      @default("open") @db.VarChar(50)
+  resolutionAction         String?     @map("resolution_action") @db.VarChar(80)
+  resolutionReason         String?     @map("resolution_reason") @db.Text
+  resolvedBy               String?     @map("resolved_by") @db.VarChar(32)
   createdAt                DateTime    @default(now()) @map("created_at")
+  updatedAt                DateTime    @updatedAt @map("updated_at")
   resolvedAt               DateTime?   @map("resolved_at")
   metadata                 Json?
 
   @@index([tenantId, novelId, issueLevel, status])
   @@index([tenantId, videoReferenceId, status])
   @@map("video_reference_issue")
+}
+
+model VideoUnit {
+  id                 String   @id @default(cuid()) @db.VarChar(32)
+  tenantId           String   @map("tenant_id") @db.VarChar(32)
+  videoProjectId     String   @map("video_project_id") @db.VarChar(32)
+  videoReferenceId   String   @map("video_reference_id") @db.VarChar(32)
+  unitNo             Int      @map("unit_no")
+  unitType           String   @default("first_test") @map("unit_type") @db.VarChar(50)
+  title              String   @db.VarChar(200)
+  chapterRangeText   String   @map("chapter_range_text") @db.VarChar(120)
+  chapterIdsJson     Json?    @map("chapter_ids_json")
+  status             String   @default("reference_ready") @db.VarChar(50)
+  productionStatus   String   @default("not_started") @map("production_status") @db.VarChar(50)
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+  metadata           Json?
+
+  @@unique([tenantId, videoProjectId, unitNo])
+  @@index([tenantId, videoReferenceId])
+  @@map("video_unit")
+}
+
+model VideoArtifact {
+  id                     String    @id @default(cuid()) @db.VarChar(32)
+  tenantId               String    @map("tenant_id") @db.VarChar(32)
+  videoProjectId         String    @map("video_project_id") @db.VarChar(32)
+  videoUnitId            String    @map("video_unit_id") @db.VarChar(32)
+  videoReferenceId       String    @map("video_reference_id") @db.VarChar(32)
+  artifactType           String    @map("artifact_type") @db.VarChar(50)
+  status                 String    @default("candidate") @db.VarChar(50)
+  versionNo              Int       @map("version_no")
+  isCurrent              Boolean   @default(false) @map("is_current")
+  sourceVersionRefs      Json      @map("source_version_refs")
+  providerSummary        Json      @map("provider_summary")
+  providerRouteId        String    @map("provider_route_id") @db.VarChar(120)
+  strategyVersion        String    @map("strategy_version") @db.VarChar(120)
+  qualityMode            String    @map("quality_mode") @db.VarChar(50)
+  contentText            String    @map("content_text") @db.Text
+  hook                   String    @db.VarChar(500)
+  firstScreenSubtitle    String    @map("first_screen_subtitle") @db.VarChar(500)
+  endingHook             String    @map("ending_hook") @db.VarChar(500)
+  estimatedDurationSeconds Int     @default(0) @map("estimated_duration_seconds")
+  durationSeconds        Int       @default(0) @map("duration_seconds")
+  fileKey                String?   @map("file_key") @db.VarChar(500)
+  previewUrl             String?   @map("preview_url") @db.VarChar(1000)
+  voiceId                String?   @map("voice_id") @db.VarChar(120)
+  voiceName              String?   @map("voice_name") @db.VarChar(120)
+  speed                  Float?
+  emotion                String?   @db.VarChar(50)
+  volume                 Int?
+  wordCount              Int       @default(0) @map("word_count")
+  riskTagsJson           Json?     @map("risk_tags_json")
+  recommendationReason   String?   @map("recommendation_reason") @db.Text
+  score                  Int       @default(0)
+  qualitySummary         String?   @map("quality_summary") @db.Text
+  rejectedReason         String?   @map("rejected_reason") @db.Text
+  confirmedBy            String?   @map("confirmed_by") @db.VarChar(32)
+  confirmedAt            DateTime? @map("confirmed_at")
+  createdBy              String?   @map("created_by") @db.VarChar(32)
+  createdAt              DateTime  @default(now()) @map("created_at")
+  updatedAt              DateTime  @updatedAt @map("updated_at")
+  metadata               Json?
+
+  @@unique([tenantId, videoProjectId, artifactType, versionNo])
+  @@index([tenantId, videoProjectId, artifactType, status])
+  @@index([tenantId, videoUnitId, artifactType, isCurrent])
+  @@index([tenantId, videoProjectId, artifactType, isCurrent])
+  @@map("video_artifact")
+}
+
+model VideoRender {
+  id                String    @id @default(cuid()) @db.VarChar(32)
+  tenantId          String    @map("tenant_id") @db.VarChar(32)
+  videoProjectId    String    @map("video_project_id") @db.VarChar(32)
+  videoUnitId       String    @map("video_unit_id") @db.VarChar(32)
+  videoReferenceId  String    @map("video_reference_id") @db.VarChar(32)
+  versionNo         Int       @map("version_no")
+  status            String    @default("candidate") @db.VarChar(50)
+  isCurrent         Boolean   @default(false) @map("is_current")
+  previewStatus     String    @default("preview_pending") @map("preview_status") @db.VarChar(50)
+  previewUrl        String    @map("preview_url") @db.VarChar(1000)
+  fileKey           String    @map("file_key") @db.VarChar(500)
+  durationSeconds   Int       @default(0) @map("duration_seconds")
+  renderMode        String    @default("mock_loop_background") @map("render_mode") @db.VarChar(80)
+  qualityMode       String    @default("standard") @map("quality_mode") @db.VarChar(50)
+  qualityIssuesJson Json?     @map("quality_issues_json")
+  safeSummary       String    @map("safe_summary") @db.Text
+  providerSummary   Json      @map("provider_summary")
+  providerRouteId   String    @map("provider_route_id") @db.VarChar(120)
+  strategyVersion   String    @map("strategy_version") @db.VarChar(120)
+  sourceVersionRefs Json      @map("source_version_refs")
+  rejectedReason    String?   @map("rejected_reason") @db.Text
+  confirmedBy       String?   @map("confirmed_by") @db.VarChar(32)
+  confirmedAt       DateTime? @map("confirmed_at")
+  createdBy         String?   @map("created_by") @db.VarChar(32)
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+  metadata          Json?
+
+  @@unique([tenantId, videoProjectId, versionNo])
+  @@index([tenantId, videoProjectId, status])
+  @@index([tenantId, videoUnitId, isCurrent])
+  @@index([tenantId, videoProjectId, isCurrent])
+  @@map("video_render")
+}
+
+model VideoExport {
+  id               String   @id @default(cuid()) @db.VarChar(32)
+  tenantId         String   @map("tenant_id") @db.VarChar(32)
+  videoProjectId   String   @map("video_project_id") @db.VarChar(32)
+  videoUnitId      String   @map("video_unit_id") @db.VarChar(32)
+  videoReferenceId String   @map("video_reference_id") @db.VarChar(32)
+  status           String   @default("created") @db.VarChar(50)
+  fileKey          String   @map("file_key") @db.VarChar(500)
+  downloadUrl      String   @map("download_url") @db.VarChar(1000)
+  fileName         String   @map("file_name") @db.VarChar(200)
+  renderVersionId  String   @map("render_version_id") @db.VarChar(32)
+  renderVersionNo  Int      @map("render_version_no")
+  safeSummary      String   @map("safe_summary") @db.Text
+  createdBy        String?  @map("created_by") @db.VarChar(32)
+  createdAt        DateTime @default(now()) @map("created_at")
+  metadata         Json?
+
+  @@index([tenantId, videoProjectId, status])
+  @@index([tenantId, renderVersionId])
+  @@map("video_export")
+}
+
+model VideoActionReceipt {
+  id                 String   @id @default(cuid()) @db.VarChar(32)
+  tenantId           String   @map("tenant_id") @db.VarChar(32)
+  videoProjectId     String?  @map("video_project_id") @db.VarChar(32)
+  actionType         String   @map("action_type") @db.VarChar(80)
+  idempotencyToken   String   @map("idempotency_token") @db.VarChar(160)
+  requestHash        String   @map("request_hash") @db.VarChar(80)
+  resultObjectType   String   @map("result_object_type") @db.VarChar(80)
+  resultObjectId     String   @map("result_object_id") @db.VarChar(80)
+  createdBy          String?  @map("created_by") @db.VarChar(32)
+  createdAt          DateTime @default(now()) @map("created_at")
+  metadata           Json?
+
+  @@unique([tenantId, actionType, idempotencyToken])
+  @@index([tenantId, videoProjectId, actionType])
+  @@map("video_action_receipt")
+}
+
+model VideoOperationLog {
+  id              String   @id @default(cuid()) @db.VarChar(32)
+  tenantId        String   @map("tenant_id") @db.VarChar(32)
+  videoProjectId  String?  @map("video_project_id") @db.VarChar(32)
+  action          String   @db.VarChar(80)
+  objectType      String   @map("object_type") @db.VarChar(80)
+  objectId        String   @map("object_id") @db.VarChar(80)
+  reason          String?  @db.Text
+  createdBy       String?  @map("created_by") @db.VarChar(32)
+  createdAt       DateTime @default(now()) @map("created_at")
+  metadata        Json?
+
+  @@index([tenantId, videoProjectId, action, createdAt])
+  @@map("video_operation_log")
 }

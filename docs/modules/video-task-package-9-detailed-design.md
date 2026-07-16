@@ -83,6 +83,170 @@ P9 可以一次性设计，但研发可拆为 5 个内部分段：
 
 研发可以按 9a-9e 顺序交付，但产品验收时必须验证完整闭环。
 
+## P9a 研发落地记录（2026-06-24）
+
+P9a 当前只交付视频详情工作台地基，不启动 P9b-P9e 的真实生产能力。
+
+已落地范围：
+
+- 新增视频详情路由：`/videos/:videoId`。
+- 新增后端聚合读取接口：`GET /videos/:videoId/workbench`。
+- workbench 聚合读取 P8b 地基数据：`VideoProject`、`VideoReference`、`VideoReferenceChapterSnapshot` 和默认 `VideoUnit`。
+- 新增 shared P9a DTO：`VideoWorkbenchDTO`、`VideoUnitDTO`、步骤 key、依赖版本 refs、风险摘要和产物占位类型。
+- 前端 `/videos/:videoId` 展示顶部状态栏、大步骤条、引用快照、默认视频单元、产物版本占位、任务/依赖/风险侧栏。
+- 只开放引用检查动作：查看引用、重新检查引用、查看异常处理建议。
+- 引用 `blocking` 时，旁白、配音、字幕、视觉方案、渲染、预览确认和导出步骤全部锁定。
+- 非 `blocking` 时，后续步骤仍为 P9a 占位态，不出现可执行生成/配音/字幕/渲染/导出按钮。
+
+未落地范围：
+
+- 不新增旁白、TTS、字幕、视觉方案、渲染或导出写接口。
+- 不新增 `VideoArtifact` / `VideoRender` / `VideoExport` 表；本阶段只保留 shared DTO / view model 占位，P9b-P9e 再按分段落库。
+- 不创建真实 TTS/subtitle/render 任务。
+- 不执行真实 MySQL / Prisma live smoke；P8b-L1b 仍待环境。
+
+## P9b 研发落地记录（2026-06-25）
+
+P9b 当前只交付旁白稿调试工作台，不启动配音、字幕、视觉方案、渲染、导出或发布能力。
+
+已落地范围：
+
+- `/videos/:videoId` 的“旁白稿”步骤已开放：生成候选、查看全文、手动编辑保存草稿、确认当前旁白、标记不采用和查看历史摘要。
+- 新增旁白共享契约：旁白版本状态 `candidate / draft / confirmed / rejected / stale / archived`，质量模式 `fast / standard / high_quality`，以及旁白候选、草稿、确认、拒绝和任务摘要 DTO。
+- 新增后端接口：
+  - `GET /videos/:videoId/narrations`
+  - `POST /videos/:videoId/narrations/generate`
+  - `POST /videos/:videoId/narrations/drafts`
+  - `POST /videos/:videoId/narrations/:artifactId/confirm`
+  - `POST /videos/:videoId/narrations/:artifactId/reject`
+- 新增最小持久化模型 `VideoArtifact`，P9b 仅使用 `artifactType=narration_script`。候选、编辑草稿、确认版本和拒绝版本都保留历史，不覆盖旧版本。
+- `GET /videos/:videoId/workbench` 已能反映旁白状态：无候选时推荐“生成旁白候选”，有候选/草稿时推荐“选择或编辑旁白候选”，确认后旁白步骤为已完成，配音仍显示 P9c 锁定。
+- 引用 `blocking` 仍是硬前置：不能生成、编辑或确认旁白，后续配音、字幕、视觉方案、渲染、预览和导出全部锁定。
+- 本包使用受控 mock 视频旁白 provider 生成 1-3 个候选，并在 `providerSummary` / `metadata.isMockOutput=true` 中标记模拟输出；未调用真实模型，不保存完整 prompt 或完整 provider 响应。
+- 所有旁白写动作沿用 `VideoActionReceipt` 幂等口径：同 `idempotencyToken + actionType + requestHash` 复用已有结果，不同 requestHash 返回 `IDEMPOTENCY_CONFLICT`。
+- `sourceVersionRefs` 记录 `videoReferenceId`、`videoReferenceVersion`、`videoUnitId`、`videoReadinessSnapshotId` 和引用章节正文版本。确认时校验引用版本一致，旧引用候选不能静默成为当前旁白。
+- 确认低分或风险偏高旁白必须填写原因；确认后写 `VideoOperationLog`，并在元数据中声明 TTS、字幕、视觉方案、渲染和导出后续产物需要重做。
+
+未落地范围：
+
+- 不生成配音、不生成字幕、不做视觉方案、不渲染、不导出、不发布。
+- 不新增真实视频生产任务队列；旁白生成首期返回受控 mock 任务摘要，页面展示任务结果和历史。
+- 不执行真实 MySQL / Prisma live smoke；P8b-L1b 仍待环境。
+
+## P9b-L1 迁移与失败路径补强记录（2026-06-26）
+
+P9b-L1 只补强旁白产物迁移支撑和任务失败/取消/重试验收路径，不启动 P9c 配音、字幕、渲染、导出或发布。
+
+已落地范围：
+
+- 新增可审查 migration 草案：`apps/api/prisma/migrations/20260626000000_add_video_artifact/migration.sql`，用于创建 `video_artifact` 表。
+- migration 与当前 `schema.prisma` 的 `VideoArtifact` 对齐，包含 `source_version_refs`、`provider_summary`、`provider_route_id`、`strategy_version`、`quality_mode`、旁白正文/钩子/字幕建议/风险字段、确认/拒绝字段、唯一约束和工作台查询索引。
+- 当前视频 Prisma 模型未声明显式 relation，P9b-L1 migration 草案沿用项目现有约定：保存引用 ID 并建立索引，不在本草案中新增外键。
+- 新增受控 mock 任务结果：`success / failed / cancelled`。失败和取消只写安全任务摘要、action receipt 和 operation log，不创建旁白候选、不推进 current、不解锁配音。
+- 失败任务展示 `failureCategory=provider_error`、当前步骤、进度、可重试提示；取消任务展示 `failureCategory=user_cancelled` 和“不写入候选”的说明。
+- 重试使用新的 `idempotencyToken` 和 `retryOfTaskId` 创建新任务，原失败/取消任务保留历史；成功重试仍只生成候选，不自动确认当前旁白。
+- `/videos/:videoId/workbench` 和前端任务侧栏可展示最新旁白任务状态；mock 页面提供失败/取消样本按钮用于验收，不在 backend 模式下展示。
+
+迁移执行边界：
+
+- 本包没有执行 `prisma migrate dev`、`prisma db push`、`prisma migrate reset`、`db:seed` 或任何真实 MySQL 写入。
+- P8b-L1b 真实 MySQL / Prisma live smoke 仍需等待安全本地/测试/smoke 数据库环境和主控明确授权。
+
+安全与边界：
+
+- 失败摘要、任务摘要、页面和接口响应仅包含安全文案、失败分类、任务 ID、进度和版本引用，不包含 API Key、完整 prompt、完整 provider 响应或完整数据库连接串。
+- 配音、字幕、视觉方案、渲染、预览确认、导出和发布仍保持 P9c/P9d/P9e/P10 锁定。
+
+## P9c 配音调试工作台实现记录（2026-06-27）
+
+P9c 只开放视频详情工作台的“配音”步骤，不进入字幕、视觉方案、渲染、导出或发布。
+
+已落地范围：
+
+- `VideoArtifact` 扩展承载 `tts_audio` 产物，新增音频参数和文件引用字段：`voiceId`、`voiceName`、`speed`、`emotion`、`volume`、`durationSeconds`、`fileKey`、`previewUrl`。
+- 新增 mock/local TTS 接口：
+  - `GET /videos/:videoId/tts`
+  - `POST /videos/:videoId/tts/generate`
+  - `POST /videos/:videoId/tts/:artifactId/confirm`
+  - `POST /videos/:videoId/tts/:artifactId/reject`
+- 配音生成使用 `video_tts_generate` 任务摘要，支持 `success / failed / cancelled` 受控 mock 结果、`retryOfTaskId`、`failureCategory`、`currentStep`、`progress` 和安全 `statusNote`。
+- 未确认旁白、引用 blocking、引用版本变化、旁白版本变化时阻断配音生成或确认。
+- 配音候选不会自动成为当前音频，用户确认后才设置当前配音版本。
+- 不采用配音必须填写原因，并保留历史版本。
+- 同 `idempotencyToken + actionType + requestHash` 复用已有任务/结果；同 token 不同请求返回 `IDEMPOTENCY_CONFLICT`。
+- 工作台在确认旁白后把配音步骤置为可操作；确认配音后只提示字幕将在 P9d 解锁，不展示可执行字幕入口。
+
+Provider / 迁移边界：
+
+- 本阶段只使用 mock/local TTS provider，不调用真实外部 TTS、云存储或付费接口。
+- `previewUrl` 是可验收的 mock 试听占位路径，不能视为真实音频托管。
+- `apps/api/prisma/migrations/20260627000000_add_video_tts_artifact_fields/migration.sql` 是 reviewable migration 草案；本包不执行 migrate、db push、reset、seed 或真实 MySQL 写入。
+- 任务摘要、页面、接口响应和迁移文件不得包含 TTS 密钥、完整供应商请求/响应、完整 prompt 或完整章节正文。
+
+## P9d 字幕调试工作台实现记录（2026-07-10）
+
+P9d 只开放视频详情工作台的“字幕”步骤，不进入视觉方案、渲染、导出或发布。
+
+已落地范围：
+
+- `VideoArtifact` 扩展承载 `subtitle` 产物，复用版本状态 `candidate / draft / confirmed / rejected / stale / archived`，并新增字幕字段：`contentText`、`firstScreenSubtitle`、`timelineSummary`、`estimatedDurationSeconds`、`lineCount`、`wordCount`、`subtitleStyle` 和 `lineLength`。
+- 新增字幕接口：
+  - `GET /videos/:videoId/subtitles`
+  - `POST /videos/:videoId/subtitles/generate`
+  - `POST /videos/:videoId/subtitles/drafts`
+  - `POST /videos/:videoId/subtitles/:artifactId/confirm`
+  - `POST /videos/:videoId/subtitles/:artifactId/reject`
+- 字幕生成使用 `video_subtitle_generate` 任务摘要，支持 `success / failed / cancelled` 受控 mock 结果、`retryOfTaskId`、`failureCategory`、`currentStep`、`progress` 和安全 `statusNote`。
+- 未确认配音、引用 blocking、引用版本变化、当前旁白变化或当前配音变化时，阻断字幕生成或确认。
+- 字幕候选不会自动成为当前字幕；用户保存编辑稿只创建 `draft` 版本，用户确认后才设置当前字幕版本。
+- 不采用字幕必须填写原因，并保留历史版本。
+- `sourceVersionRefs` 记录引用版本、默认视频单元、旁白版本、配音版本和章节正文版本，确认字幕时必须校验这些来源仍是当前版本。
+- 工作台在确认配音后解锁字幕步骤，提供风格、每行字数、生成候选、失败/取消样本、编辑草稿、确认和拒绝入口。
+- P9d 收口时字幕确认后仍保持 P9e 下游锁定；P9e 落地后，字幕确认会推进到“配置视觉方案”。
+- 后端路由测试覆盖：配音前阻断字幕、候选幂等、失败/取消保留任务、重试、编辑草稿、拒绝、确认当前字幕，以及下游解锁前置。
+
+Provider / 迁移边界：
+
+- 本阶段使用 mock/local subtitle provider，不调用真实外部字幕工具、渲染工具或付费接口。
+- `timelineSummary` 是摘要级字符串数组，不做逐帧复杂时间轴编辑。
+- 本包不执行 migrate、db push、reset、seed 或真实 MySQL 写入。
+- 任务摘要、页面、接口响应和迁移文件不得包含模型密钥、完整供应商请求/响应、完整 prompt 或完整章节正文。
+
+## P9e 渲染预览导出工作台实现记录（2026-07-10）
+
+P9e 只开放视频详情工作台的“视觉方案 / 渲染 / 预览确认 / 导出”步骤，仍不进入 P10 发布、上传、平台数据回填或运营复盘。
+
+已落地范围：
+
+- `VideoArtifact` 继续承载 `visual_plan` 视觉方案候选和当前版本，字段覆盖循环背景、画面比例、分辨率、字幕位置、字号、文字颜色、描边、阴影和安全区。
+- 新增 `VideoRender` / `VideoExport` Prisma schema 与 reviewable migration 草案：
+  - `apps/api/prisma/migrations/20260710000000_add_video_render_export/migration.sql`
+  - 迁移草案只建渲染版本和导出记录，不建发布、上传或平台回填表。
+- 新增 P9e 接口：
+  - `GET /videos/:videoId/visual-plans`
+  - `POST /videos/:videoId/visual-plans`
+  - `POST /videos/:videoId/visual-plans/:artifactId/confirm`
+  - `POST /videos/:videoId/visual-plans/:artifactId/reject`
+  - `GET /videos/:videoId/renders`
+  - `POST /videos/:videoId/renders/generate`
+  - `POST /videos/:videoId/renders/:renderId/confirm`
+  - `POST /videos/:videoId/renders/:renderId/reject`
+  - `GET /videos/:videoId/exports`
+  - `POST /videos/:videoId/exports`
+- 渲染任务使用 `video_render_generate`，支持 `success / failed / cancelled` 受控 mock 结果、`retryOfTaskId`、`failureCategory`、`currentStep`、`progress` 和安全 `statusNote`。
+- 渲染候选不会自动成为可导出版本；用户预览确认后才设置当前 render，且 `previewStatus=confirmed_exportable`。
+- 导出只能基于已确认、未过期且可导出的 render；导出创建 `VideoExport` 记录，不覆盖历史，不创建发布记录。
+- 工作台在字幕确认后解锁视觉方案，视觉方案确认后解锁渲染，渲染候选进入预览确认，确认当前视频后解锁导出记录。
+- 前端 mock 模式可完成：保存视觉方案候选、确认视觉方案、生成 mock/local 渲染、失败/取消样本、确认/驳回 render、创建导出记录。
+
+Provider / 迁移边界：
+
+- 本阶段只使用 mock/local render provider，不调用真实外部渲染工具、真实云存储、真实视频生成平台或付费 provider。
+- 视觉方案只使用内置循环背景素材，不做 AI 分镜、复杂素材库或外部素材搜索。
+- `previewUrl` / `downloadUrl` 是系统内占位路径，不能视为真实托管文件。
+- 本包不执行 migrate、db push、reset、seed 或真实 MySQL 写入；真实 MySQL 写路径仍等待安全数据库环境和主控明确授权。
+- 页面、任务摘要、接口响应和迁移文件不得包含 API Key、完整 DB URL、完整 provider 请求/响应、完整 prompt 或完整章节正文。
+
 ## 模块 1：视频详情工作台
 
 视频详情工作台参考小说步骤式工作台：不是所有模块长页面铺开，而是“顶部状态 + 大步骤条 + 当前步骤详情 + 侧边任务/版本/风险”。
@@ -195,6 +359,47 @@ confirmedAt
 createdAt
 updatedAt
 ```
+
+### 可见 metadata 与正文暴露边界
+
+P9 artifact 内部可以保留必要审计 metadata，但任何前端响应、任务摘要、操作记录展示摘要都必须先经过可见字段白名单。
+
+前端可见 `metadata` 仅允许非敏感展示字段，例如：
+
+- `isMockOutput`
+- `candidateRank`
+- `subtitleStyle`
+- `lineLength`
+- `previewKind`
+- `baseArtifactId`
+- `editReason`
+- `voiceId` / `voiceName` / `speed` / `emotion` / `volume` / `durationSeconds`
+- `backgroundAssetId` / `backgroundName` / `backgroundType`
+- `aspectRatio` / `resolution` / `subtitlePosition` / `fontSize`
+- `textColor` / `strokeColor` / `shadowEnabled` / `safeAreaPreset`
+- `timelineSummary`
+- `format`
+- `safeSummary`
+
+`providerSummary` 只允许安全展示字段：
+
+- `provider`
+- `model` 展示名
+- `isMockOutput`
+- `safeSummary`
+
+禁止进入前端响应、任务摘要、操作记录展示摘要、console/storage 的字段或字段片段：
+
+- `prompt` / `rawPrompt`
+- `rawResponse` / `modelResponse` / `providerResponse`
+- `providerPayload` / `requestPayload` / `responsePayload`
+- `apiKey` / `token` / `secret`
+- `DATABASE_URL` 或完整数据库连接串
+- `endpoint`、供应商请求 URL、完整请求体或完整响应体
+- `fullChapterText` / `chapterBody`
+- `debug`
+
+`narration_script.contentText` 和 `subtitle.contentText` 是用户可编辑业务资产，允许在对应旁白/字幕资产接口、草稿保存接口和页面编辑区完整返回与保存。该例外不能扩展到任务摘要、`recentTasks`、`statusNote`、`failureCategory`、操作记录、浏览器 storage、console 或其他非正文编辑区域。
 
 状态：
 
@@ -864,6 +1069,8 @@ Mock Provider 要求：
 - 完整模型响应。
 - 供应商完整原始响应。
 - 数据库连接串。
+- 完整章节正文。
+- artifact metadata 中未进入白名单的调试字段、请求体、响应体或供应商 payload。
 
 审计要求：
 
@@ -871,6 +1078,8 @@ Mock Provider 要求：
 - 不满意和拒绝版本必须记录原因。
 - 导出记录必须可追溯到具体渲染版本。
 - 所有写接口必须有 schema 校验、版本校验和操作日志。
+- 失败原因必须保留稳定 `failureCategory` 与可行动安全文案；不得把 raw provider error、URL、连接串、key/token 或 prompt 片段透出给用户。
+- 本安全边界为 P9 mock/local 输出合同补强，不代表真实 provider、真实外部渲染、云存储或真实 MySQL 写路径已完成验证。
 
 ## 验收标准
 

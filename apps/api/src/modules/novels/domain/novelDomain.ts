@@ -18,7 +18,8 @@ import {
   type QualityScoringDTO,
   type StructureAssetContentDTO,
   type StructureAssetType,
-  type CreateNovelDraftRequest
+  type CreateNovelDraftRequest,
+  type NovelCreationSourceType
 } from '@ai-shortvideo/shared';
 
 export const DEFAULT_TENANT_ID = 'tenant_default';
@@ -557,8 +558,11 @@ export interface NovelPreferencesRecord {
   id: string;
   tenantId: string;
   novelId: string;
+  creationSourceType: NovelCreationSourceType;
   hotspotReportId: string | null;
   hotspotOpportunityId: string | null;
+  hotspotTitle: string | null;
+  hotspotOpportunityTitle: string | null;
   appealPoints: string[];
   genres: string[];
   openingState: string | null;
@@ -598,6 +602,10 @@ export interface DraftCreationInput {
   request: CreateNovelDraftRequest;
   context: RequestContext;
   now: Date;
+  creationSourceContext?: {
+    hotspotTitle: string | null;
+    hotspotOpportunityTitle: string | null;
+  };
 }
 
 export interface CreatedDraftRecord {
@@ -661,6 +669,27 @@ export interface StructureCreationInput {
   taskType: string;
   changeReason: string;
   sourceVersionRefs: unknown;
+  reservedTaskId?: string;
+  context: RequestContext;
+  now: Date;
+}
+
+export interface StructureGenerationTaskCreationInput {
+  novel: NovelRecord;
+  objectType: StructureAssetType;
+  taskType: string;
+  changeReason: string;
+  sourceVersionRefs: unknown;
+  context: RequestContext;
+  now: Date;
+}
+
+export interface TaskFailureInput {
+  task: GenerationTaskRecord;
+  errorCode: string;
+  errorMessage: string;
+  failureCategory?: string;
+  statusNote?: string;
   context: RequestContext;
   now: Date;
 }
@@ -736,9 +765,24 @@ export interface CreatedTrialCandidatesRecord {
   chapterOneCandidates: ChapterContentVersionRecord[];
 }
 
+export interface TrialFollowupTaskCreationInput {
+  novel: NovelRecord;
+  trialRun: TrialRunRecord;
+  selectedCandidate: ChapterContentVersionRecord;
+  context: RequestContext;
+  now: Date;
+}
+
+export interface CreatedTrialFollowupTaskRecord {
+  novel: NovelRecord;
+  trialRun: TrialRunRecord;
+  task: GenerationTaskRecord;
+}
+
 export interface TrialFollowupGenerationInput {
   novel: NovelRecord;
   trialRun: TrialRunRecord;
+  task: GenerationTaskRecord;
   selectedCandidate: ChapterContentVersionRecord;
   chapters: TrialFollowupChapterDraft[];
   review: TrialReviewDraft;
@@ -776,9 +820,28 @@ export interface ConfirmedTrialRecord {
   operationLog: OperationLogRecord;
 }
 
+export interface BodyBatchTaskCreationInput {
+  novel: NovelRecord;
+  strategySnapshot: CreativeVersionRecord;
+  idempotencyKey: string;
+  requestFingerprint: unknown;
+  startChapterNo: number;
+  endChapterNo: number;
+  sourceVersionRefs: unknown;
+  context: RequestContext;
+  now: Date;
+}
+
+export interface CreatedBodyBatchTaskRecord {
+  novel: NovelRecord;
+  task: GenerationTaskRecord;
+  reused: boolean;
+}
+
 export interface BodyBatchGenerationInput {
   novel: NovelRecord;
   strategySnapshot: CreativeVersionRecord;
+  task: GenerationTaskRecord;
   chapters: BodyChapterDraft[];
   idempotencyKey: string;
   requestFingerprint: unknown;
@@ -1015,6 +1078,24 @@ export interface ChapterWorkbenchRecord {
   recentTask: GenerationTaskRecord | null;
 }
 
+export interface ChapterWordTargetUpdateInput {
+  novel: NovelRecord;
+  updates: Array<{
+    chapterNo: number;
+    wordTarget: number;
+  }>;
+  reason: string;
+  context: RequestContext;
+  now: Date;
+}
+
+export interface UpdatedChapterWordTargetsRecord {
+  novel: NovelRecord;
+  currentAsset: CreativeVersionRecord;
+  versions: CreativeVersionRecord[];
+  chapters: NovelChapterRecord[];
+}
+
 export interface ListNovelRecordsQuery {
   tenantId: string;
   page: number;
@@ -1048,7 +1129,9 @@ export interface NovelRepository {
   createDirectionRevision(input: DirectionRevisionInput): Promise<CreatedDirectionRevisionRecord>;
   findDirectionVersionById(tenantId: string, novelId: string, versionId: string): Promise<CreativeVersionRecord | null>;
   adoptDirection(input: DirectionAdoptionInput): Promise<AdoptedDirectionRecord>;
+  createStructureGenerationTask(input: StructureGenerationTaskCreationInput): Promise<GenerationTaskRecord>;
   createStructureCandidate(input: StructureCreationInput): Promise<CreatedStructureAssetRecord>;
+  failTask(input: TaskFailureInput): Promise<GenerationTaskRecord>;
   findStructureVersionById(
     tenantId: string,
     novelId: string,
@@ -1056,6 +1139,7 @@ export interface NovelRepository {
     versionId: string
   ): Promise<CreativeVersionRecord | null>;
   adoptStructureAsset(input: StructureAdoptionInput): Promise<AdoptedStructureAssetRecord>;
+  updateChapterWordTargets(input: ChapterWordTargetUpdateInput): Promise<UpdatedChapterWordTargetsRecord>;
   retryTask(input: TaskRetryInput): Promise<RetriedTaskRecord>;
   cancelTask(input: TaskCancelInput): Promise<CancelledTaskRecord>;
   findLatestTrialRun(tenantId: string, novelId: string): Promise<TrialRunRecord | null>;
@@ -1078,6 +1162,7 @@ export interface NovelRepository {
   findVideoReadinessSnapshotByIdempotencyKey(tenantId: string, novelId: string, idempotencyKey: string): Promise<VideoReadinessSnapshotRecord | null>;
   findBodyStrategySnapshot(tenantId: string, novelId: string): Promise<CreativeVersionRecord | null>;
   createTrialChapterOneCandidates(input: TrialCandidateCreationInput): Promise<CreatedTrialCandidatesRecord>;
+  createTrialFollowupTask(input: TrialFollowupTaskCreationInput): Promise<CreatedTrialFollowupTaskRecord>;
   selectTrialChapterOneAndGenerateFollowup(input: TrialFollowupGenerationInput): Promise<GeneratedTrialFollowupRecord>;
   confirmTrial(input: TrialConfirmationInput): Promise<ConfirmedTrialRecord>;
   getChapterWorkbench(tenantId: string, novelId: string, chapterId: string): Promise<ChapterWorkbenchRecord | null>;
@@ -1087,6 +1172,7 @@ export interface NovelRepository {
   listImpactCasesForChapter(tenantId: string, novelId: string, chapterId: string): Promise<ImpactCaseRecord[]>;
   findImpactCaseById(tenantId: string, novelId: string, impactCaseId: string): Promise<ImpactCaseRecord | null>;
   findLatestLongTermMemory(tenantId: string, novelId: string, chapterId?: string | null): Promise<LongTermMemoryRecord | null>;
+  createBodyBatchTask(input: BodyBatchTaskCreationInput): Promise<CreatedBodyBatchTaskRecord>;
   createFullReview(input: FullReviewCreationInput): Promise<CreatedFullReviewRecord>;
   forcePassFullReview(input: FullReviewForcePassInput): Promise<ForcedFullReviewRecord>;
   resolveFullReviewIssue(input: FullReviewIssueResolutionInput): Promise<ResolvedFullReviewIssueRecord>;
@@ -1106,13 +1192,17 @@ export function normalizeDraftRequest(request: CreateNovelDraftRequest) {
   const chapterLimit = request.chapterLimit ?? 80;
   const genres = request.genres ?? [];
   const preferences = request.preferences ?? {};
+  const creationSourceType = request.creationSourceType ?? 'system_recommendation';
 
   return {
     title: request.title.trim(),
     channel: request.channel?.trim() || 'novel',
+    creationSourceType,
     genres,
-    hotspotReportId: request.hotspotReportId ?? null,
-    hotspotOpportunityId: request.hotspotOpportunityId ?? null,
+    hotspotReportId: request.hotspotReportId?.trim() || null,
+    hotspotOpportunityId: request.hotspotOpportunityId?.trim() || null,
+    hotspotTitle: null as string | null,
+    hotspotOpportunityTitle: null as string | null,
     appealPoints: preferences.appealPoints ?? [],
     openingState: preferences.openingState ?? null,
     blockedElements: preferences.blockedElements ?? [],
@@ -1121,7 +1211,7 @@ export function normalizeDraftRequest(request: CreateNovelDraftRequest) {
     chapterWordMin,
     chapterWordMax,
     stageCount: preferences.stageCount ?? null,
-    customIdea: preferences.customIdea ?? null,
+    customIdea: preferences.customIdea?.trim() || null,
     style: preferences.style ?? null,
     videoAdaptationPreference: preferences.videoAdaptationPreference ?? null
   };

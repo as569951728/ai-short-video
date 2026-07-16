@@ -9,6 +9,8 @@ import {
   adoptChapterContentVersion,
   createImpactAssessment,
   forcePassFullReview,
+  fuseDirections,
+  editDirectionCandidate,
   generateChapterPlan,
   generateBodyBatch,
   generateDirections,
@@ -80,6 +82,33 @@ describe('novel service data source switching', () => {
     assert.equal(detail.videoReadiness?.recommendedAction.label, '去视频列表')
   })
 
+  it('provides stable mock fixtures for high-risk confirmation page regression', async () => {
+    const riskTrial = await getNovelDetail('qa-risk-trial', 'mock')
+    const riskyCandidate = riskTrial.latestTrialRun?.chapterOneCandidates.map(toTrialCandidateRow).find((candidate) => candidate.requiresRiskConfirm)
+    assert.equal(riskTrial.creationStage, NovelCreationStage.Trial)
+    assert.equal(riskTrial.stageStatus, StageStatus.WaitingUser)
+    assert.ok(riskyCandidate, 'risk trial fixture should expose a selectable risky candidate')
+    assert.equal(riskyCandidate?.canSelect, true)
+
+    const bodyBatch = await getNovelDetail('qa-body-batch', 'mock')
+    assert.equal(bodyBatch.creationStage, NovelCreationStage.Body)
+    assert.equal(bodyBatch.bodyGeneration?.strategySnapshot?.id, 'qa-body-strategy-001')
+    assert.equal(bodyBatch.bodyGeneration?.nextBatchRange.text, '第 4-8 章')
+    assert.equal(bodyBatch.bodyGeneration?.recommendedAction.disabled, false)
+
+    const fullReview = await getNovelDetail('qa-full-review', 'mock')
+    assert.equal(fullReview.creationStage, NovelCreationStage.CompletionConfirm)
+    assert.equal(fullReview.stageStatus, StageStatus.WaitingUser)
+    assert.equal(fullReview.latestFullReview?.issues[0]?.issueId, 'mock-full-review-issue-001')
+    assert.equal(fullReview.latestFullReview?.gate.allowCompletion, true)
+
+    const videoReadiness = await getNovelDetail('qa-video-readiness', 'mock')
+    assert.equal(videoReadiness.creationStage, NovelCreationStage.CompletionConfirm)
+    assert.equal(videoReadiness.stageStatus, StageStatus.Completed)
+    assert.equal(videoReadiness.videoReadiness?.status, 'candidate')
+    assert.equal(videoReadiness.videoReadiness?.recommendedAction.label, '确认进入待视频化')
+  })
+
   it('maps backend draft DTOs into list rows with detail as the primary action', () => {
     const row = toNovelListRow(createNovelListItemDTO())
 
@@ -87,6 +116,8 @@ describe('novel service data source switching', () => {
     assert.equal(row.stage, '草稿已创建')
     assert.equal(row.status, '草稿已创建')
     assert.equal(row.chapterProgress, '0/80')
+    assert.equal(row.creationSourceType, 'system_recommendation')
+    assert.equal(row.creationSourceText, '系统推荐')
     assert.equal(row.videoReferenceStatus, 'not_referenced')
     assert.equal(row.videoStatus, '未准备')
     assert.equal(row.action.label, '进入详情')
@@ -149,10 +180,12 @@ describe('novel service data source switching', () => {
       const result = await createNovelDraft(
         {
           title: '重生后我靠系统逆袭',
+          creationSourceType: 'manual_idea',
           genres: ['都市逆袭'],
           preferences: {
             appealPoints: ['低谷翻盘'],
             targetAudience: '18-35 岁爽文用户',
+            customIdea: '主角被背叛后靠证据反击。',
           },
           chapterLimit: 80,
           chapterWordRange: { min: 1800, max: 2600 },
@@ -162,6 +195,8 @@ describe('novel service data source switching', () => {
 
       assert.equal(requestedUrl, 'http://localhost:3001/novels/drafts')
       assert.equal(JSON.parse(requestedBody).title, '重生后我靠系统逆袭')
+      assert.equal(JSON.parse(requestedBody).creationSourceType, 'manual_idea')
+      assert.equal(JSON.parse(requestedBody).preferences.customIdea, '主角被背叛后靠证据反击。')
       assert.equal(result.title, '重生后我靠系统逆袭')
       assert.equal(result.statusSummary.displayStatusText, '草稿已创建')
     } finally {
@@ -175,6 +210,7 @@ describe('novel service data source switching', () => {
     assert.equal(row.title, '低谷系统翻盘线')
     assert.equal(row.scoreText, '62')
     assert.equal(row.marketScoreText, '58')
+    assert.equal(row.statusKey, VersionStatus.Candidate)
     assert.equal(row.lowScoreRequiresConfirm, true)
     assert.equal(row.riskLevelText, '高风险')
     assert.equal(row.primaryReason, '差异化强但理解成本偏高。')
@@ -247,6 +283,60 @@ describe('novel service data source switching', () => {
     assert.equal(after.directionCandidates[0].id, generated.candidates[0].id)
     assert.equal(after.recentTask?.id, generated.task.id)
     assert.equal(after.recentTasks[0]?.id, generated.task.id)
+  })
+
+  it('keeps mock fused and optimized direction candidates visible after detail refresh', async () => {
+    const novelId = `mock-direction-revision-${Date.now()}`
+    const generated = await generateDirections(novelId, {}, 'mock')
+
+    const fused = await fuseDirections(
+      novelId,
+      {
+        versionIds: generated.candidates.map((candidate) => candidate.id).slice(0, 2),
+        reason: '融合两个候选的钩子和爽点',
+      },
+      'mock',
+    )
+    const afterFuse = await getNovelDetail(novelId, 'mock')
+    assert.ok(afterFuse.directionCandidates.some((candidate) => candidate.id === fused.candidate?.id))
+    assert.equal(afterFuse.recentTask?.id, fused.task.id)
+
+    const optimized = await optimizeDirection(
+      novelId,
+      generated.candidates[0].id,
+      { instruction: '强化前三秒钩子' },
+      'mock',
+    )
+    const afterOptimize = await getNovelDetail(novelId, 'mock')
+    assert.ok(afterOptimize.directionCandidates.some((candidate) => candidate.id === optimized.candidate?.id))
+    assert.equal(afterOptimize.recentTask?.id, optimized.task.id)
+    assert.ok(afterOptimize.directionCandidates.length >= generated.candidates.length + 2)
+  })
+
+  it('keeps mock manually edited direction candidates visible after detail refresh', async () => {
+    const novelId = `mock-direction-edit-${Date.now()}`
+    const generated = await generateDirections(novelId, {}, 'mock')
+    const edited = await editDirectionCandidate(
+      novelId,
+      generated.candidates[0].id,
+      {
+        title: '手动编辑方向',
+        logline: '用户直接微调后形成的新方向。',
+        coreHook: '先用反差开场，再给明确逆袭承诺。',
+        audienceAppeal: '短视频爽文读者',
+        videoPotential: '适合前三秒强钩子口播。',
+        sellingPoints: ['反差开场', '逆袭承诺'],
+        riskTags: ['避免空泛'],
+        recommendation: '手动编辑后再对比采用。',
+        reason: '用户手动编辑候选',
+      },
+      'mock',
+    )
+    const afterEdit = await getNovelDetail(novelId, 'mock')
+
+    assert.ok(afterEdit.directionCandidates.some((candidate) => candidate.id === edited.candidate?.id))
+    assert.equal(afterEdit.recentTask?.taskType, 'novel_direction_manual_edit')
+    assert.equal(afterEdit.recentTask?.id, edited.task.id)
   })
 
   it('maps structure assets and chapter plans into workbench rows', () => {
@@ -843,6 +933,17 @@ function createNovelListItemDTO(): NovelListItemDTO {
       statusText: '未准备',
       referencedVideoCount: 0,
     },
+    creationSource: {
+      type: 'system_recommendation',
+      label: '系统推荐',
+      description: '按题材、爽点和默认策略作为方向生成参考。',
+      hotspotReportId: null,
+      hotspotOpportunityId: null,
+      hotspotTitle: null,
+      hotspotOpportunityTitle: null,
+      isLegacyUnknown: false,
+      unavailableReason: null,
+    },
     recentTask: null,
     primaryAction: {
       type: 'view_detail',
@@ -860,8 +961,13 @@ function createNovelDetailDTO(): NovelDetailDTO {
   return {
     ...item,
     preferences: {
+      creationSourceType: 'system_recommendation',
+      creationSourceLabel: '系统推荐',
+      creationSourceDescription: '按题材、爽点和默认策略作为方向生成参考。',
       hotspotReportId: null,
       hotspotOpportunityId: null,
+      hotspotTitle: null,
+      hotspotOpportunityTitle: null,
       appealPoints: ['低谷翻盘'],
       genres: ['都市逆袭'],
       openingState: null,

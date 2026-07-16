@@ -161,7 +161,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import type { ChapterWorkbenchDTO } from '@ai-shortvideo/shared'
 import { ApiClientError } from '../shared/services/http'
 import TaskProgressPanel from '../modules/novels/components/TaskProgressPanel.vue'
@@ -225,8 +225,19 @@ async function handleRewriteChapter() {
     apiError.value = '当前章节没有正式正文，不能生成重写候选'
     return
   }
-  const instruction = window.prompt('请输入重写方向。结果会先生成候选版本，不会直接覆盖正式正文。', '强化结尾钩子，并检查是否影响后续旧码头线索。')
-  if (!instruction?.trim()) return
+  const instruction = await promptChapterActionReason({
+    title: '生成章节重写候选',
+    message: '请输入本次重写方向。结果只会生成新的候选版本，不会直接覆盖当前正式正文；后续仍需要人工采用，并可继续做影响评估。',
+    details: [
+      { label: '章节对象', value: titleText.value },
+      { label: '当前正文版本', value: currentVersionId },
+      { label: '影响范围', value: '生成候选版本；不覆盖正式正文，不进入视频生产链路。' },
+    ],
+    inputPlaceholder: '例如：强化结尾钩子，并检查是否影响后续旧码头线索。',
+    inputValue: '强化结尾钩子，并检查是否影响后续旧码头线索。',
+    confirmButtonText: '生成候选',
+  })
+  if (!instruction) return
 
   actionLoading.value = true
   apiError.value = ''
@@ -247,11 +258,20 @@ async function handleRewriteChapter() {
 
 async function handleAdoptCandidate(candidate: TrialCandidateRow) {
   const currentVersionId = workbench.value?.chapter.currentContentVersionId
-  const reason = window.prompt('采用候选会写入决策记录并触发影响评估；如可能影响后续，请说明原因。', '采用该候选强化结尾钩子，接受影响评估后再继续。')
-  if (!reason?.trim()) {
-    apiError.value = '采用章节候选必须填写原因'
-    return
-  }
+  const reason = await promptChapterActionReason({
+    title: '采用章节候选',
+    message: '采用后会写入决策记录，并触发影响评估；请说明为什么采用这个候选，以及是否接受后续影响检查。',
+    details: [
+      { label: '章节对象', value: titleText.value },
+      { label: '候选版本', value: `${candidate.versionLabel} / 评分 ${candidate.scoreText} / ${candidate.gateText}` },
+      { label: '当前正文版本', value: currentVersionId || '暂无正式正文版本' },
+      { label: '影响范围', value: '会成为当前章节正式正文；会保留历史候选并生成影响评估。' },
+    ],
+    inputPlaceholder: '请填写采用原因',
+    inputValue: '采用该候选强化结尾钩子，接受影响评估后再继续。',
+    confirmButtonText: '确认采用',
+  })
+  if (!reason) return
 
   actionLoading.value = true
   apiError.value = ''
@@ -279,8 +299,19 @@ async function handleCreateImpactAssessment() {
     apiError.value = '当前章节没有正式正文，不能发起影响评估'
     return
   }
-  const reason = window.prompt('请输入发起影响评估的原因。', '检查本章改动是否影响后续章节和长篇记忆。')
-  if (!reason?.trim()) return
+  const reason = await promptChapterActionReason({
+    title: '发起章节影响评估',
+    message: '影响评估会检查本章改动对后续章节、长篇记忆和已知伏笔的影响；结果会进入影响案例，不会直接改写正文。',
+    details: [
+      { label: '章节对象', value: titleText.value },
+      { label: '当前正文版本', value: currentVersionId },
+      { label: '影响范围', value: '只生成影响评估记录；不覆盖正文，不进入视频生产链路。' },
+    ],
+    inputPlaceholder: '请输入发起影响评估的原因',
+    inputValue: '检查本章改动是否影响后续章节和长篇记忆。',
+    confirmButtonText: '发起评估',
+  })
+  if (!reason) return
 
   actionLoading.value = true
   apiError.value = ''
@@ -296,11 +327,19 @@ async function handleCreateImpactAssessment() {
 }
 
 async function handleResolveImpact(impactCaseId: string) {
-  const reason = window.prompt('请填写关闭或忽略该影响案例的原因。', '已人工确认影响处理完成。')
-  if (!reason?.trim()) {
-    apiError.value = '关闭影响案例必须填写原因'
-    return
-  }
+  const reason = await promptChapterActionReason({
+    title: '关闭影响案例',
+    message: '关闭后会记录人工处理决策。请确认该影响已处理或可接受，避免后续全书审稿误判。',
+    details: [
+      { label: '章节对象', value: titleText.value },
+      { label: '影响案例', value: impactCaseId },
+      { label: '影响范围', value: '写入影响案例处理记录；不改写正文，不进入视频生产链路。' },
+    ],
+    inputPlaceholder: '请填写关闭或忽略该影响案例的原因',
+    inputValue: '已人工确认影响处理完成。',
+    confirmButtonText: '确认关闭',
+  })
+  if (!reason) return
 
   actionLoading.value = true
   apiError.value = ''
@@ -323,6 +362,46 @@ function openContent(candidate: TrialCandidateRow) {
   contentDrawer.open = true
   contentDrawer.title = `${candidate.title} ${candidate.versionLabel}`
   contentDrawer.content = candidate.content
+}
+
+async function promptChapterActionReason(options: {
+  title: string
+  message: string
+  details: Array<{ label: string; value: string }>
+  inputPlaceholder: string
+  inputValue?: string
+  confirmButtonText: string
+}) {
+  try {
+    const result = await ElMessageBox.prompt(
+      formatChapterActionMessage(options.message, options.details),
+      options.title,
+      {
+        confirmButtonText: options.confirmButtonText,
+        cancelButtonText: '取消',
+        inputPlaceholder: options.inputPlaceholder,
+        inputValue: options.inputValue ?? '',
+        inputType: 'textarea',
+        inputPattern: /\S+/,
+        inputErrorMessage: '请填写原因或处理说明',
+        type: 'warning',
+        closeOnClickModal: false,
+        closeOnPressEscape: true,
+        distinguishCancelAndClose: false,
+      },
+    )
+    return result.value.trim()
+  } catch {
+    return null
+  }
+}
+
+function formatChapterActionMessage(message: string, details: Array<{ label: string; value: string }>) {
+  return [
+    message,
+    '',
+    ...details.map((detail) => `${detail.label}：${detail.value}`),
+  ].join('\n')
 }
 
 function formatApiError(error: unknown) {

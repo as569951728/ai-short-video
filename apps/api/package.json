@@ -10,6 +10,7 @@
     "typecheck": "prisma generate && tsc -p tsconfig.json --noEmit",
     "test": "AI_PROVIDER_MODE=mock tsx --test src/**/*.test.ts prisma/**/*.test.ts",
     "smoke:deepseek": "tsx src/modules/novels/deepseekLiveSmoke.ts",
+    "smoke:p8b:mysql": "tsx src/modules/videos/p8bMysqlSmoke.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:validate": "prisma validate",

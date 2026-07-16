@@ -33,15 +33,18 @@ import type { TrialChapterCandidateDraftLike, TrialProvider } from './mockTrialP
 interface DeepSeekNovelProviderOptions {
   client: LlmClient;
   model?: string;
+  structureModel?: string;
   reasonerModel?: string;
 }
 
 export class DeepSeekNovelProvider implements DirectionProvider, StructureProvider, TrialProvider, BodyProvider, FullReviewProvider {
   private readonly model: string;
+  private readonly structureModel: string;
   private readonly reasonerModel: string;
 
   constructor(private readonly options: DeepSeekNovelProviderOptions) {
     this.model = options.model ?? 'deepseek-v4-pro';
+    this.structureModel = options.structureModel ?? this.model;
     this.reasonerModel = options.reasonerModel ?? this.model;
   }
 
@@ -49,7 +52,7 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
     return requestJsonOutput(this.options.client, {
       taskName: 'novel_direction_generate',
       model: this.model,
-      messages: createMessages('生成 3-4 个小说方向候选，只返回 JSON。', input.novel, input.preferences),
+      messages: createMessages('生成 3-4 个小说方向候选，只返回 JSON。', input.novel, input.preferences, M1_OUTPUT_SCHEMA_HINT.direction),
       validate: (value) => readArray(value, 'candidates').map(toDirectionDraft)
     });
   }
@@ -61,7 +64,7 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
       messages: createMessages('融合多个方向候选，只返回 JSON。', null, {
         sources: input.sources,
         reason: input.reason
-      }),
+      }, M1_OUTPUT_SCHEMA_HINT.direction),
       validate: (value) => toDirectionDraft(readObject(value, 'candidate') ?? value)
     });
   }
@@ -73,7 +76,7 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
       messages: createMessages('优化一个方向候选，只返回 JSON。', null, {
         source: input.source,
         instruction: input.instruction
-      }),
+      }, M1_OUTPUT_SCHEMA_HINT.direction),
       validate: (value) => toDirectionDraft(readObject(value, 'candidate') ?? value)
     });
   }
@@ -84,15 +87,57 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
     preferences: NovelPreferencesRecord;
     currentAssets: Record<string, unknown>;
   }): Promise<StructureAssetDraft> {
+    if (input.objectType === 'chapter_plan') {
+      return this.generateChapterPlanAsset(input);
+    }
+
     return requestJsonOutput(this.options.client, {
       taskName: `novel_structure_${input.objectType}`,
-      model: this.model,
-      messages: createMessages(`生成 ${input.objectType} 结构资产候选，只返回 JSON。`, input.novel, {
+      model: this.getStructureTaskModel(input.objectType),
+      messages: createMessages(getStructureInstruction(input.objectType), input.novel, {
         preferences: input.preferences,
-        currentAssets: input.currentAssets
-      }),
+        currentAssets: summarizeCurrentAssets(input.currentAssets)
+      }, getStructureSchemaHint(input.objectType)),
+      maxTokens: getStructureMaxTokens(input.objectType),
       validate: (value) => toStructureDraft(input.objectType, unwrapPayload(value, ['candidate', 'asset', input.objectType, 'result']))
     });
+  }
+
+  private async generateChapterPlanAsset(input: {
+    objectType: StructureAssetType;
+    novel: NovelRecord;
+    preferences: NovelPreferencesRecord;
+    currentAssets: Record<string, unknown>;
+  }): Promise<StructureAssetDraft> {
+    const currentAssets = summarizeCurrentAssets(input.currentAssets);
+    const chapterCount = Math.max(1, Math.min(input.novel.chapterLimit, 1000));
+    const batchSize = 10;
+    const chapters: StructureAssetContentDTO['chapters'] = [];
+
+    for (let start = 1; start <= chapterCount; start += batchSize) {
+      const end = Math.min(chapterCount, start + batchSize - 1);
+      const wordTargetPolicy = createWordTargetPolicy(input.novel);
+      const chunk = await requestJsonOutput(this.options.client, {
+        taskName: `novel_structure_chapter_plan_${start}_${end}`,
+        model: this.structureModel,
+        messages: createMessages(getChapterPlanChunkInstruction(start, end, chapterCount, wordTargetPolicy), input.novel, {
+          preferences: input.preferences,
+          currentAssets,
+          chapterRange: { start, end },
+          requiredChapterNumbers: Array.from({ length: end - start + 1 }, (_, index) => start + index),
+          wordTargetPolicy
+        }, M1_OUTPUT_SCHEMA_HINT.chapterPlanChunk),
+        maxTokens: 2200,
+        validate: (value) => readArray(value, 'chapters').map((chapter, index) => toStructureChapterDraft(chapter, start + index, '章节推进主线。', wordTargetPolicy.defaultTarget))
+      });
+      chapters.push(...chunk);
+    }
+
+    return createChapterPlanStructureDraft(input.novel, currentAssets, chapters.slice(0, chapterCount));
+  }
+
+  private getStructureTaskModel(objectType: StructureAssetType): string {
+    return this.structureModel;
   }
 
   async generateChapterOneCandidates(input: {
@@ -112,14 +157,15 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const candidates = await requestJsonOutput(this.options.client, {
         taskName: 'novel_trial_chapter_one',
-        model: this.model,
-        messages: createMessages('生成第1章试写候选，只返回 JSON。', input.novel, {
+        model: this.structureModel,
+        messages: createMessages('生成第1章试写候选，只返回 JSON。每个候选的 content 控制在 900-1200 个中文字符，用于开篇方向比较；不要扩写成完整长章。', input.novel, {
           preferences: input.preferences,
           chapterCount: expectedCount,
           requiredCandidateCount: expectedCount,
           retryReason: attempt > 0 ? '上一轮返回候选数量不足，请补齐到要求数量。' : undefined,
           chapter: pickChapter(firstChapter)
-        }),
+        }, M1_OUTPUT_SCHEMA_HINT.trialChapterOne),
+        maxTokens: 4200,
         validate: (value) => readArray(value, 'candidates').map((item, index) => toTrialCandidateDraft(item, firstChapter, index === 0))
       });
 
@@ -147,7 +193,7 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
       messages: createMessages('基于已选第1章生成第2-3章试写和试写总评，只返回 JSON。', input.novel, {
         selectedCandidate: summarizeSelectedCandidate(input.selectedCandidate),
         chapters: input.chapters.map(pickChapter)
-      }),
+      }, M1_OUTPUT_SCHEMA_HINT.trialFollowup),
       validate: (value) => {
         const payload = asRecord(value);
         const generatedChapters = readArray(payload, 'chapters').map((item) => {
@@ -176,16 +222,19 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
     previousBatchNotes: string[];
     enhancedReview: boolean;
   }): Promise<BodyChapterDraft> {
+    const wordTargetPolicy = createWordTargetPolicy(input.novel, input.chapter.wordTarget ?? undefined);
     return requestJsonOutput(this.options.client, {
       taskName: 'novel_body_chapter_generate',
       model: this.model,
       messages: createMessages('生成单章正文、特性卡、单章审稿和长篇记忆摘要，只返回 JSON。', input.novel, {
         chapter: pickChapter(input.chapter),
+        wordTargetPolicy,
         strategySnapshotId: (input.strategySnapshot as { id?: string })?.id,
         previousContentSummary: input.previousContent?.summary,
         previousBatchNotes: input.previousBatchNotes,
         enhancedReview: input.enhancedReview
-      }),
+      }, M1_OUTPUT_SCHEMA_HINT.body),
+      maxTokens: getBodyChapterMaxTokens(wordTargetPolicy.target),
       validate: (value) => toBodyDraft(value, input.novel, input.chapter)
     });
   }
@@ -203,7 +252,7 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
         chapter: pickChapter(input.chapter),
         instruction: input.instruction,
         currentSummary: input.currentContent.summary
-      }),
+      }, M1_OUTPUT_SCHEMA_HINT.body),
       validate: (value) => {
         const payload = asRecord(value);
         const candidateSource = readObject(payload, 'candidate') ?? payload;
@@ -231,7 +280,7 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
         oldSummary: input.oldContent?.summary,
         newSummary: input.newContent.summary,
         instruction: input.instruction
-      }),
+      }, M1_OUTPUT_SCHEMA_HINT.impact),
       validate: toImpactDraft
     });
   }
@@ -243,13 +292,13 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
       messages: createMessages('生成全书审稿报告、门禁结论和首条视频建议，只返回 JSON。', input.novel, {
         chapters: input.chapters.map(pickChapter),
         sourceVersionRefs: input.sourceVersionRefs
-      }),
+      }, M1_OUTPUT_SCHEMA_HINT.fullReview),
       validate: toFullReviewDraft
     });
   }
 }
 
-function createMessages(instruction: string, novel: NovelRecord | null, payload: unknown) {
+function createMessages(instruction: string, novel: NovelRecord | null, payload: unknown, outputSchemaHint: string) {
   return [
     {
       role: 'system' as const,
@@ -259,7 +308,7 @@ function createMessages(instruction: string, novel: NovelRecord | null, payload:
       role: 'user' as const,
       content: JSON.stringify({
         instruction,
-        outputSchemaHint: M1_OUTPUT_SCHEMA_HINT,
+        outputSchemaHint,
         novel: novel ? { id: novel.id, title: novel.title, genres: novel.genres, chapterLimit: novel.chapterLimit } : null,
         payload
       })
@@ -272,8 +321,10 @@ const M1_OUTPUT_SCHEMA_HINT = {
     '方向任务返回 {"candidates":[{"title","summary","content":{"title","logline","coreHook","audienceAppeal","videoPotential","sellingPoints":[],"riskTags":[],"recommendation"},"score":0-100,"marketScore":0-100,"riskLevel":"low|medium|high|blocking","riskTags":[],"recommendedReason"}]}',
   structure:
     '结构任务返回 {"title","summary","content":{"title","summary","sections":[{"title","body","items":[]}],"stages":[{"stageIndex","title","chapterRange","goal","conflict","payoff"}],"chapters":[{"chapterNo","stageIndex","title","wordTarget","goal","conflict","hook"}],"riskTags":[],"recommendation"},"score":0-100,"riskLevel":"low|medium|high","riskTags":[],"recommendedReason"}',
+  chapterPlanChunk:
+    '章节目录分块只返回 {"chapters":[{"chapterNo","stageIndex","title","wordTarget","goal","conflict","hook"}]}。不得返回说明、Markdown、额外字段或缺失章节。',
   trialChapterOne:
-    '第1章试写返回 {"candidates":[{"title","content","summary","openingStrategy","openingHighlight","firstSentence","first300Summary","endingHook","riskLevel","riskTags":[],"aiRecommendedReason","isAiRecommended":true/false,"scoring":{"totalScore":0-100,"dimensions":[{"key","label","score","weight","evidence","penaltyPoints"}]}}]}',
+    '第1章试写返回 {"candidates":[{"title","content","summary","openingStrategy","openingHighlight","firstSentence","first300Summary","endingHook","riskLevel","riskTags":[],"aiRecommendedReason","isAiRecommended":true/false,"scoring":{"totalScore":0-100,"dimensions":[{"key","label","score","weight","evidence","penaltyPoints"}]}}]}。每个 content 900-1200 中文字符，候选数量必须等于 requiredCandidateCount。',
   trialFollowup:
     '第2-3章试写返回 {"chapters":[{"chapterNo":2,"title","content","summary","openingStrategy","openingHighlight","firstSentence","first300Summary","endingHook","riskLevel","riskTags":[],"aiRecommendedReason","scoring":{"totalScore","dimensions":[]},"featureCard":{},"review":{"totalScore","issues":[],"suggestions":[],"riskLevel"},"hardFailed":false,"hardFailureReasons":[]}],"review":{"totalScore","trialResult":"pass|pass_with_suggestions|blocked|return_upstream","summary","strengths":[],"problems":[],"suggestions":[],"recommendedAction","allowNextStep":true,"requiresRiskConfirmation":false,"chapterScores":[{"chapterNo","score","hardFailed":false}]}}',
   body:
@@ -352,16 +403,7 @@ function toStructureDraft(objectType: StructureAssetType, value: unknown): Struc
       };
     }),
     chapters: readPlainArray(rawContent, 'chapters').map((chapter, index) => {
-      const record = asRecord(chapter);
-      return {
-        chapterNo: readOptionalNumber(record, 'chapterNo') ?? index + 1,
-        stageIndex: readOptionalNumber(record, 'stageIndex') ?? 1,
-        title: readOptionalString(record, 'title') ?? `第${index + 1}章`,
-        wordTarget: readOptionalNumber(record, 'wordTarget') ?? 1200,
-        goal: readOptionalString(record, 'goal') ?? readOptionalString(record, 'summary') ?? summary,
-        conflict: readOptionalString(record, 'conflict') ?? '主角继续反击',
-        hook: readOptionalString(record, 'hook') ?? '留下下一章钩子'
-      };
+      return toStructureChapterDraft(chapter, index + 1, summary);
     }),
     riskTags: readStringArray(rawContent, 'riskTags', readStringArray(item, 'riskTags')),
     recommendation: readOptionalString(rawContent, 'recommendation') ?? readOptionalString(item, 'recommendedReason') ?? summary
@@ -409,6 +451,180 @@ function getStructureAssetLabel(objectType: StructureAssetType): string {
     chapter_plan: '章节目录'
   };
   return labels[objectType];
+}
+
+function getStructureInstruction(objectType: StructureAssetType): string {
+  const label = getStructureAssetLabel(objectType);
+  const objectGuidance: Record<StructureAssetType, string> = {
+    setting: '聚焦人物设定、关系、世界规则和禁忌边界。sections 控制在 3-4 个，每段 body 不超过 80 字、items 不超过 4 条；stages 和 chapters 必须返回空数组，不展开全书章节。',
+    outline: '聚焦全书主线、结局和关键转折。只返回 sections 3 个，每段 body 不超过 80 字、items 不超过 3 条；stages 和 chapters 必须返回空数组，阶段和章节由后续步骤生成。',
+    stage_outline: '聚焦阶段目标、冲突递进和爽点兑现。sections 控制在 1-2 个；stages 给 3-4 个阶段；chapters 必须返回空数组，章节由后续步骤生成。',
+    chapter_plan: '聚焦章节目录。chapters 给完整章节规划，但每章 goal/conflict/hook 不超过 35 字；sections 和 stages 只做简要说明。'
+  };
+  return `生成 ${label} 候选，只返回 JSON。${objectGuidance[objectType]}`;
+}
+
+function getChapterPlanChunkInstruction(start: number, end: number, total: number, wordTargetPolicy: WordTargetPolicy): string {
+  return `生成章节目录第 ${start}-${end} 章，共 ${total} 章。只返回一个完整 JSON 对象，不要 Markdown，不要解释，不要省略闭合括号；根字段只能是 chapters。chapters 必须按 chapterNo 从 ${start} 到 ${end} 连续返回；每章 goal/conflict/hook 不超过 24 个汉字；title 不超过 14 个汉字；wordTarget 使用 ${wordTargetPolicy.min}-${wordTargetPolicy.max} 的整数，常规章节靠近 ${wordTargetPolicy.defaultTarget}，高潮或关键转折章节可接近上限。`;
+}
+
+function getStructureSchemaHint(objectType: StructureAssetType): string {
+  if (objectType === 'outline') {
+    return '全书大纲返回 {"title","summary","content":{"title","summary","sections":[{"title","body","items":[]}],"stages":[],"chapters":[],"riskTags":[],"recommendation"},"score":0-100,"riskLevel":"low|medium|high","riskTags":[],"recommendedReason"}';
+  }
+  if (objectType === 'stage_outline') {
+    return '阶段大纲返回 {"title","summary","content":{"title","summary","sections":[{"title","body","items":[]}],"stages":[{"stageIndex","title","chapterRange","goal","conflict","payoff"}],"chapters":[],"riskTags":[],"recommendation"},"score":0-100,"riskLevel":"low|medium|high","riskTags":[],"recommendedReason"}';
+  }
+  if (objectType === 'chapter_plan') {
+    return '章节目录返回 {"title","summary","content":{"title","summary","sections":[{"title","body","items":[]}],"stages":[{"stageIndex","title","chapterRange","goal","conflict","payoff"}],"chapters":[{"chapterNo","stageIndex","title","wordTarget","goal","conflict","hook"}],"riskTags":[],"recommendation"},"score":0-100,"riskLevel":"low|medium|high","riskTags":[],"recommendedReason"}';
+  }
+  return M1_OUTPUT_SCHEMA_HINT.structure;
+}
+
+function getStructureMaxTokens(objectType: StructureAssetType): number {
+  const limits: Record<StructureAssetType, number> = {
+    setting: 2000,
+    outline: 1600,
+    stage_outline: 2200,
+    chapter_plan: 3800
+  };
+  return limits[objectType];
+}
+
+function summarizeCurrentAssets(assets: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(assets).map(([key, value]) => [key, summarizeAssetValue(value)]));
+}
+
+function summarizeAssetValue(value: unknown): unknown {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const record = asRecord(value);
+  const directionContent = readOptionalString(record, 'content');
+  if (directionContent) {
+    return {
+      title: readOptionalString(record, 'title'),
+      summary: truncateText(readOptionalString(record, 'summary'), 160),
+      content: truncateText(directionContent, 260),
+      score: readOptionalNumber(record, 'score'),
+      riskLevel: readOptionalString(record, 'riskLevel'),
+      recommendedReason: truncateText(readOptionalString(record, 'recommendedReason'), 160)
+    };
+  }
+  const content = asRecord(record.content ?? {});
+  const sections = readPlainArray(content, 'sections').slice(0, 4).map((section) => {
+    const item = asRecord(section);
+    return {
+      title: readOptionalString(item, 'title'),
+      body: truncateText(readOptionalString(item, 'body') ?? readOptionalString(item, 'summary'), 120),
+      items: readStringArray(item, 'items').slice(0, 4).map((entry) => truncateText(entry, 80))
+    };
+  });
+  const stages = readPlainArray(content, 'stages').slice(0, 5).map((stage) => {
+    const item = asRecord(stage);
+    return {
+      stageIndex: readOptionalNumber(item, 'stageIndex'),
+      title: readOptionalString(item, 'title'),
+      goal: truncateText(readOptionalString(item, 'goal') ?? readOptionalString(item, 'summary'), 100)
+    };
+  });
+  const chapters = readPlainArray(content, 'chapters').slice(0, 8).map((chapter) => {
+    const item = asRecord(chapter);
+    return {
+      chapterNo: readOptionalNumber(item, 'chapterNo'),
+      title: readOptionalString(item, 'title'),
+      goal: truncateText(readOptionalString(item, 'goal') ?? readOptionalString(item, 'summary'), 100)
+    };
+  });
+
+  return {
+    title: readOptionalString(record, 'title') ?? readOptionalString(content, 'title'),
+    summary: truncateText(readOptionalString(record, 'summary') ?? readOptionalString(content, 'summary'), 180),
+    score: readOptionalNumber(record, 'score'),
+    riskLevel: readOptionalString(record, 'riskLevel'),
+    logline: truncateText(readOptionalString(content, 'logline'), 120),
+    coreHook: truncateText(readOptionalString(content, 'coreHook'), 120),
+    sections,
+    stages,
+    chapters
+  };
+}
+
+function truncateText(value: string | undefined | null, maxLength: number): string | undefined {
+  if (!value) return undefined;
+  return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
+}
+
+function toStructureChapterDraft(value: unknown, fallbackChapterNo: number, summary = '章节推进主线。', fallbackWordTarget = 1200): StructureAssetContentDTO['chapters'][number] {
+  const record = asRecord(value);
+  const chapterNo = readOptionalNumber(record, 'chapterNo') ?? fallbackChapterNo;
+  return {
+    chapterNo,
+    stageIndex: readOptionalNumber(record, 'stageIndex') ?? Math.max(1, Math.ceil(chapterNo / 20)),
+    title: truncateText(readOptionalString(record, 'title') ?? `第${chapterNo}章`, 24) ?? `第${chapterNo}章`,
+    wordTarget: readOptionalNumber(record, 'wordTarget') ?? fallbackWordTarget,
+    goal: truncateText(readOptionalString(record, 'goal') ?? readOptionalString(record, 'summary') ?? summary, 80) ?? summary,
+    conflict: truncateText(readOptionalString(record, 'conflict') ?? '主角继续反击', 80) ?? '主角继续反击',
+    hook: truncateText(readOptionalString(record, 'hook') ?? '留下下一章钩子', 80) ?? '留下下一章钩子'
+  };
+}
+
+function createChapterPlanStructureDraft(
+  novel: NovelRecord,
+  currentAssets: Record<string, unknown>,
+  chapters: StructureAssetContentDTO['chapters']
+): StructureAssetDraft {
+  const stageOutline = asRecord(currentAssets.stageOutline ?? currentAssets.stage_outline ?? {});
+  const stageSummary = readOptionalString(stageOutline, 'summary') ?? `${novel.title} 章节目录已生成。`;
+  const stages = readPlainArray(stageOutline, 'stages').map((stage, index) => {
+    const record = asRecord(stage);
+    return {
+      stageIndex: readOptionalNumber(record, 'stageIndex') ?? index + 1,
+      title: readOptionalString(record, 'title') ?? `阶段 ${index + 1}`,
+      chapterRange: readOptionalString(record, 'chapterRange') ?? createStageChapterRange(index + 1, chapters.length),
+      goal: readOptionalString(record, 'goal') ?? stageSummary,
+      conflict: readOptionalString(record, 'conflict') ?? '主线压力升级',
+      payoff: readOptionalString(record, 'payoff') ?? '阶段爽点兑现'
+    };
+  });
+
+  return {
+    objectType: 'chapter_plan',
+    title: '章节目录',
+    summary: `已规划 ${chapters.length} 章，按阶段推进主线、冲突和章末钩子。`,
+    content: {
+      title: '章节目录',
+      summary: `已规划 ${chapters.length} 章，按阶段推进主线、冲突和章末钩子。`,
+      sections: [{ title: '章节规划原则', body: stageSummary, items: ['章节号连续', '每章保留目标、冲突和钩子', '采用后生成正式章节清单'] }],
+      stages: stages.length > 0 ? stages : createFallbackStages(chapters.length),
+      chapters,
+      riskTags: [],
+      recommendation: '可采用章节目录，进入试写调试。'
+    },
+    score: 82,
+    riskLevel: RiskLevel.Low,
+    riskTags: [],
+    recommendedReason: '章节目标、冲突和钩子已按范围生成。'
+  };
+}
+
+function createFallbackStages(chapterCount: number): StructureAssetContentDTO['stages'] {
+  const stageCount = Math.max(1, Math.min(4, Math.ceil(chapterCount / 20)));
+  return Array.from({ length: stageCount }, (_, index) => ({
+    stageIndex: index + 1,
+    title: `阶段 ${index + 1}`,
+    chapterRange: createStageChapterRange(index + 1, chapterCount, stageCount),
+    goal: '推进主角成长和商业反击',
+    conflict: '外部压力持续升级',
+    payoff: '阶段性胜利兑现'
+  }));
+}
+
+function createStageChapterRange(stageIndex: number, chapterCount: number, stageCount = Math.max(1, Math.min(4, Math.ceil(chapterCount / 20)))) {
+  const perStage = Math.ceil(chapterCount / stageCount);
+  const start = (stageIndex - 1) * perStage + 1;
+  const end = Math.min(chapterCount, stageIndex * perStage);
+  return `${start}-${end}`;
 }
 
 function toTrialCandidateDraft(value: unknown, chapter: NovelChapterRecord, recommendedFallback: boolean): TrialChapterCandidateDraft {
@@ -703,8 +919,47 @@ function pickChapter(chapter: NovelChapterRecord) {
     id: chapter.id,
     chapterNo: chapter.chapterNo,
     title: chapter.title,
+    wordTarget: chapter.wordTarget,
     statusNote: chapter.statusNote
   };
+}
+
+interface WordTargetPolicy {
+  min: number;
+  max: number;
+  defaultTarget: number;
+  target: number;
+  lowerBound: number;
+  upperBound: number;
+  instruction: string;
+}
+
+function createWordTargetPolicy(novel: NovelRecord, chapterTarget?: number): WordTargetPolicy {
+  const min = clampInteger(novel.chapterWordMin ?? 1800, 100, 30000);
+  const max = clampInteger(Math.max(novel.chapterWordMax ?? 2600, min), min, 30000);
+  const defaultTarget = Math.round((min + max) / 2);
+  const target = clampInteger(chapterTarget ?? defaultTarget, min, max);
+  const lowerBound = Math.max(100, Math.floor(target * 0.9));
+  const upperBound = Math.ceil(target * 1.15);
+
+  return {
+    min,
+    max,
+    defaultTarget,
+    target,
+    lowerBound,
+    upperBound,
+    instruction: `本章目标 ${target} 字，允许范围 ${lowerBound}-${upperBound} 字。content 正文字数不得低于 ${lowerBound} 字；如果剧情不足，请补充动作、对话、心理、场景和冲突推进，不要用提纲或说明凑数。`
+  };
+}
+
+function getBodyChapterMaxTokens(target: number): number {
+  return Math.max(3600, Math.min(9000, Math.ceil(target * 2.4)));
+}
+
+function clampInteger(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.max(min, Math.min(max, Math.round(value)));
 }
 
 function firstSentence(content: string): string {

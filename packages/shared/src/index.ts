@@ -1,3 +1,4 @@
 export * from './api.js';
 export * from './enums.js';
 export * from './novels.js';
+export * from './videos.js';

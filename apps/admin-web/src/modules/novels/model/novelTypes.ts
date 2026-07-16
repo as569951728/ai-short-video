@@ -1,4 +1,4 @@
-import type { NovelCreationStage, NovelLifecycleStatus, PagedResult, StageStatus } from '@ai-shortvideo/shared'
+import type { NovelCreationStage, NovelCreationSourceType, NovelLifecycleStatus, PagedResult, StageStatus, VersionStatus } from '@ai-shortvideo/shared'
 import type { RecommendedAction } from '../../../types/prototype'
 
 export interface NovelListQuery {
@@ -15,6 +15,8 @@ export interface NovelListRow {
   title: string
   genre: string
   hotspot: string
+  creationSourceType: NovelCreationSourceType
+  creationSourceText: string
   stage: string
   status: string
   creationStage: NovelCreationStage
@@ -44,6 +46,7 @@ export interface DirectionCandidateRow {
   id: string
   title: string
   versionLabel: string
+  statusKey: VersionStatus | string
   status: string
   scoreText: string
   marketScoreText: string
@@ -51,6 +54,7 @@ export interface DirectionCandidateRow {
   riskTags: string[]
   logline: string
   coreHook: string
+  audienceAppeal: string
   videoPotential: string
   sellingPoints: string[]
   primaryReason: string
@@ -64,6 +68,7 @@ export interface StructureAssetRow {
   typeText: string
   title: string
   versionLabel: string
+  statusKey: VersionStatus | string
   status: string
   scoreText: string
   riskLevelText: string

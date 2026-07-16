@@ -35,6 +35,8 @@ import {
   type DirectionCandidateContentDTO,
   type DirectionCandidateDTO,
   type DirectionTaskDTO,
+  type EditDirectionCandidateRequest,
+  type EditStructureAssetRequest,
   type FirstVideoSuggestionDTO,
   type ForcePassFullReviewRequest,
   type FullReviewActionResultDTO,
@@ -72,6 +74,7 @@ import {
   type StructureAssetType,
   type StructureTaskDTO,
   type AdoptStructureAssetRequest,
+  type UpdateChapterWordTargetsRequest,
   type TrialActionResultDTO,
   type TrialChapterCandidateDTO,
   type TrialChapterResultDTO,
@@ -96,6 +99,7 @@ import {
   type BodyBatchSummaryRecord,
   type DirectionCandidateDraft,
   type GenerationTaskRecord,
+  type GeneratedBodyBatchRecord,
   type ImpactCaseRecord,
   type LongTermMemoryRecord,
   type NovelChapterRecord,
@@ -104,6 +108,7 @@ import {
   type NovelRepository,
   type RequestContext,
   type ReviewReportRecord,
+  type StructureAssetDraft,
   type FullReviewGateRecord,
   type CompletionDecisionRecord,
   type VideoReadinessCheckRecord,
@@ -116,6 +121,7 @@ import { MockStructureProvider, type StructureProvider } from '../providers/mock
 import { MockTrialProvider, type TrialProvider } from '../providers/mockTrialProvider.js';
 import { MockBodyProvider, type BodyProvider } from '../providers/mockBodyProvider.js';
 import { MockFullReviewProvider, type FullReviewProvider } from '../providers/mockFullReviewProvider.js';
+import { UnavailableHotspotReferenceGateway, type HotspotReferenceGateway } from '../integrations/hotspotReferenceGateway.js';
 import { NovelStatusService } from './novelStatusService.js';
 import { toRecentTaskSummaryDTO } from '../../tasks/services/taskService.js';
 
@@ -126,6 +132,7 @@ export interface NovelServiceOptions {
   trialProvider?: TrialProvider;
   bodyProvider?: BodyProvider;
   fullReviewProvider?: FullReviewProvider;
+  hotspotReferenceGateway?: HotspotReferenceGateway;
   now?: () => Date;
 }
 
@@ -136,6 +143,7 @@ export class NovelService {
   private readonly trialProvider: TrialProvider;
   private readonly bodyProvider: BodyProvider;
   private readonly fullReviewProvider: FullReviewProvider;
+  private readonly hotspotReferenceGateway: HotspotReferenceGateway;
   private readonly now: () => Date;
 
   constructor(private readonly options: NovelServiceOptions) {
@@ -146,6 +154,7 @@ export class NovelService {
     this.trialProvider = options.trialProvider ?? new MockTrialProvider();
     this.bodyProvider = options.bodyProvider ?? new MockBodyProvider();
     this.fullReviewProvider = options.fullReviewProvider ?? new MockFullReviewProvider();
+    this.hotspotReferenceGateway = options.hotspotReferenceGateway ?? new UnavailableHotspotReferenceGateway();
   }
 
   async createDraft(request: CreateNovelDraftRequest, context: RequestContext): Promise<NovelDetailDTO> {
@@ -155,13 +164,73 @@ export class NovelService {
       });
     }
 
+    const creationSourceContext = await this.validateCreationSource(request, context);
+
     const { novel, preferences } = await this.options.repository.createDraft({
       request,
       context,
-      now: this.now()
+      now: this.now(),
+      creationSourceContext
     });
 
     return this.toDetailDTO(novel, preferences);
+  }
+
+  private async validateCreationSource(request: CreateNovelDraftRequest, context: RequestContext) {
+    const sourceType = request.creationSourceType ?? 'system_recommendation';
+    const customIdea = request.preferences?.customIdea?.trim() ?? '';
+    const hotspotReportId = request.hotspotReportId?.trim() ?? '';
+    const hotspotOpportunityId = request.hotspotOpportunityId?.trim() ?? '';
+
+    if (sourceType === 'system_recommendation') {
+      if (hotspotReportId || hotspotOpportunityId) {
+        throw createCreationSourceValidationError('hotspotReportId', '系统推荐不能携带热点报告或机会点。');
+      }
+
+      return { hotspotTitle: null, hotspotOpportunityTitle: null };
+    }
+
+    if (sourceType === 'manual_idea') {
+      if (customIdea.length < 6) {
+        throw createCreationSourceValidationError('preferences.customIdea', '手动想法需要填写不少于 6 个字符的核心想法。');
+      }
+
+      if (hotspotReportId || hotspotOpportunityId) {
+        throw createCreationSourceValidationError('hotspotReportId', '手动想法不能携带热点报告或机会点。');
+      }
+
+      return { hotspotTitle: null, hotspotOpportunityTitle: null };
+    }
+
+    if (sourceType === 'hotspot_reference') {
+      if (!hotspotReportId) {
+        throw createCreationSourceValidationError('hotspotReportId', '引用热点需要选择可验证的热点报告。');
+      }
+
+      const capability = await this.hotspotReferenceGateway.getCapability(context.tenantId);
+      if (!capability.available) {
+        throw createCreationSourceValidationError('creationSourceType', capability.unavailableReason ?? '当前热点引用能力不可用。');
+      }
+
+      const validation = await this.hotspotReferenceGateway.validateReference({
+        tenantId: context.tenantId,
+        reportId: hotspotReportId,
+        opportunityId: hotspotOpportunityId || null
+      });
+
+      if (!validation.ok) {
+        throw createCreationSourceValidationError('hotspotReportId', validation.message ?? '热点引用校验未通过。', {
+          reasonCode: validation.reasonCode
+        });
+      }
+
+      return {
+        hotspotTitle: validation.report?.title ?? null,
+        hotspotOpportunityTitle: validation.opportunity?.title ?? null
+      };
+    }
+
+    throw createCreationSourceValidationError('creationSourceType', '创作来源类型不合法。');
   }
 
   async list(query: NovelListQuery): Promise<NovelListResultDTO> {
@@ -229,7 +298,7 @@ export class NovelService {
       novel,
       candidates,
       taskType: 'novel_direction_generate',
-      changeReason: request.regenerateReason ?? 'mock provider 生成方向候选',
+      changeReason: request.regenerateReason ?? '模型服务生成方向候选',
       context,
       now: this.now()
     });
@@ -279,6 +348,45 @@ export class NovelService {
       candidate,
       taskType: 'novel_direction_optimize',
       changeReason: request.instruction ?? '优化方向候选',
+      sourceVersionIds: [versionId],
+      context,
+      now: this.now()
+    });
+    const versions = await this.options.repository.listDirectionVersions(context.tenantId, novelId);
+
+    return this.toDirectionActionResult(result.novel, result.task, versions, result.version);
+  }
+
+  async editDirectionCandidate(novelId: string, versionId: string, request: EditDirectionCandidateRequest, context: RequestContext): Promise<DirectionActionResultDTO> {
+    const novel = await this.findNovelOrThrow(novelId);
+    this.ensureLifecycleActive(novel);
+    this.ensureDirectionWorkStage(novel);
+    const source = await this.findDirectionVersionOrThrow(context.tenantId, novelId, versionId);
+    const sourceDraft = toDirectionDraft(source);
+    const candidate: DirectionCandidateDraft = {
+      title: request.title.trim(),
+      summary: request.logline.trim(),
+      content: {
+        title: request.title.trim(),
+        logline: request.logline.trim(),
+        coreHook: request.coreHook.trim(),
+        audienceAppeal: request.audienceAppeal.trim(),
+        videoPotential: request.videoPotential.trim(),
+        sellingPoints: normalizeTextItems(request.sellingPoints),
+        riskTags: normalizeTextItems(request.riskTags),
+        recommendation: request.recommendation.trim()
+      },
+      score: sourceDraft.score,
+      marketScore: sourceDraft.marketScore,
+      riskLevel: sourceDraft.riskLevel,
+      riskTags: normalizeTextItems(request.riskTags),
+      recommendedReason: request.recommendation.trim()
+    };
+    const result = await this.options.repository.createDirectionRevision({
+      novel,
+      candidate,
+      taskType: 'novel_direction_manual_edit',
+      changeReason: request.reason.trim(),
       sourceVersionIds: [versionId],
       context,
       now: this.now()
@@ -358,8 +466,113 @@ export class NovelService {
     return this.generateStructureAsset(novelId, 'chapter_plan', request, context);
   }
 
+  async editStructureAsset(
+    novelId: string,
+    objectType: StructureAssetType,
+    versionId: string,
+    request: EditStructureAssetRequest,
+    context: RequestContext
+  ): Promise<StructureActionResultDTO> {
+    const novel = await this.findNovelOrThrow(novelId);
+    this.ensureLifecycleActive(novel);
+    await this.ensureStructureGenerationGate(novel, objectType);
+
+    const source = await this.options.repository.findStructureVersionById(context.tenantId, novelId, objectType, versionId);
+    if (!source) {
+      throw new BusinessError(ErrorCode.NotFound, '结构资产候选不存在');
+    }
+    if (source.staleLevel === StaleLevel.HardStale) {
+      throw new BusinessError(ErrorCode.CandidateStale, '该结构资产候选已过期，请重新生成');
+    }
+    if (source.status !== VersionStatus.Candidate) {
+      throw new BusinessError(ErrorCode.VersionConflict, '该结构资产候选当前不可编辑');
+    }
+
+    const reason = request.reason.trim();
+    const sourceContent = toStructureContent(source.content);
+    const riskTags = normalizeTextItems(request.riskTags);
+    const recommendation = request.recommendation.trim();
+    const content: StructureAssetContentDTO = {
+      ...sourceContent,
+      title: request.title.trim(),
+      summary: request.summary.trim(),
+      sections: [
+        {
+          title: request.sectionTitle.trim(),
+          body: request.sectionBody.trim(),
+          items: normalizeTextItems(request.sectionItems)
+        },
+        ...sourceContent.sections.slice(1)
+      ],
+      riskTags,
+      recommendation
+    };
+    const asset: StructureAssetDraft = {
+      objectType,
+      title: content.title,
+      summary: content.summary,
+      content,
+      score: source.score ?? 0,
+      riskLevel: source.riskLevel,
+      riskTags,
+      recommendedReason: recommendation
+    };
+    const directionVersions = await this.options.repository.listDirectionVersions(context.tenantId, novelId);
+    const result = await this.options.repository.createStructureCandidate({
+      novel,
+      asset,
+      taskType: `${getStructureTaskType(objectType)}_manual_edit`,
+      changeReason: reason,
+      sourceVersionRefs: {
+        ...createStructureSourceRefs(novel, objectType),
+        sourceStructureVersionId: versionId,
+        editReason: reason
+      },
+      context,
+      now: this.now()
+    });
+    const versions = await this.options.repository.listStructureVersions(context.tenantId, novelId);
+    const chapters = await this.options.repository.listNovelChapters(context.tenantId, novelId);
+
+    return this.toStructureActionResult(result.novel, result.task, versions, result.version, chapters, directionVersions);
+  }
+
   async adoptChapterPlan(novelId: string, versionId: string, request: AdoptStructureAssetRequest, context: RequestContext) {
     return this.adoptStructureAsset(novelId, 'chapter_plan', versionId, request, context);
+  }
+
+  async updateChapterWordTargets(
+    novelId: string,
+    request: UpdateChapterWordTargetsRequest,
+    context: RequestContext
+  ): Promise<StructureActionResultDTO> {
+    const novel = await this.findNovelOrThrow(novelId);
+    this.ensureLifecycleActive(novel);
+    if (!novel.currentChapterPlanVersionId) {
+      throw new BusinessError(ErrorCode.GateBlocked, '需要先采用章节目录后才能调整目标字数');
+    }
+    if (request.currentChapterPlanVersionId !== undefined && request.currentChapterPlanVersionId !== novel.currentChapterPlanVersionId) {
+      throw new BusinessError(ErrorCode.VersionConflict, '当前章节目录版本已变化，请刷新后重试');
+    }
+
+    const updates = normalizeChapterWordTargetUpdates(request, novel);
+    const result = await this.options.repository.updateChapterWordTargets({
+      novel,
+      updates,
+      reason: request.reason?.trim() || '调整章节目标字数',
+      context,
+      now: this.now()
+    });
+    const directionVersions = await this.options.repository.listDirectionVersions(context.tenantId, novelId);
+
+    return this.toStructureActionResult(
+      result.novel,
+      createStructureAdoptedTask(result.currentAsset),
+      result.versions,
+      result.currentAsset,
+      result.chapters,
+      directionVersions
+    );
   }
 
   async generateTrial(novelId: string, request: GenerateTrialRequest, context: RequestContext): Promise<TrialActionResultDTO> {
@@ -395,7 +608,7 @@ export class NovelService {
         chapters,
         candidates,
         chapterCount,
-        changeReason: request.regenerateReason ?? 'mock provider 生成第1章试写候选',
+        changeReason: request.regenerateReason ?? '模型服务生成第1章试写候选',
         sourceVersionRefs: createTrialSourceRefs(novel),
         context,
         now: this.now()
@@ -417,19 +630,55 @@ export class NovelService {
       return this.toTrialActionResult(novel, existingTask ?? createVirtualTrialTask(trialRun, novel), trialRun);
     }
 
+    const activeTask = await this.options.repository.findActiveTaskByConflict(context.tenantId, 'novel_trial', novelId);
+    if (activeTask && activeTask.id !== trialRun.sourceTaskId) {
+      const latestRun = await this.options.repository.findLatestTrialRun(context.tenantId, novelId);
+      if (latestRun && activeTask.taskType === 'trial_followup_generate') {
+        return this.toTrialActionResult(novel, activeTask, latestRun);
+      }
+
+      throw new BusinessError(ErrorCode.ConflictTaskExists, '已有同一小说试写任务正在处理或等待确认，请先处理当前任务。', {
+        activeTaskId: activeTask.id,
+        taskType: activeTask.taskType,
+        status: activeTask.status
+      });
+    }
+
     const selectedCandidate = await this.options.repository.findChapterContentVersionById(context.tenantId, novelId, request.selectedCandidateId);
     if (!selectedCandidate || getMetadataString(selectedCandidate.metadata, 'trialRunId') !== trialRun.id) {
       throw new BusinessError(ErrorCode.NotFound, '第1章候选不存在');
     }
 
-    const followup = await this.trialProvider.generateFollowup({
-      novel,
-      selectedCandidate,
-      chapters: chapters.slice(0, trialRun.trialChapterCount)
-    });
-    const result = await this.options.repository.selectTrialChapterOneAndGenerateFollowup({
+    const reserved = await this.options.repository.createTrialFollowupTask({
       novel,
       trialRun,
+      selectedCandidate,
+      context,
+      now: this.now()
+    });
+
+    let followup: Awaited<ReturnType<TrialProvider['generateFollowup']>>;
+    try {
+      followup = await this.trialProvider.generateFollowup({
+        novel: reserved.novel,
+        selectedCandidate,
+        chapters: chapters.slice(0, reserved.trialRun.trialChapterCount)
+      });
+    } catch (error) {
+      await this.options.repository.failTask({
+        task: reserved.task,
+        errorCode: getTaskErrorCode(error),
+        errorMessage: getTaskErrorMessage(error),
+        context,
+        now: this.now()
+      });
+      throw error;
+    }
+
+    const result = await this.options.repository.selectTrialChapterOneAndGenerateFollowup({
+      novel: reserved.novel,
+      trialRun: reserved.trialRun,
+      task: reserved.task,
       selectedCandidate,
       chapters: followup.chapters,
       review: followup.review,
@@ -539,39 +788,77 @@ export class NovelService {
     const targetChapters = chapters.filter((chapter) => chapter.chapterNo >= range.startChapterNo! && chapter.chapterNo <= range.endChapterNo!);
     const previousBatchNotes = latestBatch?.summary.nextBatchNotes ?? [];
     const enhancedReview = isEnhancedReviewEnabled(strategySnapshot) && range.startChapterNo <= 10;
-    const drafts = [];
-    let previousContent = await findPreviousContentVersion(this.options.repository, context.tenantId, novelId, chapters, range.startChapterNo);
-
-    for (const chapter of targetChapters) {
-      const draft = await this.bodyProvider.generateBodyChapter({
-        novel,
-        chapter,
-        strategySnapshot,
-        previousContent,
-        previousMemory,
-        previousBatchNotes,
-        enhancedReview: enhancedReview && chapter.chapterNo <= 10
-      });
-      drafts.push(draft);
-      if (draft.hardFailed) {
-        break;
-      }
-      previousContent = createDraftLikeContentVersion(chapter, draft);
-    }
-
-    const result = await this.options.repository.generateBodyBatch({
+    const reserved = await this.options.repository.createBodyBatchTask({
       novel,
       strategySnapshot,
-      chapters: drafts,
       idempotencyKey,
       requestFingerprint,
       startChapterNo: range.startChapterNo,
       endChapterNo: range.endChapterNo,
       sourceVersionRefs,
-      previousBatchSummary: latestBatch?.summary ?? null,
       context,
       now: this.now()
     });
+    if (reserved.reused) {
+      return this.returnReservedBodyBatchTask({
+        novel: reserved.novel,
+        context,
+        strategySnapshot,
+        task: reserved.task
+      });
+    }
+
+    let result: GeneratedBodyBatchRecord;
+    let providerCompleted = false;
+    try {
+      const drafts = [];
+      let previousContent = await findPreviousContentVersion(this.options.repository, context.tenantId, novelId, chapters, range.startChapterNo);
+
+      for (const chapter of targetChapters) {
+        const draft = await this.bodyProvider.generateBodyChapter({
+          novel: reserved.novel,
+          chapter,
+          strategySnapshot,
+          previousContent,
+          previousMemory,
+          previousBatchNotes,
+          enhancedReview: enhancedReview && chapter.chapterNo <= 10
+        });
+        drafts.push(draft);
+        if (draft.hardFailed) {
+          break;
+        }
+        previousContent = createDraftLikeContentVersion(chapter, draft);
+      }
+      providerCompleted = true;
+
+      result = await this.options.repository.generateBodyBatch({
+        novel: reserved.novel,
+        strategySnapshot,
+        task: reserved.task,
+        chapters: drafts,
+        idempotencyKey,
+        requestFingerprint,
+        startChapterNo: range.startChapterNo,
+        endChapterNo: range.endChapterNo,
+        sourceVersionRefs,
+        previousBatchSummary: latestBatch?.summary ?? null,
+        context,
+        now: this.now()
+      });
+    } catch (error) {
+      await this.options.repository.failTask({
+        task: reserved.task,
+        errorCode: getTaskErrorCode(error),
+        errorMessage: getTaskErrorMessage(error),
+        failureCategory: getBodyBatchFailureCategory(error, providerCompleted),
+        statusNote: providerCompleted ? '正文保存失败，请查看原因后重试。' : undefined,
+        context,
+        now: this.now()
+      });
+      throw error;
+    }
+
     const statusSummary = this.statusService.calculate(result.novel);
     const bodyGeneration = await this.getBodyGenerationState(result.novel, result.chapters, strategySnapshot);
 
@@ -583,6 +870,28 @@ export class NovelService {
       bodyGeneration,
       chapters: result.chapters.map(toNovelChapterDTO),
       affectedObjects: ['chapters', 'review_reports', 'long_term_memory', 'body_batch_summary'],
+      nextAction: bodyGeneration.recommendedAction
+    };
+  }
+
+  private async returnReservedBodyBatchTask(input: {
+    novel: NovelRecord;
+    context: RequestContext;
+    strategySnapshot: CreativeVersionRecord;
+    task: GenerationTaskRecord;
+  }): Promise<BodyBatchActionResultDTO> {
+    const chapters = await this.options.repository.listNovelChapters(input.context.tenantId, input.novel.id);
+    const statusSummary = this.statusService.calculate(input.novel);
+    const bodyGeneration = await this.getBodyGenerationState(input.novel, chapters, input.strategySnapshot);
+
+    return {
+      novelId: input.novel.id,
+      statusSummary,
+      task: toDirectionTaskDTO(input.task),
+      batch: null,
+      bodyGeneration,
+      chapters: chapters.map(toNovelChapterDTO),
+      affectedObjects: ['body_batch_task'],
       nextAction: bodyGeneration.recommendedAction
     };
   }
@@ -1271,18 +1580,6 @@ export class NovelService {
     if (novel.creationStage !== NovelCreationStage.Body) {
       throw new BusinessError(ErrorCode.InvalidStage, '当前小说尚未进入正文生成阶段，不能批量生成正文');
     }
-    if (novel.stageStatus === StageStatus.Processing) {
-      throw new BusinessError(ErrorCode.ConflictTaskExists, '正文生成阶段已有任务处理中，请先查看当前任务进度。');
-    }
-
-    const activeTask = await this.options.repository.findActiveTaskByConflict(context.tenantId, 'novel_body_batch', novel.id);
-    if (activeTask) {
-      throw new BusinessError(ErrorCode.ConflictTaskExists, '同一小说已有批量正文任务正在处理，请先处理当前任务。', {
-        activeTaskId: activeTask.id,
-        taskType: activeTask.taskType,
-        status: activeTask.status
-      });
-    }
     if (snapshot.id !== request.strategySnapshotId) {
       throw new BusinessError(ErrorCode.CandidateStale, '正文策略快照不是当前最新版本，请刷新后基于最新试写结论继续生成');
     }
@@ -1388,8 +1685,8 @@ export class NovelService {
     this.ensureLifecycleActive(novel);
     await this.ensureStructureGenerationGate(novel, objectType);
     const conflictTask = await this.options.repository.findActiveTaskByConflict(context.tenantId, `novel_${objectType}`, novelId);
-    if (conflictTask) {
-      throw new BusinessError(ErrorCode.ConflictTaskExists, '已有同一对象的生成任务正在处理或等待确认，请先处理当前任务。', {
+    if (conflictTask && [TaskStatus.Queued, TaskStatus.Processing].includes(conflictTask.status)) {
+      throw new BusinessError(ErrorCode.ConflictTaskExists, '已有同一对象的生成任务正在处理，请先查看当前任务。', {
         activeTaskId: conflictTask.id,
         taskType: conflictTask.taskType,
         status: conflictTask.status
@@ -1400,18 +1697,53 @@ export class NovelService {
     const allStructureVersions = await this.options.repository.listStructureVersions(context.tenantId, novelId);
     const directionVersions = await this.options.repository.listDirectionVersions(context.tenantId, novelId);
     const currentAssets = getCurrentCreativeAssetRecords(novel, directionVersions, allStructureVersions);
-    const asset = await this.structureProvider.generateAsset({
-      objectType,
+    const taskType = getStructureTaskType(objectType);
+    const changeReason = request.regenerateReason ?? `模型服务生成 ${objectType} 候选`;
+    const sourceVersionRefs = createStructureSourceRefs(novel, objectType);
+    const reservedTask = await this.options.repository.createStructureGenerationTask({
       novel,
-      preferences: preferences ?? createEmptyPreferences(novel),
-      currentAssets
+      objectType,
+      taskType,
+      changeReason,
+      sourceVersionRefs,
+      context,
+      now: this.now()
     });
+
+    let asset: StructureAssetDraft;
+    try {
+      asset = await this.structureProvider.generateAsset({
+        objectType,
+        novel,
+        preferences: preferences ?? createEmptyPreferences(novel),
+        currentAssets
+      });
+    } catch (error) {
+      await this.options.repository.failTask({
+        task: reservedTask,
+        errorCode: getTaskErrorCode(error),
+        errorMessage: getTaskErrorMessage(error),
+        context,
+        now: this.now()
+      });
+      throw error;
+    }
+
+    const latestReservedTask = await this.options.repository.findTaskById(context.tenantId, reservedTask.id);
+    if (latestReservedTask?.status === TaskStatus.Cancelled) {
+      throw new BusinessError(ErrorCode.GateBlocked, '生成任务已取消，模型返回结果已丢弃。', {
+        taskId: reservedTask.id,
+        taskType: reservedTask.taskType
+      });
+    }
+
     const result = await this.options.repository.createStructureCandidate({
       novel,
       asset,
-      taskType: getStructureTaskType(objectType),
-      changeReason: request.regenerateReason ?? `mock provider 生成 ${objectType} 候选`,
-      sourceVersionRefs: createStructureSourceRefs(novel, objectType),
+      taskType,
+      changeReason,
+      sourceVersionRefs,
+      reservedTaskId: reservedTask.id,
       context,
       now: this.now()
     });
@@ -1555,8 +1887,9 @@ export class NovelService {
     return version;
   }
 
-  private toListItemDTO(novel: NovelRecord): NovelListItemDTO {
+  private toListItemDTO(novel: NovelRecord, preferences?: NovelPreferencesRecord): NovelListItemDTO {
     const statusSummary = this.statusService.calculate(novel);
+    const safePreferences = preferences ?? createEmptyPreferences(novel);
 
     return {
       id: novel.id,
@@ -1583,6 +1916,7 @@ export class NovelService {
         statusText: '未准备',
         referencedVideoCount: 0
       },
+      creationSource: toCreationSourceSummaryDTO(safePreferences),
       recentTask: null,
       primaryAction: {
         type: 'view_detail',
@@ -1595,7 +1929,8 @@ export class NovelService {
   }
 
   private async toListItemDTOWithRecentTask(novel: NovelRecord): Promise<NovelListItemDTO> {
-    const item = this.toListItemDTO(novel);
+    const preferences = await this.options.repository.findPreferencesByNovelId(novel.tenantId, novel.id);
+    const item = this.toListItemDTO(novel, preferences ?? createEmptyPreferences(novel));
     const recentTasks = await this.options.repository.listRecentTasksForNovel(novel.tenantId, novel.id, 1);
     const latestTrialRun = await this.options.repository.findLatestTrialRun(novel.tenantId, novel.id);
 
@@ -1607,7 +1942,7 @@ export class NovelService {
   }
 
   private toDetailDTO(novel: NovelRecord, preferences: NovelPreferencesRecord): NovelDetailDTO {
-    const item = this.toListItemDTO(novel);
+    const item = this.toListItemDTO(novel, preferences);
     const preferenceDTO = toPreferenceDTO(preferences);
     const directionCandidates: DirectionCandidateDTO[] = [];
 
@@ -1717,9 +2052,16 @@ export function createDefaultRequestContext(requestId: string, ip?: string, user
 }
 
 function toPreferenceDTO(preferences: NovelPreferencesRecord): CreateNovelPreferencesDTO {
+  const sourceSummary = toCreationSourceSummaryDTO(preferences);
+
   return {
+    creationSourceType: preferences.creationSourceType,
+    creationSourceLabel: sourceSummary.label,
+    creationSourceDescription: sourceSummary.description,
     hotspotReportId: preferences.hotspotReportId,
     hotspotOpportunityId: preferences.hotspotOpportunityId,
+    hotspotTitle: preferences.hotspotTitle,
+    hotspotOpportunityTitle: preferences.hotspotOpportunityTitle,
     appealPoints: preferences.appealPoints,
     genres: preferences.genres,
     openingState: preferences.openingState,
@@ -1735,13 +2077,59 @@ function toPreferenceDTO(preferences: NovelPreferencesRecord): CreateNovelPrefer
   };
 }
 
+function toCreationSourceSummaryDTO(preferences: NovelPreferencesRecord) {
+  const type = preferences.creationSourceType;
+  const base = getCreationSourceDisplay(type);
+
+  return {
+    type,
+    label: base.label,
+    description: base.description,
+    hotspotReportId: preferences.hotspotReportId,
+    hotspotOpportunityId: preferences.hotspotOpportunityId,
+    hotspotTitle: preferences.hotspotTitle,
+    hotspotOpportunityTitle: preferences.hotspotOpportunityTitle,
+    isLegacyUnknown: type === 'legacy_unknown',
+    unavailableReason: type === 'hotspot_reference' ? null : null
+  };
+}
+
+function getCreationSourceDisplay(type: NovelPreferencesRecord['creationSourceType']) {
+  switch (type) {
+    case 'system_recommendation':
+      return {
+        label: '系统推荐',
+        description: '按题材、爽点和默认策略作为方向生成参考。'
+      };
+    case 'hotspot_reference':
+      return {
+        label: '引用热点',
+        description: '基于已验证的热点报告或机会点作为方向生成参考。'
+      };
+    case 'manual_idea':
+      return {
+        label: '手动想法',
+        description: '围绕用户填写的核心想法扩展方向。'
+      };
+    case 'legacy_unknown':
+    default:
+      return {
+        label: '未记录来源',
+        description: '历史数据没有可信创作来源记录。'
+      };
+  }
+}
+
 function createEmptyPreferences(novel: NovelRecord): NovelPreferencesRecord {
   return {
     id: '',
     tenantId: novel.tenantId,
     novelId: novel.id,
+    creationSourceType: 'legacy_unknown',
     hotspotReportId: novel.hotspotReportId,
     hotspotOpportunityId: null,
+    hotspotTitle: null,
+    hotspotOpportunityTitle: null,
     appealPoints: [],
     genres: novel.genres,
     openingState: null,
@@ -1757,6 +2145,13 @@ function createEmptyPreferences(novel: NovelRecord): NovelPreferencesRecord {
     createdBy: novel.createdBy,
     createdAt: novel.createdAt
   };
+}
+
+function createCreationSourceValidationError(path: string, message: string, extraDetails: Record<string, unknown> = {}) {
+  return new BusinessError(ErrorCode.ValidationError, message, {
+    issues: [{ path, message }],
+    ...extraDetails
+  });
 }
 
 function applyTrialReviewStatusSummary<T extends { recommendedAction: unknown }>(
@@ -1947,7 +2342,8 @@ function toDirectionTaskDTO(task: GenerationTaskRecord): DirectionTaskDTO {
     currentStep: task.currentStep,
     resultVersionIds: task.resultVersionIds,
     failureCategory: task.failureCategory,
-    errorCode: task.errorCode
+    errorCode: task.errorCode,
+    errorMessage: task.errorMessage
   };
 }
 
@@ -2927,6 +3323,10 @@ function toDirectionDraft(version: CreativeVersionRecord): DirectionCandidateDra
   };
 }
 
+function normalizeTextItems(items: string[]) {
+  return items.map((item) => item.trim()).filter(Boolean);
+}
+
 function toMetadata(value: unknown) {
   if (value && typeof value === 'object') {
     const record = value as Record<string, unknown>;
@@ -3086,6 +3486,8 @@ function toStructureTaskDTO(task: GenerationTaskRecord): StructureTaskDTO {
     statusText: getTaskStatusText(task.status),
     progress: task.progress,
     currentStep: task.currentStep,
+    errorCode: task.errorCode,
+    errorMessage: task.errorMessage,
     resultVersionIds: task.resultVersionIds
   };
 }
@@ -3093,6 +3495,31 @@ function toStructureTaskDTO(task: GenerationTaskRecord): StructureTaskDTO {
 function normalizeTrialChapterCount(value: number | undefined) {
   if (value === 2 || value === 3 || value === 5) return value;
   return 3;
+}
+
+function normalizeChapterWordTargetUpdates(request: UpdateChapterWordTargetsRequest, novel: NovelRecord) {
+  if (!Array.isArray(request.updates) || request.updates.length === 0) {
+    throw new BusinessError(ErrorCode.ValidationError, '请至少提供一个章节目标字数');
+  }
+  const minAllowed = Math.max(100, Math.floor(novel.chapterWordMin * 0.5));
+  const maxAllowed = Math.min(30000, Math.ceil(novel.chapterWordMax * 1.8));
+  const seen = new Set<number>();
+
+  return request.updates.map((update) => {
+    const chapterNo = Number(update.chapterNo);
+    const wordTarget = Number(update.wordTarget);
+    if (!Number.isInteger(chapterNo) || chapterNo < 1 || chapterNo > novel.chapterLimit) {
+      throw new BusinessError(ErrorCode.ValidationError, '章节序号不合法');
+    }
+    if (seen.has(chapterNo)) {
+      throw new BusinessError(ErrorCode.ValidationError, '章节目标字数不能重复提交同一章');
+    }
+    seen.add(chapterNo);
+    if (!Number.isInteger(wordTarget) || wordTarget < minAllowed || wordTarget > maxAllowed) {
+      throw new BusinessError(ErrorCode.ValidationError, `目标字数需在 ${minAllowed}-${maxAllowed} 之间`);
+    }
+    return { chapterNo, wordTarget };
+  });
 }
 
 function createTrialSourceRefs(novel: NovelRecord) {
@@ -3130,6 +3557,13 @@ function createBodyStrategySnapshotContent(
 }
 
 function createVirtualTrialTask(trialRun: TrialRunRecord, novel: NovelRecord): GenerationTaskRecord {
+  const status =
+    trialRun.status === 'blocked' || trialRun.status === 'followup_failed'
+      ? TaskStatus.Failed
+      : trialRun.status === 'followup_generating'
+        ? TaskStatus.Processing
+        : TaskStatus.WaitingConfirmation;
+
   return {
     id: trialRun.sourceTaskId ?? `trial_${trialRun.id}`,
     tenantId: trialRun.tenantId,
@@ -3137,9 +3571,9 @@ function createVirtualTrialTask(trialRun: TrialRunRecord, novel: NovelRecord): G
     taskType: 'trial_writing_generate',
     objectType: 'trial_run',
     objectId: trialRun.id,
-    status: trialRun.status === 'blocked' ? TaskStatus.Failed : TaskStatus.WaitingConfirmation,
+    status,
     statusNote: trialRun.status,
-    progress: 100,
+    progress: status === TaskStatus.Processing ? 18 : 100,
     currentStep: getTrialRunStatusText(trialRun.status),
     triggerSource: 'manual',
     sourceVersionRefs: createTrialSourceRefs(novel),
@@ -3149,7 +3583,7 @@ function createVirtualTrialTask(trialRun: TrialRunRecord, novel: NovelRecord): G
     outputSummary: trialRun.trialResult,
     resultVersionIds: [],
     retryOfTaskId: null,
-    failureCategory: trialRun.status === 'blocked' ? 'validation_error' : null,
+    failureCategory: status === TaskStatus.Failed ? 'model_generation_failed' : null,
     errorCode: null,
     errorMessage: null,
     resultObjectType: 'trial_run',
@@ -3158,7 +3592,7 @@ function createVirtualTrialTask(trialRun: TrialRunRecord, novel: NovelRecord): G
     cancelRequestedAt: null,
     cancelReason: null,
     startedAt: trialRun.createdAt,
-    finishedAt: trialRun.updatedAt,
+    finishedAt: status === TaskStatus.Processing ? null : trialRun.updatedAt,
     createdBy: null,
     createdAt: trialRun.createdAt,
     updatedAt: trialRun.updatedAt,
@@ -3218,6 +3652,8 @@ function toReviewIssues(value: unknown): ChapterReviewIssueDTO[] {
 
 function getTrialRunStatusText(status: string) {
   if (status === 'waiting_chapter1_selection') return '待选择第1章候选';
+  if (status === 'followup_generating') return '正在生成第2-3章和试写总评';
+  if (status === 'followup_failed') return '继续试写失败';
   if (status === 'review_ready') return '试写待确认';
   if (status === 'blocked') return '试写被阻塞';
   if (status === 'confirmed') return '试写已确认';
@@ -3234,6 +3670,24 @@ function getTrialResultText(result: TrialReviewDTO['trialResult']) {
 
 function firstSentence(content: string) {
   return content.split(/[。！？]/)[0] ? `${content.split(/[。！？]/)[0]}。` : content.slice(0, 80);
+}
+
+function getTaskErrorCode(error: unknown) {
+  if (error instanceof BusinessError) return error.code;
+  if (error instanceof Error && error.name) return error.name;
+  return ErrorCode.InternalError;
+}
+
+function getTaskErrorMessage(error: unknown) {
+  if (error instanceof Error && error.message) return error.message;
+  return '模型生成失败，请稍后重试';
+}
+
+function getBodyBatchFailureCategory(error: unknown, providerCompleted: boolean) {
+  if (error instanceof BusinessError && error.code === ErrorCode.ConfigMissing) return 'not_implemented';
+  if (providerCompleted) return 'save_failed';
+  if (error instanceof BusinessError && error.code === ErrorCode.ValidationError) return 'output_parse_failed';
+  return 'provider_error';
 }
 
 function getTaskStatusText(status: TaskStatus | string) {

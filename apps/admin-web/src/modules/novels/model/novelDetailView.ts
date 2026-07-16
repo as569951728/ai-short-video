@@ -1,6 +1,6 @@
 import { NovelCreationStage, TaskStatus, type NovelDetailDTO, type RecentTaskSummaryDTO, type TaskDetailDTO } from '@ai-shortvideo/shared'
 
-type DetailState = Pick<NovelDetailDTO, 'creationStage' | 'statusSummary'>
+type DetailState = Pick<NovelDetailDTO, 'creationStage' | 'statusSummary'> & Partial<Pick<NovelDetailDTO, 'latestTrialRun' | 'bodyStrategySnapshot'>>
 
 export const NOVEL_WORKBENCH_STEP_KEYS = [
   'direction',
@@ -41,8 +41,15 @@ export interface VideoReadyEntryAction {
   route: '/videos'
 }
 
+export interface TaskResultPlacement {
+  summary: string
+  actionLabel: string
+  stepKey: NovelWorkbenchStepKey
+}
+
 export interface LocalPendingTaskSummary extends RecentTaskSummaryDTO {
   isLocalPending: true
+  action: NovelLongRunningAction
   startedAt: string
   statusNote: string
 }
@@ -82,7 +89,13 @@ export function shouldShowTrialAuthoringAction(detail: DetailState | null | unde
 }
 
 export function shouldShowTrialReviewConfirmAction(detail: DetailState | null | undefined): boolean {
-  return !isVideoReadyDetail(detail)
+  if (!detail || isVideoReadyDetail(detail)) return false
+
+  return (
+    detail.statusSummary.recommendedAction.type === 'confirm_trial_review' &&
+    detail.latestTrialRun?.status === 'review_ready' &&
+    !detail.bodyStrategySnapshot
+  )
 }
 
 export function getVideoReadyEntryAction(detail: DetailState | null | undefined): VideoReadyEntryAction | null {
@@ -97,6 +110,7 @@ export function getVideoReadyEntryAction(detail: DetailState | null | undefined)
 export function createLocalPendingTaskSummary(input: {
   taskType: string
   label: string
+  action: NovelLongRunningAction
   startedAt?: string
 }): LocalPendingTaskSummary {
   const startedAt = input.startedAt ?? new Date().toISOString()
@@ -106,9 +120,10 @@ export function createLocalPendingTaskSummary(input: {
     taskType: input.taskType,
     status: TaskStatus.Processing,
     statusText: '生成中',
-    progress: 12,
+    progress: 0,
     currentStep: `${input.label}：${LONG_RUNNING_MODEL_STATUS_NOTE}`,
     isLocalPending: true,
+    action: input.action,
     startedAt,
     statusNote: LONG_RUNNING_MODEL_STATUS_NOTE,
   }
@@ -138,6 +153,7 @@ export function createNovelActionPendingTask(action: NovelLongRunningAction, sta
   return createLocalPendingTaskSummary({
     taskType: meta.taskType,
     label: meta.label,
+    action,
     startedAt,
   })
 }
@@ -161,6 +177,94 @@ export function canInteractWithSubStep(state: NovelWorkbenchStepState): boolean 
   return state !== 'locked'
 }
 
+export function getTaskResultPlacement(task: (Pick<RecentTaskSummaryDTO, 'status'> & { taskType?: string | null }) | null | undefined): TaskResultPlacement | null {
+  if (!task) return null
+  if (task.status !== TaskStatus.Completed && task.status !== TaskStatus.WaitingConfirmation) return null
+
+  const taskType = task.taskType ?? ''
+  if (taskType.includes('direction')) {
+    return {
+      summary: taskType.includes('adopt') ? '正式方向已采用，下一步可生成小说设定。' : '新方向候选已进入候选池，请查看后决定是否采用。',
+      actionLabel: taskType.includes('adopt') ? '进入设定' : '查看方向候选',
+      stepKey: taskType.includes('adopt') ? 'setting' : 'direction',
+    }
+  }
+
+  if (taskType.includes('setting')) {
+    return {
+      summary: taskType.includes('adopt') ? '正式设定已采用，下一步可生成全书大纲。' : '新设定候选已进入候选池，请查看后决定是否采用。',
+      actionLabel: taskType.includes('adopt') ? '进入大纲' : '查看设定候选',
+      stepKey: taskType.includes('adopt') ? 'outline' : 'setting',
+    }
+  }
+
+  if (taskType.includes('adopt_stage_outline')) {
+    return {
+      summary: '阶段大纲已采用，下一步可生成章节目录。',
+      actionLabel: '进入章节目录',
+      stepKey: 'chapterPlan',
+    }
+  }
+
+  if (taskType.includes('adopt_outline')) {
+    return {
+      summary: '全书大纲已采用，下一步需要生成并采用阶段大纲。',
+      actionLabel: '生成阶段大纲',
+      stepKey: 'outline',
+    }
+  }
+
+  if (taskType.includes('outline') || taskType.includes('stage_outline')) {
+    return {
+      summary: '新大纲候选已进入候选池，请查看后决定是否采用。',
+      actionLabel: '查看大纲候选',
+      stepKey: 'outline',
+    }
+  }
+
+  if (taskType.includes('chapter_plan') || taskType.includes('chapterPlan')) {
+    return {
+      summary: taskType.includes('adopt') ? '章节目录已采用，下一步可进入试写调试。' : '新章节目录候选已进入候选池，请查看后决定是否采用。',
+      actionLabel: taskType.includes('adopt') ? '进入试写' : '查看章节目录',
+      stepKey: taskType.includes('adopt') ? 'trial' : 'chapterPlan',
+    }
+  }
+
+  if (taskType.includes('trial')) {
+    return {
+      summary: '试写结果已生成，请查看章节候选和试写总评。',
+      actionLabel: '查看试写结果',
+      stepKey: 'trial',
+    }
+  }
+
+  if (taskType.includes('body_batch')) {
+    return {
+      summary: '正文批次已生成，请查看章节表、失败章节和批次确认状态。',
+      actionLabel: '查看正文批次',
+      stepKey: 'body',
+    }
+  }
+
+  if (taskType.includes('full_review')) {
+    return {
+      summary: '全书质检结果已生成，请查看总评、Top 问题和处理建议。',
+      actionLabel: '查看全书质检',
+      stepKey: 'fullReview',
+    }
+  }
+
+  if (taskType.includes('video_readiness')) {
+    return {
+      summary: '待视频化检查结果已生成，请查看检查清单和首条视频建议。',
+      actionLabel: '查看待视频化',
+      stepKey: 'videoReady',
+    }
+  }
+
+  return null
+}
+
 export function getDirectionDraftSubStepState(input: { hasDirection: boolean; hasCandidates: boolean }): NovelWorkbenchStepState {
   if (input.hasDirection || input.hasCandidates) return 'done'
   return 'active'
@@ -170,7 +274,112 @@ export function resolveVisibleTaskSummary(
   pendingTask: RecentTaskSummaryDTO | null | undefined,
   detail: Pick<NovelDetailDTO, 'recentTask' | 'recentTasks'> | null | undefined,
 ): RecentTaskSummaryDTO | null {
-  return pendingTask ?? detail?.recentTask ?? detail?.recentTasks?.[0] ?? null
+  const backendTask = detail?.recentTask ?? detail?.recentTasks?.[0] ?? null
+  if (shouldPreferBackendTask(pendingTask, backendTask)) return backendTask
+  return pendingTask ?? backendTask
+}
+
+export function resolveTaskSummaryForAction(
+  pendingTask: RecentTaskSummaryDTO | null | undefined,
+  detail: Pick<NovelDetailDTO, 'recentTask' | 'recentTasks'> | null | undefined,
+  action: NovelLongRunningAction,
+): RecentTaskSummaryDTO | null {
+  const pendingForAction = isTaskForNovelAction(pendingTask, action) ? pendingTask : null
+  const backendTask = findBackendTaskForAction(detail, action)
+  if (shouldPreferBackendTaskForAction(pendingForAction, backendTask)) return backendTask
+  return pendingForAction ?? backendTask
+}
+
+function shouldPreferBackendTask(pendingTask: RecentTaskSummaryDTO | null | undefined, backendTask: RecentTaskSummaryDTO | null | undefined) {
+  if (!backendTask) return false
+  if (isActiveBackendTask(backendTask)) return true
+  if (!pendingTask) return true
+  if (!isSameTaskFamily(backendTask.taskType, pendingTask.taskType)) return false
+
+  const pendingStartedAt = Date.parse((pendingTask as { startedAt?: string }).startedAt ?? '')
+  const backendUpdatedAt = Date.parse(backendTask.updatedAt ?? backendTask.createdAt ?? '')
+  return Number.isFinite(pendingStartedAt) && Number.isFinite(backendUpdatedAt) && backendUpdatedAt >= pendingStartedAt
+}
+
+function shouldPreferBackendTaskForAction(pendingTask: RecentTaskSummaryDTO | null | undefined, backendTask: RecentTaskSummaryDTO | null | undefined) {
+  if (!backendTask) return false
+  if (isActiveBackendTask(backendTask)) return true
+  if (!pendingTask) return true
+
+  const pendingStartedAt = Date.parse((pendingTask as { startedAt?: string }).startedAt ?? '')
+  const backendUpdatedAt = Date.parse(backendTask.updatedAt ?? backendTask.createdAt ?? '')
+  return Number.isFinite(pendingStartedAt) && Number.isFinite(backendUpdatedAt) && backendUpdatedAt >= pendingStartedAt
+}
+
+function isActiveBackendTask(task: RecentTaskSummaryDTO | null | undefined) {
+  return task?.status === TaskStatus.Queued || task?.status === TaskStatus.Processing
+}
+
+function isSameTaskFamily(left: string | null | undefined, right: string | null | undefined) {
+  const leftType = normalizeTaskType(left)
+  const rightType = normalizeTaskType(right)
+  if (!leftType || !rightType) return false
+  if (leftType === rightType) return true
+
+  const leftFamily = getTaskFamily(leftType)
+  const rightFamily = getTaskFamily(rightType)
+  return Boolean(leftFamily && leftFamily === rightFamily)
+}
+
+function normalizeTaskType(value: string | null | undefined) {
+  return (value ?? '').toLowerCase().replace(/^novel_/, '')
+}
+
+function getTaskFamily(taskType: string) {
+  if (taskType.includes('chapter_plan')) return 'chapter_plan'
+  if (taskType.includes('stage_outline')) return 'stage_outline'
+  if (taskType.includes('direction_fuse')) return 'direction_fuse'
+  if (taskType.includes('direction_optimize')) return 'direction_optimize'
+  if (taskType.includes('direction') && taskType.includes('generate')) return 'direction_generate'
+  if (taskType.includes('setting')) return 'setting'
+  if (taskType.includes('outline') && !taskType.includes('stage_outline')) return 'outline'
+  if (taskType.includes('trial_followup')) return 'trial_followup'
+  if (taskType.includes('trial')) return 'trial'
+  if (taskType.includes('body_batch')) return 'body_batch'
+  if (taskType.includes('full_review')) return 'full_review'
+  if (taskType.includes('video_readiness')) return 'video_readiness'
+  return ''
+}
+
+function findBackendTaskForAction(
+  detail: Pick<NovelDetailDTO, 'recentTask' | 'recentTasks'> | null | undefined,
+  action: NovelLongRunningAction,
+) {
+  const tasks = [detail?.recentTask, ...(detail?.recentTasks ?? [])].filter(Boolean) as RecentTaskSummaryDTO[]
+  const seen = new Set<string>()
+  return tasks.find((task) => {
+    if (seen.has(task.id)) return false
+    seen.add(task.id)
+    return isTaskForNovelAction(task, action)
+  }) ?? null
+}
+
+function isTaskForNovelAction(task: RecentTaskSummaryDTO | null | undefined, action: NovelLongRunningAction) {
+  const taskType = task?.taskType ?? ''
+  if (!taskType) return false
+  const normalized = taskType.toLowerCase()
+  const isGeneration = normalized.includes('generate')
+  const isAdoptOrEdit = normalized.includes('adopt') || normalized.includes('edit') || normalized.includes('discard')
+
+  if (action === 'chapter_plan_generate') return normalized.includes('chapter_plan') && isGeneration && !isAdoptOrEdit
+  if (action === 'stage_outline_generate') return normalized.includes('stage_outline') && isGeneration && !isAdoptOrEdit
+  if (action === 'outline_generate') return normalized.includes('outline') && !normalized.includes('stage_outline') && isGeneration && !isAdoptOrEdit
+  if (action === 'setting_generate') return normalized.includes('setting') && isGeneration && !isAdoptOrEdit
+  if (action === 'direction_generate') return normalized.includes('direction') && isGeneration && !normalized.includes('fuse') && !normalized.includes('optimize') && !isAdoptOrEdit
+  if (action === 'direction_fuse') return normalized.includes('direction') && normalized.includes('fuse')
+  if (action === 'direction_optimize') return normalized.includes('direction') && normalized.includes('optimize')
+  if (action === 'trial_generate') return normalized.includes('trial') && isGeneration
+  if (action === 'trial_followup_generate') return normalized.includes('trial_followup')
+  if (action === 'body_batch_generate') return normalized.includes('body_batch')
+  if (action === 'full_review') return normalized.includes('full_review')
+  if (action === 'video_readiness_recheck') return normalized.includes('video_readiness') && normalized.includes('check')
+  if (action === 'video_readiness_confirm') return normalized.includes('video_readiness') && normalized.includes('confirm')
+  return false
 }
 
 export function createLocalPendingTaskDetail(input: {
