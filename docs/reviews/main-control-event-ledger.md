@@ -1368,3 +1368,28 @@ evidence: current worktree package gate passed at 15 files / 1,993 net additions
 mc_decision: 保持 B2a2 not_authorized、总账 9/42、RMD-TASK-002=partial、RMD-TASK-003=open；QUALITY 同差异复核与最终工程矩阵通过前不提交、不推送、不授权 A2。
 next_action: 由独立 QUALITY 复核本 15-file / 1,993-net 冻结差异；P0/P1 清零后执行最终工程矩阵、原子 amend、推送和远程 E1 闭环。
 ```
+
+### MCE-RP02B2A2-G0-E1-REMOTE-ACCEPTED
+
+```text
+event_id: MCE-RP02B2A2-G0-E1-REMOTE-ACCEPTED
+occurred_at: 2026-07-17 03:29:36 CST
+event_type: governance_bootstrap_remote_accepted
+source_thread: main-control
+package_id: RP-02B2a2-G0-E1
+accepted_code_head: 0cfcbd19bb998bd84faa72cf4549eca17e5ab190
+issue_ids: RMD-TASK-002, RMD-TASK-003
+summary: RP-02B2a2-G0 最终 15-file package、独立复核、本地工程矩阵和四路同头远程 push CI 已完成。
+evidence: package gate 46/46; actor-clean core 69/69; remote runs rp01a=29527879687,rp01b=29527879721,rp01c=29527879669,governance=29527879657 completed/success
+g0_evidence_parent_sha: 0cfcbd19bb998bd84faa72cf4549eca17e5ab190
+g0_evidence_rp01a_run: 29527879687
+g0_evidence_rp01b_run: 29527879721
+g0_evidence_rp01c_run: 29527879669
+g0_evidence_governance_run: 29527879657
+g0_evidence_a2_authorization: not_authorized
+g0_evidence_issue_closed_count: 9/42
+g0_evidence_rmd_task_002: partial
+g0_evidence_rmd_task_003: open
+mc_decision: RP-02B2a2-G0 关闭；B2a2 继续 not_authorized，总账与真实环境边界不变。
+next_action: 仅在 MC 独立授权后，才可从 accepted G0 code head 创建与 E1 互为 sibling 的 A2 实现分支。
+```
