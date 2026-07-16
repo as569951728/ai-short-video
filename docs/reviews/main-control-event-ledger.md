@@ -940,3 +940,227 @@ evidence: commit 2da6d31; docs/reviews/remediation-rmd-task-002-rp-02b2a0-verifi
 mc_decision: RP-02B2a0 阶段完成，当前子包门禁 8/8；RMD-TASK-002 保持 partial，总体关闭进度保持 9/42。不得自动授权 B2a/B2b/B2c/B3 或真实 DB/provider/media。
 next_action: MC 单独核对 RP-02B2a 的依赖、20 files / 2000 additions 写集与冻结边界；在新授权前不修改业务代码。
 ```
+
+### MCE-20260714-RP02B2A-AUTH-AUDIT-REJECTED
+
+```text
+event_id: MCE-20260714-RP02B2A-AUTH-AUDIT-REJECTED
+occurred_at: 2026-07-14 00:15:14 CST
+event_type: implementation_authorization_review
+source_thread: main-control, 019f5987-1d1f-75a3-952e-4a03ac2e96b1, 019f5986-7e35-7862-afea-cae01c798616, 019f5987-bb3c-7f92-be64-e38a38887bc1, 019f5988-59da-7323-9a13-38fab6a61e2b
+package_id: RP-02B2a
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RETRY-01, GOV-GIT-01
+summary: B2a 第一轮单包开工审计完成；后端 approved 0/0/1、QUALITY approved 0/0/0、产品 rejected 0/2/0、TEST rejected 0/1/0。去重后 3 个 P1 为 route retry 回归未进入 manifest、隐藏 retry 后失败文案仍可能诱导重试、B2a fixture/完整复合命令未进入远程 CI。
+evidence: docs/reviews/rp-02b2-multi-agent-admission-review-2026-07-13.md section 16; current baseline c4ae04f; local test:rp02b2a0 50/50 + 17/17 + 6/6
+mc_decision: 拒绝当前 B2a 开工授权。只允许修订实现包、验收矩阵、ADR 模板和治理状态；业务代码继续冻结。manifest 改为 22 个实现/测试/CI 文件加同 diff ADR，总上限 23 files / 2,000 net additions。
+next_action: 修订资产通过 governance/diff check 后，原四角色执行第二轮独立复核；只有四路 P0/P1=0 才能提交授权资产并由 MC 单独授权 B2a。B2b/B2c/B3、真实 DB/provider/media 继续冻结。
+```
+
+### MCE-20260714-RP02B2A-SECOND-AUTH-AUDIT-REJECTED
+
+```text
+event_id: MCE-20260714-RP02B2A-SECOND-AUTH-AUDIT-REJECTED
+occurred_at: 2026-07-14 00:42:25 CST
+event_type: implementation_authorization_review
+source_thread: main-control, 019f5987-1d1f-75a3-952e-4a03ac2e96b1, 019f5986-7e35-7862-afea-cae01c798616, 019f5987-bb3c-7f92-be64-e38a38887bc1, 019f5988-59da-7323-9a13-38fab6a61e2b
+package_id: RP-02B2a
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RETRY-01, GOV-GIT-01
+summary: B2a 第二轮单包授权复核完成；产品/TEST approved 0/0/0，后端 rejected 0/2/0，QUALITY rejected 0/1/0。去重后 2 类 P1 为专属 workflow 无法按实现 diff 消费/机器验证 ready ADR，以及评审记录顶部仍把最新授权上限写成 B2a0。
+evidence: docs/reviews/rp-02b2-multi-agent-admission-review-2026-07-13.md section 17; four independent second-round reports; current baseline c4ae04f
+mc_decision: 再次拒绝 B2a 开工授权。只允许补 PR/push BASE/HEAD、NUL-safe changed-ADR discovery、显式 --adr、status=ready 机器门禁和最新授权口径；业务代码继续冻结。
+next_action: 修订资产通过本地 governance/diff check 后，原四角色执行第三轮独立复核；只有四路 P0/P1=0 才能提交推送授权资产并运行远程治理。B2b/B2c/B3、真实 DB/provider/media 继续冻结。
+```
+
+### MCE-20260714-RP02B2A-THIRD-AUTH-REVIEW-APPROVED
+
+```text
+event_id: MCE-20260714-RP02B2A-THIRD-AUTH-REVIEW-APPROVED
+occurred_at: 2026-07-14 00:59:15 CST
+event_type: implementation_authorization_review
+source_thread: main-control, 019f5987-1d1f-75a3-952e-4a03ac2e96b1, 019f5986-7e35-7862-afea-cae01c798616, 019f5987-bb3c-7f92-be64-e38a38887bc1, 019f5988-59da-7323-9a13-38fab6a61e2b
+package_id: RP-02B2a
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RETRY-01, GOV-GIT-01
+summary: B2a 第三轮单包授权复核完成；后端、产品、TEST、QUALITY 全部 approved，四路 P0/P1/P2=0。专属 workflow 的 BASE/HEAD、NUL-safe ADR discovery、显式 --adr、status=ready/实际计数失败门禁和最新授权口径均闭合，第一轮 retry/route/回归合同未回退。
+evidence: docs/reviews/rp-02b2-multi-agent-admission-review-2026-07-13.md section 18; four independent third-round reports; local governance 15/15; git diff --check
+mc_decision: B2a 单包开工授权合同准入清零，只允许进入授权资产 commit/push 与远程治理；不视为研发授权、实现完成或问题关闭。总体关闭进度保持 9/42。
+next_action: 提交并推送当前授权资产，确认远程治理成功后由 MC 单独裁决是否授权 RP-02B2a。B2b/B2c/B3、真实 DB/provider/media 继续冻结。
+```
+
+### MCE-20260714-RP02B2A-AUTH-ASSETS-GOVERNANCE-PASSED
+
+```text
+event_id: MCE-20260714-RP02B2A-AUTH-ASSETS-GOVERNANCE-PASSED
+occurred_at: 2026-07-14 01:12:00 CST
+event_type: requirements_governance
+source_thread: main-control
+package_id: RP-02B2a
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RETRY-01, GOV-GIT-01
+summary: 第三轮批准后的 B2a 授权资产已以 48bbac7 提交并推送；本地与远端 head 一致，Remediation governance run 29269395271 completed/success。
+evidence: commit 48bbac7e26854bbae999ef5eacc748d3e6deaa81; https://github.com/as569951728/ai-short-video/actions/runs/29269395271; local governance 15/15; git budget 6 files / 136 net additions
+mc_decision: 授权资产与远程治理门禁通过；允许 MC 对 RP-02B2a 做单包最终裁决，不增加 9/42 关闭数。
+next_action: MC 单独决定是否授权 RP-02B2a；B2b/B2c/B3、真实 DB/provider/media 继续冻结。
+```
+
+### MCE-20260714-RP02B2A-AUTHORIZED
+
+```text
+event_id: MCE-20260714-RP02B2A-AUTHORIZED
+occurred_at: 2026-07-14 01:16:32 CST
+event_type: implementation_authorization
+source_thread: main-control
+package_id: RP-02B2a
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RETRY-01, GOV-GIT-01
+summary: 第三轮四路 P0/P1/P2=0、授权资产提交推送及远程治理均通过；MC 只授权 RP-02B2a 实现 15-action execution core、strict provider ABI、双 stale gate、checkpoint/fenced finalize、Prisma 9/6 gate 和 provider-backed retry 冻结。
+evidence: commit 48bbac7; run 29269395271; docs/modules/rp-02b2-dispatcher-transport-implementation-package.md section RP-02B2a; docs/reviews/rp-02b2-multi-agent-admission-review-2026-07-13.md section 19
+mc_decision: 仅授权 RP-02B2a，硬写集 23 files / 2,000 net additions，实施同 diff ADR 必须 status=ready 并写真实计数。禁止 B2b/B2c/B3、HTTP 202/Admin transport、真实 DB/provider/media/E6。
+next_action: 全栈研发按 manifest 实现并自测；不得自行 commit/push。交付后由独立 TEST 与 QUALITY 验收，未通过不得更新总账。
+```
+
+### MCE-20260714-RP02B2A-DELIVERY-REJECTED-SPLIT-DRAFTED
+
+```text
+event_id: MCE-20260714-RP02B2A-DELIVERY-REJECTED-SPLIT-DRAFTED
+occurred_at: 2026-07-14 04:33:27 CST
+event_type: implementation_rejection_and_requirement_resplit
+source_thread: main-control, 019ed4ee-441a-7fa2-894d-393c7d4c527b, 019ed4ee-b33b-7621-b71c-3aa3d9e7b26e, 019f5986-7e35-7862-afea-cae01c798616, 019f5987-bb3c-7f92-be64-e38a38887bc1, 019f5988-59da-7323-9a13-38fab6a61e2b
+package_id: RP-02B2a, RP-02B2a1, RP-02B2a2, RP-02B2a3, RP-02B2a4, RP-02B2a5
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TASK-PRECLAIM-01, TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RETRY-01, GOV-GIT-01
+summary: 原 B2a 在 13-path/约733-net-additions partial diff 上通过 DEV 自测和首次 TEST，但正式 QUALITY 沿生产链发现 P0=2/P1=4；MC 采用更强证据，拒绝交付。产品、TEST、QUALITY 拆包复审继续以 2/4/0、2/5/0、2/3/0 否决原单包；后端席位未在本轮 SLA 内返回有效报告，不计批准。MC 形成 B2a1-B2a5 未授权拆包草案。
+evidence: 当前 dirty worktree 13 paths；docs/modules/rp-02b2-dispatcher-transport-implementation-package.md section 17；docs/reviews/rp-02b2-multi-agent-admission-review-2026-07-13.md section 20；原 ADR status superseded_before_commit
+mc_decision: 撤销原 RP-02B2a 单包授权。禁止提交当前 partial diff；从 c673eaf clean worktree 修订治理资产。B2a1-B2a5 全部 not_authorized，总账保持 9/42。
+next_action: 运行本地治理与一致性检查；后端/产品/TEST/QUALITY 对拆包资产重新复核。四路 P0/P1=0 前不得提交授权资产或派发 B2a1；B2b/B2c/B3、202/Admin transport、真实 DB/provider/media/E6 继续冻结。
+```
+
+### MCE-20260714-RP02B2A-SPLIT-ASSET-ROUND1-REJECTED-REVISION
+
+```text
+event_id: MCE-20260714-RP02B2A-SPLIT-ASSET-ROUND1-REJECTED-REVISION
+occurred_at: 2026-07-14 05:29:05 CST
+event_type: requirements_admission_rejection
+source_thread: main-control, 019f5d48-b4e0-7033-a38d-349c05363439, 019f5986-7e35-7862-afea-cae01c798616, 019f5987-bb3c-7f92-be64-e38a38887bc1, 019f5988-59da-7323-9a13-38fab6a61e2b
+package_id: RP-02B2a1, RP-02B2a2, RP-02B2a3, RP-02B2a4, RP-02B2a5
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TASK-PRECLAIM-01, TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RESTART-01, TASK-RETRY-01, GOV-GIT-01
+summary: 五包拆分治理资产首轮正式复核完成；产品 rejected 0/4/2、后端 rejected 0/4/3、TEST rejected 0/4/2、QUALITY rejected 0/3/1。四路 P0=0，主控去重为 retry 时机、leased result 公开门禁、逐包命令、package gate/机器预算、上位资产口径、repository capability 六类 P1。
+evidence: docs/reviews/rp-02b2-multi-agent-admission-review-2026-07-13.md section 21; four independent first-round reports; clean worktree codex/rp-02b2a-split-assets-20260714 at c673eaf
+mc_decision: 拒绝提交与 B2a1 授权；只允许在 clean 治理工作树统一修订六类 P1/P2。原 13-path partial diff 继续隔离，总账保持 9/42。
+next_action: 本地治理、预算、文档一致性和负例合同检查通过后，由同四角色执行第二轮复核。四路 P0/P1=0 前不得 commit/push 或授权；B2a2-B2a5/B2b/B2c/B3、202/Admin、真实 DB/provider/media/E6 继续冻结。
+```
+
+### MCE-20260714-RP02B2A-SPLIT-ASSET-ROUND2-REJECTED-REVISION
+
+```text
+event_id: MCE-20260714-RP02B2A-SPLIT-ASSET-ROUND2-REJECTED-REVISION
+occurred_at: 2026-07-14 06:16:23 CST
+event_type: requirements_admission_rejection
+source_thread: main-control, 019f5d48-b4e0-7033-a38d-349c05363439, 019f5986-7e35-7862-afea-cae01c798616, 019f5987-bb3c-7f92-be64-e38a38887bc1, 019f5988-59da-7323-9a13-38fab6a61e2b
+package_id: RP-02B2a1, RP-02B2a2, RP-02B2a3, RP-02B2a4, RP-02B2a5
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TASK-PRECLAIM-01, TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RESTART-01, TASK-RETRY-01, GOV-GIT-01
+summary: 五包拆分治理资产第二轮正式复核完成；产品 approved 0/0/2，后端 rejected 0/1/2、TEST rejected 0/2/1、QUALITY rejected 0/1/1。四路 P0=0，主控去重为 A1 gate 可执行命令、production workflow wiring/可达性、24 场景逐包归属、A2/B2b/B2c 权责矩阵四类 P1。
+evidence: docs/reviews/rp-02b2-multi-agent-admission-review-2026-07-13.md section 22; four independent second-round reports; clean worktree codex/rp-02b2a-split-assets-20260714 at c673eaf; actual governance diff 14 files / 290 net additions before round2 corrections
+mc_decision: 拒绝提交与 B2a1 授权；只允许在 clean 治理工作树统一修订 4 类 P1 与关联 P2。原 13-path partial diff 继续隔离，总账保持 9/42。
+next_action: 本地 governance、diff、预算、文档一致性和负例合同检查通过后，由同四角色执行第三轮复核。四路 P0/P1=0 前不得 commit/push 或授权；B2a2-B2a5/B2b/B2c/B3、202/Admin、真实 DB/provider/media/E6 继续冻结。
+```
+
+### MCE-20260714-RP02B2A-SPLIT-ASSET-ROUND3-REJECTED-REVISION
+
+```text
+event_id: MCE-20260714-RP02B2A-SPLIT-ASSET-ROUND3-REJECTED-REVISION
+occurred_at: 2026-07-14 06:39:36 CST
+event_type: requirements_admission_rejection
+source_thread: main-control, 019f5d48-b4e0-7033-a38d-349c05363439, 019f5986-7e35-7862-afea-cae01c798616, 019f5987-bb3c-7f92-be64-e38a38887bc1, 019f5988-59da-7323-9a13-38fab6a61e2b
+package_id: RP-02B2a1, RP-02B2a2, RP-02B2a3, RP-02B2a4, RP-02B2a5
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TASK-PRECLAIM-01, TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RESTART-01, TASK-RETRY-01, GOV-GIT-01
+summary: 五包拆分治理资产第三轮正式复核完成；后端、TEST、QUALITY approved 0/0/2，产品 rejected 0/1/1。四路 P0=0，主控去重后唯一 P1 为实现包、主状态和评审记录中的当前轮次/授权状态指针不一致。
+evidence: docs/reviews/rp-02b2-multi-agent-admission-review-2026-07-13.md section 23; four independent third-round reports; clean worktree codex/rp-02b2a-split-assets-20260714 at c673eaf
+mc_decision: 拒绝提交与 B2a1 授权；只允许修正治理资产中的当前状态指针和关联 P2，不触业务代码。原 13-path partial diff 继续隔离，总账保持 9/42。
+next_action: 本地 governance、diff、预算和文档一致性检查通过后，由同四角色执行第四轮复核。四路 P0/P1=0 前不得 commit/push 或授权；B2a2-B2a5/B2b/B2c/B3、202/Admin、真实 DB/provider/media/E6 继续冻结。
+```
+
+### MCE-20260714-RP02B2A-SPLIT-ASSET-ROUND3-REVISION-COMPLETE
+
+```text
+event_id: MCE-20260714-RP02B2A-SPLIT-ASSET-ROUND3-REVISION-COMPLETE
+occurred_at: 2026-07-14 06:48:00 CST
+event_type: requirements_revision_complete
+source_thread: main-control
+package_id: RP-02B2a1, RP-02B2a2, RP-02B2a3, RP-02B2a4, RP-02B2a5
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TASK-PRECLAIM-01, TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RESTART-01, TASK-RETRY-01, GOV-GIT-01
+summary: 第三轮唯一 P1 已修订；实现包、父包、主状态、评审记录与事件总账统一为第三轮 3/4 通过、产品 rejected 0/1/1、五包仍未授权、第四轮复核中。重复 2.4 标题同步修正。
+evidence: git diff --check passed; governance 15/15 passed; 主控逐项合同核对完成但不作为独立机器门禁；worktree budget precheck passed，未暂存数字不作为关闭证据，提交前以 staged BASE/HEAD 为权威
+mc_decision: 允许进入第四轮四角色只读复核；仍不允许提交或授权研发，总账保持 9/42。
+next_action: 后端、产品、TEST、QUALITY 四路全部 approved 且 P0/P1=0 后，才允许提交推送治理资产并执行远程治理。远程成功前 B2a1-B2a5 均 not_authorized。
+```
+
+### MCE-20260714-RP02B2A-SPLIT-ASSET-ROUND4-REJECTED-REVISION
+
+```text
+event_id: MCE-20260714-RP02B2A-SPLIT-ASSET-ROUND4-REJECTED-REVISION
+occurred_at: 2026-07-14 06:55:00 CST
+event_type: requirements_admission_rejection
+source_thread: main-control, 019f5d48-b4e0-7033-a38d-349c05363439, 019f5986-7e35-7862-afea-cae01c798616, 019f5987-bb3c-7f92-be64-e38a38887bc1, 019f5988-59da-7323-9a13-38fab6a61e2b
+package_id: RP-02B2a1, RP-02B2a2, RP-02B2a3, RP-02B2a4, RP-02B2a5
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TASK-PRECLAIM-01, TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RESTART-01, TASK-RETRY-01, GOV-GIT-01
+summary: 五包拆分治理资产第四轮正式复核完成；产品、TEST、QUALITY approved，后端 rejected 0/1/1。四路 P0=0，主控去重后唯一 P1 为实现包第17节和主状态“当前唯一推荐动作”仍停在旧轮次。
+evidence: docs/reviews/rp-02b2-multi-agent-admission-review-2026-07-13.md section 24; four independent fourth-round reports; clean worktree codex/rp-02b2a-split-assets-20260714 at c673eaf
+mc_decision: 拒绝提交与 B2a1 授权；只允许修正两处当前动作和关联证据卫生 P2，不触业务代码。原 13-path partial diff 继续隔离，总账保持 9/42。
+next_action: 本地治理、diff、预算和文档一致性检查通过后，由同四角色执行第五轮复核。四路 P0/P1=0 前不得 commit/push 或授权；B2a2-B2a5/B2b/B2c/B3、202/Admin、真实 DB/provider/media/E6 继续冻结。
+```
+
+### MCE-20260714-RP02B2A-SPLIT-ASSET-ROUND4-REVISION-COMPLETE
+
+```text
+event_id: MCE-20260714-RP02B2A-SPLIT-ASSET-ROUND4-REVISION-COMPLETE
+occurred_at: 2026-07-14 06:57:00 CST
+event_type: requirements_revision_complete
+source_thread: main-control
+package_id: RP-02B2a1, RP-02B2a2, RP-02B2a3, RP-02B2a4, RP-02B2a5
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TASK-PRECLAIM-01, TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RESTART-01, TASK-RETRY-01, GOV-GIT-01
+summary: 第四轮唯一 P1 已修订；实现包第17节与主状态“当前唯一推荐动作”统一为第四轮 3/4 通过、后端 rejected 0/1/1、唯一 P1 已修订、第五轮复核中。泛化状态与不可重放的机器证据表述同步清理。
+evidence: git diff --check passed; governance 15/15 passed; stale current-action check returned zero matches; worktree budget precheck passed，提交前仍以 staged BASE/HEAD 为唯一权威计数
+mc_decision: 允许进入第五轮四角色只读复核；仍不允许提交或授权研发，总账保持 9/42。
+next_action: 后端、产品、TEST、QUALITY 四路全部 approved 且 P0/P1=0 后，才允许提交推送治理资产并执行远程治理。远程成功前 B2a1-B2a5 均 not_authorized。
+```
+
+### MCE-20260714-RP02B2A-SPLIT-ASSET-ROUND5-REJECTED-REVISION-COMPLETE
+
+```text
+event_id: MCE-20260714-RP02B2A-SPLIT-ASSET-ROUND5-REJECTED-REVISION-COMPLETE
+occurred_at: 2026-07-14 07:04:00 CST
+event_type: requirements_admission_rejection_and_revision
+source_thread: main-control, 019f5d48-b4e0-7033-a38d-349c05363439, 019f5986-7e35-7862-afea-cae01c798616, 019f5987-bb3c-7f92-be64-e38a38887bc1, 019f5988-59da-7323-9a13-38fab6a61e2b
+package_id: RP-02B2a1, RP-02B2a2, RP-02B2a3, RP-02B2a4, RP-02B2a5
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TASK-PRECLAIM-01, TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RESTART-01, TASK-RETRY-01, GOV-GIT-01
+summary: 五包拆分治理资产第五轮四角色均 rejected P0=0/P1=1；唯一重复 P1 为主状态“当前唯一推荐动作”仍使用整改进行态。该句已改为第五轮拒绝历史、唯一 P1 修订完成且第六轮复核中。
+evidence: docs/reviews/rp-02b2-multi-agent-admission-review-2026-07-13.md section 25; four independent fifth-round reports; precise stale-state patterns zero matches after revision; governance 15/15; git diff --check
+mc_decision: 允许进入第六轮四角色只读复核；仍不允许提交或授权研发，总账保持 9/42。
+next_action: 四路全部 approved 且 P0/P1=0 后，才允许提交推送治理资产并执行远程治理。远程成功前 B2a1-B2a5 均 not_authorized。
+```
+
+### MCE-20260714-RP02B2A-SPLIT-ASSET-ROUND6-APPROVED
+
+```text
+event_id: MCE-20260714-RP02B2A-SPLIT-ASSET-ROUND6-APPROVED
+occurred_at: 2026-07-14 07:34:00 CST
+event_type: requirements_admission_approved
+source_thread: main-control, 019f5d48-b4e0-7033-a38d-349c05363439, 019f5986-7e35-7862-afea-cae01c798616, 019f5987-bb3c-7f92-be64-e38a38887bc1, 019f5988-59da-7323-9a13-38fab6a61e2b
+package_id: RP-02B2a1, RP-02B2a2, RP-02B2a3, RP-02B2a4, RP-02B2a5
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TASK-PRECLAIM-01, TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RESTART-01, TASK-RETRY-01, GOV-GIT-01
+summary: 五包拆分治理资产第六轮正式复核完成；后端、产品、TEST、QUALITY 全部 approved，四路 P0/P1=0。当前状态、五包合同、24 场景、TASK-PRECLAIM、同步200、retry和冻结边界无回退。
+evidence: docs/reviews/rp-02b2-multi-agent-admission-review-2026-07-13.md section 26; four independent sixth-round reports; precise stale-state patterns zero matches; governance 15/15; git diff --check
+mc_decision: 拆包治理合同准入清零，只允许进入 14 个治理路径的 commit/push 与远程治理；不视为 B2a1 研发授权或总账关闭。
+next_action: 全量 stage 后以显式 BASE/HEAD 运行权威预算/manifest 门禁，提交推送并确认远程治理成功；此前 B2a1-B2a5 均 not_authorized。
+```

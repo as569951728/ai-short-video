@@ -1,10 +1,10 @@
 # RP-02B2 Dispatcher、Fenced Finalize 与异步 Transport 实现包
 
-状态：`rp02b2a0_authorized_for_implementation_b2a_b2b_b2c_b3_frozen`
+状态：`rp02b2a0_completed_b2a_single_package_superseded_split_round6_approved_asset_submission_pending_b2b_b2c_b3_frozen`
 
 问题：`RMD-TASK-002`，承接 `RMD-TASK-001` 的异步执行阶段；`RMD-TASK-003` 继续冻结到 `RP-02B3`
 
-验收：`TASK-PRECLAIM-01`、`TASK-CONCURRENCY-01`、`TASK-WORKER-01`；`TASK-RESTART-01` 仅覆盖 heartbeat/fencing，不覆盖 recovery。`TASK-SURFACE-01` 完整保留给 RP-02C
+验收：`TASK-PRECLAIM-01`、`TASK-CONCURRENCY-01`、`TASK-WORKER-01`、`TASK-RETRY-01`；heartbeat/graceful shutdown 只属于 B2b，restart/recovery/unknown outcome 只属于 B3。`TASK-SURFACE-01` 完整保留给 RP-02C
 
 依赖：`RP-02B1` 提交 `415d03a` 和阶段证据 `e2c6196`
 
@@ -12,14 +12,18 @@
 
 四路初审均拒绝原 RP-02B2 大包。共同原因是：原包混入 B3 recovery/retry、缺少逐 action 权威来源合同、缺少业务资产与 receipt 的同事务 fenced finalize、缺少 provider dispatch checkpoint、HTTP/admin 不能区分 `202 accepted` 与 `200 existing`，且 `15 files / 1,700 additions` 不足以诚实承载全部范围。
 
-RP-02B2 继续拆为四个顺序子包：
+原 RP-02B2a 重拆为五个顺序包；连同已完成的 B2a0 和后续 B2b/B2c，当前完整实施顺序共八个阶段：
 
 1. `RP-02B2a0`：高风险试写选择前置修复。只修复 `confirmRisk/selectionReason` 从 Admin 到同步 route/service 的真实透传和 provider 前校验，不改 transport 或 worker。
-2. `RP-02B2a`：执行核心。补齐 ExecutionEnvelope、15-action authority matrix、lease-CAS checkpoint、双 stale gate、action-specific fenced finalize、dispatcher registry 和能力门禁。
-3. `RP-02B2b`：API 传输与生命周期。把 claim 初态切为 queued、提供 HTTP 202、in-process worker loop/heartbeat/graceful shutdown 和 API E3 回归。
-4. `RP-02B2c`：Admin transport。保存真实 taskId、稳定幂等键、精确轮询、刷新/多标签恢复和不会误报完成的 DOM 回归。
+2. `RP-02B2a1`：Registry、严格 provider ABI 与公开 retry 冻结。让 15-action registry 接管现有同步调用，清除 provider public ABI 的 raw entity/cast，并在任何 leased 能力出现前先关闭误导性的公开重试入口。
+3. `RP-02B2a2`：权威 claim 与 provider 前门禁。由可信 actor 和权威仓储构造 canonical envelope，并在 provider 前执行同一 matcher。
+4. `RP-02B2a3`：lease phase CAS 与历史 retry child fence。修正 attempt 时机、单向 phase CAS、原子安全失败与既存 retry child；正常 leased action 仍保持 provider=0。
+5. `RP-02B2a4`：InMemory action-specific fenced finalize。为 deterministic/InMemory 执行核心补齐第二 stale gate 与资产、receipt、task、event、operation log 原子提交。
+6. `RP-02B2a5`：Prisma 9/6 fenced finalize 与 B2a 阶段收口。支持 9 action，后 6 action provider 前零副作用阻断；不外推真实 MySQL。
+7. `RP-02B2b`：API 传输与生命周期。把 claim 初态切为 queued、提供 HTTP 202、in-process worker loop/heartbeat/graceful shutdown 和 API E3 回归。
+8. `RP-02B2c`：Admin transport。保存真实 taskId、稳定幂等键、精确轮询、刷新/多标签恢复和不会误报完成的 DOM 回归。
 
-只有前一包独立实现、验收、commit/push 后才能授权下一包。B2a0/B2a/B2b/B2c 都不实现 recovery scan、retry child、provider outcome unknown、poison orchestration或真实数据库/多进程/provider。
+只有前一包独立实现、验收、commit/push 后才能授权下一包。B2a1-B2a5 是原 B2a 目标的可验证实施顺序，不缩小最终合同。B2a0/B2a1-B2a5/B2b/B2c 都不实现 recovery scan、真实 retry child、provider outcome unknown、poison orchestration或真实数据库/多进程/provider。
 
 ## 2. 冻结范围
 
@@ -30,7 +34,7 @@ RP-02B2 继续拆为四个顺序子包：
 - 不新增 ExecutionEnvelope、dispatcher、worker、capability、202 或 submission intent；不改变其他生成入口。
 - API route、Admin service 与 Vue DOM 使用独立命令 `test:rp02b2a0` 形成完整回归。
 
-### 2.2 RP-02B2a
+### 2.2 RP-02B2a1-B2a5
 
 - shared `ExecutionEnvelopeV1` 补齐 worker finalize 所需的严格审计字段。
 - 单一 action-discriminated `ActionExecutionPlan` registry 同时服务现有同步路径和 worker dispatcher；禁止维护第二份 provider/finalize 映射，未知 handler 安全失败。
@@ -38,9 +42,14 @@ RP-02B2 继续拆为四个顺序子包：
 - typed `checkpointLeasedTask`，所有 phase 迁移都要求有效 lease。
 - `finalizeLeasedAction`：stale recheck、业务资产、result receipt、task 终态和唯一 terminal event 同事务提交。
 - in-memory 与 Prisma 的同合同实现；Prisma 只允许当前支持的 9 action，后 6 action 在 claim 前稳定零副作用阻断。
-- B2 期间 retry API 对 provider-backed failed task 稳定返回 `RETRY_NOT_AVAILABLE`，不得创建 queued child。
+- B2a1 起，provider-backed task 的公开 projection 固定 `retryable=false`、受控失败原因和 disabled 下一步；retry API 稳定返回 `409 RETRY_NOT_AVAILABLE`，mutation/event/log/child=0。该冻结优先于 stale/conflict 分支。B2a3 只负责把历史遗留 queued/processing retry child 在 lease/provider 前原子置为受控终态。
 - 承接 B2a0 已验收的风险参数；将其继续写入 envelope/receipt/log，禁止重复定义另一份 route/Admin 映射。
-- deterministic execution-core fixture 的独立命令是 `test:rp02b2a:core`；B2a 包级准入命令 `test:rp02b2a` 必须按失败即停顺序执行 core 与 B2a0。
+- B2a1-B2a5 各自拥有精确 core 命令和累计 fail-fast 包命令；`test:rp02b2a:core` 只能是五个精确 core 的显式串行别名，`test:rp02b2a` 只能指向通过全部前序回归的 B2a5 复合命令，禁止目录 glob 或后包测试反向冒充前包证据。
+- 拆包只改变交付和验收粒度，不允许减少上述任何能力。B2a1-B2a5 全部独立验收前，`RP-02B2a` 不得标记完成。
+- B2a3 只能证明 phase/attempt/fail-safe/retry 合同；B2a4 未完成前，正常 leased action 必须在 provider 前硬阻断。B2a4 只放行 deterministic/InMemory 能力；Prisma action 必须等 B2a5 对应 9/6 能力门禁完成。
+- 五包始终保留现有同步 HTTP 200，不切 queued/202，不新增运行时 scheduler/worker loop，不向 Admin 暴露新的任务状态。
+- B2a1-B2a3 的新增 leased path 对 public HTTP、Admin 和 task DTO 不可达；B2a4 的 `waiting_confirmation/candidate/resultIds` 仅 deterministic harness 可观察，不得接入 public route/UI。现有同步 HTTP 200 只有在同请求的业务写入成功提交后才能返回候选；stale、fenced 或 rollback 不得返回候选、resultId 或成功文案。B2a5 仍不新增 transport 或 UI 状态。
+- repository 必须提供 server-authoritative typed execution capability，dispatcher 在 `prepared -> provider_call_started` 前读取：B2a3 的 InMemory/Prisma 全部 `disabled`；B2a4 仅 InMemory 15 action `enabled`，Prisma 全部 `disabled`；B2a5 的 Prisma 仅 9 action `enabled`、6 action `unsupported`。禁止客户端 flag、环境变量或 `instanceof` 推断。新 claim 遇到 unsupported 必须 task/provider/asset=0；历史已存在的 leased task 遇到 disabled/unsupported 必须经 `failLeasedAction` 原子终态且 provider/asset/receipt/current=0。
 
 ### 2.3 RP-02B2b
 
@@ -57,7 +66,7 @@ RP-02B2 继续拆为四个顺序子包：
 - NovelDetail 与 ChapterDetail 当前已有 provider 入口同时适配；不新增新业务入口。
 - admin service unit、Vue DOM 回归和独立命令 `test:rp02b2c`。
 
-### 2.4 明确不做
+### 2.5 明确不做
 
 - `RP-02B3`：recovery scan、worker restart、retry child/lineage/预算、unknown outcome、poison、renewal-vs-recovery。
 - `RP-02C`：取消任务、停止本页等待、放弃结果、重新生成、完整任务抽屉和所有表面的统一产品投影。
@@ -246,6 +255,8 @@ Prisma B2 可进入 dispatcher 的 9 个 task type：
 
 B2a/B2b/B2c 期间 `POST /tasks/:id/retry` 遇到 provider-backed task，必须在 stale/conflict/repository retry 之前返回 `409 RETRY_NOT_AVAILABLE`；child/event/log/activeClaim/provider 均为 0。dispatcher 对任何 `retryOfTaskId != null` 的既存 queued/processing task 也必须在 provider 前一次性安全失败为 `RETRY_NOT_AVAILABLE`，provider/asset/receipt/current=0。B3 完成 retry 合同后再开放。
 
+从 B2a 起，provider-backed failed task 的公开投影固定为：`retryable=false`；`userFailureReason="任务执行失败，未写入新的候选或正式内容。"`；`nextAction.type="disabled"`、`label="暂不支持任务重试"`、`reasonText/disabledReason="当前阶段暂不支持任务重试，请返回业务页面查看当前内容。"`、`target="disabled"`、`disabled=true`、`confirmRequired=false`。公开失败文案不得包含“重试”或“稍后重试”的行动建议；这条限制不改变非 provider-backed task 的既有投影。直接调用 retry API 的公开 message 固定为“当前阶段暂不支持任务重试，未创建新任务。”，且不得回显内部异常、provider response 或请求身份字段。
+
 `RETRY_NOT_AVAILABLE` 必须作为 `packages/shared/src/api.ts` 的正式 `ErrorCode`，HTTP definition 固定 409；禁止 route/service 通过字符串、强制 cast 或复用 `TASK_NOT_RETRYABLE` 冒充。
 
 ## 8. HTTP Dispatch 合同（B2b）
@@ -356,7 +367,17 @@ HTTP 线程只允许鉴权、schema、capability/config gate、规范化/idempot
 
 B2a0 使用独立命令 `test:rp02b2a0`，精确运行 API route、Admin service 和 Vue DOM 三类既有文件。必须分别证明：普通候选保持同步生成；high/blocking 候选缺 `confirmRisk` 或空 `selectionReason` 时 provider 前拒绝；合法原因从页面到 route/service 原样但安全地透传；刷新/重复点击不绕过校验。另设 `risk_selection_reason_secret_canary`：API key、Authorization、Cookie、token 形态值在 provider 前稳定拒绝，task/provider/asset/operation-log/普通日志/浏览器持久化全部零命中，错误响应只含受控原因。每个失败场景逐项断言 task/event/provider/asset/receipt/current/operation-log/child 和 browser persistence 计数。
 
-独立目录 `apps/api/test/rp02b2a/`，`test:rp02b2a:core` 只匹配该目录；复合命令 `test:rp02b2a` 必须按失败即停顺序执行 `test:rp02b2a:core` 再执行 `test:rp02b2a0`，任一子命令失败则整体失败；`test:rp02b1` 必须缩窄到 B1 文件，避免未来污染。
+五包命令必须固定为以下精确接口；每个 `:core` 只运行本包列出的测试文件，每个复合命令先串行全部已完成前序包，任一失败立即停止。每个 `:core`、`:gate` 和复合命令必须自己以 `env -u DATABASE_URL -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL -u DEEPSEEK_MODEL -u DEEPSEEK_STRUCTURE_MODEL -u DEEPSEEK_REASONER_MODEL -u DEEPSEEK_TIMEOUT_MS -u DEEPSEEK_MAX_RETRIES NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=/dev/null` 清空真实 DB/provider/secret 环境；不得依赖调用方或 workflow 的外部清理：
+
+- `test:rp02b2a1:gate`：真实执行 `scripts/rp02b2a-package-gate.test.mjs`，该测试只通过子进程调用生产 `scripts/rp02b2a-package-gate.mjs` 和读取真实 `.github/workflows/rp01c-fixtures.yml`，不得复制 helper、正则模拟或跳过 YAML wiring。
+- `test:rp02b2a1:core`：显式串行 `registry-provider-abi.test.ts`、`novelRoutes.test.ts` 中 A1 同步 200/retry freeze 回归和 `test:rp02b2a1:gate`；`test:rp02b2a1 = test:rp02b1 -> test:rp02b2a0 -> test:rp02b2a1:core`。
+- `test:rp02b2a2:core`：`authority-claim.test.ts` 与 A2 同步 200 回归；`test:rp02b2a2 = test:rp02b2a1 -> test:rp02b2a2:core`。
+- `test:rp02b2a3:core`：`lease-dispatch-retry.test.ts`；`test:rp02b2a3 = test:rp02b2a2 -> test:rp02b2a3:core`。
+- `test:rp02b2a4:core`：`inmemory-fenced-finalize.test.ts` 与 A4 同步 200 回归；`test:rp02b2a4 = test:rp02b2a3 -> test:rp02b2a4:core`。
+- `test:rp02b2a5:core`：`prisma-fenced-finalize.test.ts`；`test:rp02b2a5 = test:rp02b2a4 -> test:rp02b2a5:core`。
+- `test:rp02b2a:core` 显式串行 A1-A5 五个 core；`test:rp02b2a = test:rp02b2a5`。禁止目录 glob、复制 fixture helper 或依赖全仓测试偶然覆盖。
+
+生产 workflow 从唯一 changed B2aN ADR 解析 packageId，并只调用该包复合命令；A1 远程复合命令必须实际包含 `test:rp02b2a1:gate`，因此远程始终固定执行 B1、B2a0、全部已完成前序包和当前包。`test:rp02b1` 必须缩窄到 B1 文件，避免未来污染。A2/A3 的 E3 必须经过真实 `NovelService -> taskClaim -> registry -> repository` 生产符号，不得只测 MutableAuthorityStore/probe。
 
 必须使用显式 `ManualClock.set/advance`、`DeferredProvider.entered/resolve/reject`、`MutableAuthorityStore`、`LeaseRepositoryProbe`、`AssetSinkProbe` 和 barrier；禁止固定 sleep。
 
@@ -381,9 +402,19 @@ B2a0 使用独立命令 `test:rp02b2a0`，精确运行 API route、Admin service
 19. `controlled_terminal_failures_are_atomic_with_event_and_operation_log`
 20. `provider_public_abi_uses_exact_action_pick_and_preserves_nullable_word_target`
 21. `long_term_memory_identity_uses_source_content_version_and_snapshot_hash`
-22. `provider_backed_task_projection_freezes_retry_and_retry_mutation_zero`
+22. `provider_backed_task_projection_freezes_retry_and_retry_mutation_zero`：除八类副作用精确为 0 外，逐字段断言 `retryable=false`、固定 `userFailureReason`、disabled `nextAction` 和 retry API 的固定 409 message；公开文案不得包含“稍后重试”。
 23. `authority_changes_during_finalize_is_locked_or_cas_fenced`
 24. `trusted_actor_is_identical_across_claim_and_envelope_no_default_fallback`
+
+24 个 deterministic 场景的唯一归属、测试文件与累计回归如下；同一编号除场景 23 的 InMemory/Prisma 两种 repository 证据外不得跨包重复认领，后续包必须运行前序复合命令而不是复制场景：
+
+| 子包 | 场景编号 | 本包测试文件 | 必须累计回归 |
+| --- | --- | --- | --- |
+| B2a1 | 1、15、20、22；另含 package-gate workflow 正反例 | `registry-provider-abi.test.ts`、`novelRoutes.test.ts`、`scripts/rp02b2a-package-gate.test.mjs` | B1、B2a0；同步 HTTP 200/非 202、公开 retry freeze、固定失败投影与八类零副作用 |
+| B2a2 | 2、3、4、13、18、21、24 | `authority-claim.test.ts`、`novelRoutes.test.ts` | B2a1 全量；可信 actor、action-specific authority/source refs、provider 前 stale、同步 200 |
+| B2a3 | 6、8、14、16、19 | `lease-dispatch-retry.test.ts` | B2a2 全量；A1 public retry freeze、A2 authority gate、正常 leased action provider=0 |
+| B2a4 | 5、7、9、10、11、17、23（InMemory） | `inmemory-fenced-finalize.test.ts`、`novelRoutes.test.ts` | B2a3 全量；provider dispatch checkpoint 只在 A4 finalize capability 就绪后证明；InMemory 15 action、公开同步 200/非 202、leased result 仅 harness 可见 |
+| B2a5 | 12、23（Prisma） | `prisma-fenced-finalize.test.ts` | B2a4 全量；Prisma 9 enabled/6 unsupported、deterministic transaction/CAS、无 transport/UI 扩张 |
 
 每个场景必须逐项断言 task/event/provider/asset/receipt/current/operation-log/child 计数，而不是只断言返回值。`existing_retry_child_is_terminally_fenced_before_provider` 必须预置 `retryOfTaskId != null` 的 queued/processing task，只允许一个 `RETRY_NOT_AVAILABLE` 安全终态、一个 terminal event、一个 operation log，provider/asset/receipt/current/new-child 全为 0。风险场景承接 B2a0 的 claim 前校验，并证明合法 reason 在 envelope、provider effective request、receipt 摘要和 operation log 中安全一致。provider 投影场景必须分别突变 novel title/genres/word policy/policy profile 与 chapter title/wordTarget/statusNote/current pointer，断言每个字段要么未进入 action payload，要么 provider 前 `SOURCE_STALE`；逐 action `Object.keys` 必须与声明的 `Pick<>` 完全相等，provider public ABI 和调用点均不得出现 raw entity/cast。
 
@@ -447,7 +478,7 @@ B2b/B2c 每个场景还必须逐项断言 task/event/provider/asset/receipt/curr
 
 ## 13. E3 / E6 证据边界
 
-B2a0/B2a/B2b/B2c E3 可证明：风险参数同步链、单进程 deterministic dispatcher/lease/checkpoint/fencing、mock provider 双 stale gate、in-memory 与 Prisma static transaction contract、Fastify inject 202、Admin store/CAS 算法与 DOM transport。
+B2a0/B2a1-B2a5/B2b/B2c E3 可证明：风险参数同步链、单进程 deterministic dispatcher/lease/checkpoint/fencing、mock provider 双 stale gate、in-memory 与可注入 deterministic Prisma repository transaction/CAS contract、Fastify inject 202、Admin store/CAS 算法与 DOM transport。
 
 仍为 not_proven：真实 MySQL migration/事务/数据库时钟/P2002、两个独立 worker 进程、真实 socket latency、进程 kill/restart、跨进程 heartbeat/fencing、真实 provider 幂等/unknown outcome/成本、真实浏览器跨标签 Web Locks/IndexedDB 调度与 storage/BroadcastChannel 投递、真实媒体。DOM 双 store/barrier 只证明算法合同，不得称真实跨标签 E6/E7。
 
@@ -466,31 +497,116 @@ B2a0/B2a/B2b/B2c E3 可证明：风险参数同步链、单进程 deterministic 
 - `package.json`
 - `test:rp02b2a0` 必须是复合精确命令，只运行上述 API route、Admin service 与 DOM 回归；不得用全仓测试偶然覆盖代替。该包不新增异步任务、provider、worker 或 transport。
 
-### RP-02B2a
+### RP-02B2a 原单包
 
-- 预算与 manifest 均为硬门禁：`20 files / 2,000 net additions`，任何增项必须先由 MC 修订。
-- `packages/shared/src/api.ts`（新增 `RETRY_NOT_AVAILABLE` typed 409）
+原 `23 files / 2,000 net additions` 授权在研发交付复核中被撤销，状态固定为 `superseded_before_commit`。当前 13-path partial diff 不得 stage/commit/push，也不得成为任一新包的累计基线。它只保留在原工作树作为隔离参考；新包必须从 `c673eaf` 或前一包已独立验收的 clean commit 逐 hunk 重建。
+
+### RP-02B2a1 Registry, Strict ABI And Public Retry Freeze
+
+- 硬门禁：`18 files / 1,900 net additions`。
+- `packages/shared/src/api.ts`
 - `packages/shared/src/novels.ts`
-- `apps/api/src/modules/novels/domain/executionContract.ts`
-- `apps/api/src/modules/novels/domain/novelDomain.ts`
-- `apps/api/src/modules/novels/services/taskClaim.ts`
-- `apps/api/src/modules/novels/services/actionExecutionPlan.ts`（new，单一 registry 与 dispatcher）
+- `apps/api/src/modules/novels/services/actionExecutionPlan.ts`
 - `apps/api/src/modules/novels/services/novelService.ts`
-- `apps/api/src/modules/novels/routes/novelRoutes.ts`（不切换 transport）
 - `apps/api/src/modules/tasks/services/taskService.ts`
-- `apps/api/src/modules/novels/repositories/inMemoryNovelRepository.ts`
-- `apps/api/src/modules/novels/repositories/prismaNovelRepository.ts`
 - `apps/api/src/modules/novels/providers/mockDirectionProvider.ts`
 - `apps/api/src/modules/novels/providers/mockStructureProvider.ts`
 - `apps/api/src/modules/novels/providers/mockTrialProvider.ts`
 - `apps/api/src/modules/novels/providers/mockBodyProvider.ts`
 - `apps/api/src/modules/novels/providers/mockFullReviewProvider.ts`
-- `apps/api/src/modules/novels/providers/deepseekNovelProvider.ts`（只改 strict public ABI；B2 不连接真实 provider）
-- `apps/api/src/app.ts`（注入 authenticated RequestContextResolver；不得让 B2 envelope 回退默认 context）
-- `apps/api/test/rp02b2a/rp02b2a.test.ts`（new，fixture 合并在本文件）
+- `apps/api/src/modules/novels/providers/deepseekNovelProvider.ts`
+- `apps/api/test/rp02b2a/registry-provider-abi.test.ts`
+- `apps/api/src/modules/novels/novelRoutes.test.ts`
+- `scripts/rp02b2a-package-gate.mjs`
+- `scripts/rp02b2a-package-gate.test.mjs`
+- `.github/workflows/rp01c-fixtures.yml`
+- `docs/adr/rp-02b2a1-registry-abi-budget.md`
 - `package.json`
-- `test:rp02b2a:core` 只运行 B2a execution-core 独立 fixture；复合命令 `test:rp02b2a` 必须按失败即停顺序执行 `test:rp02b2a:core` 和 `test:rp02b2a0`，任一失败则整体失败；不得把 Admin 全链风险回归遗漏在 execution-core 绿灯之外。
-- 现有同步 path 与 worker 必须复用同一 `ActionExecutionPlan` registry；不得复制 15-action provider/finalize mapping。不修改 admin transport，不把 HTTP 改为 202。
+- E3：真实 `NovelService -> registry -> provider spy` 覆盖 15 action、unknown action、逐 action exact keys/nullable 字段/raw canary；provider public ABI 与调用点 raw entity/cast 扫描为零。15 action 同步 HTTP 保持 `200`，不出现 `202/queued`。provider-backed projection/retry API 固定 `retryable=false + 409 RETRY_NOT_AVAILABLE`，mutation/event/log/child=0。production workflow 必须调用同一 package-gate 脚本；测试执行真实脚本的 PR merge-base、push、manual 显式 SHA、ADR/manifest/count 失败分支，不得复制 helper。
+
+### RP-02B2a2 Authoritative Claim And Pre-provider Gate
+
+- 硬门禁：`15 files / 1,900 net additions`。
+- `packages/shared/src/novels.ts`
+- `apps/api/src/modules/novels/domain/executionContract.ts`
+- `apps/api/src/modules/novels/domain/novelDomain.ts`
+- `apps/api/src/modules/novels/services/actionExecutionPlan.ts`
+- `apps/api/src/modules/novels/services/taskClaim.ts`
+- `apps/api/src/modules/novels/services/novelService.ts`
+- `apps/api/src/modules/novels/routes/novelRoutes.ts`
+- `apps/api/src/modules/novels/repositories/inMemoryNovelRepository.ts`
+- `apps/api/src/modules/novels/repositories/prismaNovelRepository.ts`
+- `apps/api/src/app.ts`
+- `apps/api/test/rp02b2a/fixtures.ts`
+- `apps/api/test/rp02b2a/authority-claim.test.ts`
+- `apps/api/src/modules/novels/novelRoutes.test.ts`
+- `docs/adr/rp-02b2a2-authority-claim-budget.md`
+- `package.json`
+- E3：真实 `NovelService -> taskClaim -> registry -> repository authority loader` 使用 ManualClock/MutableAuthorityStore 证明可信 actor、authoritative clock、persisted requestedAt replay、canonical envelope、preferences/ordered chapters/body continuity/full-review identity、跨租户隔离和 provider 前 stale；任一 authority 缺失/变化均 `provider/asset/receipt/current=0`，15 action 同步 HTTP 继续 `200` 且非 queued/202。
+
+### RP-02B2a3 Lease Phase CAS And Existing Retry Child Fence
+
+- 硬门禁：`14 files / 1,800 net additions`。
+- `packages/shared/src/api.ts`
+- `packages/shared/src/novels.ts`
+- `apps/api/src/modules/novels/domain/executionContract.ts`
+- `apps/api/src/modules/novels/domain/novelDomain.ts`
+- `apps/api/src/modules/novels/services/actionExecutionPlan.ts`
+- `apps/api/src/modules/novels/services/taskClaim.ts`
+- `apps/api/src/modules/tasks/services/taskService.ts`
+- `apps/api/src/modules/novels/repositories/inMemoryNovelRepository.ts`
+- `apps/api/src/modules/novels/repositories/prismaNovelRepository.ts`
+- `apps/api/src/modules/novels/novelRoutes.test.ts`
+- `apps/api/test/rp02b2a/fixtures.ts`
+- `apps/api/test/rp02b2a/lease-dispatch-retry.test.ts`
+- `docs/adr/rp-02b2a3-lease-retry-budget.md`
+- `package.json`
+- E3：lease 后 attempt 为 null；只有 `prepared -> provider_call_started` CAS 原子生成 attempt/dispatchedAt；错相、过期、cancel、错误 owner与历史 retry child 均受控终态；持续回归 A1 的固定 409/DTO/redaction 与八类副作用精确计数。
+- 安全中间态：本包不得为正常 leased action 调用 provider。只有 B2a4/B2a5 对应 finalize 能力完成后，才允许在 deterministic harness 中启用相应 action。
+
+### RP-02B2a4 InMemory Action-specific Fenced Finalize
+
+- 硬门禁：`12 files / 1,900 net additions`。
+- `packages/shared/src/novels.ts`
+- `apps/api/src/modules/novels/domain/executionContract.ts`
+- `apps/api/src/modules/novels/domain/novelDomain.ts`
+- `apps/api/src/modules/novels/services/actionExecutionPlan.ts`
+- `apps/api/src/modules/novels/services/taskClaim.ts`
+- `apps/api/src/modules/novels/services/novelService.ts`
+- `apps/api/src/modules/novels/repositories/inMemoryNovelRepository.ts`
+- `apps/api/test/rp02b2a/fixtures.ts`
+- `apps/api/test/rp02b2a/inmemory-fenced-finalize.test.ts`
+- `apps/api/src/modules/novels/novelRoutes.test.ts`
+- `docs/adr/rp-02b2a4-inmemory-finalize-budget.md`
+- `package.json`
+- E3：repository-owned capability 只为 InMemory 15 action 放行；Prisma 保持 disabled。15 action 分别覆盖成功、provider 后 authority mutation、重复 finalize/fail、cancel/late result；资产、receipt、task、terminal event、operation log 五个故障点整体回滚；八类副作用逐项精确计数。leased candidate/result 仅 harness 可观察，公开同步 HTTP 继续 200 且非 queued/202。只证明 deterministic/InMemory，不得外推 Prisma 或真实 DB。
+
+### RP-02B2a5 Prisma Nine/Six Fenced Finalize And Closure
+
+- 硬门禁：`10 files / 1,900 net additions`。
+- `apps/api/src/modules/novels/domain/executionContract.ts`
+- `apps/api/src/modules/novels/domain/novelDomain.ts`
+- `apps/api/src/modules/novels/services/actionExecutionPlan.ts`
+- `apps/api/src/modules/novels/services/taskClaim.ts`
+- `apps/api/src/modules/novels/repositories/prismaNovelRepository.ts`
+- `apps/api/src/modules/novels/novelRoutes.test.ts`
+- `apps/api/test/rp02b2a/fixtures.ts`
+- `apps/api/test/rp02b2a/prisma-fenced-finalize.test.ts`
+- `docs/adr/rp-02b2a5-prisma-nine-six-budget.md`
+- `package.json`
+- E3：repository-owned capability 为 Prisma 9 action 放行、6 action 返回 unsupported；可注入 deterministic Prisma transaction/CAS fixture 证明 9 action 的 authority lock/CAS、资产/receipt/task/event/oplog 原子写，以及 6 unsupported 新 claim 在 preclaim/provider 前 `task/provider/asset=0`、历史 leased task 原子失败且 `provider/asset/receipt/current=0`；最终复合命令按 B1 -> B2a0 -> B2a1 -> B2a2 -> B2a3 -> B2a4 -> B2a5 fail-fast。
+- 只有本包经独立 TEST/QUALITY P0/P1=0、commit/push、远程 clean checkout 后，MC 才能判断原 B2a 阶段完成。真实 MySQL 行锁/事务时钟/P2002、多进程 fencing、真实 provider 和 E6 继续为 `not_proven`。
+
+每包的测试必须与对应生产能力同包交付，禁止把断言集中到最后补齐。每包只能从前一包已独立验收并提交的 clean commit 开始，禁止跨包累计 dirty diff。五个包当前全部 `not_authorized`。
+
+### B2a1-B2a5 通用 package gate
+
+- A1 同包新增 `scripts/rp02b2a-package-gate.mjs`，脚本内预置五个 packageId 的 allowed-path manifest、required production/test/ADR 类别和硬预算；A2-A5 复用同一脚本与 workflow，不得复制或修改另一套判断。
+- PR 使用目标分支 merge-base 与 head SHA；push 只使用 event `before/after`；manual 必须要求显式 base/head SHA。零 SHA、缺 SHA、无法解析 SHA、相同 SHA、无参和 `HEAD~1...HEAD` fallback 全部 fail closed。
+- 同一 BASE/HEAD 以 NUL-safe 路径发现唯一 changed `rp-02b2aN-*` ADR；旧 superseded ADR、多 ADR、缺 ADR、packageId 不匹配、status 非 ready、baseline 不匹配、实际计数不符、manifest 外路径或缺少 required 类别全部失败。
+- 五个 ADR 使用机器字段 `package_id/manifest_id/baseline_sha/hard_max_files/hard_max_net_additions/actual_files/actual_net_additions`。通用 20/2000 预算通过不能覆盖包级硬预算；例如 A2 第 15 个以外的文件必须失败。
+- `workflow_dispatch.inputs.base_sha/head_sha` 必须都为 required；PR/push `paths` 必须覆盖 `scripts/rp02b2a-package-gate.*`、五个 `docs/adr/rp-02b2a1-*` 至 `rp-02b2a5-*`、`apps/api/test/rp02b2a/**` 以及所有 manifest 生产路径，ADR-only、gate-only、test-only diff 不得跳过 workflow。
+- workflow 先清空 DB/provider/secret 环境，再调用真实 package gate 和由 packageId 选择的复合测试命令。`scripts/rp02b2a-package-gate.test.mjs` 必须读取生产 workflow，证明 PR merge-base、push before/after、manual required SHA 均传给同一 gate 脚本和选定复合命令；还必须执行 ADR-only、gate-only、test-only、零 before SHA、错误 package-command、伪造旧 ADR ready、错误计数、额外路径、缺 required path 和 A2-A5 选择错误命令等 workflow 级反例。禁止 generic budget、无参 fallback、正则或复制 helper 冒充。
 
 ### RP-02B2b
 
@@ -535,7 +651,7 @@ B2a0/B2a/B2b/B2c E3 可证明：风险参数同步链、单进程 deterministic 
 
 - 任一子包超出对应文件预算，必须先提交精确写集拆分申请；不得用笼统 ADR 放行。
 
-四个子包各自独立满足：需求复核 P0/P1=0、实现、自测、独立 TEST/QUALITY、commit/push、远程 clean-checkout CI。任一包不得借用另一个包的未提交改动作为验收前提。
+每个可派发子包各自独立满足：需求复核 P0/P1=0、实现、自测、独立 TEST/QUALITY、commit/push、远程 clean-checkout CI。任一包不得借用另一个包的未提交改动作为验收前提。
 
 ## 15. 开工门禁
 
@@ -558,4 +674,19 @@ B2a0/B2a/B2b/B2c E3 可证明：风险参数同步链、单进程 deterministic 
 4. GitHub runs `29256298426`、`29256298444`、`29256298360`、`29256298392` 全部成功；远程干净检出 `2da6d31` 后专属测试再次通过。
 5. 阶段证据为 `docs/reviews/remediation-rmd-task-002-rp-02b2a0-verification-2026-07-13.md`。
 
-`RMD-TASK-002` 继续为 `partial`，总体关闭数保持 9/42。本文不自动授权 B2a/B2b/B2c/B3 或真实 DB/provider/media；下一包必须由 MC 重新核对依赖、预算和授权边界后单独裁决。
+`RMD-TASK-002` 继续为 `partial`，总体关闭数保持 9/42。本文不自动授权 B2a1-B2a5/B2b/B2c/B3 或真实 DB/provider/media；下一包必须由 MC 重新核对依赖、预算和授权边界后单独裁决。
+
+## 17. RP-02B2a 原单包失效与拆包门禁
+
+截至 2026-07-14 05:29 CST，原 B2a 研发交付在正式生产链复核中被拒绝。TEST 曾给出通过，但 QUALITY 的代码路径证据证明 registry、authority reload、phase CAS、事务 finalize 与测试 oracle 没有进入真实生产链；MC 采用更强证据并拒绝提交。
+
+后续三路独立拆包复审均拒绝继续原单包：产品 `P0=2/P1=4`、TEST `P0=2/P1=5`、QUALITY `P0=2/P1=3`。共同结论是原目标必须保留，但实施改为 B2a1-B2a5；旧授权和旧 ADR 不得复用。第四个后端架构席位本轮未在主控 SLA 内返回有效报告，不计作通过，也不影响继续形成未授权拆包草案。
+
+五包草案首轮四角色正式资产复核全部 rejected；六类唯一 P1 修订后，第二轮产品 approved，后端、TEST、QUALITY rejected，四类唯一 P1 也已修订。第三轮后端、TEST、QUALITY approved，产品以 `P0=0/P1=1/P2=1` 拒绝当前轮次与授权状态指针不一致。第三轮修订后的第四轮由产品、TEST、QUALITY approved，后端以 `P0=0/P1=1/P2=1` 拒绝两处仍停在旧轮次的当前动作。第五轮四角色均以 `P0=0/P1=1` 拒绝主状态“当前唯一推荐动作”仍使用整改进行态；该唯一 P1 修订后，第六轮后端、产品、TEST、QUALITY 全部 approved 且 P0/P1=0。
+
+当前门禁：
+
+1. 原 13-path partial diff 保留在原工作树，禁止 stage/commit/push；治理资产在 `c673eaf` 的 clean worktree 单独修订。
+2. B2a1-B2a5 仍均为 `not_authorized`。第六轮四角色已全部 `approved` 且 P0/P1=0，当前只允许提交推送治理资产并执行远程治理；远程成功后 MC 才能最多单独裁决 B2a1，不得联动授权后续包。
+3. 任一包实现后都必须独立 DEV 自测、TEST、QUALITY、commit/push、远程 CI 与 clean checkout；不得把未提交代码带入下一包。
+4. 总账仍为 9/42，`RMD-TASK-002=partial`、`RMD-TASK-003=open`。B2b/B2c/B3、202/Admin transport、真实 DB/provider/media/E6 继续冻结。

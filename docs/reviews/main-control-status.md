@@ -1,6 +1,6 @@
 # AIShortvideo 主控统一状态
 
-更新时间：2026-07-13 22:24 CST
+更新时间：2026-07-14 07:34 CST
 
 本文件是需求主控的当前状态入口。历史过程和详细证据仍保留在各模块设计、验收和工程质量文档中；发生冲突时，以当前代码、最新正式验收结论和本文件列出的证据为准。
 
@@ -35,16 +35,17 @@
 ```text
 总体关闭进度  [████░░░░░░░░░░░░░░░░]  9 / 42（21%）
 剩余问题      33
-当前整改包    RP-02B2a0
-当前包门禁进度 [████████████████████]  8 / 8（100%）
-当前状态      RP-02B2a0 已完成实现、双验收、远程 CI 与 clean checkout；B2a 仍待 MC 单独裁决
+当前整改包    RP-02B2a1-B2a5 拆包治理资产整改
+拆包准入进度  [████████████████████]  7 / 7（100%）：第六轮四角色全部 approved，P0/P1=0
+研发交付进度  [░░░░░░░░░░░░░░░░░░░░]  0 / 5（0%）：B2a1-B2a5 均未授权
+当前状态      原 B2a 单包授权失效；13-path partial diff 隔离未提交；拆包准入已清零，治理资产提交与远程治理中
 ```
 
 当前包阶段：
 
 | 阶段 | 状态 | 说明 |
 | --- | --- | --- |
-| 基线与拆包 | 已完成 | RP-02B1 已收口；B2 拆为 B2a0/B2a/B2b/B2c，B3 冻结 |
+| 基线与拆包 | 拆包准入 | RP-02B1/B2a0 已收口；原 B2a 单包失效，现拆为 B2a1-B2a5；B2b/B2c/B3 冻结 |
 | 七轮多 Agent 准入 | 已完成 | 后端 approved；产品/TEST/QUALITY rejected，角色报告 P0=0、P1=7，去重为 6 个唯一阻塞合同 |
 | 八轮多 Agent 准入 | 已完成 | TEST approved；后端/产品/QUALITY rejected，角色报告 P0=0、P1=4、P2=1，去重为 3 个唯一阻塞合同 |
 | 第八轮拒绝项修订 | 已完成 | reasonCode 唯一优先级、scope/revision/expiry 服务端权威绑定和 B2a 失败即停复合命令已进入第九轮稿；`git diff --check` 与 15/15 governance 通过 |
@@ -55,6 +56,27 @@
 | RP-02B2a0 研发 | 已完成 | 实现提交 `2da6d31`；严格 8 files / 319 net additions；未进入 B2a+ |
 | 独立验收 | 已完成 | TEST 与 QUALITY 最终均 approved，P0/P1/P2=0；四类 canary 与日志/DOM 返工闭合 |
 | 关闭证据与总账更新 | 已完成 | 阶段证据已形成；`RMD-TASK-002` 保持 partial，总体关闭数仍为 9/42 |
+| RP-02B2a 第一轮单包授权审计 | 已完成 | 后端 approved 0/0/1、QUALITY approved 0/0/0、产品 rejected 0/2/0、TEST rejected 0/1/0；去重为 route 回归写集、retry 用户文案、远程 CI 3 个 P1 |
+| RP-02B2a 第一轮拒绝项修订 | 已完成 | manifest 改为 22 个实现/测试/CI 文件 + 同 diff ADR，补 route retry 精确回归、固定失败文案和远程 B1+B2a 串行命令 |
+| RP-02B2a 第二轮单包授权复核 | 已完成 | 产品/TEST approved 0/0/0；后端 rejected 0/2/0、QUALITY rejected 0/1/0；去重为远程 budget/ADR ready 门禁和顶部授权口径 2 类 P1 |
+| RP-02B2a 第二轮拒绝项修订 | 已完成 | 补 PR/push BASE/HEAD、NUL-safe ADR discovery、显式 `--adr`、`status=ready` 机器门禁，并修正最新授权上限；本地 governance 15/15、diff check 通过 |
+| RP-02B2a 第三轮单包授权复核 | 已完成 | 后端/产品/TEST/QUALITY 均 approved，四路 P0/P1/P2=0；授权合同首次清零，不等于研发授权 |
+| RP-02B2a 授权资产提交与远程治理 | 已完成 | 提交 `48bbac7` 已推送；远程 Remediation governance run `29269395271` completed/success |
+| RP-02B2a MC 最终裁决 | 已完成 | 只授权 B2a 按 23 files / 2,000 net additions 开工；B2b/B2c/B3、202/Admin transport、真实环境继续冻结 |
+| RP-02B2a 原单包研发与正式验收 | 已拒绝 | 13 paths/约 733 net additions；正式 QUALITY P0=2/P1=4，生产 registry、authority、phase CAS、原子 finalize 与强测试证据未闭合；未提交 |
+| RP-02B2a 初始拆包复审 | 已完成 | 产品/TEST/QUALITY 拒绝原单包；旧后端席位未返回有效报告，仅用于形成五包草案，不构成准入 |
+| RP-02B2a1-B2a5 首轮正式资产复核 | 已拒绝 4/4 | 产品 `0/4/2`、后端 `0/4/3`、TEST `0/4/2`、QUALITY `0/3/1`；P0=0，P1 去重为 6 类，全部角色均 rejected |
+| 首轮拒绝项整改 | 已完成 | retry 前移 A1、leased result 公开门禁、逐包命令、package gate/机器预算、上位矩阵/父包、repository capability gate 已进入第二轮稿 |
+| RP-02B2a1-B2a5 第二轮四路准入 | 已拒绝 3/4 | 产品 `0/0/2` approved；后端 `0/1/2`、TEST `0/2/1`、QUALITY `0/1/1` rejected；P0=0，去重为 4 类 P1 |
+| 第二轮拒绝项整改 | 已完成 | A1 gate 命令、production workflow wiring、24 场景逐包归属、A2/B2b/B2c 权责矩阵已修订；`git diff --check`、governance 15/15 和 worktree budget 通过 |
+| RP-02B2a1-B2a5 第三轮四路准入 | 已拒绝 1/4 | 后端、TEST、QUALITY approved 0/0/2；产品 rejected 0/1/1；唯一 P1 为当前轮次与授权状态指针不一致 |
+| 第三轮拒绝项整改 | 已完成 | 当前轮次、3/4 角色结论、五包未授权和第四轮前置已统一；diff check、governance 15/15、逐项合同核对和预算预检通过 |
+| RP-02B2a1-B2a5 第四轮四路准入 | 已拒绝 1/4 | 产品、TEST、QUALITY approved；后端 rejected 0/1/1；唯一 P1 为实现包与“当前唯一推荐动作”仍停在旧轮次 |
+| 第四轮拒绝项整改 | 已完成 | 两处当前动作与证据卫生 P2 已修正；diff check、governance 15/15、预算预检与陈旧状态检查通过 |
+| RP-02B2a1-B2a5 第五轮四路准入 | 已拒绝 4/4 | 四角色均 rejected P0=0/P1=1；唯一 P1 为“当前唯一推荐动作”仍使用整改进行态并称第五轮尚未开始 |
+| 第五轮拒绝项整改 | 已完成 | 当前唯一推荐动作已改为 P1 修订完成、第六轮复核中；diff check、governance 15/15、预算预检和精确陈旧状态检查通过 |
+| RP-02B2a1-B2a5 第六轮四路准入 | 已完成 | 后端 approved 0/0/2、产品 0/0/1、TEST 0/0/1、QUALITY 0/0/1；四路 P0/P1=0，合同无回退 |
+| 拆包资产提交与远程治理 | 进行中 | 只允许提交 14 个治理路径并执行远程治理；远程成功前 B2a1 仍 `not_authorized` |
 
 ## 2. 小说模块
 
@@ -84,7 +106,7 @@
 ### 下一触发动作
 
 - 暂缓 `P10-R1`，不得按编号自动继续。
-- `RP-02B1` 已完成实现、返工、独立验收、远程 CI 和干净检出，提交 `415d03a`。`RP-02B2a0` 已以 `2da6d31` 完成风险参数前置修复，TEST/QUALITY 最终 P0/P1/P2=0，远程四路 CI 与 clean checkout 通过。RMD-TASK-002 保持 partial、003 保持 open；B2a 仍待 MC 单独裁决，真实 MySQL 继续等待独立授权。
+- `RP-02B1` 与 `RP-02B2a0` 已完成。原 B2a 单包授权虽曾通过治理，但正式生产链验收以更强证据推翻交付，当前授权已失效。下一动作是完成 B2a1-B2a5 拆包资产并重新四路准入；未清零前不得派发任何子包，真实 MySQL 继续等待独立授权。
 
 ## 3. 视频模块
 
@@ -112,7 +134,7 @@
 
 ## 4. 测试与验收
 
-- 全栈研发：`RP-02B1` 实现 `415d03a` 已推送；B2 第十一轮四路准入与远程治理已通过；MC 已单独授权 B2a0，B2a/B2b/B2c/B3 均不得自动继续。
+- 全栈研发：`RP-02B1` 和 `RP-02B2a0` 已推送收口；原 B2a partial diff 隔离且禁止提交。B2a1-B2a5/B2b/B2c/B3 均不得自动继续。
 - 独立测试/质量 agent：RP-02B1 最终均 approved，P0/P1/P2 为 0；真实 MySQL、多进程、dispatcher/worker loop、restart/retry 保持 not_proven。
 - `P10-R1` 验收准备保留，但当前不是推荐开工项。
 - 五类专业复盘与二次复盘已完成；执行状态以 `docs/remediation/issue-ledger.md` 为唯一事实源。
@@ -174,7 +196,7 @@
 
 ## 7. 当前唯一推荐动作
 
-1. `RP-02B2a0` 已完成 E3 实现、独立双验收、远程 CI 和 clean checkout。下一依赖包为 B2a，但必须由 MC 单独核对合同、写集和冻结边界后再授权；B2b、B2c、B3、真实 DB/provider/media 继续冻结。
+1. `RP-02B2a0` 已完成 E3 实现、独立双验收、远程 CI 和 clean checkout。原 B2a 单包已撤销；B2a1-B2a5 第六轮后端/产品/TEST/QUALITY 全部 approved 且 P0/P1=0。当前只允许提交推送 14 个治理路径并执行远程治理；远程治理成功后 MC 最多单独裁决 B2a1。B2a2-B2a5、B2b、B2c、B3、真实 DB/provider/media 继续 `not_authorized`。
 2. `RP-01D` 涉及真实 MySQL，只能在安全环境和用户独立授权后执行；管理分组不得整体派发。每个子包独立研发、测试、关闭、commit 和 push。
 3. 小说真实完本金丝雀通过后，再执行 P9-real；P10-R1 只在 `RP-10` 重新决策。
 4. 继续保持真实 DB/provider、外部媒体和平台发布的独立授权门禁。
