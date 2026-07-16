@@ -1,5 +1,5 @@
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
-import ElementPlus from 'element-plus'
+import ElementPlus, { ElMessageBox } from 'element-plus'
 import { nextTick } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NovelCreationStage, StageStatus, TaskStatus } from '@ai-shortvideo/shared'
@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   routerPush: vi.fn(),
   getNovelDetail: vi.fn(),
   adoptDirection: vi.fn(),
+  generateTrial: vi.fn(),
 }))
 
 vi.mock('vue-router', () => ({
@@ -48,7 +49,7 @@ vi.mock('../modules/novels/services/novelService', () => {
     generateOutline: noopAction,
     generateSetting: noopAction,
     generateStageOutline: noopAction,
-    generateTrial: noopAction,
+    generateTrial: mocks.generateTrial,
     getNovelDetail: mocks.getNovelDetail,
     optimizeDirection: noopAction,
     recheckVideoReadiness: noopAction,
@@ -97,6 +98,9 @@ afterEach(() => {
   mocks.routerPush.mockClear()
   mocks.getNovelDetail.mockReset()
   mocks.adoptDirection.mockReset()
+  mocks.generateTrial.mockReset()
+  localStorage.clear()
+  sessionStorage.clear()
   vi.useRealTimers()
 })
 
@@ -237,6 +241,92 @@ describe('NovelDetailWorkbench DOM behavior', () => {
     vi.runOnlyPendingTimers()
     scrollIntoView.mockRestore()
   })
+
+  it('passes high-risk trial confirmation reason through the existing generate trial action', async () => {
+    mocks.route.query = { step: 'trial' }
+    mocks.getNovelDetail.mockResolvedValue(createNovelDetail({
+      creationStage: NovelCreationStage.Trial,
+      stageStatus: StageStatus.WaitingUser,
+      statusSummary: {
+        displayStatusText: '试写调试',
+        recommendedAction: { type: 'select_trial_chapter_one', label: '选择第1章候选', reason: '选择候选继续试写' },
+      },
+      latestTrialRun: createTrialRunFixture(),
+    }))
+    mocks.generateTrial.mockResolvedValue({})
+    const promptSpy = vi.spyOn(ElMessageBox, 'prompt').mockResolvedValue({
+      value: '人工确认该候选风险，继续生成第2-3章用于试写总评。',
+      action: 'confirm',
+    } as any)
+
+    wrapper = mount(NovelDetailWorkbench, {
+      attachTo: document.body,
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+
+    const selectButton = wrapper.findAll('button').find((button) => button.text() === '选这个继续试写')
+    await selectButton?.trigger('click')
+    await flushPromises()
+
+    expect(promptSpy).toHaveBeenCalledTimes(1)
+    expect(mocks.generateTrial).toHaveBeenCalledTimes(1)
+    expect(mocks.generateTrial.mock.calls[0]).toEqual([
+      'novel-dom-001',
+      {
+        trialRunId: 'trial-run-dom-001',
+        selectedCandidateId: 'trial-candidate-risk-001',
+        confirmRisk: true,
+        selectionReason: '人工确认该候选风险，继续生成第2-3章用于试写总评。',
+      },
+    ])
+    expect(JSON.stringify({ localStorage: { ...localStorage }, sessionStorage: { ...sessionStorage } })).not.toContain('人工确认该候选风险')
+    promptSpy.mockRestore()
+  })
+
+  it('keeps secret canary out of page text and browser storage when high-risk trial selection is rejected', async () => {
+    const secretCanaries = [
+      'api_key=should-not-leak-dom-api-key',
+      'Authorization: Bearer should-not-leak-dom-authorization-bearer',
+      'Cookie: session=should-not-leak-dom-cookie',
+      'token=should-not-leak-dom-token',
+    ]
+    mocks.route.query = { step: 'trial' }
+    mocks.getNovelDetail.mockResolvedValue(createNovelDetail({
+      creationStage: NovelCreationStage.Trial,
+      stageStatus: StageStatus.WaitingUser,
+      statusSummary: {
+        displayStatusText: '试写调试',
+        recommendedAction: { type: 'select_trial_chapter_one', label: '选择第1章候选', reason: '选择候选继续试写' },
+      },
+      latestTrialRun: createTrialRunFixture(),
+    }))
+    mocks.generateTrial.mockRejectedValue(new Error('选择高风险试写候选的原因包含敏感信息，请移除密钥或 token 后重试。'))
+    const promptSpy = vi.spyOn(ElMessageBox, 'prompt')
+
+    wrapper = mount(NovelDetailWorkbench, {
+      attachTo: document.body,
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+
+    const selectButton = wrapper.findAll('button').find((button) => button.text() === '选这个继续试写')
+    for (const secretCanary of secretCanaries) {
+      promptSpy.mockResolvedValueOnce({
+        value: secretCanary,
+        action: 'confirm',
+      } as any)
+      await selectButton?.trigger('click')
+      await flushPromises()
+
+      expect(JSON.stringify(mocks.generateTrial.mock.calls.at(-1))).toContain(secretCanary)
+      expect(document.body.textContent).not.toContain(secretCanary)
+      expect(JSON.stringify({ localStorage: { ...localStorage }, sessionStorage: { ...sessionStorage } })).not.toContain(secretCanary)
+    }
+    expect(promptSpy).toHaveBeenCalledTimes(secretCanaries.length)
+    expect(mocks.generateTrial).toHaveBeenCalledTimes(secretCanaries.length)
+    promptSpy.mockRestore()
+  })
 })
 
 function createNovelDetail(overrides: Record<string, unknown> = {}) {
@@ -274,6 +364,44 @@ function createNovelDetail(overrides: Record<string, unknown> = {}) {
     completionDecision: null,
     updatedAt: '2026-07-13T00:00:00.000Z',
     ...overrides,
+  }
+}
+
+function createTrialRunFixture() {
+  return {
+    id: 'trial-run-dom-001',
+    novelId: 'novel-dom-001',
+    status: 'waiting_chapter1_selection',
+    statusText: '待选择第1章候选',
+    chapterCount: 3,
+    currentStep: '选择第1章候选后继续生成第2-3章',
+    selectedChapterOneCandidateId: null,
+    blockingReason: null,
+    chapterOneCandidates: [
+      {
+        id: 'trial-candidate-risk-001',
+        title: '风险开篇候选',
+        versionLabel: 'v1',
+        isAiRecommended: true,
+        isSelected: false,
+        requiresRiskConfirm: true,
+        scoreText: '58',
+        gateText: '风险继续',
+        statusText: '候选版本',
+        riskLevelText: '高风险',
+        openingStrategy: '强冲突开场',
+        firstSentence: '所有人都以为主角输了。',
+        first300Summary: '主角在误解中抓住证据，准备反击。',
+        endingHook: '关键证据突然出现。',
+        riskTags: ['低分继续需确认'],
+        aiRecommendedReason: '钩子强，但评分偏低。',
+        canSelect: true,
+        content: '完整正文内容摘要占位',
+      },
+    ],
+    chapterResults: [],
+    trialReview: null,
+    task: null,
   }
 }
 

@@ -1219,6 +1219,8 @@ export interface GenerateTrialRequest {
   chapterCount?: number;
   trialRunId?: string | null;
   selectedCandidateId?: string | null;
+  confirmRisk?: boolean;
+  selectionReason?: string | null;
   regenerateReason?: string | null;
   idempotencyKey?: string | null;
 }

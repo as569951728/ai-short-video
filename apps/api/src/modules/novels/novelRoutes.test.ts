@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { ErrorCode, TaskStatus } from '@ai-shortvideo/shared';
+import { Writable } from 'node:stream';
+import { ErrorCode, RiskLevel, TaskStatus } from '@ai-shortvideo/shared';
 import { buildApp } from '../../app.js';
 import type { LlmClient } from '../ai/llmClient.js';
 import { createInMemoryNovelRepository } from './repositories/inMemoryNovelRepository.js';
@@ -1305,6 +1306,126 @@ describe('novel package 5 trial writing routes', () => {
     assert.equal(workbench.recommendedAction.label, '查看试写总评');
 
     assert.ok(repository.getOperationLogs().some((log) => log.action === 'select_trial_chapter1_candidate'));
+
+    await app.close();
+  });
+
+  it('requires explicit safe confirmation before high-risk trial follow-up without side effects', async () => {
+    const repository = createInMemoryNovelRepository();
+    const logSink = createMemoryLogSink();
+    let followupProviderCalls = 0;
+    const app = await buildApp({
+      logger: { level: 'info', stream: logSink } as any,
+      novelRepository: repository,
+      aiProviderEnv: {
+        AI_PROVIDER_MODE: 'deepseek',
+        DEEPSEEK_API_KEY: 'test-deepseek-key-should-not-leak',
+        DEEPSEEK_MODEL: 'deepseek-fake-chat',
+        DEEPSEEK_REASONER_MODEL: 'deepseek-fake-reasoner'
+      },
+      llmClient: {
+        async chat(request) {
+          if (request.taskName === 'novel_trial_followup') followupProviderCalls += 1;
+          return {
+            content: JSON.stringify(createFakeDeepSeekPayload(request.taskName ?? 'unknown_task')),
+            model: request.model,
+            usage: { promptTokens: 24, completionTokens: 48, totalTokens: 72 }
+          };
+        }
+      },
+      now: () => new Date('2026-06-17T14:35:00.000Z')
+    });
+    const { novelId } = await createNovelReadyForTrial(app, '高风险试写确认透传测试', 5);
+    const firstStep = await postTrialGenerate(app, novelId);
+    const riskyCandidate = firstStep.trialRun.chapterOneCandidates[0];
+    const storedCandidate = repository.getChapterContentVersions().find((version) => version.id === riskyCandidate.id);
+    assert.ok(storedCandidate);
+    const before = captureTrialFollowupSideEffects(repository, novelId);
+
+    const secretCanaries = [
+      { name: 'api-key', value: 'api_key=should-not-leak-api-key' },
+      { name: 'authorization-bearer', value: 'Authorization: Bearer should-not-leak-authorization-bearer' },
+      { name: 'cookie', value: 'Cookie: session=should-not-leak-cookie' },
+      { name: 'token', value: 'token=should-not-leak-token' }
+    ];
+    const negativeCases = [
+      {
+        name: 'missing-confirm',
+        expectedStatus: 409,
+        expectedCode: ErrorCode.GateBlocked,
+        payload: {}
+      },
+      {
+        name: 'blank-reason',
+        expectedStatus: 409,
+        expectedCode: ErrorCode.GateBlocked,
+        payload: { confirmRisk: true, selectionReason: '   ' }
+      },
+      ...secretCanaries.map((canary) => ({
+        name: `secret-${canary.name}`,
+        expectedStatus: 400,
+        expectedCode: ErrorCode.ValidationError,
+        payload: { confirmRisk: true, selectionReason: canary.value },
+        canary: canary.value
+      }))
+    ];
+
+    for (const riskLevel of [RiskLevel.High, RiskLevel.Blocking]) {
+      storedCandidate.metadata = { ...(storedCandidate.metadata as Record<string, unknown>), riskLevel };
+
+      for (const testCase of negativeCases) {
+        const response = await app.inject({
+          method: 'POST',
+          url: `/novels/${novelId}/trial/generate`,
+          headers: { 'x-request-id': `risk-selection-${riskLevel}-${testCase.name}` },
+          payload: {
+            trialRunId: firstStep.trialRun.id,
+            selectedCandidateId: riskyCandidate.id,
+            idempotencyKey: `risk-selection-${riskLevel}-${testCase.name}`,
+            ...testCase.payload
+          }
+        });
+        assert.equal(response.statusCode, testCase.expectedStatus, `${riskLevel}/${testCase.name}`);
+        assert.equal(response.json().error.code, testCase.expectedCode);
+        if ('canary' in testCase) {
+          assert.equal(response.body.includes(testCase.canary), false);
+          assert.equal(logSink.text().includes(testCase.canary), false);
+        }
+        assert.deepEqual(captureTrialFollowupSideEffects(repository, novelId), before);
+        assert.equal(followupProviderCalls, 0);
+      }
+    }
+
+    storedCandidate.metadata = { ...(storedCandidate.metadata as Record<string, unknown>), riskLevel: RiskLevel.High };
+    const repeatedMissingResponse = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/trial/generate`,
+      payload: {
+        trialRunId: firstStep.trialRun.id,
+        selectedCandidateId: riskyCandidate.id,
+        idempotencyKey: 'risk-selection-high-missing-confirm'
+      }
+    });
+    assert.equal(repeatedMissingResponse.statusCode, 409);
+    assert.equal(repeatedMissingResponse.json().error.code, ErrorCode.GateBlocked);
+    assert.deepEqual(captureTrialFollowupSideEffects(repository, novelId), before);
+    assert.equal(followupProviderCalls, 0);
+
+    const legalResponse = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/trial/generate`,
+      payload: {
+        trialRunId: firstStep.trialRun.id,
+        selectedCandidateId: riskyCandidate.id,
+        confirmRisk: true,
+        selectionReason: '人工确认该候选风险，继续生成第2-3章用于试写总评。',
+        idempotencyKey: 'risk-selection-safe-1'
+      }
+    });
+    assert.equal(legalResponse.statusCode, 200, legalResponse.body);
+    assert.equal(legalResponse.json().success, true);
+    assert.equal(legalResponse.json().data.trialRun.selectedChapterOneCandidateId, riskyCandidate.id);
+    assert.equal(followupProviderCalls, 1);
 
     await app.close();
   });
@@ -2936,6 +3057,32 @@ async function postTrialGenerate(
   assert.equal(response.statusCode, 200);
   assert.equal(response.json().success, true);
   return response.json().data;
+}
+
+function captureTrialFollowupSideEffects(repository: ReturnType<typeof createInMemoryNovelRepository>, novelId: string) {
+  const tasks = repository.getGenerationTasks().filter((task) => task.novelId === novelId);
+  return {
+    followupTasks: tasks.filter((task) => task.taskType === 'trial_followup_generate').length,
+    events: repository.getGenerationTaskEvents().filter((event) => tasks.some((task) => task.id === event.taskId)).length,
+    contentVersions: repository.getChapterContentVersions().filter((version) => version.novelId === novelId).length,
+    currentChapterPointers: repository.getNovelChapters().filter((chapter) => chapter.novelId === novelId && Boolean(chapter.currentContentVersionId)).length,
+    operationLogs: repository.getOperationLogs().filter((log) => log.novelId === novelId).length,
+    resultReceipts: tasks.filter((task) => Boolean((task as any).resultReceiptHash)).length,
+    childTasks: tasks.filter((task) => Boolean((task as any).retryOfTaskId)).length
+  };
+}
+
+function createMemoryLogSink() {
+  const chunks: string[] = [];
+  const stream = new Writable({
+    write(chunk, _encoding, callback) {
+      chunks.push(String(chunk));
+      callback();
+    }
+  });
+  return Object.assign(stream, {
+    text: () => chunks.join('')
+  });
 }
 
 async function postStructure(

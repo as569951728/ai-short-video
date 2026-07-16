@@ -666,6 +666,8 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
             chapterCount: { type: 'integer', enum: [2, 3, 5] },
             trialRunId: { type: ['string', 'null'], maxLength: 80 },
             selectedCandidateId: { type: ['string', 'null'], maxLength: 80 },
+            confirmRisk: { type: 'boolean' },
+            selectionReason: { type: ['string', 'null'], maxLength: 500 },
             regenerateReason: { type: ['string', 'null'], maxLength: 500 },
             idempotencyKey: idempotencyKeySchema
           },
