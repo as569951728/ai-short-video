@@ -717,3 +717,210 @@ evidence: commit 415d03a; runs 29220634159, 29220634162, 29220634178, 2922063418
 mc_decision: RP-02B1 E3 远程证据满足；RMD-TASK-002 调整为 partial，RMD-TASK-003 保持 open，总账保持 9/42。
 next_action: 写阶段验收记录；RP-02B2/B3 在单独 MC 授权前继续冻结。
 ```
+### MCE-20260713-RP02B2-ADMISSION-REJECTED
+
+```text
+event_id: MCE-20260713-RP02B2-ADMISSION-REJECTED
+occurred_at: 2026-07-13 12:05:00 CST
+event_type: requirement_review
+source_thread: 019f5987-1d1f-75a3-952e-4a03ac2e96b1, 019f5986-7e35-7862-afea-cae01c798616, 019f5987-bb3c-7f92-be64-e38a38887bc1, 019f5988-59da-7323-9a13-38fab6a61e2b
+package_id: RP-02B2
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TASK-PRECLAIM-01, TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RESTART-01, TASK-RETRY-01, TASK-SURFACE-01
+summary: 四路初审均 rejected；原包缺 transaction-bound asset finalize、provider dispatch CAS、15-action authority matrix、完整 envelope、retry 冻结和 202/admin transport，并混入 B3/E6 场景且预算不足。
+evidence: docs/reviews/rp-02b2-multi-agent-admission-review-2026-07-13.md; no real DB/provider/media
+mc_decision: 禁止派发原 RP-02B2；拆为 B2a 执行核心、B2b API transport/lifecycle 和 B2c admin transport，B3 继续冻结。
+next_action: 对新 B2 专属包执行四路复审，P0/P1 清零后提交推送需求资产，最多只授权 B2a。
+```
+
+### MCE-20260713-RP02B2-SECOND-REVIEW-REJECTED
+
+```text
+event_id: MCE-20260713-RP02B2-SECOND-REVIEW-REJECTED
+occurred_at: 2026-07-13 12:35:00 CST
+event_type: requirement_review
+source_thread: 019f5986-7e35-7862-afea-cae01c798616, 019f5987-bb3c-7f92-be64-e38a38887bc1, 019f5988-59da-7323-9a13-38fab6a61e2b
+package_id: RP-02B2a, RP-02B2b, RP-02B2c
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TASK-PRECLAIM-01, TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RESTART-01, TASK-RETRY-01
+summary: 二轮仍 rejected；新增阻塞为 authority snapshot 未覆盖完整 provider 输入、caller-controlled stale hash、既存 retry child、B2b 到 B2c 的破坏窗口、risk selection reason 和 transport-unknown 收敛算法。
+evidence: docs/reviews/rp-02b2-multi-agent-admission-review-2026-07-13.md; no business code or real environment execution
+mc_decision: 继续拒绝授权；补全 authority/envelope/finalize/retry/gated rollout/admin intent 和精确 write set。
+next_action: 第三轮四路复审，P0/P1 清零前不提交授权结论、不派发实现。
+```
+
+### MCE-20260713-RP02B2-THIRD-REVIEW-REJECTED
+
+```text
+event_id: MCE-20260713-RP02B2-THIRD-REVIEW-REJECTED
+occurred_at: 2026-07-13 13:15:00 CST
+event_type: requirement_review
+source_thread: 019f5987-1d1f-75a3-952e-4a03ac2e96b1, 019f5986-7e35-7862-afea-cae01c798616, 019f5987-bb3c-7f92-be64-e38a38887bc1, 019f5988-59da-7323-9a13-38fab6a61e2b
+package_id: RP-02B2a, RP-02B2b, RP-02B2c
+issue_ids: RMD-TASK-002, RMD-TASK-003, RMD-TASK-004, RMD-TASK-005
+acceptance_ids: TASK-PRECLAIM-01, TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RESTART-01, TASK-RETRY-01, TASK-CANCEL-01, TASK-SURFACE-01
+summary: 第三轮四路仍 rejected；后端架构 1/5/3、产品 0/3/2、TEST 0/3/2、QUALITY 0/5/0。阻塞集中在 repository 事务内构造 receipt、requestedAt/规范化请求重放、原子 intent CAS、风险候选全链、既有 lifecycle 动作隐藏、过期 heartbeat fencing 和精确 manifest/预算。
+evidence: docs/reviews/rp-02b2-multi-agent-admission-review-2026-07-13.md; no business code or real DB/provider/media execution
+mc_decision: 继续拒绝授权；接受全部 P0/P1，并把合同、deterministic scenarios、上位矩阵和精确写集统一修订。
+next_action: 原四名评审执行第四轮独立复核；四路 approved 且 P0/P1=0 前不得提交授权结论或派发实现。
+```
+
+### MCE-20260713-RP02B2-FOURTH-REVIEW-REJECTED
+
+```text
+event_id: MCE-20260713-RP02B2-FOURTH-REVIEW-REJECTED
+occurred_at: 2026-07-13 13:16:00 CST
+event_type: requirement_review
+source_thread: 019f5987-1d1f-75a3-952e-4a03ac2e96b1, 019f5986-7e35-7862-afea-cae01c798616, 019f5987-bb3c-7f92-be64-e38a38887bc1, 019f5988-59da-7323-9a13-38fab6a61e2b
+package_id: RP-02B2a, RP-02B2b, RP-02B2c
+issue_ids: RMD-TASK-002, RMD-TASK-003, RMD-TASK-004, RMD-TASK-005
+acceptance_ids: TASK-PRECLAIM-01, TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RESTART-01, TASK-RETRY-01, TASK-CANCEL-01, TASK-SURFACE-01
+summary: 第四轮四路仍 rejected；后端架构 0/3/2、产品 0/5/0、TEST 0/3/2、QUALITY 0/4/1，汇总 P0=0、P1=15、P2=5。阻塞集中在 leased phase、shared retry error、provider 输入投影、风险原因透传、受控失败原子终态、服务端 capability、跨标签原子 intent 和 secret canary。
+evidence: docs/reviews/rp-02b2-multi-agent-admission-review-2026-07-13.md; no business code or real DB/provider/media execution
+mc_decision: 继续拒绝授权；接受全部 P1，形成第五轮准入稿，并把总体关闭进度与当前包阶段写入主控状态。
+next_action: 原四名评审执行第五轮独立复核；四路 approved 且 P0/P1=0 前不得提交授权结论、派发实现或增加 9/42 关闭数。
+```
+
+### MCE-20260713-RP02B2-FIFTH-REVIEW-REJECTED
+
+```text
+event_id: MCE-20260713-RP02B2-FIFTH-REVIEW-REJECTED
+occurred_at: 2026-07-13 16:34:19 CST
+event_type: requirement_review
+source_thread: 019f5987-1d1f-75a3-952e-4a03ac2e96b1, 019f5986-7e35-7862-afea-cae01c798616, 019f5987-bb3c-7f92-be64-e38a38887bc1, 019f5988-59da-7323-9a13-38fab6a61e2b
+package_id: RP-02B2a0, RP-02B2a, RP-02B2b, RP-02B2c
+issue_ids: RMD-TASK-002, RMD-TASK-003, RMD-TASK-004, RMD-TASK-005
+acceptance_ids: TASK-PRECLAIM-01, TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RESTART-01, TASK-RETRY-01, TASK-CANCEL-01, TASK-SURFACE-01
+summary: 第五轮四路仍 rejected；后端架构 0/3/2、产品 0/3/0、TEST 0/3/2、QUALITY 0/4/0，角色报告 P0=0、P1=13、P2=4，合并为 8 个唯一阻塞合同。阻塞集中在 provider public ABI、可信 capability HMAC、shutdown abandoned 零写、完整 capability 用户旅程、retry 冻结窗口、测试命令闭合和每包 20 files/2,000 additions 硬预算。
+evidence: docs/reviews/rp-02b2-multi-agent-admission-review-2026-07-13.md; no business code or real DB/provider/media execution
+mc_decision: 继续拒绝授权；新增 B2a0 前置包并形成第六轮准入稿，总体关闭进度保持 9/42，当前包门禁进度保持 2/8。
+next_action: 原四名评审执行第六轮独立复核；四路 approved 且 P0/P1=0 前不得提交授权结论、派发实现或增加关闭数。
+```
+
+### MCE-20260713-RP02B2-SIXTH-REVIEW-REJECTED
+
+```text
+event_id: MCE-20260713-RP02B2-SIXTH-REVIEW-REJECTED
+occurred_at: 2026-07-13 17:38:16 CST
+event_type: requirement_review
+source_thread: 019f5987-1d1f-75a3-952e-4a03ac2e96b1, 019f5986-7e35-7862-afea-cae01c798616, 019f5987-bb3c-7f92-be64-e38a38887bc1, 019f5988-59da-7323-9a13-38fab6a61e2b
+package_id: RP-02B2a0, RP-02B2a, RP-02B2b, RP-02B2c
+issue_ids: RMD-TASK-002, RMD-TASK-003, RMD-TASK-004, RMD-TASK-005
+acceptance_ids: TASK-PRECLAIM-01, TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RESTART-01, TASK-RETRY-01, TASK-CANCEL-01, TASK-SURFACE-01
+summary: 第六轮四路仍 rejected；后端架构 0/3/0、产品 0/2/0、TEST 0/3/1、QUALITY 0/4/0，角色报告 P0=0、P1=12、P2=1，合并为 8 个唯一阻塞合同。新增阻塞集中在 finalize authority TOCTOU、HMAC 边界碰撞、settling/abandoned 原子仲裁、trusted actor 提交轮询全链、capability recheck/receipt lifecycle、生产 IDB deterministic fixture、B2a0 secret canary 和历史授权冲突。
+evidence: docs/reviews/rp-02b2-multi-agent-admission-review-2026-07-13.md; no business code or real DB/provider/media execution
+mc_decision: 继续拒绝授权；形成第七轮准入稿，总体关闭进度保持 9/42，当前包门禁进度保持 3/8。
+next_action: 原四名评审执行第七轮独立复核；四路 approved 且 P0/P1=0 前不得提交授权结论、派发实现或增加关闭数。
+```
+
+### MCE-20260713-RP02B2-SEVENTH-REVIEW-REJECTED
+
+```text
+event_id: MCE-20260713-RP02B2-SEVENTH-REVIEW-REJECTED
+occurred_at: 2026-07-13 18:00:46 CST
+event_type: requirement_review
+source_thread: 019f5987-1d1f-75a3-952e-4a03ac2e96b1, 019f5986-7e35-7862-afea-cae01c798616, 019f5987-bb3c-7f92-be64-e38a38887bc1, 019f5988-59da-7323-9a13-38fab6a61e2b
+package_id: RP-02B2a0, RP-02B2a, RP-02B2b, RP-02B2c
+issue_ids: RMD-TASK-002, RMD-TASK-003, RMD-TASK-004, RMD-TASK-005
+acceptance_ids: TASK-PRECLAIM-01, TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RESTART-01, TASK-RETRY-01, TASK-CANCEL-01, TASK-SURFACE-01
+summary: 第七轮仍 rejected；后端架构 0/0/0 approved，产品 0/1/0、TEST 0/3/1、QUALITY 0/3/0 rejected，角色报告 P0=0、P1=7、P2=1，去重为 6 个唯一阻塞合同。新增阻塞集中在 scope A→B→A 的同 key 恢复、capability reasonCode 矩阵、CAS 后 POST 前二次门禁、expected scope 服务端绑定、submission identity/分区单调 revision 和测试命令闭合。
+evidence: docs/reviews/rp-02b2-multi-agent-admission-review-2026-07-13.md; no business code or real DB/provider/media execution
+mc_decision: 继续拒绝授权；形成第八轮准入稿，总体关闭进度保持 9/42，当前包门禁进度保持 3/8。
+next_action: 完成本地治理自检后，原四名评审执行第八轮独立复核；四路 approved 且 P0/P1=0 前不得提交授权结论、派发实现或增加关闭数。
+```
+
+### MCE-20260713-RP02B2-EIGHTH-REVIEW-REJECTED
+
+```text
+event_id: MCE-20260713-RP02B2-EIGHTH-REVIEW-REJECTED
+occurred_at: 2026-07-13 18:33:25 CST
+event_type: requirement_review
+source_thread: 019f5987-1d1f-75a3-952e-4a03ac2e96b1, 019f5986-7e35-7862-afea-cae01c798616, 019f5987-bb3c-7f92-be64-e38a38887bc1, 019f5988-59da-7323-9a13-38fab6a61e2b
+package_id: RP-02B2a0, RP-02B2a, RP-02B2b, RP-02B2c
+issue_ids: RMD-TASK-002, RMD-TASK-003, RMD-TASK-004, RMD-TASK-005
+acceptance_ids: TASK-PRECLAIM-01, TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RESTART-01, TASK-RETRY-01, TASK-CANCEL-01, TASK-SURFACE-01
+summary: 第八轮仍 rejected；后端架构 0/1/0、产品 0/1/0、TEST 0/0/1 approved、QUALITY 0/2/0，角色报告 P0=0、P1=4、P2=1，去重为 3 个唯一阻塞合同。阻塞集中在 capability reasonCode 组合优先级、客户端二次检查后服务端未绑定 revision/expiry、`test:rp02b2a` core-only 与复合命令职责冲突。
+evidence: docs/reviews/rp-02b2-multi-agent-admission-review-2026-07-13.md; no business code or real DB/provider/media execution
+mc_decision: 继续拒绝授权；形成第九轮准入稿，总体关闭进度保持 9/42，当前包门禁进度保持 3/8。
+next_action: 完成本地治理自检后，原四名评审执行第九轮独立复核；四路 approved 且 P0/P1=0 前不得提交授权结论、派发实现或增加关闭数。
+```
+
+### MCE-20260713-RP02B2-NINTH-REVIEW-REJECTED
+
+```text
+event_id: MCE-20260713-RP02B2-NINTH-REVIEW-REJECTED
+occurred_at: 2026-07-13 18:53:00 CST
+event_type: requirement_review
+source_thread: 019f5987-1d1f-75a3-952e-4a03ac2e96b1, 019f5986-7e35-7862-afea-cae01c798616, 019f5987-bb3c-7f92-be64-e38a38887bc1, 019f5988-59da-7323-9a13-38fab6a61e2b
+package_id: RP-02B2a0, RP-02B2a, RP-02B2b, RP-02B2c
+issue_ids: RMD-TASK-002, RMD-TASK-003, RMD-TASK-004, RMD-TASK-005
+acceptance_ids: TASK-PRECLAIM-01, TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RESTART-01, TASK-RETRY-01, TASK-CANCEL-01, TASK-SURFACE-01
+summary: 第九轮仍 rejected；后端架构、产品、TEST 均 0/0/0 approved，QUALITY 0/1/0 rejected，角色报告 P0=0、P1=1、P2=0，只有 1 个唯一阻塞合同。A→B→A 期间旧 capability 过期/轮换后，原 submission 缺少同 scope attestation 受限刷新路径，可能永久悬挂。
+evidence: docs/reviews/rp-02b2-multi-agent-admission-review-2026-07-13.md; no business code or real DB/provider/media execution
+mc_decision: 继续拒绝授权；形成第十轮准入稿，总体关闭进度保持 9/42，当前包门禁进度保持 3/8。
+next_action: 完成本地治理自检后，原四名评审执行第十轮独立复核；四路 approved 且 P0/P1=0 前不得提交授权结论、派发实现或增加关闭数。
+```
+
+### MCE-20260713-RP02B2-TENTH-REVIEW-REJECTED
+
+```text
+event_id: MCE-20260713-RP02B2-TENTH-REVIEW-REJECTED
+occurred_at: 2026-07-13 19:02:00 CST
+event_type: requirement_review
+source_thread: 019f5987-1d1f-75a3-952e-4a03ac2e96b1, 019f5986-7e35-7862-afea-cae01c798616, 019f5987-bb3c-7f92-be64-e38a38887bc1, 019f5988-59da-7323-9a13-38fab6a61e2b
+package_id: RP-02B2a0, RP-02B2a, RP-02B2b, RP-02B2c
+issue_ids: RMD-TASK-002, RMD-TASK-003, RMD-TASK-004, RMD-TASK-005
+acceptance_ids: TASK-PRECLAIM-01, TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RESTART-01, TASK-RETRY-01, TASK-CANCEL-01, TASK-SURFACE-01
+summary: 第十轮仍 rejected；后端架构、产品、QUALITY 均 0/0/0 approved，TEST 0/1/0 rejected，角色报告 P0=0、P1=1、P2=0，只有 1 个唯一阻塞合同。场景 22 用 202/200 宽松并集断言，未分别证明 queued 与 waiting/terminal 两条 HTTP 恢复合同。
+evidence: docs/reviews/rp-02b2-multi-agent-admission-review-2026-07-13.md; no business code or real DB/provider/media execution
+mc_decision: 继续拒绝授权；形成第十一轮准入稿，总体关闭进度保持 9/42，当前包门禁进度保持 3/8。
+next_action: 完成本地治理自检后，原四名评审执行第十一轮独立复核；四路 approved 且 P0/P1=0 前不得提交授权结论、派发实现或增加关闭数。
+```
+
+### MCE-20260713-RP02B2-ELEVENTH-REVIEW-APPROVED
+
+```text
+event_id: MCE-20260713-RP02B2-ELEVENTH-REVIEW-APPROVED
+occurred_at: 2026-07-13 19:15:47 CST
+event_type: requirement_review
+source_thread: 019f5987-1d1f-75a3-952e-4a03ac2e96b1, 019f5986-7e35-7862-afea-cae01c798616, 019f5987-bb3c-7f92-be64-e38a38887bc1, 019f5988-59da-7323-9a13-38fab6a61e2b
+package_id: RP-02B2a0, RP-02B2a, RP-02B2b, RP-02B2c
+issue_ids: RMD-TASK-002, RMD-TASK-003, RMD-TASK-004, RMD-TASK-005
+acceptance_ids: TASK-PRECLAIM-01, TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RESTART-01, TASK-RETRY-01, TASK-CANCEL-01, TASK-SURFACE-01
+summary: 第十一轮四路均 approved；后端架构、产品、TEST、QUALITY 全部 P0/P1/P2=0。queued 202 与 waiting/terminal 200 恢复子例已分别确定，当前需求合同准入清零。
+evidence: docs/reviews/rp-02b2-multi-agent-admission-review-2026-07-13.md; four independent role reports; no business code or real DB/provider/media execution
+mc_decision: 仅推进已批准需求资产 commit/push 与远程治理；总体关闭进度保持 9/42，当前包门禁推进到 4/8。不得自动派发 B2a0/B2a/B2b/B2c/B3。
+next_action: 本地最终治理通过后提交并推送需求资产；远程治理通过后由 MC 单独决定是否授权 RP-02B2a0。
+```
+
+### MCE-20260713-RP02B2-REQUIREMENTS-GOVERNANCE-PASSED
+
+```text
+event_id: MCE-20260713-RP02B2-REQUIREMENTS-GOVERNANCE-PASSED
+occurred_at: 2026-07-13 19:30:02 CST
+event_type: requirements_governance
+source_thread: main-control
+package_id: RP-02B2a0, RP-02B2a, RP-02B2b, RP-02B2c
+issue_ids: RMD-TASK-002, RMD-TASK-003, RMD-TASK-004, RMD-TASK-005
+acceptance_ids: TASK-PRECLAIM-01, TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RESTART-01, TASK-RETRY-01, TASK-CANCEL-01, TASK-SURFACE-01
+summary: 第十一轮批准后的需求合同已提交并推送；本地与远端 head 均为 42a3f1810d80063c5d8fb3a271aaa7726f87f2bd，GitHub Remediation governance run 29246455165 completed/success。
+evidence: commit 42a3f18; https://github.com/as569951728/ai-short-video/actions/runs/29246455165; local governance 15/15; git diff checks passed
+mc_decision: 当前包门禁推进到 5/8；等待 MC 单独决定是否授权 RP-02B2a0。不得联动授权 B2a/B2b/B2c/B3，不增加 9/42 关闭数。
+next_action: 用户/MC 明确授权 RP-02B2a0 后才可派发研发；真实 DB/provider/media 和 E6 继续冻结。
+```
+
+### MCE-20260713-RP02B2A0-AUTHORIZED
+
+```text
+event_id: MCE-20260713-RP02B2A0-AUTHORIZED
+occurred_at: 2026-07-13 19:45:10 CST
+event_type: implementation_authorization
+source_thread: main-control
+package_id: RP-02B2a0
+issue_ids: RMD-TASK-002
+acceptance_ids: TASK-PRECLAIM-01, TASK-WORKER-01
+summary: 第十一轮四路准入、需求合同提交/push 和远程治理均已通过；MC 单独授权 RP-02B2a0 修复 high/blocking 试写 confirmRisk/selectionReason 从 Admin 到同步 provider 前校验的真实全链。
+evidence: commits 42a3f18, 210fe59; governance runs 29246455165, 29246900223; docs/modules/rp-02b2-dispatcher-transport-implementation-package.md
+mc_decision: 仅授权 RP-02B2a0，硬写集 8 files / 700 net additions。禁止新增异步任务、provider、worker、transport；B2a/B2b/B2c/B3、真实 DB/provider/media 与 E6 继续冻结。
+next_action: 全栈研发按 manifest 实现并自测；独立 TEST 只准备验收，等待交付后正式执行。DEV 不得 commit/push，主控在验收通过后统一提交。
+```
