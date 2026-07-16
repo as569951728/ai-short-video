@@ -38,7 +38,7 @@
 | Prisma / migrations | `apps/api/prisma/schema.prisma`、untracked migrations、`video-artifact-migration.test.ts` | tracked modified + untracked | P8b/P9e 收口复盘均声明 schema/migration 草案；P8b-L1b 仍待真实 MySQL 环境 | 必须纳入版本管理或由主控明确暂存策略；不得以 ignore 隐藏 |
 | 文档 / 验收记录 | `docs/modules/*`、`docs/reviews/*`、`docs/superpowers/plans/*` | tracked modified + untracked | 对应验收收口文档和 engineering-quality-watch 最新 P1 | 属于可审计证据链，应纳入检查点；部分混合修改需拆包审查 |
 | 生成物 / 临时文件 | `.playwright-cli/**` | untracked | 文件名为 browser smoke console/page snapshot；不属于源码/迁移/测试/文档 | 已加入 `.gitignore`，后续可由主控另派安全清理，不在本包删除 |
-| 无法可靠归因 | `apps/api/tsconfig.testrun.json` | untracked | 当前仅能判断为测试运行辅助配置，未在验收文档中直接定位 | 待主控确认：纳入版本管理、合并到正式 tsconfig，或后续安全清理 |
+| 无法可靠归因 | `apps/api/tsconfig.testrun.json` | untracked | 当前仅能判断为测试运行辅助配置，未在验收文档中直接定位 | RP-00B 已完成归因：一次性辅助配置，删除且不加入 ignore |
 
 ## 关键未跟踪资产表
 
@@ -71,13 +71,13 @@
 - 已加入 ignore：`.playwright-cli/`，因为其内容是页面 smoke 产生的 console log 和 page yaml，属于本地运行产物。
 - 已有 ignore 继续保留：`node_modules/`、`dist/`、`coverage/`、`.env*`、`apps/api/src/generated/prisma/`、`.superpowers/`。
 - 不应 ignore：`apps/api/prisma/migrations/`、`packages/shared/src/videos.ts`、`apps/api/src/modules/videos/**`、`apps/admin-web/src/modules/videos/**`、`docs/reviews/**`、`docs/modules/**`、`docs/superpowers/plans/**`。这些是源码、契约、迁移、测试或审计证据。
-- `apps/api/tsconfig.testrun.json` 不加入 ignore，也不纳入检查点：当前无脚本引用，输出目录指向 `/tmp/apidist2`，并单独排除一项测试，按一次性测试辅助文件处理；在独立安全清理前保留原状。
+- `apps/api/tsconfig.testrun.json` 不加入 ignore，也不纳入检查点：当前无脚本引用，输出目录指向 `/tmp/apidist2`，并单独排除一项测试，按一次性测试辅助文件处理；RP-00B 已执行独立安全删除，后续若需要类似配置必须纳管或生成后清理。
 
 ## 无法归因项与主控决策项
 
 | 项目 | 风险 | 建议主控决策 |
 | --- | --- | --- |
-| `apps/api/tsconfig.testrun.json` | 无脚本引用，输出到 `/tmp`，且排除单项测试，属于一次性测试辅助 | 不纳入检查点、不加入 ignore；后续独立安全清理，当前不删除 |
+| `apps/api/tsconfig.testrun.json` | 无脚本引用，输出到 `/tmp`，且排除单项测试，属于一次性测试辅助 | RP-00B 决策删除；不纳入检查点、不加入 ignore |
 | `docs/modules/novel-first-iteration-development-plan.md` | tracked modified 且跨多个小说包，单看文件名无法确认每段归属 | 保留文档；提交时按逻辑包审查 diff，无法安全拆分时以检查点整体纳入并附归因说明 |
 | `docs/modules/video-task-package-8-detailed-design.md`、`video-task-package-9-detailed-design.md` | tracked modified，跨 P8/P9 多包演进 | 保留并纳入对应 P8/P9 检查点，提交说明中标明跨包演进 |
 | `docs/superpowers/plans/*` | `.superpowers/` 被忽略，但 `docs/superpowers/plans` 不被忽略 | 保留原路径并纳入版本管理，作为实施计划和验收追溯证据 |
@@ -129,7 +129,7 @@
 - `docs/reviews/p10-preflight-creation-source-multi-agent-review-2026-07-11.md`
 - `docs/reviews/creation-source-acceptance-closure-2026-07-11.md`
 
-条件项修复仅增加可见不可用说明和对应前端测试，未接热点管理、P10/P12、真实数据库或真实 provider。`apps/api/tsconfig.testrun.json` 仍保持未归因的一次性辅助文件，不纳入检查点。
+条件项修复仅增加可见不可用说明和对应前端测试，未接热点管理、P10/P12、真实数据库或真实 provider。`apps/api/tsconfig.testrun.json` 后续在 RP-00B 完成归因并删除，不纳入检查点。
 
 ### 2026-07-11 检查点落地结果
 
@@ -138,7 +138,7 @@
 - 提交：`26f1bc9 feat: checkpoint novel and video workbenches`
 - 纳管范围：89 个已验收/已归因文件，共 31,784 行新增、595 行删除。
 - 提交前门禁：shared 12/12、API 108/108、admin-web 77/77、typecheck、build budget、Prisma validate、staged diff check 全部通过。
-- 排除项：`apps/api/tsconfig.testrun.json` 继续保持未跟踪、未忽略、未纳管；未使用 reset、clean、stash 或覆盖式整理。
+- 排除项：`apps/api/tsconfig.testrun.json` 在本检查点阶段继续保持未跟踪、未忽略、未纳管；后续 RP-00B 已独立删除；未使用 reset、clean、stash 或覆盖式整理。
 
 本文前半部分“未纳入版本管理”和“未执行 git add/commit/push”描述的是最初归因盘点阶段；本节是最新状态，发生冲突时以本节和 `docs/reviews/main-control-status.md` 为准。
 
@@ -150,7 +150,7 @@ P10-R0 的研发业务 diff 严格限制为：
 - `packages/shared/src/api.ts`
 - `packages/shared/src/contracts.test.ts`
 
-主控同步修改正式需求、评审和状态文档，并新增 `docs/reviews/video-p10-r0-acceptance-closure-2026-07-12.md`。独立验收确认 `apps/api/src`、`apps/api/prisma`、`apps/admin-web` 无本包 diff；`apps/api/tsconfig.testrun.json` 仍是既有一次性未跟踪文件，不纳入 R0 检查点。
+主控同步修改正式需求、评审和状态文档，并新增 `docs/reviews/video-p10-r0-acceptance-closure-2026-07-12.md`。独立验收确认 `apps/api/src`、`apps/api/prisma`、`apps/admin-web` 无本包 diff；`apps/api/tsconfig.testrun.json` 当时仍是既有一次性未跟踪文件，不纳入 R0 检查点，后续由 RP-00B 删除。
 
 每个研发包完成时，至少交付以下检查点，避免再次出现已验收资产未归因：
 

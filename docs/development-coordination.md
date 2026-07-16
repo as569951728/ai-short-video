@@ -140,6 +140,8 @@
 6. 涉及真实 DB/provider/media 的包继续需要用户独立授权、安全边界、成本上限和回滚方案。
 7. 任一关闭证据不可复现，问题重新打开并停止后续依赖包。
 8. 唯一问题总账未全量 `closed` 前，不得准备 P10-R1 或其他下一阶段需求。
+9. 每包交付必须通过 `npm run governance:git-budget` 对应模式；超过 20 文件或 2,000 净新增行时，必须提供本次 diff 内的 `docs/adr/*.md` 并在命令中显式传入 `--adr`。ADR 必须写明 `package_id`、超限类型、实际文件数/净新增行、拆包原因、owner、有效期或适用 commit；旧 ADR、空 ADR 或不在本次 diff 内的 ADR 不能放行。
+10. 研发完成到测试派发、测试完成到 MC 裁决必须生成 SLA 收据，并通过 `npm run governance:sla -- <receipt-file>`。SLA 超时时不能标记 `passed`，只能标记 `waived` 或 `accepted_with_reason` 并写明原因。
 
 状态与证据规则：
 
