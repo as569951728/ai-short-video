@@ -10,7 +10,7 @@
       </div>
       <div class="hero-actions">
         <el-tag :type="statusTagType">{{ detail?.statusSummary.displayStatusText || '加载中' }}</el-tag>
-        <el-button :loading="loading" @click="loadDetail">刷新</el-button>
+        <el-button :loading="loading" @click="loadDetail()">刷新</el-button>
         <el-button @click="router.push('/novels')">小说列表</el-button>
         <el-button
           v-if="primaryGenerateAction && workbenchMode === 'overview'"

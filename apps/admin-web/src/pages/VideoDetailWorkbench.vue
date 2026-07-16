@@ -147,7 +147,7 @@
                     <el-button :loading="narrationLoading" @click="loadWorkbench">刷新</el-button>
                     <el-button v-if="sourceMode === 'mock'" :loading="narrationLoading" @click="generateNarrationFailureSample">生成失败样本</el-button>
                     <el-button v-if="sourceMode === 'mock'" :loading="narrationLoading" @click="generateNarrationCancelledSample">生成取消样本</el-button>
-                    <el-button type="primary" :loading="narrationLoading" @click="generateNarration">
+                    <el-button type="primary" :loading="narrationLoading" @click="generateNarration()">
                       {{ workbenchView.artifacts.narration.history.length > 0 ? '重新生成 1-3 个候选' : '生成旁白候选' }}
                     </el-button>
                   </div>
@@ -236,7 +236,7 @@
                     <el-button :loading="ttsLoading" @click="loadWorkbench">刷新</el-button>
                     <el-button v-if="sourceMode === 'mock'" :loading="ttsLoading" @click="generateTtsFailureSample">生成失败样本</el-button>
                     <el-button v-if="sourceMode === 'mock'" :loading="ttsLoading" @click="generateTtsCancelledSample">生成取消样本</el-button>
-                    <el-button type="primary" :loading="ttsLoading" @click="generateTts">
+                    <el-button type="primary" :loading="ttsLoading" @click="generateTts()">
                       {{ workbenchView.artifacts.tts.history.length > 0 ? '重新生成配音候选' : '生成配音候选' }}
                     </el-button>
                   </div>
@@ -353,7 +353,7 @@
                     <el-button :loading="subtitleLoading" @click="loadWorkbench">刷新</el-button>
                     <el-button v-if="sourceMode === 'mock'" :loading="subtitleLoading" @click="generateSubtitleFailureSample">生成失败样本</el-button>
                     <el-button v-if="sourceMode === 'mock'" :loading="subtitleLoading" @click="generateSubtitleCancelledSample">生成取消样本</el-button>
-                    <el-button type="primary" :loading="subtitleLoading" @click="generateSubtitle">
+                    <el-button type="primary" :loading="subtitleLoading" @click="generateSubtitle()">
                       {{ workbenchView.artifacts.subtitle.history.length > 0 ? '重新生成字幕候选' : '生成字幕候选' }}
                     </el-button>
                   </div>
@@ -576,7 +576,7 @@
                     <el-button :loading="renderLoading" @click="loadWorkbench">刷新</el-button>
                     <el-button v-if="sourceMode === 'mock'" :loading="renderLoading" @click="generateRenderFailureSample">生成失败样本</el-button>
                     <el-button v-if="sourceMode === 'mock'" :loading="renderLoading" @click="generateRenderCancelledSample">生成取消样本</el-button>
-                    <el-button type="primary" :loading="renderLoading" @click="generateRender">渲染视频预览</el-button>
+                    <el-button type="primary" :loading="renderLoading" @click="generateRender()">渲染视频预览</el-button>
                   </div>
                 </div>
                 <el-alert title="渲染候选不会自动成为可导出版本；需要先预览确认当前视频。" type="info" show-icon :closable="false" />
