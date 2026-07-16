@@ -237,3 +237,99 @@ evidence: GitHub Actions runs 29196618102 and 29196969050; status completed/succ
 mc_decision: 远程 CI 未验证残余风险关闭，GOV-GIT-01 证据等级提升为本地/远程可执行门禁。
 next_action: 保持该 workflow 作为后续整改包的持续门禁。
 ```
+
+### MCE-20260713-RP01A-DEV-COMPLETE
+
+```text
+event_id: MCE-20260713-RP01A-DEV-COMPLETE
+occurred_at: 2026-07-13 01:29:51 CST
+event_type: dev_complete
+source_thread: 019ed4ee-441a-7fa2-894d-393c7d4c527b
+package_id: RP-01A
+issue_ids: RMD-TEST-E2E-001
+acceptance_ids: TEST-E2E-BOOTSTRAP-01
+summary: DEV 完成 Playwright backend E2E 基线及四轮定向返修；最终补齐 clean-clone 依赖、artifact 安全白名单、递归 JSON 脱敏和 readiness body hard timeout。
+evidence: npm run test:e2e:rp01a 13/13; npm run e2e:rp01a passed; typecheck/budget/diff passed; no orphan process
+mc_decision: 允许推送实现提交并触发远程 clean-checkout CI，不提前关闭总账。
+next_action: 等待远程 CI 和独立 TEST/QUALITY 最终复验。
+```
+
+### MCE-20260713-RP01A-CI-RESULT
+
+```text
+event_id: MCE-20260713-RP01A-CI-RESULT
+occurred_at: 2026-07-13 01:34:02 CST
+event_type: remote_ci_result
+source_thread: 019ed4a5-a2f5-7d13-86d0-0c28381af555
+package_id: RP-01A
+issue_ids: RMD-TEST-E2E-001
+acceptance_ids: TEST-E2E-BOOTSTRAP-01
+summary: commit 9fc2116 的远程治理与 backend E2E 均 success；clean checkout 中 guard 13/13、真实 API/admin/Chromium E2E 和安全 artifact 上传通过。
+evidence: GitHub Actions runs 29202209121 and 29202209111; artifact 8262715897; sensitive/LEAK pattern scan 0 hits
+mc_decision: 远程 E4 证据通过，允许派发最终独立复验。
+next_action: TEST/QUALITY 对同一 SHA 复验前序 P1。
+```
+
+### MCE-20260713-RP01A-TEST-RESULT
+
+```text
+event_id: MCE-20260713-RP01A-TEST-RESULT
+occurred_at: 2026-07-13 01:39:19 CST
+event_type: test_result
+source_thread: 019f573c-a785-72e2-bddb-722e326f1284
+package_id: RP-01A
+issue_ids: RMD-TEST-E2E-001
+acceptance_ids: TEST-E2E-BOOTSTRAP-01
+summary: 独立 TEST 最终 approved；真实 backend E4、刷新恢复、递归 JSON 脱敏、上传安全摘要和两类 stall hard timeout 均通过，P0/P1 为 0。
+evidence: commit 9fc2116; runs 29202209121/29202209111; artifact 8262715897; 13/13 guard
+mc_decision: 测试门禁通过，等待 QUALITY 最终结论。
+next_action: QUALITY 复核全部前序 P1。
+```
+
+### MCE-20260713-RP01A-QUALITY-RESULT
+
+```text
+event_id: MCE-20260713-RP01A-QUALITY-RESULT
+occurred_at: 2026-07-13 01:41:35 CST
+event_type: quality_review
+source_thread: 019f573d-4593-7ee3-9f8a-2ccea33db88f
+package_id: RP-01A
+issue_ids: RMD-TEST-E2E-001
+acceptance_ids: TEST-E2E-BOOTSTRAP-01
+summary: 独立 QUALITY 最终 approved；raw trace 边界、普通日志不上传原文、JSON array/nested/pretty/sibling、no-header stall 和 body-stall 全部通过，P0/P1 为 0。
+evidence: commit 9fc2116; remote clean-clone runs success; downloaded artifact only four sanitized text files
+mc_decision: 质量门禁通过，允许 MC 正式关闭 RP-01A。
+next_action: 更新关闭记录、唯一总账、状态单源和 SLA 收据。
+```
+
+### MCE-20260713-RP01A-MC-CLOSE
+
+```text
+event_id: MCE-20260713-RP01A-MC-CLOSE
+occurred_at: 2026-07-13 01:43:19 CST
+event_type: mc_decision
+source_thread: 019ed4a5-a2f5-7d13-86d0-0c28381af555
+package_id: RP-01A
+issue_ids: RMD-TEST-E2E-001
+acceptance_ids: TEST-E2E-BOOTSTRAP-01
+summary: 实现提交 9fc2116 已推送；TEST/QUALITY 均 approved；MC 将 RMD-TEST-E2E-001 更新为 closed，总账进度 7/42。
+evidence: docs/reviews/remediation-rmd-test-e2e-001-closure-2026-07-12.md; docs/reviews/remediation-rp-01a-dispatch-receipt-2026-07-13.md; origin/codex/aishortvideo-checkpoint-20260711 @ 9fc2116
+mc_decision: RP-01A closed；允许按依赖进入 RP-01B；RP-01D 真实 MySQL 继续等待独立授权。
+next_action: 推送关闭提交并验证远程治理 CI，然后派发 RP-01B。
+```
+
+### MCE-20260713-RP01A-CLOSE-CI-VERIFY
+
+```text
+event_id: MCE-20260713-RP01A-CLOSE-CI-VERIFY
+occurred_at: 2026-07-13 01:49:05 CST
+event_type: remote_ci_result
+source_thread: 019ed4a5-a2f5-7d13-86d0-0c28381af555
+package_id: RP-01A
+issue_ids: RMD-TEST-E2E-001
+acceptance_ids: TEST-E2E-BOOTSTRAP-01
+summary: RP-01A 正式关闭提交 ee0b1a2 已推送，Remediation governance 远程运行成功。
+evidence: GitHub Actions run 29202693061; status completed/success; headSha ee0b1a2
+mc_decision: 关闭提交远程验证完成，RP-01A 保持 closed。
+next_action: 按依赖派发 RP-01B；RP-01D 继续等待独立授权。
+```

@@ -1,6 +1,6 @@
 # AIShortvideo 主控统一状态
 
-更新时间：2026-07-12 22:39 CST
+更新时间：2026-07-13 01:43 CST
 
 本文件是需求主控的当前状态入口。历史过程和详细证据仍保留在各模块设计、验收和工程质量文档中；发生冲突时，以当前代码、最新正式验收结论和本文件列出的证据为准。
 
@@ -18,12 +18,12 @@
 
 | 维度 | 当前状态 | 主控判断 |
 | --- | --- | --- |
-| 小说核心流程 | mock/in-memory 主流程可演示，已知个案已定向修复 | 真实 Prisma 后半程未实现、全书审稿未输入正文，存在 2 个未关闭 P0；没有可重复的全链浏览器 E2E |
+| 小说核心流程 | mock/in-memory 主流程可演示，已知个案已定向修复 | 已有创建草稿 backend 浏览器 E2E 基线，但不是全链；真实 Prisma 后半程未实现、全书审稿未输入正文，仍有 2 个未关闭 P0 |
 | 视频 P8-P9 | 工作台状态流与版本流程按限定范围验收 | P9c 无可播放音频，P9e 无真实 MP4/下载文件；不能称为真实视频生成闭环 |
 | P10-preflight | 已正式收口 | `creationSource` 的 shared/API/仓储/migration/admin 与浏览器链路通过 `CS-R3` 及条件项复验 |
 | P10 | `P10-R0` 已正式收口；R1 准入设计通过 | R1 准入文档已纳入当前远程分支；尚未授权，未启动业务代码 |
-| 整改计划 | RP-00A、RP-00B 已正式关闭 | 唯一总账已关闭 6/42；下一步按依赖进入 RP-01 验收基础设施，全部关闭前不进入新需求 |
-| 测试 | 206 项低层自动化与 typecheck 通过 | 证明 contract/unit/mock/in-memory；没有纳管浏览器 E2E，不能外推真实 DB/provider/media |
+| 整改计划 | RP-00A、RP-00B、RP-01A 已正式关闭 | 唯一总账已关闭 7/42；下一步按依赖进入 RP-01B，全部关闭前不进入新需求 |
+| 测试 | 206 项低层自动化、typecheck 与 RP-01A E4 浏览器基线通过 | 已纳管首条真实本地 backend 浏览器 E2E；仍不能外推真实 DB/provider/media |
 | 工程质量 | `review / high` | 发现小说真实完本与全书审稿 2 个 P0；检查点已止血，包级提交防复发机制未关闭 |
 | 本地服务 | 未运行 | `5173`、`3001` 当前无监听；用户需要浏览器验收时按需启动 |
 | 真实环境 | 冻结/待授权 | P8b-L1b、真实 DeepSeek/provider、外部渲染/云存储均无当前授权 |
@@ -56,7 +56,7 @@
 ### 下一触发动作
 
 - 暂缓 `P10-R1`，不得按编号自动继续。
-- `RP-00A`、`RP-00B` 已完成独立复核、主控裁决和远程推送；下一步按依赖推进 `RP-01A`、`RP-01B`，真实 MySQL 所属 `RP-01D` 继续等待独立授权。
+- `RP-00A`、`RP-00B`、`RP-01A` 已完成独立复核、主控裁决和远程推送；下一步按依赖推进 `RP-01B`，真实 MySQL 所属 `RP-01D` 继续等待独立授权。
 
 ## 3. 视频模块
 
@@ -84,8 +84,8 @@
 
 ## 4. 测试与验收
 
-- 全栈研发会话：`RP-00B` 治理实现交付已完成，当前 idle。
-- 测试会话：`RP-00B` 三个 acceptance id 正式验收全部 approved，当前 idle。
+- 全栈研发会话：`RP-01A` 四轮定向返修已完成，当前 idle。
+- 独立测试/质量 agent：`TEST-E2E-BOOTSTRAP-01` 最终均 approved，P0/P1 为 0。
 - `P10-R1` 验收准备保留，但当前不是推荐开工项。
 - 五类专业复盘与二次复盘已完成；执行状态以 `docs/remediation/issue-ledger.md` 为唯一事实源。
 - 每个研发包完成后必须由测试会话独立验收，研发自测不能替代正式结论。
@@ -93,10 +93,11 @@
 
 ## 5. 工程质量与工作树
 
-- 最新工程质量：二次复盘归并 42 项 PB/RB/QG/DEBT 和专项验证缺口；`RP-00A`、`RP-00B` 已关闭 5 项 QG 和 1 项 DEBT，当前关闭 6/42。
+- 最新工程质量：二次复盘归并 42 项 PB/RB/QG/DEBT 和专项验证缺口；`RP-00A`、`RP-00B`、`RP-01A` 已关闭 6 项 QG 和 1 项 DEBT，当前关闭 7/42。
 - `.playwright-cli/` 已安全忽略；源码、migration、测试和文档未被 ignore。
 - 已创建并推送检查点分支 `codex/aishortvideo-checkpoint-20260711`；P10-R0 检查点 `68957be` 及后续 R1 准入文档均纳入该远程分支。
 - RP-00B 的 `Remediation governance` 已在远程 push runs `29196618102`、`29196969050` 成功执行，Git 预算与 SLA 门禁不再只有本地证据。
+- RP-01A 已在远程 clean checkout runs `29202209121`、`29202209111` 通过治理与真实 backend E2E；关闭提交 `ee0b1a2` 的治理 run `29202693061` 也已成功。guard 13/13，远程 artifact 仅含 4 个安全摘要文本且敏感模式 0 命中。
 - 工程质量任务已对远程检查点执行一次性只读复核：本地与 upstream 同步，未发现敏感信息、浏览器产物、一次性配置或 P10/P12 可执行越界误纳管，结论为 `passed`，无 P0/P1。
 - 一次性 `apps/api/tsconfig.testrun.json` 已由 RP-00B 完成归因和安全删除，未加入 ignore；独立 TEST/QUALITY 已复核。`.playwright-cli/` 继续作为本地浏览器运行产物忽略。
 - `docs/modules/video-p10-r1-implementation-package.md` 与多会话评审记录已安全归因并纳入远程基线；它们是需求资产，不是已授权业务实现。
@@ -117,6 +118,8 @@
 - `docs/reviews/remediation-rmd-gov-sla-001-closure-2026-07-12.md`
 - `docs/reviews/remediation-rmd-gov-temp-001-closure-2026-07-12.md`
 - `docs/reviews/remediation-rp-00b-dispatch-receipt-2026-07-12.md`
+- `docs/reviews/remediation-rmd-test-e2e-001-closure-2026-07-12.md`
+- `docs/reviews/remediation-rp-01a-dispatch-receipt-2026-07-13.md`
 - `docs/reviews/worktree-attribution-checkpoint-2026-07-11.md`
 - `docs/reviews/video-p9e-acceptance-closure-2026-07-10.md`
 
@@ -132,7 +135,7 @@
 
 ## 7. 当前唯一推荐动作
 
-1. `RP-00A`、`RP-00B` 已正式关闭；下一步按依赖派发 `RP-01A Playwright backend E2E` 与 `RP-01B Vue DOM/event runner`。
+1. `RP-00A`、`RP-00B`、`RP-01A` 已正式关闭；下一步按依赖派发 `RP-01B Vue DOM/event runner`。
 2. `RP-01D` 涉及真实 MySQL，只能在安全环境和用户独立授权后执行；管理分组不得整体派发。每个子包独立研发、测试、关闭、commit 和 push。
 3. 小说真实完本金丝雀通过后，再执行 P9-real；P10-R1 只在 `RP-10` 重新决策。
 4. 继续保持真实 DB/provider、外部媒体和平台发布的独立授权门禁。
