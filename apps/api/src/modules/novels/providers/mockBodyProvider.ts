@@ -1,54 +1,30 @@
 import { RiskLevel, type ChapterSummaryCompareDTO, type QualityScoringDTO } from '@ai-shortvideo/shared';
+import type { ImpactAssessmentDraft } from '../domain/novelDomain.js';
 import type {
-  BodyChapterDraft,
-  ChapterContentVersionRecord,
-  CreativeVersionRecord,
-  ImpactAssessmentDraft,
-  LongTermMemoryRecord,
-  NovelChapterRecord,
-  NovelRecord
-} from '../domain/novelDomain.js';
+  BodyChapterProviderDraft,
+  ChapterContentProviderInputV1,
+  ChapterProviderInputV1,
+  NovelProviderActionInputFor,
+  NovelProviderInputV1
+} from '../services/actionExecutionPlan.js';
+
+type BodyGenerateInput = NovelProviderActionInputFor<'body_batch_generate' | 'chapter_body_generate'>;
+type BodyRewriteInput = NovelProviderActionInputFor<'chapter_rewrite'>;
+type BodyImpactInput = NovelProviderActionInputFor<'chapter_impact_assess' | 'chapter_adopt_impact_assess'>;
 
 export interface BodyProvider {
-  generateBodyChapter(input: {
-    novel: NovelRecord;
-    chapter: NovelChapterRecord;
-    strategySnapshot: CreativeVersionRecord;
-    previousContent: ChapterContentVersionRecord | null;
-    previousMemory: LongTermMemoryRecord | null;
-    previousBatchNotes: string[];
-    enhancedReview: boolean;
-  }): Promise<BodyChapterDraft>;
-  rewriteChapter(input: {
-    novel: NovelRecord;
-    chapter: NovelChapterRecord;
-    currentContent: ChapterContentVersionRecord;
-    instruction: string;
-  }): Promise<{
-    candidate: BodyChapterDraft;
+  generateBodyChapter(input: BodyGenerateInput): Promise<BodyChapterProviderDraft>;
+  rewriteChapter(input: BodyRewriteInput): Promise<{
+    candidate: BodyChapterProviderDraft;
     summaryCompare: ChapterSummaryCompareDTO;
   }>;
-  assessImpact(input: {
-    novel: NovelRecord;
-    chapter: NovelChapterRecord;
-    oldContent: ChapterContentVersionRecord | null;
-    newContent: ChapterContentVersionRecord;
-    instruction?: string | null;
-  }): Promise<ImpactAssessmentDraft>;
+  assessImpact(input: BodyImpactInput): Promise<ImpactAssessmentDraft>;
 }
 
 const BODY_SCORE_VERSION = 'body-chapter-score-v1';
 
 export class MockBodyProvider implements BodyProvider {
-  async generateBodyChapter(input: {
-    novel: NovelRecord;
-    chapter: NovelChapterRecord;
-    strategySnapshot: CreativeVersionRecord;
-    previousContent: ChapterContentVersionRecord | null;
-    previousMemory: LongTermMemoryRecord | null;
-    previousBatchNotes: string[];
-    enhancedReview: boolean;
-  }): Promise<BodyChapterDraft> {
+  async generateBodyChapter(input: BodyGenerateInput): Promise<BodyChapterProviderDraft> {
     const hardFailed = input.novel.title.includes('批量正文暂停') && input.chapter.chapterNo === 6;
     const ordinaryRisk = !hardFailed && (input.chapter.chapterNo === 5 || input.chapter.chapterNo === 9);
     const score = hardFailed ? 56 : ordinaryRisk ? 66 : input.enhancedReview ? 82 : 84;
@@ -70,12 +46,7 @@ export class MockBodyProvider implements BodyProvider {
     });
   }
 
-  async rewriteChapter(input: {
-    novel: NovelRecord;
-    chapter: NovelChapterRecord;
-    currentContent: ChapterContentVersionRecord;
-    instruction: string;
-  }) {
+  async rewriteChapter(input: BodyRewriteInput) {
     const changesLater = /影响后续|旧码头|关键事实|伏笔/.test(input.instruction);
     const score = changesLater ? 86 : 84;
     const candidate = createBodyDraft({
@@ -102,13 +73,7 @@ export class MockBodyProvider implements BodyProvider {
     return { candidate, summaryCompare };
   }
 
-  async assessImpact(input: {
-    novel: NovelRecord;
-    chapter: NovelChapterRecord;
-    oldContent: ChapterContentVersionRecord | null;
-    newContent: ChapterContentVersionRecord;
-    instruction?: string | null;
-  }): Promise<ImpactAssessmentDraft> {
+  async assessImpact(input: BodyImpactInput): Promise<ImpactAssessmentDraft> {
     const text = `${input.instruction ?? ''} ${input.newContent.summary ?? ''} ${input.newContent.content.slice(-300)}`;
     const severe = /清空后续|推翻主线|严重影响|严重内容安全/.test(text);
     const medium = severe || /影响后续|旧码头|关键事实|伏笔/.test(text);
@@ -139,8 +104,8 @@ export class MockBodyProvider implements BodyProvider {
 }
 
 function createBodyDraft(input: {
-  novel: NovelRecord;
-  chapter: NovelChapterRecord;
+  novel: NovelProviderInputV1;
+  chapter: ChapterProviderInputV1;
   content: string;
   summary: string;
   score: number;
@@ -149,11 +114,11 @@ function createBodyDraft(input: {
   hardFailed: boolean;
   hardFailureReasons: string[];
   memoryPrefix: string;
-}): BodyChapterDraft {
+}): BodyChapterProviderDraft {
   const scoring = createScoring(input.score, input.hardFailed);
 
   return {
-    chapter: input.chapter,
+    chapter: { id: input.chapter.id, chapterNo: input.chapter.chapterNo },
     content: input.content,
     summary: input.summary,
     openingStrategy: '承接上一章钩子，先回收事实，再推进本章目标。',
@@ -234,9 +199,9 @@ function createBodyDraft(input: {
 }
 
 function createBodyContent(
-  novel: NovelRecord,
-  chapter: NovelChapterRecord,
-  previousContent: ChapterContentVersionRecord | null,
+  novel: NovelProviderInputV1,
+  chapter: ChapterProviderInputV1,
+  previousContent: ChapterContentProviderInputV1 | null,
   ordinaryRisk: boolean,
   hardFailed: boolean
 ) {

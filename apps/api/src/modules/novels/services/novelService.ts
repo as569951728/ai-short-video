@@ -114,7 +114,8 @@ import {
   type VideoReadinessCheckRecord,
   type VideoReadinessSnapshotRecord,
   type TrialRunRecord,
-  type TrialChapterResultRecord
+  type TrialChapterResultRecord,
+  type TrialChapterCandidateDraft, type TrialFollowupChapterDraft
 } from '../domain/novelDomain.js';
 import { MockDirectionProvider, type DirectionProvider } from '../providers/mockDirectionProvider.js';
 import { MockStructureProvider, type StructureProvider } from '../providers/mockStructureProvider.js';
@@ -125,6 +126,21 @@ import { UnavailableHotspotReferenceGateway, type HotspotReferenceGateway } from
 import { NovelStatusService } from './novelStatusService.js';
 import { toRecentTaskSummaryDTO } from '../../tasks/services/taskService.js';
 import { executeClaimedGeneration, type NovelProviderAction } from './taskClaim.js';
+import {
+  executeNovelProviderAction,
+  projectBodyStrategyProviderInput,
+  projectChapterContentProviderInput,
+  projectChapterProviderInput,
+  projectCreativeAssetProviderInput,
+  projectDirectionDraftProviderInput,
+  projectFullReviewSourceVersionRefsProviderInput,
+  projectLongTermMemoryProviderInput,
+  projectNovelProviderInput,
+  projectPreferencesProviderInput,
+  type BodyChapterProviderDraft,
+  type NovelProviderSet,
+  type TrialFollowupChapterProviderDraft
+} from './actionExecutionPlan.js';
 
 export interface NovelServiceOptions {
   repository: NovelRepository;
@@ -156,6 +172,16 @@ export class NovelService {
     this.bodyProvider = options.bodyProvider ?? new MockBodyProvider();
     this.fullReviewProvider = options.fullReviewProvider ?? new MockFullReviewProvider();
     this.hotspotReferenceGateway = options.hotspotReferenceGateway ?? new UnavailableHotspotReferenceGateway();
+  }
+
+  private getProviderSet(): NovelProviderSet {
+    return {
+      directionProvider: this.directionProvider,
+      structureProvider: this.structureProvider,
+      trialProvider: this.trialProvider,
+      bodyProvider: this.bodyProvider,
+      fullReviewProvider: this.fullReviewProvider
+    };
   }
 
   async createDraft(request: CreateNovelDraftRequest, context: RequestContext): Promise<NovelDetailDTO> {
@@ -303,9 +329,10 @@ export class NovelService {
       context,
       now: this.now,
       providerCapability: this.directionProvider,
-      provider: () => this.directionProvider.generateCandidates({
-        novel,
-        preferences: preferences ?? createEmptyPreferences(novel)
+      provider: () => executeNovelProviderAction(this.getProviderSet(), {
+        action: 'direction_generate',
+        novel: projectNovelProviderInput(novel),
+        preferences: projectPreferencesProviderInput(preferences ?? createEmptyPreferences(novel))
       }),
       finalize: (task, candidates) => this.options.repository.createDirectionCandidates({
         novel,
@@ -346,7 +373,11 @@ export class NovelService {
       context,
       now: this.now,
       providerCapability: this.directionProvider,
-      provider: () => this.directionProvider.fuseCandidates({ sources: sources.map(toDirectionDraft), reason: request.reason }),
+      provider: () => executeNovelProviderAction(this.getProviderSet(), {
+        action: 'direction_fuse',
+        sources: sources.map((source) => projectDirectionDraftProviderInput(toDirectionDraft(source))),
+        reason: request.reason
+      }),
       finalize: (task, candidate) => this.options.repository.createDirectionRevision({
         novel,
         task,
@@ -381,7 +412,11 @@ export class NovelService {
       context,
       now: this.now,
       providerCapability: this.directionProvider,
-      provider: () => this.directionProvider.optimizeCandidate({ source: toDirectionDraft(source), instruction: request.instruction }),
+      provider: () => executeNovelProviderAction(this.getProviderSet(), {
+        action: 'direction_optimize',
+        source: projectDirectionDraftProviderInput(toDirectionDraft(source)),
+        instruction: request.instruction
+      }),
       finalize: (task, candidate) => this.options.repository.createDirectionRevision({
         novel,
         task,
@@ -637,12 +672,13 @@ export class NovelService {
         context,
         now: this.now,
         providerCapability: this.trialProvider,
-        provider: () => this.trialProvider.generateChapterOneCandidates({
-          novel,
-          preferences: preferences ?? createEmptyPreferences(novel),
-          chapters,
+        provider: () => executeNovelProviderAction(this.getProviderSet(), {
+          action: 'trial_chapter_one_generate',
+          novel: projectNovelProviderInput(novel),
+          preferences: projectPreferencesProviderInput(preferences ?? createEmptyPreferences(novel)),
+          chapters: chapters.map(projectChapterProviderInput),
           chapterCount
-        }),
+        }).then((candidates) => bindTrialChapterOneCandidates(chapters, candidates)),
         finalize: (task, candidates) => this.options.repository.createTrialChapterOneCandidates({
           novel,
           task,
@@ -702,6 +738,7 @@ export class NovelService {
     }
 
     const sourceVersionRefs = createTrialSourceRefs(novel);
+    const trialScopeChapters = chapters.slice(0, trialRun.trialChapterCount);
     const execution = await executeClaimedGeneration({
       action: 'trial_followup_generate',
       repository: this.options.repository,
@@ -713,29 +750,17 @@ export class NovelService {
       context,
       now: this.now,
       providerCapability: this.trialProvider,
-      prepare: (task) => this.options.repository.createTrialFollowupTask({
-        novel,
-        trialRun,
-        task,
-        selectedCandidate,
-        context,
-        now: this.now()
-      }).then(() => undefined),
-      provider: () => this.trialProvider.generateFollowup({
-        novel,
-        selectedCandidate,
-        chapters: chapters.slice(0, trialRun.trialChapterCount)
-      }),
-      finalize: (task, followup) => this.options.repository.selectTrialChapterOneAndGenerateFollowup({
-        novel,
-        trialRun,
-        task,
-        selectedCandidate,
-        chapters: followup.chapters,
-        review: followup.review,
-        context,
-        now: this.now()
-      })
+      prepare: () => Promise.resolve(),
+      provider: () => executeNovelProviderAction(this.getProviderSet(), {
+        action: 'trial_followup_generate',
+        novel: projectNovelProviderInput(novel),
+        selectedCandidate: projectChapterContentProviderInput(selectedCandidate),
+        chapters: trialScopeChapters.map(projectChapterProviderInput)
+      }).then((followup) => ({
+        ...followup,
+        chapters: bindTrialFollowupChapters(trialScopeChapters, followup.chapters, followup.review)
+      })),
+      finalize: (task, followup) => this.options.repository.selectTrialChapterOneAndGenerateFollowup({ novel, trialRun, task, selectedCandidate, chapters: followup.chapters, review: followup.review, context, now: this.now() })
     });
     if (execution.reused) return this.toTrialActionResult(novel, execution.task, trialRun);
     const result = execution.value;
@@ -867,15 +892,17 @@ export class NovelService {
         const drafts: BodyChapterDraft[] = [];
         let previousContent = await findPreviousContentVersion(this.options.repository, context.tenantId, novelId, chapters, range.startChapterNo!);
         for (const chapter of targetChapters) {
-          const draft = await this.bodyProvider.generateBodyChapter({
-            novel,
-            chapter,
-            strategySnapshot,
-            previousContent,
-            previousMemory,
+          const providerDraft = await executeNovelProviderAction(this.getProviderSet(), {
+            action,
+            novel: projectNovelProviderInput(novel),
+            chapter: projectChapterProviderInput(chapter),
+            strategySnapshot: projectBodyStrategyProviderInput(strategySnapshot),
+            previousContent: previousContent ? projectChapterContentProviderInput(previousContent) : null,
+            previousMemory: projectLongTermMemoryProviderInput(previousMemory),
             previousBatchNotes,
             enhancedReview: enhancedReview && chapter.chapterNo <= 10
           });
+          const draft = bindGeneratedBodyChapter(chapter, providerDraft);
           drafts.push(draft);
           if (draft.hardFailed) break;
           previousContent = createDraftLikeContentVersion(chapter, draft);
@@ -1059,12 +1086,13 @@ export class NovelService {
       context,
       now: this.now,
       providerCapability: this.bodyProvider,
-      provider: () => this.bodyProvider.rewriteChapter({
-        novel,
-        chapter,
-        currentContent,
+      provider: () => executeNovelProviderAction(this.getProviderSet(), {
+        action: 'chapter_rewrite',
+        novel: projectNovelProviderInput(novel),
+        chapter: projectChapterProviderInput(chapter),
+        currentContent: projectChapterContentProviderInput(currentContent),
         instruction: request.instruction?.trim() || '基于审稿建议优化本章'
-      }),
+      }).then((rewrite) => ({ ...rewrite, candidate: bindGeneratedBodyChapter(chapter, rewrite.candidate) })),
       finalize: (task, rewrite) => this.options.repository.rewriteChapter({
         novel,
         task,
@@ -1177,11 +1205,12 @@ export class NovelService {
       context,
       now: this.now,
       providerCapability: this.bodyProvider,
-      provider: () => this.bodyProvider.assessImpact({
-        novel,
-        chapter,
-        oldContent: currentContent,
-        newContent: candidate,
+      provider: () => executeNovelProviderAction(this.getProviderSet(), {
+        action: 'chapter_adopt_impact_assess',
+        novel: projectNovelProviderInput(novel),
+        chapter: projectChapterProviderInput(chapter),
+        oldContent: currentContent ? projectChapterContentProviderInput(currentContent) : null,
+        newContent: projectChapterContentProviderInput(candidate),
         instruction: candidate.rewriteReason
       }),
       finalize: (task, impact) => {
@@ -1294,11 +1323,12 @@ export class NovelService {
       context,
       now: this.now,
       providerCapability: this.bodyProvider,
-      provider: () => this.bodyProvider.assessImpact({
-        novel,
-        chapter,
-        oldContent: currentContent,
-        newContent: currentContent,
+      provider: () => executeNovelProviderAction(this.getProviderSet(), {
+        action: 'chapter_impact_assess',
+        novel: projectNovelProviderInput(novel),
+        chapter: projectChapterProviderInput(chapter),
+        oldContent: projectChapterContentProviderInput(currentContent),
+        newContent: projectChapterContentProviderInput(currentContent),
         instruction: request.reason
       }),
       finalize: (task, impact) => this.options.repository.createImpactAssessment({
@@ -1383,7 +1413,7 @@ export class NovelService {
     const currentSourceVersionRefs = createFullReviewSourceRefs(novel, currentChapters);
     const requestFingerprint = {
       taskType: 'novel_full_review',
-      reviewPolicyVersionId: request.reviewPolicyVersionId ?? novel.policyProfileVersionId ?? DEFAULT_POLICY_PROFILE_VERSION_ID,
+      reviewPolicyVersionId: request.reviewPolicyVersionId?.trim() || novel.policyProfileVersionId || DEFAULT_POLICY_PROFILE_VERSION_ID,
       expectedNovelVersion: request.expectedNovelVersion ?? null,
       sourceVersionRefs: currentSourceVersionRefs
     };
@@ -1423,14 +1453,19 @@ export class NovelService {
       context,
       now: this.now,
       providerCapability: this.fullReviewProvider,
-      provider: () => this.fullReviewProvider.generateFullReview({ novel, chapters, sourceVersionRefs }),
+      provider: () => executeNovelProviderAction(this.getProviderSet(), {
+        action: 'novel_full_review',
+        novel: projectNovelProviderInput(novel),
+        chapters: chapters.map(projectChapterProviderInput),
+        sourceVersionRefs: projectFullReviewSourceVersionRefsProviderInput(sourceVersionRefs)
+      }),
       finalize: (task, draft) => this.options.repository.createFullReview({
         novel,
         task,
         chapters,
         draft: {
           ...draft,
-          reviewPolicyVersionId: request.reviewPolicyVersionId?.trim() || draft.reviewPolicyVersionId
+          reviewPolicyVersionId: requestFingerprint.reviewPolicyVersionId
         },
         idempotencyKey,
         requestFingerprint,
@@ -1912,8 +1947,9 @@ export class NovelService {
     const taskType = getStructureTaskType(objectType);
     const changeReason = request.regenerateReason ?? `模型服务生成 ${objectType} 候选`;
     const sourceVersionRefs = createStructureSourceRefs(novel, objectType);
+    const action = getStructureGenerateAction(objectType);
     const execution = await executeClaimedGeneration({
-      action: `${objectType}_generate` as NovelProviderAction,
+      action,
       repository: this.options.repository,
       novel,
       idempotencyKey: request.idempotencyKey,
@@ -1922,12 +1958,22 @@ export class NovelService {
       context,
       now: this.now,
       providerCapability: this.structureProvider,
-      provider: () => this.structureProvider.generateAsset({
-        objectType,
-        novel,
-        preferences: preferences ?? createEmptyPreferences(novel),
-        currentAssets
-      }),
+      provider: () => {
+        const input = {
+          novel: projectNovelProviderInput(novel),
+          preferences: projectPreferencesProviderInput(preferences ?? createEmptyPreferences(novel)),
+          currentAssets: {
+            direction: projectCreativeAssetProviderInput(currentAssets.direction),
+            setting: action === 'setting_generate' ? null : projectCreativeAssetProviderInput(currentAssets.setting),
+            outline: action === 'setting_generate' || action === 'outline_generate' ? null : projectCreativeAssetProviderInput(currentAssets.outline),
+            stageOutline: action === 'chapter_plan_generate' ? projectCreativeAssetProviderInput(currentAssets.stageOutline) : null
+          }
+        };
+        if (objectType === 'setting') return executeNovelProviderAction(this.getProviderSet(), { ...input, action: 'setting_generate', objectType });
+        if (objectType === 'outline') return executeNovelProviderAction(this.getProviderSet(), { ...input, action: 'outline_generate', objectType });
+        if (objectType === 'stage_outline') return executeNovelProviderAction(this.getProviderSet(), { ...input, action: 'stage_outline_generate', objectType });
+        return executeNovelProviderAction(this.getProviderSet(), { ...input, action: 'chapter_plan_generate', objectType });
+      },
       finalize: (task, asset) => this.options.repository.createStructureCandidate({
         novel,
         task,
@@ -2486,7 +2532,15 @@ export async function enrichDetailWithCreativeAssets(
   const latestVideoReadinessCheck = await repository.findLatestVideoReadinessCheck(tenantId, novel.id);
   const latestVideoReadinessSnapshot = await repository.findLatestVideoReadinessSnapshot(tenantId, novel.id);
   const statusService = new NovelStatusService();
-  const statusSummary = applyTrialReviewStatusSummary(detail.statusSummary, latestTrialRun);
+  const activeTrialFollowup = recentTasks.find((task) => task.taskType === 'trial_followup_generate' && task.status === TaskStatus.Processing);
+  const statusSummary = activeTrialFollowup ? {
+    ...applyTrialReviewStatusSummary(detail.statusSummary, latestTrialRun),
+    stageStatus: StageStatus.Processing,
+    displayStatus: 'trial_followup_processing',
+    displayStatusText: '正在生成第2-3章和试写总评',
+    currentStep: activeTrialFollowup.currentStep ?? '正在生成第2-3章和试写总评',
+    recommendedAction: createLocalRecommendedAction({ type: 'view_task', label: '查看任务', reasonText: '试写续写任务正在处理，请查看任务进度。', target: 'task', taskType: activeTrialFollowup.taskType })
+  } : applyTrialReviewStatusSummary(detail.statusSummary, latestTrialRun);
   const bodyGeneration = await buildBodyGenerationState(repository, novel, statusService, chapters, bodyStrategySnapshot);
 
   return {
@@ -2531,18 +2585,19 @@ export async function enrichDetailWithDirections(
 }
 
 function toDirectionTaskDTO(task: GenerationTaskRecord): DirectionTaskDTO {
+  const safe = toRecentTaskSummaryDTO(task);
   return {
     id: task.id,
     taskType: task.taskType,
     status: task.status,
     statusText: getTaskStatusText(task.status),
-    statusNote: task.statusNote,
+    statusNote: task.status === TaskStatus.Failed ? safe.errorMessage : task.statusNote,
     progress: task.progress,
-    currentStep: task.currentStep,
+    currentStep: safe.currentStep,
     resultVersionIds: task.resultVersionIds,
     failureCategory: task.failureCategory,
-    errorCode: task.errorCode,
-    errorMessage: task.errorMessage
+    errorCode: safe.errorCode,
+    errorMessage: safe.errorMessage
   };
 }
 
@@ -3692,6 +3747,15 @@ function getStructureTaskType(objectType: StructureAssetType) {
   return 'chapter_plan_generate';
 }
 
+type StructureGenerateAction = 'setting_generate' | 'outline_generate' | 'stage_outline_generate' | 'chapter_plan_generate';
+
+function getStructureGenerateAction(objectType: StructureAssetType): StructureGenerateAction {
+  if (objectType === 'setting') return 'setting_generate';
+  if (objectType === 'outline') return 'outline_generate';
+  if (objectType === 'stage_outline') return 'stage_outline_generate';
+  return 'chapter_plan_generate';
+}
+
 function createStructureSourceRefs(novel: NovelRecord, objectType: StructureAssetType) {
   return {
     currentDirectionVersionId: novel.currentDirectionVersionId,
@@ -3717,15 +3781,16 @@ function getAffectedObjects(objectType: StructureAssetType) {
 }
 
 function toStructureTaskDTO(task: GenerationTaskRecord): StructureTaskDTO {
+  const safe = toRecentTaskSummaryDTO(task);
   return {
     id: task.id,
     taskType: task.taskType,
     status: task.status,
     statusText: getTaskStatusText(task.status),
     progress: task.progress,
-    currentStep: task.currentStep,
-    errorCode: task.errorCode,
-    errorMessage: task.errorMessage,
+    currentStep: safe.currentStep,
+    errorCode: safe.errorCode,
+    errorMessage: safe.errorMessage,
     resultVersionIds: task.resultVersionIds
   };
 }
@@ -4004,6 +4069,132 @@ function getImpactStatusText(status: ImpactCaseVisibleStatus) {
   if (status === 'resolved') return '已处理';
   if (status === 'ignored') return '已忽略';
   return '已取消';
+}
+
+function bindTrialChapterOneCandidates(chapters: NovelChapterRecord[], candidates: TrialChapterCandidateDraft[]): TrialChapterCandidateDraft[] { const chapter = chapters.find((item) => item.chapterNo === 1); if (!chapter) throw new BusinessError(ErrorCode.ValidationError, '缺少权威第1章，无法保存试写候选。'); if (candidates.some((candidate) => candidate.chapterId !== chapter.id || candidate.chapterNo !== chapter.chapterNo)) throw new BusinessError(ErrorCode.ValidationError, '模型返回的首章标识与权威章节不一致。'); return candidates.map((candidate) => ({ ...candidate, chapterId: chapter.id, chapterNo: chapter.chapterNo })); }
+function bindGeneratedBodyChapter(chapter: NovelChapterRecord, draft: BodyChapterProviderDraft): BodyChapterDraft {
+  const providerChapter = draft.chapter;
+  if (providerChapter.id !== chapter.id || providerChapter.chapterNo !== chapter.chapterNo) {
+    throw new BusinessError(ErrorCode.ValidationError, '模型返回的章节标识与请求章节不一致。');
+  }
+  if (draft.featureCard.chapterId !== chapter.id) throw new BusinessError(ErrorCode.ValidationError, '模型返回的章节特性卡与请求章节不一致。');
+  return {
+    ...constructTrialFollowupChapterDraft(chapter, draft),
+    memory: {
+      previousSummary: draft.memory.previousSummary,
+      characterStates: [...draft.memory.characterStates],
+      relationshipStates: [...draft.memory.relationshipStates],
+      locations: [...draft.memory.locations],
+      organizations: [...draft.memory.organizations],
+      items: [...draft.memory.items],
+      plantedForeshadowing: [...draft.memory.plantedForeshadowing],
+      resolvedForeshadowing: [...draft.memory.resolvedForeshadowing],
+      unresolvedConflicts: [...draft.memory.unresolvedConflicts],
+      newSettings: [...draft.memory.newSettings],
+      factsCannotContradict: [...draft.memory.factsCannotContradict],
+      metadata: {
+        scoringStrategyVersion: draft.memory.metadata.scoringStrategyVersion,
+        hardFailed: draft.memory.metadata.hardFailed,
+        summary: draft.memory.metadata.summary
+      }
+    }
+  };
+}
+
+function bindTrialFollowupChapters(
+  chapters: NovelChapterRecord[],
+  drafts: TrialFollowupChapterProviderDraft[],
+  review: { totalScore: number; trialResult: string; allowNextStep: boolean; chapterScores: Array<{ chapterNo: number; score: number; hardFailed: boolean }> }
+): TrialFollowupChapterDraft[] {
+  const chaptersById = new Map(chapters.map((chapter) => [chapter.id, chapter])); const seenChapterIds = new Set<string>();
+  const blocked = review.trialResult === 'blocked'; const allowsNext = review.trialResult === 'pass' || review.trialResult === 'pass_with_suggestions'; const failedDrafts = drafts.filter((draft) => draft.hardFailed); const failedScores = review.chapterScores.filter((score) => score.hardFailed);
+  const failedIndex = blocked && failedDrafts.length === 1 ? chapters.findIndex((chapter) => chapter.id === failedDrafts[0].chapter.id) : -1;
+  const expected = blocked && failedIndex >= 0 ? chapters.slice(0, failedIndex + 1) : chapters; const expectedChapterNos = expected.map((chapter) => chapter.chapterNo); const scoreChapterNos = review.chapterScores.map((score) => score.chapterNo); const scoreChapterSet = new Set(scoreChapterNos); const chapterScoresByNo = new Map(review.chapterScores.map((score) => [score.chapterNo, score])); if ([review.totalScore, ...review.chapterScores.map((score) => score.score)].some((score) => !Number.isFinite(score) || score < 0 || score > 100) || review.totalScore !== Math.round(review.chapterScores.reduce((sum, score) => sum + score.score, 0) / review.chapterScores.length)) throw new BusinessError(ErrorCode.ValidationError, '模型试写评分不合法。');
+  if (scoreChapterSet.size !== expected.length || scoreChapterNos.length !== expected.length || expectedChapterNos.some((chapterNo) => !scoreChapterSet.has(chapterNo))) throw new BusinessError(ErrorCode.ValidationError, '模型试写评分章节集合不完整。');
+  if (!['pass', 'pass_with_suggestions', 'return_upstream', 'blocked'].includes(review.trialResult) || review.allowNextStep !== allowsNext || (blocked && (failedDrafts.length !== 1 || failedScores.length !== 1 || failedIndex < 0 || failedDrafts[0].chapter.chapterNo !== chapters[failedIndex]?.chapterNo || failedScores[0].chapterNo !== chapters[failedIndex]?.chapterNo)) || (!blocked && (failedDrafts.length > 0 || failedScores.length > 0))) throw new BusinessError(ErrorCode.ValidationError, '模型失败章声明与返回章节不一致。');
+  const bound = drafts.map((draft) => {
+    const providerChapter = draft.chapter;
+    const chapter = chaptersById.get(providerChapter.id);
+    if (!chapter || chapter.chapterNo !== providerChapter.chapterNo) throw new BusinessError(ErrorCode.ValidationError, '模型返回了不属于当前试写范围的章节。');
+    if (seenChapterIds.has(chapter.id)) throw new BusinessError(ErrorCode.ValidationError, '模型重复返回了同一试写章节。');
+    if (draft.featureCard.chapterId !== chapter.id) throw new BusinessError(ErrorCode.ValidationError, '模型返回的章节特性卡与试写章节不一致。');
+    const chapterScore = chapterScoresByNo.get(providerChapter.chapterNo);
+    if (!chapterScore || chapterScore.score !== draft.scoring.totalScore || draft.scoring.totalScore !== draft.review.totalScore || chapterScore.hardFailed !== draft.hardFailed || draft.scoring.hardFailure !== draft.hardFailed || (typeof draft.review.metadata.hardFailed === 'boolean' && draft.review.metadata.hardFailed !== draft.hardFailed)) throw new BusinessError(ErrorCode.ValidationError, '模型试写章节评分或硬失败标记不一致。');
+    seenChapterIds.add(chapter.id);
+    return constructTrialFollowupChapterDraft(chapter, draft);
+  });
+  if (bound.length !== expected.length || expected.some((chapter) => !seenChapterIds.has(chapter.id))) {
+    throw new BusinessError(ErrorCode.ValidationError, '模型未完整返回当前试写范围章节。');
+  }
+  return bound;
+}
+
+function constructTrialFollowupChapterDraft(
+  chapter: NovelChapterRecord,
+  draft: TrialFollowupChapterProviderDraft
+): TrialFollowupChapterDraft {
+  const score = draft.scoring.totalScore; const reviewScore = draft.review.totalScore; const reviewHardFailed = draft.review.metadata.hardFailed; const scoringReasons = draft.scoring.hardFailureReasons; const subScores = Object.values(draft.review.subScores);
+  if (!Number.isFinite(score) || score < 0 || score > 100 || typeof reviewScore !== 'number' || !Number.isFinite(reviewScore) || reviewScore < 0 || reviewScore > 100 || score !== reviewScore || draft.scoring.dimensions.some((dimension) => !Number.isFinite(dimension.score) || dimension.score < 0 || dimension.score > 100) || subScores.some((subScore) => typeof subScore === 'number' && (!Number.isFinite(subScore) || subScore < 0 || subScore > 100)) || draft.scoring.scoringStrategyVersion !== draft.review.metadata.scoringStrategyVersion || draft.review.subScores.scoringStrategyVersion !== draft.scoring.scoringStrategyVersion) throw new BusinessError(ErrorCode.ValidationError, '模型章节评分不一致。');
+  if (draft.hardFailed !== draft.scoring.hardFailure || (typeof reviewHardFailed === 'boolean' && reviewHardFailed !== draft.hardFailed) || !['pass', 'warning', 'hard_fail'].includes(draft.scoring.gateResult) || (draft.scoring.gateResult === 'hard_fail') !== draft.hardFailed || draft.review.allowNextStep === draft.hardFailed || (draft.hardFailureReasons.length > 0) !== draft.hardFailed || draft.hardFailureReasons.length !== scoringReasons.length || draft.hardFailureReasons.some((reason, index) => reason !== scoringReasons[index])) throw new BusinessError(ErrorCode.ValidationError, '模型章节硬失败语义不一致。');
+  return {
+    chapter,
+    content: draft.content,
+    summary: draft.summary,
+    openingStrategy: draft.openingStrategy,
+    openingHighlight: draft.openingHighlight,
+    firstSentence: draft.firstSentence,
+    first300Summary: draft.first300Summary,
+    endingHook: draft.endingHook,
+    riskLevel: draft.riskLevel,
+    riskTags: [...draft.riskTags],
+    aiRecommendedReason: draft.aiRecommendedReason,
+    scoring: draft.scoring,
+    featureCard: {
+      chapterId: chapter.id,
+      oneLineSummary: draft.featureCard.oneLineSummary,
+      coreTask: draft.featureCard.coreTask,
+      mainConflict: draft.featureCard.mainConflict,
+      appealPoint: draft.featureCard.appealPoint,
+      emotionKeywords: [...draft.featureCard.emotionKeywords],
+      characterChanges: [...draft.featureCard.characterChanges],
+      relationshipChanges: [...draft.featureCard.relationshipChanges],
+      keyInformation: [...draft.featureCard.keyInformation],
+      foreshadowingOperation: draft.featureCard.foreshadowingOperation,
+      endingHook: draft.featureCard.endingHook,
+      factsCannotChange: [...draft.featureCard.factsCannotChange],
+      featuresToStrengthen: [...draft.featureCard.featuresToStrengthen],
+      metadata: {
+        scoringStrategyVersion: draft.featureCard.metadata.scoringStrategyVersion,
+        hardFailed: draft.featureCard.metadata.hardFailed,
+        summary: draft.featureCard.metadata.summary
+      }
+    },
+    review: {
+      reviewLevel: draft.review.reviewLevel,
+      totalScore: draft.review.totalScore,
+      subScores: { ...draft.review.subScores },
+      rating: draft.review.rating,
+      summary: draft.review.summary,
+      strengths: [...draft.review.strengths],
+      problems: [...draft.review.problems],
+      suggestions: [...draft.review.suggestions],
+      issueCards: draft.review.issueCards.map((issue) => ({ ...issue })),
+      actionOptions: [...draft.review.actionOptions],
+      recommendedAction: draft.review.recommendedAction,
+      allowNextStep: draft.review.allowNextStep,
+      blockingIssueCount: draft.review.blockingIssueCount,
+      resolvedStatus: draft.review.resolvedStatus,
+      promptTemplateVersionId: draft.review.promptTemplateVersionId,
+      policyProfileVersionId: draft.review.policyProfileVersionId,
+      metadata: {
+        scoringStrategyVersion: draft.review.metadata.scoringStrategyVersion,
+        hardFailed: draft.review.metadata.hardFailed,
+        summary: draft.review.metadata.summary
+      }
+    },
+    hardFailed: draft.hardFailed,
+    hardFailureReasons: [...draft.hardFailureReasons]
+  };
 }
 
 function countChineseWords(content: string) {

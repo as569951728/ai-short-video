@@ -1,50 +1,36 @@
 import { RiskLevel, type QualityScoringDTO } from '@ai-shortvideo/shared';
 import type {
   ChapterFeatureCardRecord,
-  NovelChapterRecord,
-  NovelPreferencesRecord,
-  NovelRecord,
   ReviewReportRecord,
   TrialChapterCandidateDraft,
-  TrialFollowupChapterDraft,
   TrialReviewDraft
 } from '../domain/novelDomain.js';
+import type {
+  ChapterContentProviderInputV1,
+  ChapterProviderInputV1,
+  NovelProviderActionInputFor,
+  NovelProviderInputV1,
+  TrialFollowupChapterProviderDraft
+} from '../services/actionExecutionPlan.js';
+
+type TrialChapterOneInput = NovelProviderActionInputFor<'trial_chapter_one_generate'>;
+type TrialFollowupInput = NovelProviderActionInputFor<'trial_followup_generate'>;
 
 export interface TrialProvider {
-  generateChapterOneCandidates(input: {
-    novel: NovelRecord;
-    preferences: NovelPreferencesRecord;
-    chapters: NovelChapterRecord[];
-    chapterCount: number;
-  }): Promise<TrialChapterCandidateDraft[]>;
-  generateFollowup(input: {
-    novel: NovelRecord;
-    selectedCandidate: TrialChapterCandidateDraftLike;
-    chapters: NovelChapterRecord[];
-  }): Promise<{
-    chapters: TrialFollowupChapterDraft[];
+  generateChapterOneCandidates(input: TrialChapterOneInput): Promise<TrialChapterCandidateDraft[]>;
+  generateFollowup(input: TrialFollowupInput): Promise<{
+    chapters: TrialFollowupChapterProviderDraft[];
     review: TrialReviewDraft;
   }>;
 }
 
-export interface TrialChapterCandidateDraftLike {
-  id: string;
-  content: string;
-  summary: string | null;
-  reviewScore: number | null;
-  metadata: unknown;
-}
+export type TrialChapterCandidateDraftLike = ChapterContentProviderInputV1;
 
 const OPENING_SCORE_VERSION = 'trial-opening-score-v1';
 const CHAPTER_SCORE_VERSION = 'trial-chapter-score-v1';
 
 export class MockTrialProvider implements TrialProvider {
-  async generateChapterOneCandidates(input: {
-    novel: NovelRecord;
-    preferences: NovelPreferencesRecord;
-    chapters: NovelChapterRecord[];
-    chapterCount: number;
-  }) {
+  async generateChapterOneCandidates(input: TrialChapterOneInput) {
     const chapter = input.chapters[0];
     const requestedCount = Math.max(2, Math.min(5, input.chapterCount || 3));
     const scores = requestedCount === 2 ? [86, 72] : requestedCount === 5 ? [88, 82, 73, 68, 79] : [88, 74, 82];
@@ -80,15 +66,11 @@ export class MockTrialProvider implements TrialProvider {
     });
   }
 
-  async generateFollowup(input: {
-    novel: NovelRecord;
-    selectedCandidate: TrialChapterCandidateDraftLike;
-    chapters: NovelChapterRecord[];
-  }) {
+  async generateFollowup(input: TrialFollowupInput) {
     const selectedScore = input.selectedCandidate.reviewScore ?? 80;
     const hardFail = input.novel.title.includes('硬失败');
     const riskyRun = selectedScore < 75 || input.novel.title.includes('风险继续');
-    const followup: TrialFollowupChapterDraft[] = [];
+    const followup: TrialFollowupChapterProviderDraft[] = [];
 
     const chapterOne = input.chapters[0];
     followup.push(createFollowupChapter({
@@ -134,14 +116,14 @@ export class MockTrialProvider implements TrialProvider {
 }
 
 function createFollowupChapter(input: {
-  novel: NovelRecord;
-  chapter: NovelChapterRecord;
+  novel: NovelProviderInputV1;
+  chapter: ChapterProviderInputV1;
   chapterNo: number;
   score: number;
   content: string;
   summary: string;
   hardFailureReasons: string[];
-}): TrialFollowupChapterDraft {
+}): TrialFollowupChapterProviderDraft {
   const hardFailed = input.hardFailureReasons.length > 0;
   const scoring = createScoring({
     score: input.score,
@@ -158,7 +140,7 @@ function createFollowupChapter(input: {
   });
 
   return {
-    chapter: input.chapter,
+    chapter: { id: input.chapter.id, chapterNo: input.chapter.chapterNo },
     content: input.content,
     summary: input.summary,
     openingStrategy: input.chapterNo === 1 ? '沿用用户选择的第1章开篇策略' : '承接前章事实，控制新增设定数量',
@@ -177,7 +159,7 @@ function createFollowupChapter(input: {
   };
 }
 
-function createTrialReview(chapters: TrialFollowupChapterDraft[], flags: { hardFail: boolean; riskyRun: boolean }): TrialReviewDraft {
+function createTrialReview(chapters: TrialFollowupChapterProviderDraft[], flags: { hardFail: boolean; riskyRun: boolean }): TrialReviewDraft {
   const totalScore = Math.round(chapters.reduce((sum, item) => sum + item.scoring.totalScore, 0) / chapters.length);
   if (flags.hardFail) {
     return {
@@ -260,7 +242,7 @@ function createScoring(input: {
   };
 }
 
-function createFeatureCardDraft(chapter: NovelChapterRecord, summary: string): TrialFollowupChapterDraft['featureCard'] {
+function createFeatureCardDraft(chapter: ChapterProviderInputV1, summary: string): TrialFollowupChapterProviderDraft['featureCard'] {
   return {
     chapterId: chapter.id,
     oneLineSummary: summary,
@@ -284,7 +266,7 @@ function createReviewDraft(input: {
   hardFailed: boolean;
   hardFailureReasons: string[];
   summary: string;
-}): TrialFollowupChapterDraft['review'] {
+}): TrialFollowupChapterProviderDraft['review'] {
   const issueSeverity = input.hardFailed ? 'blocking' : input.score < 75 ? 'warning' : 'info';
 
   return {
@@ -319,7 +301,7 @@ function createReviewDraft(input: {
   };
 }
 
-function createChapterBody(novelTitle: string, chapter: NovelChapterRecord, variant: number, score: number) {
+function createChapterBody(novelTitle: string, chapter: ChapterProviderInputV1, variant: number, score: number) {
   const paragraphs = [
     `《${novelTitle}》${chapter.title}开场，会议室的灯白得刺眼。主角站在人群最前面，所有人的目光都在等她低头，前夫阵营把协议推到她面前，仿佛只要她签字，过去所有委屈就能被一句“到此为止”轻轻抹掉。`,
     `她没有立刻反驳，而是把母亲留下的旧文件夹按在掌心。系统提示只给出一行冷静建议：先确认对手最怕被公开的证据。她抬头看向主位，第一次没有躲开那些轻蔑的眼神。`,
@@ -339,7 +321,7 @@ function firstSentence(content: string) {
   return content.split(/[。！？]/)[0] ? `${content.split(/[。！？]/)[0]}。` : content.slice(0, 80);
 }
 
-function toChapterScore(chapter: TrialFollowupChapterDraft) {
+function toChapterScore(chapter: TrialFollowupChapterProviderDraft) {
   return {
     chapterNo: chapter.chapter.chapterNo,
     score: chapter.scoring.totalScore,
