@@ -22,7 +22,7 @@
 | 视频 P8-P9 | 工作台状态流与版本流程按限定范围验收 | P9c 无可播放音频，P9e 无真实 MP4/下载文件；不能称为真实视频生成闭环 |
 | P10-preflight | 已正式收口 | `creationSource` 的 shared/API/仓储/migration/admin 与浏览器链路通过 `CS-R3` 及条件项复验 |
 | P10 | `P10-R0` 已正式收口；R1 准入设计通过 | R1 准入文档已纳入当前远程分支；尚未授权，未启动业务代码 |
-| 整改计划 | RP-00A、RP-00B、RP-01A、RP-01B、RP-01C 已正式关闭；RP-02A E3 阶段完成 | 唯一总账仍关闭 9/42；RMD-TASK-001 保持 partial，下一步按依赖进入 RP-02B，全部关闭前不进入新需求 |
+| 整改计划 | RP-00A、RP-00B、RP-01A、RP-01B、RP-01C 已正式关闭；RP-02A E3 阶段完成 | 唯一总账仍关闭 9/42；RP-02B 已拆为 B1/B2/B3，需求复核通过且只批准 B1，全部关闭前不进入新需求 |
 | 测试 | 206 项低层自动化、10 项 Vue DOM、typecheck 与 RP-01A E4 浏览器基线通过 | 已纳管真实 Vue DOM/event runner 与首条 backend 浏览器 E2E；仍不能外推真实 DB/provider/media |
 | 工程质量 | `review / high` | 发现小说真实完本与全书审稿 2 个 P0；检查点已止血，包级提交防复发机制未关闭 |
 | 本地服务 | 未运行 | `5173`、`3001` 当前无监听；用户需要浏览器验收时按需启动 |
@@ -41,7 +41,7 @@
 
 - P0：Prisma 正文批量、重写、正文采用、全书审稿和完结确认未形成真实 MySQL 完整链路。
 - P0：全书审稿只接收章节元数据，没有章节正文、分层摘要或连续性记忆，当前审稿结果不可作为质量门禁。
-- P1：小说 provider-backed action 已完成 RP-02A 单进程 preclaim E3；首请求仍未快速返回 taskId，通用重试仍没有 worker 消费，真实 MySQL/多进程原子性未证明。
+- P0/P1：小说 provider-backed action 已完成 RP-02A 单进程 preclaim E3；RMD-TASK-002/003 的快速返回、worker、lease/fencing、restart/retry 仍在需求冻结，真实 MySQL/多进程原子性未证明。
 - P1：章节目录只有顺序分块，没有持久 checkpoint 和失败段续跑。
 - P1：正文目标字数、长期记忆和真实 DeepSeek 稳定性未形成质量门禁。
 
@@ -56,7 +56,7 @@
 ### 下一触发动作
 
 - 暂缓 `P10-R1`，不得按编号自动继续。
-- `RP-02A` 已完成 E3 实现、3 个 P1 返工、独立 TEST/QUALITY 和远程 clean-checkout CI；下一步按依赖推进 `RP-02B`，真实 MySQL 所属 `RP-01D` 继续等待独立授权。
+- `RP-02A` 已完成 E3 实现、3 个 P1 返工、独立 TEST/QUALITY 和远程 clean-checkout CI；`RP-02B` 已拆为 `RP-02B1/B2/B3`，三路需求复核最终 approved，当前只批准 B1；真实 MySQL 所属 `RP-01D` 继续等待独立授权。
 
 ## 3. 视频模块
 
@@ -84,7 +84,7 @@
 
 ## 4. 测试与验收
 
-- 全栈研发：`RP-02A` 实现与定向返工已推送；下一执行包为 `RP-02B`，需先完成多 agent 需求复核。
+- 全栈研发：`RP-02A` 实现与定向返工已推送；`RP-02B1` 需求已通过多 agent 复核，需求资产推送及治理 CI 成功后可派发；B2/B3 不得自动继续。
 - 独立测试/质量 agent：`TASK-PRECLAIM-01`、`TASK-CONCURRENCY-01` 的 RP-02A E3 最终均 approved，P0/P1/P2 为 0；真实 MySQL、多进程和 worker 保持 not_proven。
 - `P10-R1` 验收准备保留，但当前不是推荐开工项。
 - 五类专业复盘与二次复盘已完成；执行状态以 `docs/remediation/issue-ledger.md` 为唯一事实源。
@@ -143,7 +143,7 @@
 
 ## 7. 当前唯一推荐动作
 
-1. `RP-02A Task SSOT、原子 preclaim、幂等与冲突` 已完成 E3 阶段；下一步按依赖对 `RP-02B worker、heartbeat、restart 与真实 retry` 做多 agent 需求复核并冻结实现包。
+1. `RP-02B` 已拆为 B1/B2/B3，三路需求复核最终 approved。下一步提交并推送 `docs/modules/rp-02b-worker-recovery-implementation-package.md`，治理 CI 成功后只派发 `RP-02B1`。
 2. `RP-01D` 涉及真实 MySQL，只能在安全环境和用户独立授权后执行；管理分组不得整体派发。每个子包独立研发、测试、关闭、commit 和 push。
 3. 小说真实完本金丝雀通过后，再执行 P9-real；P10-R1 只在 `RP-10` 重新决策。
 4. 继续保持真实 DB/provider、外部媒体和平台发布的独立授权门禁。

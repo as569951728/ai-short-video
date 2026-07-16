@@ -52,7 +52,7 @@ flowchart TD
 | --- | --- | --- | --- |
 | W0 | RP-00A → RP-00B | 状态、Git、证据模板、SLA 与临时文件归因 | 冻结 |
 | W1 | RP-01A/RP-01B/RP-01D，RP-01A → RP-01C；RP-09A 至 RP-09G 按依赖启动审计 | 可重复浏览器 E2E、fixture、真实测试库入口和遗漏领域审计 | 冻结 |
-| W2 | RP-02A → RP-02B → RP-02C；RP-03A → RP-03B → RP-03C → RP-03D | 持久任务平台与小说真实数据库链 | 冻结 |
+| W2 | RP-02A → RP-02B1 → RP-02B2 → RP-02B3 → RP-02C；RP-03A → RP-03B → RP-03C → RP-03D | 持久任务平台与小说真实数据库链 | 冻结 |
 | W3 | RP-04A → RP-04B → RP-04C → RP-04D；RP-05A → RP-05B/RP-05C → RP-05D；完成后 RP-09H1 | 小说内容质量、用户交互闭环和小说/任务热点文件拆分 | 冻结 |
 | W4 | RP-06A → RP-06B → RP-06C | 真实 DeepSeek + MySQL 小规模完本 | 冻结 |
 | W5 | RP-07A → RP-07B → RP-07C → RP-07D；RP-08A → RP-08B → RP-08C → RP-08D → RP-08E → RP-08F；完成后 RP-09H2 | 视频数据库与真实音频/字幕/MP4 金丝雀 | 冻结 |
@@ -74,14 +74,16 @@ flowchart TD
 | RP-01B | Vue DOM/event 测试 | RP-00B | RMD-TEST-DOM-001 |
 | RP-01C | 失败状态 fixture factory | RP-01A | RMD-TEST-FIXTURE-001 |
 | RP-01D | 受控 MySQL 测试入口 | RP-00B | RMD-TEST-DB-001 基础设施 |
-| RP-02A | 小说 AI Task SSOT、provider 前原子 preclaim、幂等与冲突的 E3 阶段；首请求快速返回/worker 与真实 DB 并发不在本包关闭 | RP-01C | RMD-TASK-001（保持 partial/implemented_pending_verification，等待 RP-02B 与 E6） |
-| RP-02B | worker、heartbeat、restart 与真实 retry | RP-02A | RMD-TASK-002、RMD-TASK-003 |
-| RP-02C | cancel 语义、迟到结果和前端统一投影 | RP-02B | RMD-TASK-004、RMD-TASK-005 |
+| RP-02A | 小说 AI Task SSOT、provider 前原子 preclaim、幂等与冲突的 E3 阶段；首请求快速返回/worker 与真实 DB 并发不在本包关闭 | RP-01C | RMD-TASK-001（保持 partial/implemented_pending_verification，等待 RP-02B1-B3 与 E6） |
+| RP-02B1 | ExecutionEnvelope、lease/fencing 合同与仓储原语 | RP-02A | RMD-TASK-002、RMD-TASK-003（保持 open/partial） |
+| RP-02B2 | worker dispatcher、HTTP 快速返回、heartbeat、幂等 finalize、最小前端 transport 适配 | RP-02B1 | RMD-TASK-002 保持 partial；RMD-TASK-003 保持 open/partial；不得提前进入 implemented_pending_verification |
+| RP-02B3 | restart recovery、真实 retry、poison/unknown outcome 与 deterministic 故障注入 | RP-02B2 | RMD-TASK-002、RMD-TASK-003（E3 后仍等待 RP-01D E6） |
+| RP-02C | cancel 语义、迟到结果和前端统一投影 | RP-02B3 | RMD-TASK-004、RMD-TASK-005 |
 | RP-03A | 小说 migration、tenant、version/current 基础 | RP-01D | RMD-NOV-VERSION-001 |
-| RP-03B | 正文批量、重写、采用和影响案例 Prisma | RP-03A、RP-02B | RMD-NOV-DB-001 前半 |
+| RP-03B | 正文批量、重写、采用和影响案例 Prisma | RP-03A、RP-02B3 | RMD-NOV-DB-001 前半 |
 | RP-03C | 全书审稿、完结确认 Prisma | RP-03B | RMD-NOV-DB-001 后半 |
 | RP-03D | 并发、来源审计、回滚与重启 E2E | RP-03C | RMD-NOV-VERSION-001、RMD-TEST-DB-001 小说部分 |
-| RP-04A | JSON/schema repair、章节目录分段恢复 | RP-02B、RP-03B | RMD-NOV-AI-001 |
+| RP-04A | JSON/schema repair、章节目录分段恢复 | RP-02B3、RP-03B | RMD-NOV-AI-001 |
 | RP-04B | 正文 checkpoint、长期记忆和字数门禁 | RP-04A、RP-03B | RMD-NOV-BATCH-001、RMD-NOV-QUALITY-001 |
 | RP-04C | 全书审稿正文输入和质量判定 | RP-04B、RP-03C | RMD-NOV-REVIEW-001 |
 | RP-04D | 内容基准集、错误分类和安全诊断 | RP-04C | RMD-NOV-ERROR-001、RMD-TEST-CONTENT-001 |
@@ -96,11 +98,11 @@ flowchart TD
 | RP-07B | relations、tenant、current/version 并发约束 | RP-07A | RMD-VID-DB-001 |
 | RP-07C | P8-P9 artifact 真实持久化 | RP-07B | RMD-VID-DB-001 |
 | RP-07D | 回滚、并发、重启 E2E | RP-07C | RMD-TEST-DB-001 视频部分 |
-| RP-08A | narration provider 和版本来源 | RP-02B、RP-07C | RMD-VID-NARRATION-001 |
+| RP-08A | narration provider 和版本来源 | RP-02B3、RP-07C | RMD-VID-NARRATION-001 |
 | RP-08B | TTS provider、音频存储和播放 | RP-08A | RMD-VID-AUDIO-001 |
 | RP-08C | 时间戳字幕与 SRT/VTT | RP-08B | RMD-VID-SUB-001 |
 | RP-08D | render、media storage、MP4、文件服务和下载 | RP-08C | RMD-VID-MEDIA-001 |
-| RP-08E | VideoTask worker、取消、重试和重启 | RP-02B、RP-08D | RMD-VID-TASK-001 |
+| RP-08E | VideoTask worker、取消、重试和重启 | RP-02B3、RP-08D | RMD-VID-TASK-001 |
 | RP-08F | 从小说引用到 MP4 的浏览器媒体 E2E 与能力标签 | RP-08E、RP-01A | RMD-VID-CAPABILITY-001、RMD-VID-MEDIA-001、视频 PB 最终 E7 |
 | RP-09A | 权限与租户只读审计 | RP-00A | RMD-AUD-SEC-001 |
 | RP-09B | 部署与回滚只读审计 | RP-01A | RMD-AUD-OPS-001 |
@@ -172,7 +174,7 @@ Owner：TEST 主责，DEV 配合，QUALITY 审核环境安全。
 
 Owner：DEV；TEST 独立并发/重启验收；PRODUCT 验证动作语义。
 
-子包关闭覆盖：RMD-TASK-001 至 RMD-TASK-005；以 RP-02A、RP-02B、RP-02C 和 ledger 映射为准。
+子包关闭覆盖：RMD-TASK-001 至 RMD-TASK-005；以 RP-02A、RP-02B1-B3、RP-02C 和 ledger 映射为准。
 
 ### RP-03 管理分组：小说 Prisma 完整链路（不可派发）
 

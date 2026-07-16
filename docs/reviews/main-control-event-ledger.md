@@ -637,3 +637,35 @@ evidence: docs/reviews/remediation-rmd-task-001-rp-02a-verification-2026-07-13.m
 mc_decision: RP-02A package completed；RMD-TASK-001 保持 partial；总账关闭数保持 9/42；允许按依赖进入 RP-02B。
 next_action: 对 RP-02B worker、heartbeat、restart 与真实 retry 先做多 agent 需求复核，再冻结实现包。
 ```
+
+### MCE-20260713-RP02B-REQUIREMENT-REVIEW
+
+```text
+event_id: MCE-20260713-RP02B-REQUIREMENT-REVIEW
+occurred_at: 2026-07-13 08:20:00 CST
+event_type: requirement_review
+source_thread: 019f58ce-a630-7b40-b8f4-f6372a4b5a78, 019f58cf-4481-7341-bd16-3860dded830a, 019f58cf-e2a9-7901-bdda-66231ad8eee9
+package_id: RP-02B
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TASK-WORKER-01, TASK-RESTART-01, TASK-RETRY-01
+summary: 后端架构、TEST、QUALITY 三路只读评审均判定现有口径 needs_revision；共同缺口为可序列化执行输入、lease owner/expiry/fencing、原子 retry lineage、stale 双门禁、provider unknown outcome 和前端快速返回适配。
+evidence: three agent reports; no real DB/provider execution; clean worktree baseline 712f7ea
+mc_decision: 禁止直接派发原 RP-02B 大包；拆分 RP-02B1/B2/B3，并重写实现包、验收矩阵和整改计划。
+next_action: 对修订后的需求资产做多 agent 复核，P0/P1 清零后只派发 RP-02B1。
+```
+
+### MCE-20260713-RP02B-REQUIREMENT-APPROVED
+
+```text
+event_id: MCE-20260713-RP02B-REQUIREMENT-APPROVED
+occurred_at: 2026-07-13 08:40:00 CST
+event_type: requirement_review
+source_thread: 019f58ce-a630-7b40-b8f4-f6372a4b5a78, 019f58cf-4481-7341-bd16-3860dded830a, 019f58cf-e2a9-7901-bdda-66231ad8eee9
+package_id: RP-02B1
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TASK-PRECLAIM-01, TASK-WORKER-01, TASK-RESTART-01, TASK-RETRY-01
+summary: 三轮只读复核关闭 ExecutionEnvelope、lease/fencing/recovery CAS、dispatch checkpoint、stale 双门禁、atomic retry、root lineage 预算、capability 双门禁和 E3/E6 口径缺口；三名评审最终均 approved，P0/P1 为 0。
+evidence: docs/modules/rp-02b-worker-recovery-implementation-package.md; agents 019f58ce-a630-7b40-b8f4-f6372a4b5a78, 019f58cf-4481-7341-bd16-3860dded830a, 019f58cf-e2a9-7901-bdda-66231ad8eee9
+mc_decision: requirements approved_for_implementation，仅允许派发 RP-02B1；RP-02B2/B3 和真实 DB/provider 未授权。
+next_action: 提交并推送需求资产，治理 CI 成功后派发 RP-02B1。
+```

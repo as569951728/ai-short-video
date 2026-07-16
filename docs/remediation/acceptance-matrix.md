@@ -75,11 +75,11 @@ conclusion: approved | needs_revision | blocked
 
 | 验收 ID | 核心操作与断言 | 最低证据 | 阻塞条件 |
 | --- | --- | --- | --- |
-| TASK-PRECLAIM-01 | 分阶段验收：RP-02A 证明 provider 前原子创建/复用 processing task、处理中可查询且副请求复用同一 taskId；RP-02B 再证明首请求快速返回 taskId、worker 执行 `queued→processing→terminal` | RP-02A E3 + RP-02B E3/E6 | provider 先调用、失败后才建任务；或在 RP-02A 用 fire-and-forget 伪装 worker/快速返回 |
-| TASK-CONCURRENCY-01 | 分阶段验收：RP-02A 在单进程 deterministic repository 下验证 10 个同租户/同键/同指纹请求只触发一次 provider，同键异指纹和同域异键冲突、跨租户隔离；真实 MySQL/多进程原子性待 RP-01D/RP-02B 补 E6 | RP-02A E3 + 最终 E6 | 重复调用、多个候选、跨租户复用；或用 in-memory 结果宣称真实数据库并发已证明 |
-| TASK-WORKER-01 | HTTP 返回后 worker 执行；状态 queued→processing→terminal | E3 | 请求线程内长期 await、无消费者 |
-| TASK-RESTART-01 | processing 时重启 API/worker；任务恢复或明确失败并可重试 | E3/E6 | 永久 processing、状态丢失 |
-| TASK-RETRY-01 | failed 任务重试后真实执行并完成/再次失败，关联原任务 | E3 | 只新增 queued 记录 |
+| TASK-PRECLAIM-01 | 分阶段验收：RP-02A 证明 provider 前原子创建/复用 processing task；RP-02B1/B2 再证明安全 ExecutionEnvelope、首请求 `202 + queued`、worker 执行 `queued→processing→terminal`，前端不得误报已完成 | RP-02A E3 + RP-02B1/B2 E3 + 最终 E6 | provider 先调用、失败后才建任务；fire-and-forget；202 后前端显示已生成 |
+| TASK-CONCURRENCY-01 | 分阶段验收：RP-02A 在单进程 deterministic repository 下验证同键/冲突/租户隔离；RP-02B1-B3 再补 lease/fencing/retry deterministic 竞争；真实 MySQL/多进程原子性待 RP-01D E6 | RP-02A/RP-02B E3 + 最终 E6 | 重复 provider、多个候选/child、跨租户复用；用 in-memory 宣称真实数据库并发 |
+| TASK-WORKER-01 | Paused worker 下 POST 必须在 provider call=0 时返回 `202 + taskId + queued`；tick 后唯一 processing；所有写入要求未过期 lease fencing；provider 前和 finalize 内 stale 均 `failed/SOURCE_STALE` 且零错误资产；Prisma 不支持 action 必须 task/provider/asset=0；RP-02B2 同步最小前端 transport 适配 | E3；真实 HTTP latency、DB task/event 事务和独立 worker 进程留 E6 | HTTP await provider；fire-and-forget；过期 owner 可写；unsupported 先排队；前端误报已生成 |
+| TASK-RESTART-01 | ManualClock + worker A/B：heartbeat 阻止接管；recovery 用 observed lease CAS；续租与 recovery 竞态不得误失败；过期 owner 在 scan 前也不能 heartbeat/finalize；dispatch checkpoint 区分 lease expired 与 provider outcome unknown | E3 模拟恢复 + E6 真实 MySQL/进程 kill/restart | 无 authoritative time/owner/token/expiry；旧 scan 误杀续租任务；依赖内存闭包；盲目重放 provider |
+| TASK-RETRY-01 | retry 身份为 tenant+parent+token；事务内完成幂等、预算/stale、active claim、child/event/log；fresh/retry 竞争只有一个 active；root lineage 持久累计调用/时长/成本；worker 真实消费 child 并成功或再次失败 | E3；真实 MySQL 并发、事务回滚和跨进程消费留 E6 | 只新增 queued；child 重置预算；原任务被覆盖；多个 active child；unknown/poison 自动重试 |
 | TASK-CANCEL-01 | 区分停止本页等待、取消任务、放弃结果、重新生成；迟到结果不成为 current | E4/E6 | 文案和后端状态不一致 |
 | TASK-SURFACE-01 | 主卡片、最近任务、抽屉、路由和刷新后任务 ID/状态一致 | E4 | 任一表面显示旧状态 |
 
