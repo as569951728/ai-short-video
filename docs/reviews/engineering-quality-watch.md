@@ -19,6 +19,8 @@
 
 ## 最新巡检摘要
 
+2026-07-15 RP-02B2a1 最终质量同步：早期 `0a583c8` 虽有远端绿灯，但最终独立 QUALITY 以两个 P1 拒绝：package resolver 可丢失 damaged package 的累计范围，RP02A AST 可被 `if(0)`、`this` alias、解构赋值和动态 computed 绕过。修复链 `072b9be -> f342297 -> 4817abc` 已关闭上述缺口；accepted head `4817abc67cf916772b317aff027403b97ab4df76`、tree `ad3d36c`。最终 TEST/QUALITY/clean-checkout 均 `APPROVED`，复合链 192/192、API 119/119、RP-01C 13/13、根 RP02A 11/11、14/14 负向变异拒绝、P1/P2=0/0。固定基线门禁为单一 `501a3cf..4817abc`，18 files / 1,898 net additions；workflow `required_files=35`。同 SHA 治理 `29405557756`、RP-01A `29405557734`、RP-01B `29405557763`、RP-01C `29405557764` 均 `completed/success`。结论只覆盖 E3 registry/ABI/public retry freeze，不证明 B2a2 authority claim、worker lifecycle、真实 retry child、真实 DB/provider/media 或 E6；`RMD-TASK-002=partial`、`RMD-TASK-003=open`、总览 9/42 不变。
+
 2026-07-11 P9e-L2 admin build budget 与 warning 治理：在 P9a-P9e mock/local 已验收且 P10/真实 provider/真实 DB 冻结的边界内，记录 admin build baseline 并补可执行门禁。改动前 baseline 为 entry `index-BGBIKWkJ.js` 1,208.09 kB / gzip 378.61 kB，已拆分视频列表和视频详情；改动后将小说列表、创建向导、小说详情、章节详情同样改为 Vue Router 动态导入，entry 降至约 1,000.89 kB / gzip 324.27 kB，新增 route chunks 包括 `NovelDetailWorkbench` 96.60 kB、`novelService` 47.28 kB、`ChapterDetailWorkbench` 12.62 kB、`NovelList` 9.86 kB、`NovelCreateWizard` 7.46 kB。新增 `npm run build:budget -w apps/admin-web`，门禁会重新执行 build、检查 entry <= 1.10 MB、route chunk <= 200 kB，并只精确允许 `@vueuse/core/dist/index.js` 的 Rolldown `INVALID_ANNOTATION` 指纹 `3362:1` 和 `5780:23`；Vite 大 chunk 提示只能在 chunk budget 通过时作为已知受控提示存在，新增未知 warning 必须非零退出。该白名单是临时治理债，不代表永久忽略，也没有通过调高 `chunkSizeWarningLimit` 掩盖。
 
 2026-07-11 12:56 一次性工程质量刷新：`status=watch`，`engineering_debt_level=medium`。本轮以当前代码和 docs 静态核对主控最新状态：小说 `body_batch_generate` 预占、同幂等复用、冲突拦截、Prisma 前置阻断和 `save_failed` 固定 API 回归已有代码/测试/验收记录支撑，小说验收会话中的旧 P1 结论已失效，不再重复派发。P9a-P9e mock/local、P9e-L1 可访问性与视频路由懒加载、P1 工作树归因治理、P9 内容暴露与脱敏合同补强均按最新收口口径处理；工作树仍 dirty/untracked，但这是“尚未纳入版本管理”的持续治理背景，不再等同于未归因 P1。静态抽查未发现 P9 metadata/provider/task 摘要 sanitizer 的 P0/P1 明显出口漏网，`narration_script.contentText` 和 `subtitle.contentText` 保留为用户可编辑业务资产。当前最高价值、无需 P10/真实 DB/provider 的下一小包建议调整为 P9e 构建 warning 与 chunk budget 治理：只做基线、预算、warning 分类和低风险路由级拆分评估，不做侵入式依赖升级或大范围 manualChunks 拆分。
@@ -1494,3 +1496,12 @@
 - 影响：归因风险从 P1 降为持续治理背景；后续提交/检查点仍需保护用户改动，禁止 reset、checkout、clean、stash。
 - 建议动作：后续由主控按业务包或检查点策略纳入版本管理；治理会话不再把“已归因但未提交”重复升级为 P1。
 - 建议归属：主控 / 研发 / 工程质量治理。
+
+## 2026-07-15 RP-02B2a1 阶段质量结论
+
+- 结论：限定范围 `passed`；QUALITY `APPROVED`，P0/P1/P2=0/0/0。
+- 正式证据：`0a583c8` 的初始远端绿灯已被最终独立 QUALITY 否决并 supersede；accepted head `4817abc` 的 TEST/QUALITY/clean-checkout 均通过，复合链 192/192、API 119/119、RP-01C 13/13、根 RP02A 11/11、14/14 负向变异拒绝；typecheck、build、Prisma generate/validate、diff check 通过。
+- Git/治理：固定基线 `501a3cf..4817abc` 的单一累计 package gate 为 18 files / 1,898 net additions；workflow contract `required_files=35`。accepted head 的四路远程 runs `29405557756`、`29405557734`、`29405557763`、`29405557764` 均成功。
+- 通过范围：15-action registry、strict provider ABI、真实同步调用点精确覆盖、unknown action 安全失败、同步 HTTP 200 保持、provider-backed public retry freeze。
+- 未证明：B2a2-B2a5、leased execution、worker loop/heartbeat/shutdown、HTTP 202/Admin transport、真实 retry child、restart/unknown outcome、真实 MySQL/provider/media/E6。
+- 治理判断：该阶段证据不增加问题关闭数；`RMD-TASK-002` 保持 `partial`，`RMD-TASK-003` 保持 `open`，总览保持 9/42。后续包必须独立授权、独立实现、独立验收和独立 Git/CI 证据。
