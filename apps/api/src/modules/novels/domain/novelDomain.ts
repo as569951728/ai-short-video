@@ -19,7 +19,8 @@ import {
   type StructureAssetContentDTO,
   type StructureAssetType,
   type CreateNovelDraftRequest,
-  type NovelCreationSourceType
+  type NovelCreationSourceType,
+  type ExecutionEnvelopeV1
 } from '@ai-shortvideo/shared';
 
 export const DEFAULT_TENANT_ID = 'tenant_default';
@@ -505,6 +506,8 @@ export interface GenerationTaskRecord {
   idempotencyToken: string | null;
   requestHash: string | null;
   activeClaimKey: string | null;
+  policyProfileVersionId?: string | null;
+  modelRoutingVersion?: string | null;
   inputSummary: string | null;
   outputSummary: string | null;
   resultVersionIds: string[];
@@ -523,7 +526,26 @@ export interface GenerationTaskRecord {
   createdAt: Date;
   updatedAt: Date;
   metadata: unknown;
+  leaseOwnerId?: string | null;
+  leaseToken?: string | null;
+  leaseExpiresAt?: Date | null;
+  lastHeartbeatAt?: Date | null;
+  retryCount?: number;
+  maxRetries?: number;
+  executionEnvelopeJson?: ExecutionEnvelopeV1 | null;
+  providerAttemptId?: string | null;
+  providerAttemptPhase?: ProviderAttemptPhase | null;
+  providerDispatchedAt?: Date | null;
+  resultReceiptHash?: string | null;
+  rootTaskId?: string;
+  providerCallBudgetMax?: number;
+  providerCallBudgetUsed?: number;
+  durationDeadlineAt?: Date;
+  costBudgetMicrosMax?: bigint | number;
+  costBudgetMicrosUsed?: bigint | number;
 }
+
+export type ProviderAttemptPhase = 'leased' | 'prepared' | 'provider_call_started' | 'provider_result_validated' | 'finalizing';
 
 export interface ClaimGenerationTaskInput {
   tenantId: string;
@@ -537,6 +559,9 @@ export interface ClaimGenerationTaskInput {
   idempotencyToken: string;
   requestHash: string;
   sourceVersionRefs: unknown;
+  executionEnvelopeJson: ExecutionEnvelopeV1;
+  policyProfileVersionId: string | null;
+  modelRoutingVersion: string;
   inputSummary: string;
   context: RequestContext;
   now: Date;
@@ -547,6 +572,46 @@ export type ClaimGenerationTaskResult =
   | { outcome: 'reused'; task: GenerationTaskRecord }
   | { outcome: 'idempotency_conflict'; task: GenerationTaskRecord }
   | { outcome: 'active_conflict'; task: GenerationTaskRecord };
+
+export interface ObservedTaskLease {
+  tenantId: string;
+  taskId: string;
+  leaseOwnerId: string;
+  leaseToken: string;
+  leaseExpiresAt: Date;
+}
+
+export interface SafeResultReceiptV1 {
+  schemaVersion: 1;
+  taskId: string;
+  attemptId: string;
+  status: 'waiting_confirmation' | 'completed';
+  outcome: 'candidate_created' | 'review_created' | 'completed';
+  resultObjectType: string | null;
+  resultObjectId: string | null;
+  resultVersionIds: string[];
+  safeSummary: { schemaVersion: 1; resultCount: number };
+}
+
+export interface HashedSafeResultReceipt {
+  receipt: SafeResultReceiptV1;
+  hash: string;
+}
+
+export interface LeasedTaskFailure {
+  failureCategory: string;
+  errorCode: string;
+  errorMessage: string;
+  statusNote: string;
+}
+
+export type LeasedTaskMutationResult =
+  | { outcome: 'applied'; task: GenerationTaskRecord }
+  | { outcome: 'fenced'; task: null };
+
+export type RecoverExpiredTaskResult =
+  | { outcome: 'recovered'; task: GenerationTaskRecord }
+  | { outcome: 'not_recovered'; task: null };
 
 export interface GenerationTaskEventRecord {
   id: string;
@@ -1162,6 +1227,11 @@ export interface NovelRepository {
   listRecentTasksForNovel(tenantId: string, novelId: string, limit: number): Promise<GenerationTaskRecord[]>;
   assertProviderActionSupported(taskType: string): Promise<void>;
   claimGenerationTask(input: ClaimGenerationTaskInput): Promise<ClaimGenerationTaskResult>;
+  leaseNextQueuedTask(workerId: string, leaseToken: string, now: Date, leaseUntil: Date): Promise<GenerationTaskRecord | null>;
+  heartbeatTask(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, now: Date, leaseUntil: Date): Promise<boolean>;
+  finalizeLeasedTask(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, authoritativeNow: Date, result: HashedSafeResultReceipt): Promise<LeasedTaskMutationResult>;
+  failLeasedTask(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, authoritativeNow: Date, failure: LeasedTaskFailure): Promise<LeasedTaskMutationResult>;
+  recoverExpiredTask(observedTaskLease: ObservedTaskLease, authoritativeNow: Date): Promise<RecoverExpiredTaskResult>;
   findActiveTaskByConflict(tenantId: string, conflictScope: string, conflictKey: string): Promise<GenerationTaskRecord | null>;
   createDirectionCandidates(input: DirectionCreationInput): Promise<CreatedDirectionCandidatesRecord>;
   createDirectionRevision(input: DirectionRevisionInput): Promise<CreatedDirectionRevisionRecord>;

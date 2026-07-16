@@ -1,6 +1,6 @@
-import { createHash } from 'node:crypto';
-import { ErrorCode } from '@ai-shortvideo/shared';
+import { ErrorCode, NOVEL_PROVIDER_ACTIONS, type NovelProviderAction } from '@ai-shortvideo/shared';
 import { BusinessError } from '../../../shared/errors.js';
+import { createExecutionEnvelope, hashCanonicalJson, WorkerPayloadUnsupportedError } from '../domain/executionContract.js';
 import type {
   GenerationTaskRecord,
   NovelRecord,
@@ -8,25 +8,8 @@ import type {
   RequestContext
 } from '../domain/novelDomain.js';
 
-export const NOVEL_PROVIDER_ACTIONS = [
-  'direction_generate',
-  'direction_fuse',
-  'direction_optimize',
-  'setting_generate',
-  'outline_generate',
-  'stage_outline_generate',
-  'chapter_plan_generate',
-  'trial_chapter_one_generate',
-  'trial_followup_generate',
-  'body_batch_generate',
-  'chapter_body_generate',
-  'chapter_rewrite',
-  'chapter_impact_assess',
-  'chapter_adopt_impact_assess',
-  'novel_full_review'
-] as const;
-
-export type NovelProviderAction = (typeof NOVEL_PROVIDER_ACTIONS)[number];
+export { NOVEL_PROVIDER_ACTIONS, hashCanonicalJson };
+export type { NovelProviderAction };
 
 interface ClaimSpec {
   taskType: string;
@@ -82,21 +65,42 @@ export async function executeClaimedGeneration<TProviderResult, TFinalResult>(
     getModelRoutingVersion?: (action: NovelProviderAction) => string;
     constructor?: { name?: string };
   } | undefined;
-  await providerCapability?.assertAvailable?.();
-  await input.repository.assertProviderActionSupported(spec.taskType);
   const objectId = input.objectId ?? input.novel.id;
   const idempotencyToken = resolveIdempotencyToken(input.idempotencyKey, input.context.requestId);
-  const requestHash = hashCanonicalJson({
-    taskType: spec.taskType,
-    novelId: input.novel.id,
-    objectType: spec.objectType,
-    objectId,
-    effectiveRequest: input.effectiveRequest,
-    sourceVersionRefs: input.sourceVersionRefs,
-    policyProfileVersionId: input.novel.policyProfileVersionId,
-    modelRoutingVersion: providerCapability?.getModelRoutingVersion?.(input.action)
-      ?? `provider:${providerCapability?.constructor?.name || 'default'}:v1`
-  });
+  const existingIdempotentTask = await input.repository.findTaskByIdempotencyToken(
+    input.context.tenantId,
+    spec.taskType,
+    idempotencyToken
+  );
+  const modelRoutingVersion = providerCapability?.getModelRoutingVersion?.(input.action)
+    ?? `provider:${providerCapability?.constructor?.name || 'default'}:v1`;
+  const normalizedSourceVersionRefs = normalizeClaimSourceRefs(input.action, input.sourceVersionRefs);
+  let executionEnvelopeJson;
+  try {
+    executionEnvelopeJson = createExecutionEnvelope({
+      action: input.action,
+      objectType: spec.objectType,
+      objectId,
+      effectiveRequest: normalizeClaimEffectiveRequest(input.action, objectId, input.effectiveRequest, normalizedSourceVersionRefs, input.novel.policyProfileVersionId),
+      sourceVersionRefs: normalizedSourceVersionRefs,
+      policyProfileVersionId: input.novel.policyProfileVersionId,
+      modelRoutingVersion
+    });
+  } catch (error) {
+    if (!(error instanceof WorkerPayloadUnsupportedError)) throw error;
+    if (existingIdempotentTask) {
+      throw taskConflict(ErrorCode.IdempotencyConflict, '同一个幂等键已绑定到不同请求。', existingIdempotentTask);
+    }
+    throw new BusinessError(ErrorCode.GateBlocked, '生成上下文缺少必需的权威版本引用，请刷新后重试。', {
+      action: input.action,
+      contractError: error.message
+    });
+  }
+  const requestHash = hashCanonicalJson(executionEnvelopeJson);
+  if (!existingIdempotentTask) {
+    await providerCapability?.assertAvailable?.();
+    await input.repository.assertProviderActionSupported(spec.taskType);
+  }
   const conflictKey = spec.conflictScope === 'chapter' ? objectId : input.novel.id;
   const claim = await input.repository.claimGenerationTask({
     tenantId: input.context.tenantId,
@@ -109,7 +113,10 @@ export async function executeClaimedGeneration<TProviderResult, TFinalResult>(
     activeClaimKey: hashCanonicalJson({ conflictScope: spec.conflictScope, conflictKey }),
     idempotencyToken,
     requestHash,
-    sourceVersionRefs: input.sourceVersionRefs,
+    sourceVersionRefs: normalizedSourceVersionRefs,
+    executionEnvelopeJson,
+    policyProfileVersionId: input.novel.policyProfileVersionId,
+    modelRoutingVersion,
     inputSummary: spec.inputSummary,
     context: input.context,
     now: input.now()
@@ -171,10 +178,6 @@ export function resolveRequestIdempotencyKey(headerValue: unknown, bodyValue: un
   return header ?? body;
 }
 
-export function hashCanonicalJson(value: unknown): string {
-  return createHash('sha256').update(canonicalJson(value)).digest('hex');
-}
-
 function resolveIdempotencyToken(value: string | null | undefined, requestId: string): string {
   const normalized = normalizeOptionalKey(value);
   return normalized ?? `request:${requestId}`.slice(0, 120);
@@ -191,18 +194,73 @@ function normalizeOptionalKey(value: unknown): string | undefined {
   return normalized;
 }
 
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
-  if (value && typeof value === 'object') {
-    const record = value as Record<string, unknown>;
-    return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`;
-  }
-  const encoded = JSON.stringify(value);
-  return encoded === undefined ? 'null' : encoded;
-}
-
 function taskSpec(taskType: string, objectType: string, conflictScope: string, inputSummary: string): ClaimSpec {
   return { taskType, objectType, conflictScope, inputSummary };
+}
+
+function normalizeClaimEffectiveRequest(action: NovelProviderAction, objectId: string, effectiveRequest: unknown, sourceVersionRefs: unknown, policyProfileVersionId: string | null) {
+  const request = toRecord(effectiveRequest);
+  const refs = toRecord(sourceVersionRefs);
+  switch (action) {
+    case 'direction_generate': return compact({ regenerateReason: request.regenerateReason });
+    case 'direction_fuse': return compact({ versionIds: request.versionIds ?? refs.sourceVersionIds, reason: request.reason });
+    case 'direction_optimize': return compact({ versionId: request.versionId ?? objectId, instruction: request.instruction });
+    case 'setting_generate': return { currentDirectionVersionId: refs.currentDirectionVersionId };
+    case 'outline_generate': return { currentDirectionVersionId: refs.currentDirectionVersionId, currentSettingVersionId: refs.currentSettingVersionId };
+    case 'stage_outline_generate': return { currentOutlineVersionId: refs.currentOutlineVersionId };
+    case 'chapter_plan_generate': return { currentOutlineVersionId: refs.currentOutlineVersionId, currentStageOutlineVersionId: refs.currentStageOutlineVersionId };
+    case 'trial_chapter_one_generate': return { chapterPlanVersionId: refs.currentChapterPlanVersionId, chapterCount: request.chapterCount ?? 3 };
+    case 'trial_followup_generate': return { selectedCandidateVersionId: request.selectedCandidateId ?? refs.selectedChapterOneCandidateId, chapterPlanVersionId: refs.currentChapterPlanVersionId };
+    case 'body_batch_generate': {
+      const startChapter = typeof request.startChapterNo === 'number' ? request.startChapterNo : 1;
+      const endChapter = typeof request.endChapterNo === 'number' ? request.endChapterNo : startChapter;
+      return { startChapter, endChapter, batchSize: endChapter - startChapter + 1, strategySnapshotId: refs.strategySnapshotId };
+    }
+    case 'chapter_body_generate': return { chapterId: objectId, strategySnapshotId: refs.strategySnapshotId };
+    case 'chapter_rewrite': return { chapterId: objectId, currentContentVersionId: request.currentContentVersionId ?? refs.currentContentVersionId, instruction: request.instruction || request.reason || '基于审稿建议优化本章' };
+    case 'chapter_impact_assess': return compact({ chapterId: objectId, currentContentVersionId: request.currentContentVersionId ?? refs.currentContentVersionId, instruction: request.reason });
+    case 'chapter_adopt_impact_assess': return { chapterId: objectId, candidateVersionId: refs.candidateVersionId, currentContentVersionId: request.currentContentVersionId ?? refs.currentContentVersionId, reason: request.reason || '采用候选前影响评估' };
+    case 'novel_full_review': return { policyProfileVersionId: request.reviewPolicyVersionId ?? policyProfileVersionId };
+  }
+}
+
+function normalizeClaimSourceRefs(action: NovelProviderAction, value: unknown) {
+  const refs = toRecord(value);
+  const structure = {
+    currentDirectionVersionId: refs.currentDirectionVersionId,
+    currentSettingVersionId: refs.currentSettingVersionId,
+    currentOutlineVersionId: refs.currentOutlineVersionId,
+    currentStageOutlineVersionId: refs.currentStageOutlineVersionId
+  };
+  if (action === 'direction_generate') return { currentDirectionVersionId: refs.currentDirectionVersionId };
+  if (action === 'direction_fuse' || action === 'direction_optimize') return { sourceVersionIds: refs.sourceVersionIds };
+  if (action === 'setting_generate' || action === 'outline_generate' || action === 'stage_outline_generate' || action === 'chapter_plan_generate') {
+    return { ...structure, objectType: action.replace('_generate', '') };
+  }
+  if (action === 'trial_chapter_one_generate' || action === 'trial_followup_generate') {
+    return { ...structure, currentChapterPlanVersionId: refs.currentChapterPlanVersionId, objectType: 'trial_run',
+      ...(action === 'trial_followup_generate' ? { selectedChapterOneCandidateId: refs.selectedChapterOneCandidateId } : {}) };
+  }
+  if (action === 'body_batch_generate' || action === 'chapter_body_generate') {
+    return { ...structure, currentChapterPlanVersionId: refs.currentChapterPlanVersionId, trialRunId: refs.trialRunId,
+      selectedChapterOneCandidateId: refs.selectedChapterOneCandidateId, strategySnapshotId: refs.strategySnapshotId,
+      strategySnapshotVersion: refs.strategySnapshotVersion, creationStage: 'body' };
+  }
+  if (action === 'chapter_rewrite' || action === 'chapter_impact_assess' || action === 'chapter_adopt_impact_assess') {
+    return { currentContentVersionId: refs.currentContentVersionId, ...(action === 'chapter_adopt_impact_assess' ? { candidateVersionId: refs.candidateVersionId } : {}) };
+  }
+  if (action === 'novel_full_review') return { ...structure,
+    currentChapterPlanVersionId: refs.currentChapterPlanVersionId,
+    chapterContentVersionIds: refs.chapterContentVersionIds };
+  return refs;
+}
+
+function toRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function compact(value: Record<string, unknown>) {
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined && item !== null && item !== ''));
 }
 
 function taskConflict(code: ErrorCode, message: string, task: GenerationTaskRecord) {

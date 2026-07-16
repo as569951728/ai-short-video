@@ -191,14 +191,15 @@ describe('RP-02A generation task SSOT and provider preclaim', () => {
           return baseRepository.claimGenerationTask(input);
         }
       });
+      const contract = claimContractFor(action);
       const result = await executeClaimedGeneration({
         action,
         repository,
         novel: created.novel,
         objectId: action.includes('chapter') ? 'chapter-guard' : undefined,
         idempotencyKey: `guard-${action}`.slice(0, 120),
-        effectiveRequest: { action },
-        sourceVersionRefs: { version: 1 },
+        effectiveRequest: action === 'novel_full_review' ? { reviewPolicyVersionId: created.novel.policyProfileVersionId } : contract.effectiveRequest,
+        sourceVersionRefs: contract.sourceVersionRefs,
         context,
         now: () => new Date(),
         provider: async () => {
@@ -290,6 +291,22 @@ describe('RP-02A generation task SSOT and provider preclaim', () => {
     assert.match(migration, /Each DDL is conditional/);
   });
 });
+
+function claimContractFor(action: (typeof NOVEL_PROVIDER_ACTIONS)[number]) {
+  const structure = { currentDirectionVersionId: 'direction-v1', currentSettingVersionId: 'setting-v1', currentOutlineVersionId: 'outline-v1', currentStageOutlineVersionId: 'stage-v1' };
+  const body = { ...structure, currentChapterPlanVersionId: 'plan-v1', trialRunId: 'trial-v1', selectedChapterOneCandidateId: 'candidate-v1', strategySnapshotId: 'strategy-v1', strategySnapshotVersion: 1, creationStage: 'body' };
+  const contracts: Record<(typeof NOVEL_PROVIDER_ACTIONS)[number], { effectiveRequest: unknown; sourceVersionRefs: unknown }> = {
+    direction_generate: { effectiveRequest: {}, sourceVersionRefs: { currentDirectionVersionId: null } }, direction_fuse: { effectiveRequest: { versionIds: ['direction-v1', 'direction-v2'] }, sourceVersionRefs: { sourceVersionIds: ['direction-v1', 'direction-v2'] } },
+    direction_optimize: { effectiveRequest: { versionId: 'direction-v1' }, sourceVersionRefs: { sourceVersionIds: ['direction-v1'] } }, setting_generate: { effectiveRequest: {}, sourceVersionRefs: { ...structure, objectType: 'setting' } },
+    outline_generate: { effectiveRequest: {}, sourceVersionRefs: { ...structure, objectType: 'outline' } }, stage_outline_generate: { effectiveRequest: {}, sourceVersionRefs: { ...structure, objectType: 'stage_outline' } },
+    chapter_plan_generate: { effectiveRequest: {}, sourceVersionRefs: { ...structure, objectType: 'chapter_plan' } }, trial_chapter_one_generate: { effectiveRequest: { chapterCount: 3 }, sourceVersionRefs: { ...structure, currentChapterPlanVersionId: 'plan-v1', objectType: 'trial_run' } },
+    trial_followup_generate: { effectiveRequest: { selectedCandidateId: 'candidate-v1' }, sourceVersionRefs: { ...structure, currentChapterPlanVersionId: 'plan-v1', selectedChapterOneCandidateId: 'candidate-v1', objectType: 'trial_run' } }, body_batch_generate: { effectiveRequest: { startChapterNo: 1, endChapterNo: 2 }, sourceVersionRefs: body },
+    chapter_body_generate: { effectiveRequest: {}, sourceVersionRefs: body }, chapter_rewrite: { effectiveRequest: { currentContentVersionId: 'content-v1', instruction: 'rewrite' }, sourceVersionRefs: { currentContentVersionId: 'content-v1' } },
+    chapter_impact_assess: { effectiveRequest: { currentContentVersionId: 'content-v1' }, sourceVersionRefs: { currentContentVersionId: 'content-v1' } }, chapter_adopt_impact_assess: { effectiveRequest: { currentContentVersionId: 'content-v1', candidateVersionId: 'candidate-v1', reason: 'adopt' }, sourceVersionRefs: { currentContentVersionId: 'content-v1', candidateVersionId: 'candidate-v1' } },
+    novel_full_review: { effectiveRequest: { reviewPolicyVersionId: 'policy-v1' }, sourceVersionRefs: { ...structure, currentChapterPlanVersionId: 'plan-v1', chapterContentVersionIds: [{ chapterId: 'chapter-v1', chapterNo: 1, currentContentVersionId: 'content-v1', currentFeatureCardVersionId: null, currentReviewReportId: null }] } }
+  };
+  return contracts[action];
+}
 
 class CountingDirectionProvider implements DirectionProvider {
   readonly delegate = new MockDirectionProvider();
