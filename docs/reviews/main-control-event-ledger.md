@@ -17,7 +17,7 @@
 ```text
 event_id:
 occurred_at:
-event_type: dispatch | dev_result | test_result | product_review | quality_review | mc_decision | status_update | regression
+event_type: <稳定 snake_case 事件令牌；可使用 dispatch、dev_result、test_result、product_review、quality_review、mc_decision、status_update、regression 或更具体的受控事件名>
 source_thread:
 package_id:
 issue_ids:
@@ -1211,4 +1211,160 @@ summary: 在拒绝 0a583c8 后，以 072b9be 修复累计 package gate、f342297
 evidence: accepted_head 4817abc67cf916772b317aff027403b97ab4df76; tree ad3d36cb128989080289b5842a115d3d92776314; composite 192/192; RP-01C 13/13; API 119/119; root RP02A 11/11; AST mutations 14/14 rejected; fixed gate 501a3cf..4817abc = 18 files/1898 net; workflow required_files=35; governance 29405557756; RP-01A 29405557734; RP-01B 29405557763; RP-01C 29405557764
 mc_decision: RP-02B2a1 仅在 registry/strict ABI/public retry freeze 的 E3 范围阶段通过。RMD-TASK-002 保持 partial、RMD-TASK-003 保持 open、总览 9/42 不变；不证明真实 DB/provider/media/E6。
 next_action: 发布治理证据提交；B2a2-B2a5/B2b/B2c/B3 仍需单独 MC 裁决，不因本事件自动授权。
+```
+
+### MCE-20260715-RP02B2A1-EVIDENCE-PUBLISHED
+
+```text
+event_id: MCE-20260715-RP02B2A1-EVIDENCE-PUBLISHED
+occurred_at: 2026-07-15 19:07:15 CST
+event_type: governance_evidence_published
+source_thread: RP-02B2a1 governance evidence closeout
+package_id: RP-02B2a1
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TASK-PRECLAIM-01, TASK-WORKER-01, TASK-RETRY-01, GOV-GIT-01
+summary: RP-02B2a1 accepted code head 固定为 4817abc；治理证据以其后续文档提交 6eaf60a 发布并推送。Remediation governance run 29410503391 对 immutable evidence publication head 6eaf60a completed/success；可移动远端 ref 只记录当时指向。
+evidence: accepted code head 4817abc67cf916772b317aff027403b97ab4df76; immutable evidence publication head 6eaf60af4155a8b95ff77d53261f5896d3a8f77d; origin/codex/rp-02b2a1-registry-abi-20260714 at run time; Remediation governance run 29410503391 completed/success; docs/reviews/remediation-rmd-task-002-003-rp-02b2a1-verification-2026-07-15.md
+mc_decision: RP-02B2a1 阶段证据发布完成，但发布绿灯只证明治理文档门禁通过。RMD-TASK-002 保持 partial、RMD-TASK-003 保持 open、总览 9/42 不变；真实 DB/provider/media/E6 继续冻结。
+next_action: 后续包继续执行独立准入与 MC 裁决；不得把 evidence head 6eaf60a 混写为 accepted code head，也不得自动授权 B2a2-B2a5/B2b/B2c/B3。
+```
+
+### MCE-20260715-RP02B2A2-FOUR-LANE-ADMISSION-REJECTED
+
+```text
+event_id: MCE-20260715-RP02B2A2-FOUR-LANE-ADMISSION-REJECTED
+occurred_at: 2026-07-15 20:06:55 CST
+event_type: implementation_admission_rejected
+source_thread: RP-02B2a2 four-lane admission handoff
+package_id: RP-02B2a2
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TASK-PRECLAIM-01, TASK-CONCURRENCY-01, TASK-WORKER-01, TASK-RETRY-01, GOV-GIT-01
+summary: RP-02B2a2 四路准入结论为：后端合同 APPROVED 0/0/2；独立 TEST REJECTED P0=0/P1=3/P2=1；QUALITY 对当前实现 REJECTED P0=3/P1=2/P2=1；治理 REJECTED P0=0/P1=3/P2=1。四路未全部批准。
+evidence: RP-02B2a2 four-lane admission reports as handed off to the governance closeout worker; no B2a2 business-code authorization or real DB/provider/media/E6 execution
+mc_decision: RP-02B2a2 保持 not_authorized，不得因后端合同单路 approved 开工。RMD-TASK-002 保持 partial、RMD-TASK-003 保持 open、总览 9/42 不变；真实 DB/provider/media/E6 继续冻结。
+next_action: 仅允许按拒绝项修订 B2a2 准入资产并重新执行四路独立复核；未取得所需批准前不得进入实现，也不得联动 B2a3-B2a5/B2b/B2c/B3。
+```
+
+### MCE-20260715-RP02B2A2-G0-REVIEW-REJECTED
+
+```text
+event_id: MCE-20260715-RP02B2A2-G0-REVIEW-REJECTED
+occurred_at: 2026-07-15 21:15:00 CST
+event_type: governance_bootstrap_review_rejected
+source_thread: main-control direct-agent four-lane re-review
+package_id: RP-02B2a2-G0
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TASK-B2A2-ACTOR-REPLAY-01, TASK-B2A2-AUTHORITY-01, TEST-B2A2-COMMAND-01, GOV-GIT-01
+summary: 首轮整改复核四路均拒绝：TEST 0/2/0、后端架构 0/3/3、QUALITY 0/5/1、治理 0/3/1。未发现新增 P0；P1 聚合为 gate-prep 无独立 package、range/manual 可隐藏累计 diff、candidate gate/命令假绿、workflow shell 注入及 actor/legacy 合同越界。
+evidence: read-only direct-agent reports; local gate 30/30 and governance 15/15 were green but explicitly insufficient; no business implementation or real DB/provider/media/E6 execution
+mc_decision: 不提交当前 rejected 资产，不授权 B2a2。建立固定 6eaf60a 的 9-file RP-02B2a2-G0，只有 G0 四路 P0/P1=0、提交推送和新 SHA 远程 CI 成功后，才可重新裁决 A2。
+next_action: 完成 G0 package/range/command/workflow/contract 修复，执行 candidate-self gate 与负向变异，再重新四路独立复核。
+```
+
+### MCE-20260716-RP02B2A2-G0-PRIOR-APPROVAL-INVALIDATED
+
+```text
+event_id: MCE-20260716-RP02B2A2-G0-PRIOR-APPROVAL-INVALIDATED
+occurred_at: 2026-07-16 06:18:00 CST
+event_type: governance_bootstrap_prior_approval_invalidated
+source_thread: shared-worktree governance status correction
+package_id: RP-02B2a2-G0
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TASK-B2A2-ACTOR-REPLAY-01, TASK-B2A2-AUTHORITY-01, TEST-B2A2-COMMAND-01, GOV-GIT-01
+summary: 03:18 形成的 10 files / 418 net additions、package gate 40/40 与四路 APPROVED 只绑定当时快照；G0 累计差异随后变化，旧准入结论全部作废，不能再作为当前提交、推送或 A2 授权依据。
+evidence: fixed base 6eaf60a; current frozen scope remains the 10-file cumulative G0 diff; full package gate 43/43 and four-role same-diff re-review are pending; no current remote acceptance evidence
+mc_decision: 冻结当前 G0 累计差异，不得提交、推送或授权 A2。B2a2 保持 not_authorized；总账 9/42、RMD-TASK-002=partial、RMD-TASK-003=open 不变，真实 DB/provider/media/E6 继续冻结。
+next_action: 先在当前冻结差异上完整执行 43/43，再由独立 TEST、后端架构、QUALITY、治理执行同差异复核；四路重新 APPROVED 且 P0/P1 清零后，才允许交由 MC 重新裁决 G0，不能自动授权 A2。
+```
+
+### MCE-20260716-RP02B2A2-G0-SECOND-REVIEW-REJECTED
+
+```text
+event_id: MCE-20260716-RP02B2A2-G0-SECOND-REVIEW-REJECTED
+occurred_at: 2026-07-16 08:45:00 CST
+event_type: governance_bootstrap_second_review_rejected
+source_thread: main-control direct-agent TEST/backend/QUALITY/governance review
+package_id: RP-02B2a2-G0
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TEST-B2A2-G0-E1-01, TEST-B2A2-COMMAND-01, GOV-GIT-01
+summary: 第二轮同差异复核未发现 P0，但仍发现 trusted workflow current-run/PR 身份、E1 admission 前置、父 workflow mutable actions、durable JSON artifact、candidate-bound digest、负例非零退出及 Unicode/HTML 授权绕过等 P1；因此旧 11-file/44-test 本地结果不能提交或形成准入。
+evidence: four read-only direct-agent reports; prior local package gate 44/44, governance 15/15, typecheck and actor-clean core green but explicitly insufficient; no remote acceptance evidence
+mc_decision: G0 manifest 扩为 14 files，仅增加三份父 workflow 的 immutable-action 修复；强制 repository-controlled G0-E1 SHA 成为 A2-A5 admission 前置，并补 current run/PR 复核、耐久 artifact 和对抗测试。B2a2 继续 not_authorized，总账 9/42、RMD-TASK-002=partial、RMD-TASK-003=open 不变。
+next_action: 完成第二轮 P1 整改与最终机器计数，运行完整 44/44 和工程矩阵，再执行第三轮 TEST/backend/QUALITY/governance 同差异复核；P0/P1=0 前不得提交、推送或授权 A2。
+```
+
+### MCE-20260716-RP02B2A2-G0-THIRD-REVIEW-REJECTED
+
+```text
+event_id: MCE-20260716-RP02B2A2-G0-THIRD-REVIEW-REJECTED
+occurred_at: 2026-07-16 16:15:00 CST
+event_type: governance_bootstrap_third_review_rejected
+source_thread: main-control direct-agent workflow/backend/test review; QUALITY/governance seat returned no effective approval
+package_id: RP-02B2a2-G0
+issue_ids: RMD-TASK-002, RMD-TASK-003
+acceptance_ids: TEST-B2A2-G0-E1-01, TEST-B2A2-COMMAND-01, GOV-GIT-01
+summary: 第三轮未发现 P0，但 workflow 权限与候选执行边界、E1 真实 run schema、HTML/隐藏字符授权绕过、current-run/live-PR 竞态和 A4/A5 生产差异测试夹具仍有 P1；因此不得沿用任何旧批准。
+evidence: 第三轮只读报告；整改前完整 gate 42/45，三项失败同源于业务包 fixture；修复后定点 3/3 与完整 package gate 45/45 通过，但工程矩阵和第四轮同差异复核尚未完成。
+mc_decision: 第三轮结论保持 rejected；B2a2 继续 not_authorized，总账 9/42、RMD-TASK-002=partial、RMD-TASK-003=open 不变，不提交、不推送、不授权 A2。
+next_action: 冻结 14-file 最终差异并执行工程矩阵；随后由独立 TEST、后端架构、QUALITY、治理进行第四轮复核，只有 P0/P1=0 才进入原子 amend、远程 CI 和 E1 证据闭环。
+```
+
+### MCE-20260716-RP02B2A2-G0-FOURTH-REVIEW-REJECTED
+
+```text
+event_id: MCE-20260716-RP02B2A2-G0-FOURTH-REVIEW-REJECTED
+occurred_at: 2026-07-16 23:06:42 CST
+event_type: governance_bootstrap_fourth_review_rejected
+source_thread: main-control SECURITY/BACKEND/TEST/QUALITY read-only review
+package_id: RP-02B2a2-G0
+issue_ids: RMD-TASK-002, RMD-TASK-003
+summary: SECURITY 通过；BACKEND/TEST 发现命名 HTML 实体绕过、三文档字段非全局白名单、实际 gate 计数未绑定及测试 oracle 独立性争议。P0=0，但 P1 未清零。
+evidence: review snapshot before the 15-file / 1,898-net follow-up fixes; no commit, push, remote acceptance, A2 authorization, or real DB/provider/media execution
+mc_decision: 第四轮保持 rejected；只允许在 G0 同包关闭 P1、重跑最终矩阵并重新独立复核。总账 9/42、RMD-TASK-002=partial、RMD-TASK-003=open 与 B2a2 not_authorized 不变。
+next_action: 完成全局字段、HTML 实体和实际测试计数整改，裁定独立 oracle 后，以最终冻结差异重新取得四席 P0/P1=0。
+```
+
+### MCE-20260717-RP02B2A2-G0-FIFTH-REVIEW-REJECTED
+
+```text
+event_id: MCE-20260717-RP02B2A2-G0-FIFTH-REVIEW-REJECTED
+occurred_at: 2026-07-17 01:10:42 CST
+event_type: governance_bootstrap_fifth_review_rejected
+source_thread: main-control SECURITY/BACKEND/TEST/QUALITY read-only review
+package_id: RP-02B2a2-G0
+issue_ids: RMD-TASK-002, RMD-TASK-003
+summary: BACKEND 通过；SECURITY/TEST/QUALITY 发现数值实体编码 HTML tag、默认分支 PR 约束、trusted workflow bootstrap oracle 边界、事件 schema、15-file 允许集和状态时间戳等 P1。P0=0，但 P1 未清零。
+evidence: review snapshot at 15 files / 1,917 net additions before the fifth-review follow-up fixes; package gate 46/46 passed locally, but no commit, push, remote acceptance, A2 authorization, or real DB/provider/media execution
+mc_decision: 第五轮保持 rejected；只允许在 G0 同包关闭可复现 P1，并把同包 canonical mutation check 与外部独立复核的信任边界写清。总账 9/42、RMD-TASK-002=partial、RMD-TASK-003=open 与 B2a2 not_authorized 不变。
+next_action: 完成默认分支双重校验、解码后 HTML 拒绝、治理文档自洽和 bootstrap oracle 边界说明，以最终冻结差异重跑门禁并重新取得四席 P0/P1=0。
+```
+
+### MCE-20260717-RP02B2A2-G0-SIXTH-REVIEW-REJECTED
+
+```text
+event_id: MCE-20260717-RP02B2A2-G0-SIXTH-REVIEW-REJECTED
+occurred_at: 2026-07-17 02:07:11 CST
+event_type: governance_bootstrap_sixth_review_rejected
+source_thread: main-control SECURITY/BACKEND/TEST/QUALITY read-only review
+package_id: RP-02B2a2-G0
+issue_ids: RMD-TASK-002, RMD-TASK-003
+summary: SECURITY/BACKEND 通过；TEST/QUALITY 报告时间线、事件类型和状态轮次 P1。核对本机时钟后，01:10/01:14 早于本轮 02:07，未来时间戳结论不成立；事件类型和状态轮次为可复现 P1。
+evidence: review snapshot at 15 files / 1,963 net additions; package gate 46/46 passed locally, but no commit, push, remote acceptance, A2 authorization, or real DB/provider/media execution
+mc_decision: 第六轮保持 rejected；只允许在 G0 同包修复专用事件令牌与当前轮次自洽，重新计算预算并复跑同差异门禁和独立复核。总账 9/42、RMD-TASK-002=partial、RMD-TASK-003=open 与 B2a2 not_authorized 不变。
+next_action: 冻结修复后的 15-file 差异，重跑 package gate 与四席只读复核；P0/P1 清零后再执行最终工程矩阵、原子 amend、推送和远程 E1 闭环。
+```
+
+### MCE-20260717-RP02B2A2-G0-POST-SIXTH-REMEDIATION
+
+```text
+event_id: MCE-20260717-RP02B2A2-G0-POST-SIXTH-REMEDIATION
+occurred_at: 2026-07-17 02:18:50 CST
+event_type: governance_bootstrap_post_sixth_remediation_status_update
+source_thread: main-control
+package_id: RP-02B2a2-G0
+issue_ids: RMD-TASK-002, RMD-TASK-003
+summary: 第六轮可复现的专用事件令牌和状态轮次 P1 已整改；第七轮 TEST 已通过，QUALITY 要求补齐修复后当前态事件，本事件记录最终待复核差异。
+evidence: current worktree package gate passed at 15 files / 1,993 net additions including untracked .github/workflows/rp02b2a-admission.yml; targeted trusted-checkout and E1 adversarial tests 4/4 passed
+mc_decision: 保持 B2a2 not_authorized、总账 9/42、RMD-TASK-002=partial、RMD-TASK-003=open；QUALITY 同差异复核与最终工程矩阵通过前不提交、不推送、不授权 A2。
+next_action: 由独立 QUALITY 复核本 15-file / 1,993-net 冻结差异；P0/P1 清零后执行最终工程矩阵、原子 amend、推送和远程 E1 闭环。
 ```

@@ -15,8 +15,9 @@
 | hardening_chain | `072b9beb7541c5446b619898748093e1362ef449 -> f3422979e7506ba72ebaed07f41175514b9c092b -> 4817abc67cf916772b317aff027403b97ab4df76` |
 | accepted_code_head_sha | `4817abc67cf916772b317aff027403b97ab4df76` |
 | accepted_code_tree_sha | `ad3d36cb128989080289b5842a115d3d92776314` |
-| remote_branch_head | `origin/codex/rp-02b2a1-registry-abi-20260714` = `4817abc67cf916772b317aff027403b97ab4df76` |
-| evidence_publication_commit | 本文件所在的后续治理文档提交；不得与 accepted code head 混写 |
+| evidence_publication_commit | `6eaf60af4155a8b95ff77d53261f5896d3a8f77d`；仅发布治理证据，不改写 accepted code head |
+| evidence_publication_ref_at_run | `origin/codex/rp-02b2a1-registry-abi-20260714` 在 run `29410503391` 时指向 `6eaf60af4155a8b95ff77d53261f5896d3a8f77d`；证据身份绑定 commit/run，不把可移动 ref 当永久事实 |
+| evidence_remote_governance | GitHub Actions run `29410503391`，head `6eaf60a`，`completed/success` |
 | final_review | TEST、QUALITY、独立 clean checkout 均 `APPROVED` |
 | remote_ci_status | accepted code head 四路 `completed/success` |
 | acceptance_ids | TASK-PRECLAIM-01、TASK-WORKER-01、TASK-RETRY-01、GOV-GIT-01 的 RP-02B2a1 阶段 |
@@ -61,6 +62,7 @@
 | remote RP-01A | GitHub Actions run `29405557734` | `completed/success`，head `4817abc` | 不替代真实 DB |
 | remote RP-01B | GitHub Actions run `29405557763` | `completed/success`，head `4817abc` | 不替代真实媒体 |
 | remote RP-01C | GitHub Actions run `29405557764` | `completed/success`，head `4817abc` | 不替代真实 provider |
+| evidence publication | GitHub Actions run `29410503391` | `completed/success`，head `6eaf60a` | 只证明治理证据已发布，不授权后续包或真实环境 |
 
 ## 5. Acceptance ID 阶段映射
 
@@ -86,9 +88,37 @@ next_package: none automatically authorized; RP-02B2a2 and later packages requir
 reopen_conditions: raw entity or cast reaches provider; unknown action dispatches; public retry becomes available or creates side effects; sync route changes to queued/202; package/workflow gate is weakened
 accepted_code_head_sha: 4817abc67cf916772b317aff027403b97ab4df76
 accepted_code_tree_sha: ad3d36cb128989080289b5842a115d3d92776314
-evidence_publication_commit: containing commit
+evidence_publication_commit: 6eaf60af4155a8b95ff77d53261f5896d3a8f77d
+evidence_remote_head_sha: 6eaf60af4155a8b95ff77d53261f5896d3a8f77d
+evidence_governance_run: 29410503391 completed/success
 decided_by: MC based on independent TEST, QUALITY, clean-checkout and remote CI evidence
 decided_at: 2026-07-15
 ```
 
 RP-02B2a1 阶段通过不等于 `RMD-TASK-002` 或 `RMD-TASK-003` 关闭，不授权 RP-02B2a2-B2a5、B2b、B2c、B3，也不把 mock/static 证据外推为真实数据库、真实模型、真实媒体或 E6。
+
+## 7. RP-02B2a2 四路准入记录
+
+| 准入路由 | 结论 | 阻塞计数 | 主控解释 |
+| --- | --- | --- | --- |
+| 后端合同 | `APPROVED` | `P0=0/P1=0/P2=2` | 只表示合同路由通过，不单独构成研发授权 |
+| 独立 TEST | `REJECTED` | `P0=0/P1=3/P2=1` | 测试准入未清零 |
+| QUALITY（当前实现） | `REJECTED` | `P0=3/P1=2/P2=1` | 当前实现不能作为 B2a2 通过证据 |
+| 治理 | `REJECTED` | `P0=0/P1=3/P2=1` | 治理准入未清零 |
+
+四路未全部批准，因此 RP-02B2a2 继续 `not_authorized`。本记录不授权 B2a2 实现，不改变 9/42、`RMD-TASK-002=partial`、`RMD-TASK-003=open`，真实 DB/provider/media/E6 继续冻结。
+
+### 7.1 G0 首轮整改复核
+
+首轮 gate/合同整改仍为 4/4 rejected：TEST `P0/P1/P2=0/2/0`、后端架构 `0/3/3`、QUALITY `0/5/1`、治理 `0/3/1`。共同阻塞包括治理文件没有独立 package 归属、candidate 未执行自身 gate、zero/unreachable push 与非祖先 manual 未 fail closed、A2 命令依赖可空壳、workflow expression 进入 shell、生产 actor 来源与 legacy 计数不明确。整改改由固定 `6eaf60a` 的 `RP-02B2a2-G0` 十文件治理包承载；G0 清零、提交、推送和远程 CI 前，A2 业务实现仍不授权。
+
+### 7.2 G0 旧复核快照作废与当前复核前置
+
+| 复核路由 | 旧快照 | 当前结论 | 重新准入前置 |
+| --- | --- | --- | --- |
+| 独立 TEST | 40/40 下的 `APPROVED` | 第七轮同差异复核已 `APPROVED`、P0=0/P1=0；当前 15 files / 1,993 net additions，完整门禁和工程矩阵仍待重跑 | 最终矩阵通过后保留该独立结论并进入原子 amend |
+| 后端架构 | 旧差异下的 `APPROVED` | 第五轮同一 15-file 差异已 `APPROVED P0=0/P1=0`，但尚未与后续修复差异重新绑定 | 最终差异冻结后复核 package canonical、E1 文档合同和 A2 交接边界 |
+| QUALITY | 10/418 下的 `APPROVED` | 已作废；第三轮未形成有效独立通过结论 | 第四轮重新复核坏 SHA、继承脚本、workflow、权限、凭证与越权边界 |
+| 治理 | 10/418、40/40 下的 `APPROVED` | 已作废；当前 15 files / 1,993 net additions，第七轮 QUALITY 要求的修复后当前态 status-update 已补齐，既有工程矩阵证据待最终差异重跑 | QUALITY 按同一冻结差异复核唯一 ADR、机器计数、durable artifact 与授权边界 |
+
+旧 `10 files / 418 net additions` 与 package gate 40/40 只绑定已经变化的历史差异，不能再写成当前机器口径、最终 diff 或当前 `APPROVED`。第四轮问题关闭后曾在 15 files / 1,917 net additions 差异上取得 package gate 46/46；第五轮问题关闭后，第六轮仅留下专用事件令牌和状态轮次自洽 P1，未来时间戳结论经本机 `2026-07-17 02:07:11 CST` 时钟核对不成立。第七轮 TEST 已通过，QUALITY 要求的修复后当前态事件已补齐；当前累计差异为 `15 files / 1,993 net additions`。既有 package gate 46/46、actor-clean core 69/69、governance 15/15、RP-01C 13/13、API 119/119、Admin/DOM/E2E 103/103、typecheck、build 与 Prisma validate 证据必须在最终冻结差异上重跑。QUALITY 同差异复核和最终矩阵通过前，不得提交、推送或授权 A2；B2a2 保持 `not_authorized`。总账仍为 9/42，`RMD-TASK-002=partial`、`RMD-TASK-003=open`，真实 DB/provider/media/E6 继续冻结。
