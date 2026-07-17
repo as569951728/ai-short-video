@@ -1354,17 +1354,17 @@ mc_decision: 第六轮保持 rejected；只允许在 G0 同包修复专用事件
 next_action: 冻结修复后的 15-file 差异，重跑 package gate 与四席只读复核；P0/P1 清零后再执行最终工程矩阵、原子 amend、推送和远程 E1 闭环。
 ```
 
-### MCE-20260717-RP02B2A2-G0-POST-SIXTH-REMEDIATION
+### MCE-20260717-RP02B2A2-G0-REPLACEMENT-VALIDATION
 
 ```text
-event_id: MCE-20260717-RP02B2A2-G0-POST-SIXTH-REMEDIATION
-occurred_at: 2026-07-17 02:18:50 CST
-event_type: governance_bootstrap_post_sixth_remediation_status_update
+event_id: MCE-20260717-RP02B2A2-G0-REPLACEMENT-VALIDATION
+occurred_at: 2026-07-17 06:59:23 CST
+event_type: governance_bootstrap_replacement_validation
 source_thread: main-control
 package_id: RP-02B2a2-G0
 issue_ids: RMD-TASK-002, RMD-TASK-003
-summary: 第六轮可复现的专用事件令牌和状态轮次 P1 已整改；第七轮 TEST 已通过，QUALITY 要求补齐修复后当前态事件，本事件记录最终待复核差异。
-evidence: current worktree package gate passed at 15 files / 1,993 net additions including untracked .github/workflows/rp02b2a-admission.yml; targeted trusted-checkout and E1 adversarial tests 4/4 passed
-mc_decision: 保持 B2a2 not_authorized、总账 9/42、RMD-TASK-002=partial、RMD-TASK-003=open；QUALITY 同差异复核与最终工程矩阵通过前不提交、不推送、不授权 A2。
-next_action: 由独立 QUALITY 复核本 15-file / 1,993-net 冻结差异；P0/P1 清零后执行最终工程矩阵、原子 amend、推送和远程 E1 闭环。
+summary: 旧 G0 无法与合法 A2 scripts 组合，已保持审计只读并撤销授权；替代 G0 从固定 6eaf60a 基线重建为单一原子直接子提交候选。
+evidence: replacement worktree 16 files / 1,999 net additions；修复后 package gate 47/47，targeted 15/15、actor-clean 69/69、governance 15/15、RP-01C 13/13、API 119/119、Admin 77/77、DOM 12/12、E2E 13/13、typecheck/build/Prisma 全绿；最终同差异绑定与独立复核待执行
+mc_decision: 保持 B2a2 not_authorized、总账 9/42、RMD-TASK-002=partial、RMD-TASK-003=open；工程矩阵和独立 TEST/QUALITY 通过前不提交、不推送、不授权 A2。
+next_action: 文档冻结后在同一 16-file / 1,999-net 差异上重跑 47-case package gate 绑定，然后由全新独立 TEST/QUALITY 复核。
 ```

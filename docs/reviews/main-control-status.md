@@ -1,6 +1,6 @@
 # AIShortvideo 主控统一状态
 
-更新时间：2026-07-17 02:18 CST
+更新时间：2026-07-17 08:52 CST
 
 本文件是需求主控的当前状态入口。历史过程和详细证据仍保留在各模块设计、验收和工程质量文档中；发生冲突时，以当前代码、最新正式验收结论和本文件列出的证据为准。
 
@@ -35,10 +35,10 @@
 ```text
 总体关闭进度  [████░░░░░░░░░░░░░░░░]  9 / 42（21%）
 剩余问题      33
-当前整改包    RP-02B2a2-G0 第七轮 QUALITY P1 已整改待复核；当前差异 15 files / 1,993 net additions，当前 package gate 与定向 E1 4/4 已通过，完整 package gate 46/46 和工程矩阵待在最终差异重跑
+当前整改包    RP-02B2a2-G0 replacement：旧 G0 组合缺陷已撤权；当前差异 16 files / 1,999 net additions，package gate 47/47 与本地工程矩阵全绿，待最终同差异门禁绑定和独立 TEST/QUALITY 复核
 拆包准入进度  [████████████████████]  7 / 7（100%）：第六轮四角色全部 approved，P0/P1=0
 研发交付进度  [████░░░░░░░░░░░░░░░░]  1 / 5（20%）：仅 B2a1 限定阶段完成
-当前状态      B2a1 accepted code head 4817abc、immutable evidence publication commit 6eaf60a，run 29410503391 success；G0 第七轮 TEST 已通过，QUALITY 提出的修复后当前态缺少事件 P1 已由 post-sixth status-update 关闭；真实当前差异为 15 files / 1,993 net additions。QUALITY 同差异复核和最终矩阵通过前不得提交、推送或授权 A2，B2a2 仍 not_authorized
+当前状态      B2a1 accepted code head 4817abc、immutable evidence publication commit 6eaf60a，run 29410503391 success；旧 G0 因 gate-prep 复制 A2 package scripts 导致合法组合失败，已撤销授权并仅保留审计；替代 G0 从 6eaf60a 重建，真实当前差异为 16 files / 1,999 net additions。本地 47/47、15/15、69/69、13/13、119/119、77/77、12/12 及 typecheck/build/Prisma 全绿；最终独立复核、提交、推送与远程 CI 前不授权 A2，B2a2 仍 not_authorized
 ```
 
 当前包阶段：
@@ -82,7 +82,7 @@
 | RP-02B2a1 阶段证据与总账同步 | 已完成 | accepted code head `4817abc` 与 immutable evidence publication head `6eaf60a` 分离绑定；Remediation governance run `29410503391` completed/success；`RMD-TASK-002=partial`、`RMD-TASK-003=open`，总览仍为 9/42 |
 | RP-02B2a2 四路准入 | 已拒绝 | 后端合同 `APPROVED P0=0/P1=0/P2=2`；TEST `REJECTED P0=0/P1=3/P2=1`；QUALITY 对当前实现 `REJECTED P0=3/P1=2/P2=1`；治理 `REJECTED P0=0/P1=3/P2=1`。四路未清零，B2a2 保持 `not_authorized` |
 | RP-02B2a2-G0 首轮独立复核 | 已拒绝 4/4 | TEST `0/2/0`、后端架构 `0/3/3`、QUALITY `0/5/1`、治理 `0/3/1`；共同 P1 为治理文件无独立 package 归属、range/命令/workflow 假绿及 actor/legacy 合同越界。当时按固定 `6eaf60a` 的 10-file G0 包整改，业务实现未启动 |
-| RP-02B2a2-G0 整改后最终复核 | 第七轮 QUALITY P1 已整改待复核 | 旧 `10 files / 418 net additions`、package gate 40/40 与旧批准均作废；第六轮可复现 P1 已关闭，第七轮 TEST 已通过，QUALITY 要求的修复后当前态事件已补齐。当前 15-file 累计差异为 1,993 net additions；须重跑完整 package gate、工程矩阵和 QUALITY 同差异复核。P0/P1 清零前不得提交、推送或授权 A2，B2a2 保持 `not_authorized` |
+| RP-02B2a2-G0 整改后最终复核 | replacement 验证中 | 旧 `10 files / 418 net additions`、package gate 40/40、旧 G0 46/46 与旧批准均作废；替代 G0 当前 16-file 累计差异为 1,999 net additions。修复后 package gate 47/47，定向 15/15、actor-clean 69/69、governance 15/15、RP-01C 13/13、API 119/119、Admin 77/77、DOM 12/12、E2E 13/13 及 typecheck/build/Prisma 全绿。须在文档冻结后重跑同差异 47-case 绑定，再由独立 TEST/QUALITY 复核；P0/P1 清零前不得提交、推送或授权 A2，B2a2 保持 `not_authorized` |
 
 ## 2. 小说模块
 
