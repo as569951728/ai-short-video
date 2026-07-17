@@ -16,6 +16,7 @@ on:
       - '.github/workflows/rp01c-fixtures.yml'
       - '.github/workflows/remediation-governance.yml'
       - '.github/workflows/rp02b2a-admission.yml'
+      - 'apps/admin-web/src/modules/novels/components/TaskProgressPanel.dom.spec.ts'
       - 'apps/api/test/rp01c/**'
       - 'apps/api/test/rp02a/**'
       - 'apps/api/test/rp02b/**'

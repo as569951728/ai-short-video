@@ -114,8 +114,8 @@ jobs:
             echo "authorized package ID must select RP-02B2a2 through RP-02B2a5" >&2
             exit 1
           }
-          [[ "$(git -C trusted rev-parse HEAD)" == "$GATE_SOURCE_SHA" ]] || {
-            echo "trusted checkout does not match RP02B2A_GATE_SOURCE_SHA" >&2
+          [[ "$GATE_SOURCE_SHA" != "0cfcbd19bb998bd84faa72cf4549eca17e5ab190" && "$G0_EVIDENCE_SHA" != "3ad4c16be3053aeacc84144cbfe954da328b453a" && "$(git -C trusted rev-parse HEAD)" == "$GATE_SOURCE_SHA" ]] || {
+            echo "trusted checkout does not match RP02B2A_GATE_SOURCE_SHA or references a revoked G0 lineage" >&2
             exit 1
           }
 
