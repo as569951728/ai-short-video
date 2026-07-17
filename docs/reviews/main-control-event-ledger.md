@@ -1368,3 +1368,28 @@ evidence: replacement worktree 16 files / 1,999 net additions；修复后 packag
 mc_decision: 保持 B2a2 not_authorized、总账 9/42、RMD-TASK-002=partial、RMD-TASK-003=open；工程矩阵和独立 TEST/QUALITY 通过前不提交、不推送、不授权 A2。
 next_action: 文档冻结后在同一 16-file / 1,999-net 差异上重跑 47-case package gate 绑定，然后由全新独立 TEST/QUALITY 复核。
 ```
+
+### MCE-RP02B2A2-G0-E1-REMOTE-ACCEPTED
+
+```text
+event_id: MCE-RP02B2A2-G0-E1-REMOTE-ACCEPTED
+occurred_at: 2026-07-18 03:45:54 CST
+event_type: governance_bootstrap_remote_accepted
+source_thread: main-control
+package_id: RP-02B2a2-G0-E1
+accepted_code_head: 01245feb51b50ec838cb405a67bcafd1b194eeae
+issue_ids: RMD-TASK-002, RMD-TASK-003
+summary: RP-02B2a2-G0 replacement 最终 16-file package、独立 TEST/QUALITY、本地工程矩阵和四路同头远程 CI 已完成。
+evidence: package gate 47/47; independent TEST/QUALITY PASS; remote push runs rp01a=29608314069,rp01b=29608314153,rp01c=29608314165,governance=29608314134 completed/success; recovery branch advanced from 6eaf60a to 01245fe by a non-zero fast-forward push
+g0_evidence_parent_sha: 01245feb51b50ec838cb405a67bcafd1b194eeae
+g0_evidence_rp01a_run: 29608314069
+g0_evidence_rp01b_run: 29608314153
+g0_evidence_rp01c_run: 29608314165
+g0_evidence_governance_run: 29608314134
+g0_evidence_a2_authorization: not_authorized
+g0_evidence_issue_closed_count: 9/42
+g0_evidence_rmd_task_002: partial
+g0_evidence_rmd_task_003: open
+mc_decision: RP-02B2a2-G0 关闭；replacement accepted code head 为 01245fe，B2a2 继续 not_authorized，总账与真实环境边界不变。
+next_action: 仅在 MC 独立授权后，才可从 accepted G0 code head 创建与 E1 互为 sibling 的 A2 实现分支。
+```
