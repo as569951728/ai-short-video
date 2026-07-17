@@ -1,4 +1,4 @@
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
 import { afterEach, describe, expect, it } from 'vitest'
 import { TaskStatus, type RecentTaskSummaryDTO } from '@ai-shortvideo/shared'
@@ -29,6 +29,7 @@ describe('TaskProgressPanel DOM integration', () => {
     })
 
     await wrapper.get('button.el-button--success').trigger('click')
+    await flushPromises()
 
     expect(wrapper.emitted('viewResult')).toEqual([['direction']])
   })

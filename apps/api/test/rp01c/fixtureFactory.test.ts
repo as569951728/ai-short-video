@@ -53,7 +53,7 @@ describe('RP-01C fixture factory contract', () => {
     assert.match(apiCommand, /NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=\/dev\/null/);
 
     const workflow = readFileSync(new URL('../../../../.github/workflows/rp01c-fixtures.yml', import.meta.url), 'utf8');
-    assert.match(workflow, /uses: actions\/checkout@v4\n\s+with:\n\s+fetch-depth: 0/);
+    assert.match(workflow, /uses: actions\/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5\n\s+with:\n\s+fetch-depth: 0\n\s+ref: \$\{\{ github\.event_name == 'workflow_dispatch' && inputs\.head_sha \|\| github\.event\.after \}\}\n\s+persist-credentials: false/);
     assert.match(workflow, /run: npm run governance:git-budget/);
   });
 

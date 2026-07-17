@@ -1,6 +1,6 @@
 # AIShortvideo 主控统一状态
 
-更新时间：2026-07-15 18:21 CST
+更新时间：2026-07-17 08:52 CST
 
 本文件是需求主控的当前状态入口。历史过程和详细证据仍保留在各模块设计、验收和工程质量文档中；发生冲突时，以当前代码、最新正式验收结论和本文件列出的证据为准。
 
@@ -22,7 +22,7 @@
 | 视频 P8-P9 | 工作台状态流与版本流程按限定范围验收 | P9c 无可播放音频，P9e 无真实 MP4/下载文件；不能称为真实视频生成闭环 |
 | P10-preflight | 已正式收口 | `creationSource` 的 shared/API/仓储/migration/admin 与浏览器链路通过 `CS-R3` 及条件项复验 |
 | P10 | `P10-R0` 已正式收口；R1 准入设计通过 | R1 准入文档已纳入当前远程分支；尚未授权，未启动业务代码 |
-| 整改计划 | RP-00A、RP-00B、RP-01A、RP-01B、RP-01C 已正式关闭；RP-02A、RP-02B1、RP-02B2a0、RP-02B2a1 限定阶段完成 | 唯一总账仍关闭 9/42；RMD-TASK-002 为 partial、003 为 open；B2a2-B2a5/B2b/B2c/B3 未由本记录授权 |
+| 整改计划 | RP-00A、RP-00B、RP-01A、RP-01B、RP-01C 已正式关闭；RP-02A、RP-02B1、RP-02B2a0、RP-02B2a1 限定阶段完成 | 唯一总账仍关闭 9/42；RMD-TASK-002 为 partial、003 为 open；B2a2 四路准入未通过，G0 旧准入快照已作废并保持冻结待复核；B2a2-B2a5/B2b/B2c/B3 均未授权 |
 | 测试 | RP-02B2a1 accepted head `4817abc` 的最终 TEST 与 clean-checkout 均 `APPROVED`，复合链 192/192；四路远程 CI 同头全绿 | 只证明 E3 registry/ABI/public retry freeze；仍不能外推真实 DB/provider/media/E6 |
 | 工程质量 | `review / high` | 最终 QUALITY `APPROVED`，P1/P2=0/0，14/14 负向变异被拒绝；小说真实完本与全书审稿 2 个既有 P0 仍未关闭 |
 | 本地服务 | 未运行 | `5173`、`3001` 当前无监听；用户需要浏览器验收时按需启动 |
@@ -35,10 +35,10 @@
 ```text
 总体关闭进度  [████░░░░░░░░░░░░░░░░]  9 / 42（21%）
 剩余问题      33
-当前整改包    RP-02B2a1 阶段证据已收口；后续包等待独立裁决
+当前整改包    RP-02B2a2-G0 replacement：旧 G0 组合缺陷已撤权；当前差异 16 files / 1,999 net additions，package gate 47/47 与本地工程矩阵全绿，待最终同差异门禁绑定和独立 TEST/QUALITY 复核
 拆包准入进度  [████████████████████]  7 / 7（100%）：第六轮四角色全部 approved，P0/P1=0
 研发交付进度  [████░░░░░░░░░░░░░░░░]  1 / 5（20%）：仅 B2a1 限定阶段完成
-当前状态      B2a1 accepted code head 4817abc 已完成最终 TEST/QUALITY/clean-checkout 与四路远程 CI；治理证据发布中，后续包不自动授权
+当前状态      B2a1 accepted code head 4817abc、immutable evidence publication commit 6eaf60a，run 29410503391 success；旧 G0 因 gate-prep 复制 A2 package scripts 导致合法组合失败，已撤销授权并仅保留审计；替代 G0 从 6eaf60a 重建，真实当前差异为 16 files / 1,999 net additions。本地 47/47、15/15、69/69、13/13、119/119、77/77、12/12 及 typecheck/build/Prisma 全绿；最终独立复核、提交、推送与远程 CI 前不授权 A2，B2a2 仍 not_authorized
 ```
 
 当前包阶段：
@@ -79,7 +79,10 @@
 | 拆包资产提交与 B2a1 独立实施 | 已完成 | B2a1 从 clean 基线 `501a3cf` 独立实施；不联动授权后续包 |
 | RP-02B2a1 实现与远程验收 | 已完成 | 早期 `0a583c8` 因两个最终质量 P1 被拒绝；修复链 `072b9be -> f342297 -> 4817abc` 已推送，固定基线单一累计门禁为 18 files / 1,898 net additions，accepted code head 四路远程 CI 全绿 |
 | RP-02B2a1 最终 TEST/QUALITY/clean checkout | 已完成 | TEST/QUALITY/clean-checkout 均 `APPROVED`；复合链 192/192、API 119/119、RP-01C 13/13、根 RP-02A 11/11、14/14 负向变异拒绝，P1/P2=0/0 |
-| RP-02B2a1 阶段证据与总账同步 | 进行中 | 最终治理文档已绑定 accepted code head `4817abc`、tree `ad3d36c` 与同头远程 runs，正在完成独立文档复核和证据发布提交；`RMD-TASK-002=partial`、`RMD-TASK-003=open`，总览仍为 9/42 |
+| RP-02B2a1 阶段证据与总账同步 | 已完成 | accepted code head `4817abc` 与 immutable evidence publication head `6eaf60a` 分离绑定；Remediation governance run `29410503391` completed/success；`RMD-TASK-002=partial`、`RMD-TASK-003=open`，总览仍为 9/42 |
+| RP-02B2a2 四路准入 | 已拒绝 | 后端合同 `APPROVED P0=0/P1=0/P2=2`；TEST `REJECTED P0=0/P1=3/P2=1`；QUALITY 对当前实现 `REJECTED P0=3/P1=2/P2=1`；治理 `REJECTED P0=0/P1=3/P2=1`。四路未清零，B2a2 保持 `not_authorized` |
+| RP-02B2a2-G0 首轮独立复核 | 已拒绝 4/4 | TEST `0/2/0`、后端架构 `0/3/3`、QUALITY `0/5/1`、治理 `0/3/1`；共同 P1 为治理文件无独立 package 归属、range/命令/workflow 假绿及 actor/legacy 合同越界。当时按固定 `6eaf60a` 的 10-file G0 包整改，业务实现未启动 |
+| RP-02B2a2-G0 整改后最终复核 | replacement 验证中 | 旧 `10 files / 418 net additions`、package gate 40/40、旧 G0 46/46 与旧批准均作废；替代 G0 当前 16-file 累计差异为 1,999 net additions。修复后 package gate 47/47，定向 15/15、actor-clean 69/69、governance 15/15、RP-01C 13/13、API 119/119、Admin 77/77、DOM 12/12、E2E 13/13 及 typecheck/build/Prisma 全绿。须在文档冻结后重跑同差异 47-case 绑定，再由独立 TEST/QUALITY 复核；P0/P1 清零前不得提交、推送或授权 A2，B2a2 保持 `not_authorized` |
 
 ## 2. 小说模块
 
@@ -94,7 +97,7 @@
 
 - P0：Prisma 正文批量、重写、正文采用、全书审稿和完结确认未形成真实 MySQL 完整链路。
 - P0：全书审稿只接收章节元数据，没有章节正文、分层摘要或连续性记忆，当前审稿结果不可作为质量门禁。
-- P0/P1：小说 provider-backed action 已完成 RP-02A preclaim、RP-02B1 ExecutionEnvelope/lease 仓储原语和 RP-02B2a1 15-action registry/strict provider ABI/public retry freeze E3；B2a2 authority reload/stale gate、快速返回、dispatcher、worker loop、restart/retry child 和真实 MySQL/多进程仍未实现或未证明。
+- P0/P1：小说 provider-backed action 已完成 RP-02A preclaim、RP-02B1 ExecutionEnvelope/lease 仓储原语和 RP-02B2a1 15-action registry/strict provider ABI/public retry freeze E3；B2a2 四路准入已拒绝，authority reload/stale gate、快速返回、dispatcher、worker loop、restart/retry child 和真实 MySQL/多进程仍未实现或未证明。
 - P1：章节目录只有顺序分块，没有持久 checkpoint 和失败段续跑。
 - P1：正文目标字数、长期记忆和真实 DeepSeek 稳定性未形成质量门禁。
 
@@ -109,7 +112,7 @@
 ### 下一触发动作
 
 - 暂缓 `P10-R1`，不得按编号自动继续。
-- `RP-02B1`、`RP-02B2a0` 与 `RP-02B2a1` 限定阶段已完成。B2a1 只证明 registry/strict ABI/public retry freeze；B2a2-B2a5/B2b/B2c/B3 等待 MC 独立裁决，不得按编号自动继续，真实 MySQL 继续等待独立授权。
+- `RP-02B1`、`RP-02B2a0` 与 `RP-02B2a1` 限定阶段已完成。B2a1 只证明 registry/strict ABI/public retry freeze；B2a2 四路准入未通过并保持 `not_authorized`，B2a3-B2a5/B2b/B2c/B3 不得按编号自动继续，真实 MySQL 继续等待独立授权。
 
 ## 3. 视频模块
 
@@ -137,7 +140,7 @@
 
 ## 4. 测试与验收
 
-- 全栈研发：`RP-02B1`、`RP-02B2a0` 与 `RP-02B2a1` 实现链已按各自限定阶段推送；RP-02B2a1 accepted code head 为 `4817abc`，`0a583c8` 明确为 rejected/superseded。原 B2a partial diff 不得复用。B2a2-B2a5/B2b/B2c/B3 均不得自动继续。
+- 全栈研发：`RP-02B1`、`RP-02B2a0` 与 `RP-02B2a1` 实现链已按各自限定阶段推送；RP-02B2a1 accepted code head 为 `4817abc`，immutable evidence publication commit 为 `6eaf60a`，后者不是可变远程分支的“当前 head”；`0a583c8` 明确为 rejected/superseded。原 B2a partial diff 不得复用。B2a2 四路准入已拒绝，B2a2-B2a5/B2b/B2c/B3 均不得自动继续。
 - 独立测试/质量 agent：最终 TEST/QUALITY/clean-checkout 均 `APPROVED`；复合链 192/192，QUALITY P1/P2=0/0，14/14 负向变异拒绝。真实 MySQL、多进程、dispatcher/worker loop、restart/真实 retry 仍为 not_proven。
 - `P10-R1` 验收准备保留，但当前不是推荐开工项。
 - 五类专业复盘与二次复盘已完成；执行状态以 `docs/remediation/issue-ledger.md` 为唯一事实源。
@@ -155,7 +158,7 @@
 - RP-01C 已在实现/返工提交 `12d77da` 至 `dc1991a` 建立 10 类确定性失败 fixture 和完整命令链环境隔离；远程 run `29208828449` 通过 targeted 13/API 108/RP-01A 13/governance 15/typecheck/build/budget，独立 TEST/QUALITY 对 `1406878` 均 approved，关闭提交 `bdfa814` 的治理 run `29209311021` 也已成功。
 - RP-02A 已在 `b2b374a` 建立统一 provider 前 preclaim，并在独立验收发现 3 个 P1 后以 `76dabd8` 完成模型路由指纹、阶段推进后终态 replay 和可重入 migration 返工；最终 RP-02A 11/API 110/RP-01C 13/E2E 13/governance 15 与 typecheck/build/Prisma 全绿，远程 runs `29214449969`、`29214450023`、`29214450008` 成功。RMD-TASK-001 仍为 partial。
 - RP-02B1 已在 `415d03a` 建立 shared 15-action ExecutionEnvelope、显式 source refs 禁止合成/跨字段一致、lease/fencing/recovery CAS、安全回执与多结果 Prisma 合同；独立 TEST/QUALITY 最终 P0/P1/P2 = 0，干净检出 13/13，远程 runs `29220634159`、`29220634162`、`29220634178`、`29220634187` 成功。worker 权威重载和 stale 双门禁未证明；RMD-TASK-002 为 partial、003 为 open，E6 未证明。
-- RP-02B2a1 已在 `eee5568` 建立 15-action registry、strict provider ABI、同步调用点精确覆盖和 provider-backed public retry freeze；`ec8278e` 修复 RP-01C fixture。早期 `0a583c8` 的远程绿灯被最终 QUALITY 发现的 package resolver 累计范围绕过与 RP-02A AST oracle 绕过两个 P1 否决；修复链 `072b9be -> f342297 -> 4817abc` 已闭合。固定基线 `501a3cf..4817abc` 的单一累计 package gate 为 18 files / 1,898 net additions，workflow contract `required_files=35`；accepted code head 四路远程 runs `29405557756`、`29405557734`、`29405557763`、`29405557764` 均成功。B2a2 authority claim、worker lifecycle、真实 retry child 与真实 DB/provider/media/E6 未证明；RMD-TASK-002 仍为 partial、003 仍为 open。
+- RP-02B2a1 已在 `eee5568` 建立 15-action registry、strict provider ABI、同步调用点精确覆盖和 provider-backed public retry freeze；`ec8278e` 修复 RP-01C fixture。早期 `0a583c8` 的远程绿灯被最终 QUALITY 发现的 package resolver 累计范围绕过与 RP-02A AST oracle 绕过两个 P1 否决；修复链 `072b9be -> f342297 -> 4817abc` 已闭合。固定基线 `501a3cf..4817abc` 的单一累计 package gate 为 18 files / 1,898 net additions，workflow contract `required_files=35`；accepted code head 四路远程 runs `29405557756`、`29405557734`、`29405557763`、`29405557764` 均成功。治理证据以 `6eaf60a` 发布并推送，run `29410503391` completed/success。B2a2 四路准入未通过，authority claim、worker lifecycle、真实 retry child 与真实 DB/provider/media/E6 未证明；RMD-TASK-002 仍为 partial、003 仍为 open。
 - 工程质量任务已对远程检查点执行一次性只读复核：本地与 upstream 同步，未发现敏感信息、浏览器产物、一次性配置或 P10/P12 可执行越界误纳管，结论为 `passed`，无 P0/P1。
 - 一次性 `apps/api/tsconfig.testrun.json` 已由 RP-00B 完成归因和安全删除，未加入 ignore；独立 TEST/QUALITY 已复核。`.playwright-cli/` 继续作为本地浏览器运行产物忽略。
 - `docs/modules/video-p10-r1-implementation-package.md` 与多会话评审记录已安全归因并纳入远程基线；它们是需求资产，不是已授权业务实现。
@@ -201,7 +204,7 @@
 
 ## 7. 当前唯一推荐动作
 
-1. `RP-02B2a1` accepted code head `4817abc` 已完成最终 TEST/QUALITY/clean-checkout 与四路远程 CI；当前唯一动作是完成治理证据独立复核、提交和推送。B2a2-B2a5、B2b、B2c、B3、真实 DB/provider/media/E6 继续 `not_authorized`，不得自动继续或借 B2a1 声明总问题关闭。
+1. `RP-02B2a1` code head `4817abc` 与 immutable evidence publication head `6eaf60a` 已完成，run `29410503391` success。`RP-02B2a2-G0` 第七轮 QUALITY P1 已整改待同差异复核；完整门禁、最终矩阵和 P0/P1 清零前不得提交、推送或授权 A2。B2a2 继续 `not_authorized`，B2a3-B2a5、B2b、B2c、B3、真实 DB/provider/media/E6 继续冻结。
 2. `RP-01D` 涉及真实 MySQL，只能在安全环境和用户独立授权后执行；管理分组不得整体派发。每个子包独立研发、测试、关闭、commit 和 push。
 3. 小说真实完本金丝雀通过后，再执行 P9-real；P10-R1 只在 `RP-10` 重新决策。
 4. 继续保持真实 DB/provider、外部媒体和平台发布的独立授权门禁。
