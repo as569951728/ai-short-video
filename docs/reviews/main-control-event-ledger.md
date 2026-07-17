@@ -1373,16 +1373,17 @@ next_action: 文档冻结后在同一 16-file / 1,999-net 差异上重跑 47-cas
 
 ```text
 event_id: MCE-20260717-RP02B2A2-A2-AUTHORIZED
-occurred_at: 2026-07-17 15:08:48 CST
+occurred_at: 2026-07-17 16:49:22 CST
 event_type: authority_claim_subpackage_authorized
 source_thread: main-control
-package_id: RP-02B2a2-A2
+package_id: RP-02B2a2
+authorized_stage: A2 authority-claim
 issue_ids: RMD-TASK-002, RMD-TASK-003
 accepted_g0_sha: 52549d73823c911b69c97dad8d4d8a799154f065
 immutable_e1_sha: 39d48a6fa3c49c67a99261eb06ef329b1c739fde
 default_branch_sha: 9b320a5da43b0d677ab81626e9f6c8b8d5bd3096
 summary: replacement G0 与 E1 已完成独立验收、四路远程 push 证据和默认分支 ancestry bridge；PR #25 以 merge commit 合入，main tree/trusted workflow 与 G0 一致，E1 未进入集成祖先链。
-evidence: G0 runs 29550266898/29550266912/29550266923/29550266905 success；E1 runs 29552245971/29552245974 success；PR #25 merge 9b320a5；merge-base(main,G0)=G0；main recovery run 29559215753 success；repository variables RP02B2A_AUTHORIZED_PACKAGE_ID=RP-02B2a2-A2 and RP02B2A_AUTHORIZED_PREDECESSOR_SHA=52549d73823c911b69c97dad8d4d8a799154f065；A2 draft audit P0/P1=0/8
-mc_decision: 只授权 RP-02B2a2-A2 authority-claim 子包从精确 G0 52549d7 创建 sibling 分支并迁移返工；授权不等于实现、验收或问题关闭。A3-A5/B2b/B2c/B3 与真实 DB/provider/media/E6 继续冻结，总账保持 9/42。
+evidence: G0 runs 29550266898/29550266912/29550266923/29550266905 success；E1 runs 29552245971/29552245974 success；PR #25 merge 9b320a5；merge-base(main,G0)=G0；main recovery run 29559215753 success；repository variables RP02B2A_AUTHORIZED_PACKAGE_ID=RP-02B2a2 and RP02B2A_AUTHORIZED_PREDECESSOR_SHA=52549d73823c911b69c97dad8d4d8a799154f065；A2 draft audit P0/P1=0/8
+mc_decision: 只授权 RP-02B2a2 的 A2 authority-claim 阶段从精确 G0 52549d7 创建 sibling 分支并迁移返工；授权不等于实现、验收或问题关闭。A3-A5/B2b/B2c/B3 与真实 DB/provider/media/E6 继续冻结，总账保持 9/42。
 next_action: 创建 G0 sibling A2 工作树，机械迁移旧 17-file 草稿，先关闭 stale replay、权威 provider projection、原子 authority+claim、15-action authority、默认 actor、action-specific fixture、绝对零副作用和验收矩阵八个 P1，再进入 authoritative admission。
 ```

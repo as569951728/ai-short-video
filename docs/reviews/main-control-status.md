@@ -1,6 +1,6 @@
 # AIShortvideo 主控统一状态
 
-更新时间：2026-07-17 15:08 CST
+更新时间：2026-07-17 16:54 CST
 
 本文件是需求主控的当前状态入口。历史过程和详细证据仍保留在各模块设计、验收和工程质量文档中；发生冲突时，以当前代码、最新正式验收结论和本文件列出的证据为准。
 
@@ -22,7 +22,7 @@
 | 视频 P8-P9 | 工作台状态流与版本流程按限定范围验收 | P9c 无可播放音频，P9e 无真实 MP4/下载文件；不能称为真实视频生成闭环 |
 | P10-preflight | 已正式收口 | `creationSource` 的 shared/API/仓储/migration/admin 与浏览器链路通过 `CS-R3` 及条件项复验 |
 | P10 | `P10-R0` 已正式收口；R1 准入设计通过 | R1 准入文档已纳入当前远程分支；尚未授权，未启动业务代码 |
-| 整改计划 | RP-00A、RP-00B、RP-01A、RP-01B、RP-01C 已正式关闭；RP-02A、RP-02B1、RP-02B2a0、RP-02B2a1 限定阶段完成；replacement G0/E1/default-branch bridge 已闭合 | 唯一总账仍关闭 9/42；RMD-TASK-002 为 partial、003 为 open；当前只授权 `RP-02B2a2-A2` 从精确 G0 开工，A3-A5/B2b/B2c/B3 均未授权 |
+| 整改计划 | RP-00A、RP-00B、RP-01A、RP-01B、RP-01C 已正式关闭；RP-02A、RP-02B1、RP-02B2a0、RP-02B2a1 限定阶段完成；replacement G0/E1/default-branch bridge 已闭合 | 唯一总账仍关闭 9/42；RMD-TASK-002 为 partial、003 为 open；当前只授权 `RP-02B2a2` 的 A2 authority-claim 阶段从精确 G0 开工，A3-A5/B2b/B2c/B3 均未授权 |
 | 测试 | RP-02B2a1 accepted head `4817abc` 的最终 TEST 与 clean-checkout 均 `APPROVED`，复合链 192/192；四路远程 CI 同头全绿 | 只证明 E3 registry/ABI/public retry freeze；仍不能外推真实 DB/provider/media/E6 |
 | 工程质量 | `review / high` | 最终 QUALITY `APPROVED`，P1/P2=0/0，14/14 负向变异被拒绝；小说真实完本与全书审稿 2 个既有 P0 仍未关闭 |
 | 本地服务 | 未运行 | `5173`、`3001` 当前无监听；用户需要浏览器验收时按需启动 |
@@ -35,10 +35,10 @@
 ```text
 总体关闭进度  [████░░░░░░░░░░░░░░░░]  9 / 42（21%）
 剩余问题      33
-当前整改包    RP-02B2a2-A2 authority claim：replacement G0/E1/default-branch bridge 已闭合，仓库变量只授权 A2；旧 17-file 草稿审计发现 8 个 P1，待迁移到精确 G0 sibling 分支后返工
+当前整改包    RP-02B2a2（A2 authority claim）：replacement G0/E1/default-branch bridge 已闭合，仓库变量只授权该实现包的 A2 阶段；旧 17-file 草稿审计发现 8 个 P1，待迁移到精确 G0 sibling 分支后返工
 拆包准入进度  [████████████████████]  7 / 7（100%）：第六轮四角色全部 approved，P0/P1=0
 研发交付进度  [████░░░░░░░░░░░░░░░░]  1 / 5（20%）：仅 B2a1 限定阶段完成
-当前状态      G0 `52549d7`、E1 `39d48a6` 和 main bridge `9b320a5` 已完成；G0/E1 远程 runs 与 main recovery run `29559215753` 均 success。仓库变量已设为 `RP-02B2a2-A2` + predecessor `52549d7`，只表示允许 A2 开工，不表示实现、验收或总账关闭；A2 尚未迁移返工，当前仍为 9/42
+当前状态      G0 `52549d7`、E1 `39d48a6` 和 main bridge `9b320a5` 已完成；G0/E1 远程 runs 与 main recovery run `29559215753` 均 success。仓库变量已设为 package `RP-02B2a2` + predecessor `52549d7`，只表示允许 A2 authority-claim 阶段开工，不表示实现、验收或总账关闭；A2 尚未迁移返工，当前仍为 9/42
 ```
 
 当前包阶段：
@@ -112,7 +112,7 @@
 ### 下一触发动作
 
 - 暂缓 `P10-R1`，不得按编号自动继续。
-- `RP-02B1`、`RP-02B2a0` 与 `RP-02B2a1` 限定阶段已完成；replacement G0/E1/default-branch bridge 已闭合。当前只授权 `RP-02B2a2-A2` 从精确 G0 开工，A3-A5/B2b/B2c/B3 不得按编号自动继续，真实 MySQL 继续等待独立授权。
+- `RP-02B1`、`RP-02B2a0` 与 `RP-02B2a1` 限定阶段已完成；replacement G0/E1/default-branch bridge 已闭合。当前只授权 `RP-02B2a2` 的 A2 authority-claim 阶段从精确 G0 开工，A3-A5/B2b/B2c/B3 不得按编号自动继续，真实 MySQL 继续等待独立授权。
 
 ## 3. 视频模块
 
