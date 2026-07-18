@@ -8,7 +8,7 @@ hard_max_files: 20
 hard_max_net_additions: 3250
 exceeded_budget: false
 actual_files: 20
-actual_net_additions: 3187
+actual_net_additions: 3196
 split_reason: Trusted actor, per-asset source identities, canonical envelope, repository claim rollback, worker/recovery fail-closed behavior, Prisma snapshot parity, and the provider-before stale oracle form one fail-closed capability and must be independently verified before lease execution.
 owner: MC
 valid_until: 2026-08-31

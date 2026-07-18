@@ -156,5 +156,13 @@ function nullableId(value: unknown, path: string) { return value === null || val
 function integer(value: unknown, path: string, min: number, max: number) { if (!Number.isInteger(value) || (value as number) < min || (value as number) > max) unsupported(`${path} must be ${min}-${max}`); return value as number; }
 function oneOf<T extends string>(value: unknown, values: readonly T[], path: string): T { if (typeof value !== 'string' || !values.includes(value as T)) unsupported(`${path} is unsupported`); return value as T; }
 function idArray(value: unknown, path: string, min: number, max: number) { if (!Array.isArray(value)) unsupported(`${path} must be an array`); const normalized = [...new Set(value.map((item, index) => { const result = id(item, `${path}[${index}]`); if (result.length > 32) unsupported(`${path}[${index}] must be 1-32 characters`); return result; }))].sort(); if (normalized.length < min || normalized.length > max) unsupported(`${path} must contain ${min}-${max} unique items`); return normalized; }
-function isUntrustedAuditActor(value: unknown) { return typeof value !== 'string' || /default|legacy|placeholder/i.test(value.trim()); }
+function isUntrustedAuditActor(value: unknown) {
+  if (typeof value !== 'string' || !value.trim()) return true;
+  const tokens = value.trim()
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  return tokens.some((token) => token === 'default' || token === 'legacy' || token === 'placeholder');
+}
 function unsupported(message: string): never { throw new WorkerPayloadUnsupportedError(message); }

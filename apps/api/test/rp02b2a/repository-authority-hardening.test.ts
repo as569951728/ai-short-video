@@ -32,6 +32,7 @@ describe('RP-02B2a2 A2 repository authority hardening', () => {
   it('leases a valid V1.1 task and recovers only the same authoritative envelope and actor', async () => {
     const repository = createInMemoryNovelRepository();
     const queued = await seedQueuedTask(repository, 'normal');
+    mutateActor(queued, 'user_legacyaccount');
     const beforeLeaseEvents = repository.getGenerationTaskEvents().length;
     const leased = await repository.leaseNextQueuedTask('worker-a', 'lease-a', at(1), at(30));
     assert.equal(leased?.id, queued.id);
