@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { ErrorCode, type CancelTaskRequest, type RetryTaskRequest } from '@ai-shortvideo/shared';
+import { ErrorCode, isPlaceholderAuthorityIdentifier, type CancelTaskRequest, type RetryTaskRequest } from '@ai-shortvideo/shared';
 import { sendOk } from '../../../shared/reply.js';
 import { BusinessError } from '../../../shared/errors.js';
 import type { NovelRepository, RequestContext, RequestContextResolver } from '../../novels/domain/novelDomain.js';
@@ -138,7 +138,7 @@ async function resolveTaskContext(
   }
   const tenantId = actor?.tenantId?.trim() ?? '';
   const userId = actor?.userId?.trim() ?? '';
-  if (!tenantId || !userId || tenantId === 'tenant_default' || userId === 'user_default') {
+  if (isPlaceholderAuthorityIdentifier(tenantId) || isPlaceholderAuthorityIdentifier(userId)) {
     throw new BusinessError(ErrorCode.Unauthorized, '当前请求缺少可信身份。');
   }
   return Object.freeze({

@@ -115,8 +115,23 @@ export interface PreviousBatchAuthorityIdentityV1 {
   summaryHash: string;
 }
 
+export const AUTHORITY_SOURCE_TYPES = [
+  'novel', 'preferences', 'direction', 'setting', 'outline', 'stage_outline', 'chapter_plan',
+  'trial_run', 'chapter', 'chapter_content', 'body_strategy_snapshot', 'long_term_memory', 'body_batch'
+] as const;
+
+export type AuthoritySourceType = (typeof AUTHORITY_SOURCE_TYPES)[number];
+
+export interface AuthoritySourceIdentityV1 {
+  sourceType: AuthoritySourceType;
+  sourceId: string;
+  revision: string | number;
+  snapshotHash: string;
+}
+
 export interface AuthoritySourceVersionRefsV1 {
   sourceIdentitySchemaVersion: 1;
+  sourceIdentities: AuthoritySourceIdentityV1[];
   novelProviderInputSnapshotHash: string;
   preferencesSnapshotHash?: string;
   chapterProviderInputSnapshotHash?: string;
@@ -148,19 +163,26 @@ export type ExecutionEnvelopeV1_1 = ExecutionEnvelopeV1 extends infer TEnvelope
 export type ExecutionEnvelope = ExecutionEnvelopeV1 | ExecutionEnvelopeV1_1;
 
 const MAX_EXECUTION_ENVELOPE_BYTES = 32 * 1024;
+const MAX_EXECUTION_ENVELOPE_V1_1_BYTES = 48 * 1024;
 const EXECUTION_SENSITIVE_KEY = /(?:api.?key|authorization|cookie|database.?url|access.?token|provider.*(?:body|header|response)|raw.?response|reasoning|messages?|system.?prompt|user.?prompt|user.?agent|ip.?address)/i;
 const EXECUTION_SENSITIVE_VALUE = /(?:\bBearer\s+[A-Za-z0-9._~+\/-]+=*|\bsk-[A-Za-z0-9_-]{8,}\b|\b(?:AKIA|ASIA|AIDA|AROA|AIPA|ANPA|ANVA|ASCA)[A-Z0-9]{16}\b|\bgh[pousr]_[A-Za-z0-9]{30,}\b|\bAIza[A-Za-z0-9_-]{30,}\b|\bxox[baprs]-[A-Za-z0-9-]{10,}\b|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|\b(?:mysql|mariadb|postgres(?:ql)?):\/\/[^\s]+|\b(?:DEEPSEEK_API_KEY|DATABASE_URL)\s*=|\b(?:system|user)\s*prompt\s*:|\bmessages\s*=|\bprovider\s+raw\s+response\s*:|\breasoning\s*:|\bclient\s+ip\s*:|\buser-agent\s*:)/i;
 const EXECUTION_ACTIONS = new Set<string>(NOVEL_PROVIDER_ACTIONS);
 const EXECUTION_AUTHORITY_REF_KEYS = [
   'authoritySnapshotHash', 'providerInputSnapshotHash', 'sourceIdentitySchemaVersion',
-  'novelProviderInputSnapshotHash', 'preferencesSnapshotHash', 'chapterProviderInputSnapshotHash',
+  'sourceIdentities', 'novelProviderInputSnapshotHash', 'preferencesSnapshotHash', 'chapterProviderInputSnapshotHash',
   'chapterRefs', 'chapterInputSnapshotHash', 'targetChapterRefs', 'previousContentVersionId',
   'longTermMemoryIdentity', 'previousBatchIdentity', 'strategyProviderInputSnapshotHash'
 ] as const;
 const EXECUTION_REQUIRED_AUTHORITY_REF_KEYS = [
   'authoritySnapshotHash', 'providerInputSnapshotHash', 'sourceIdentitySchemaVersion',
-  'novelProviderInputSnapshotHash'
+  'sourceIdentities', 'novelProviderInputSnapshotHash'
 ] as const;
+
+const AUTHORITY_PLACEHOLDER_TOKENS = new Set([
+  'legacy', 'objectid', 'placeholder', 'synthetic', 'default', 'null', 'empty', 'undefined',
+  'unknown', 'none', 'nil', 'dummy', 'fake', 'mock', 'temporary', 'temp', 'sample', 'example',
+  'todo', 'tbd', 'na'
+]);
 
 export class WorkerPayloadUnsupportedError extends Error { readonly code = 'WORKER_PAYLOAD_UNSUPPORTED'; }
 
@@ -209,7 +231,7 @@ export function normalizeExecutionEnvelopeV1_1(input: unknown): ExecutionEnvelop
     ...legacyBase,
     schemaVersion: '1.1' as const,
     tenantId: executionTrustedActorId(value.tenantId, 'tenantId', 'tenant_default'),
-    novelId: executionId(value.novelId, 'novelId'),
+    novelId: executionAuthorityId(value.novelId, 'novelId'),
     auditContext: {
       requestedByUserId: executionTrustedActorId(audit.requestedByUserId, 'auditContext.requestedByUserId', 'user_default'),
       requestedAt
@@ -222,8 +244,9 @@ export function normalizeExecutionEnvelopeV1_1(input: unknown): ExecutionEnvelop
       providerInputSnapshotHash
     }
   };
-  if (new TextEncoder().encode(canonicalExecutionJson(envelope)).byteLength > MAX_EXECUTION_ENVELOPE_BYTES) {
-    executionUnsupported('normalized envelope exceeds 32 KiB');
+  assertAuthoritySourceIdentityCoverage(envelope as ExecutionEnvelopeV1_1);
+  if (new TextEncoder().encode(canonicalExecutionJson(envelope)).byteLength > MAX_EXECUTION_ENVELOPE_V1_1_BYTES) {
+    executionUnsupported('normalized envelope exceeds 48 KiB');
   }
   return envelope as ExecutionEnvelopeV1_1;
 }
@@ -234,7 +257,7 @@ export function normalizeExecutionEnvelope(input: unknown): ExecutionEnvelopeV1 
   if (value.schemaVersion !== 1) executionUnsupported('schemaVersion must be 1');
   const action = executionText(value.action, 'action', 128);
   if (!EXECUTION_ACTIONS.has(action)) executionUnsupported(`unsupported action: ${action}`);
-  const common = { schemaVersion: 1 as const, action: action as NovelProviderAction, objectType: executionText(value.objectType, 'objectType', 128), objectId: executionId(value.objectId, 'objectId'), policyProfileVersionId: executionNullableId(value.policyProfileVersionId, 'policyProfileVersionId'), modelRoutingVersion: executionId(value.modelRoutingVersion, 'modelRoutingVersion') };
+  const common = { schemaVersion: 1 as const, action: action as NovelProviderAction, objectType: executionText(value.objectType, 'objectType', 128), objectId: executionAuthorityId(value.objectId, 'objectId'), policyProfileVersionId: executionNullableId(value.policyProfileVersionId, 'policyProfileVersionId'), modelRoutingVersion: executionId(value.modelRoutingVersion, 'modelRoutingVersion') };
   const request = value.effectiveRequest;
   const refs = value.sourceVersionRefs;
   let envelope: ExecutionEnvelopeV1;
@@ -317,43 +340,43 @@ function executionChapterRewriteRequest(value: unknown) { const source = executi
 function executionChapterImpactRequest(value: unknown) { const source = executionRecord(value, ['chapterId', 'currentContentVersionId', 'instruction', 'reason'], 'effectiveRequest'); const instruction = executionOptionalText(source.instruction, 'effectiveRequest.instruction', 2_000); const reason = executionOptionalText(source.reason, 'effectiveRequest.reason', 1_000); return { chapterId: executionId(source.chapterId, 'effectiveRequest.chapterId'), currentContentVersionId: executionId(source.currentContentVersionId, 'effectiveRequest.currentContentVersionId'), ...(instruction ? { instruction } : {}), ...(reason ? { reason } : {}) }; }
 function executionChapterAdoptImpactRequest(value: unknown) { const source = executionRecord(value, ['chapterId', 'candidateVersionId', 'currentContentVersionId', 'reason', 'pageVersionSnapshot'], 'effectiveRequest'); const pageVersionSnapshot = executionOptionalPageVersionSnapshot(source.pageVersionSnapshot); return { chapterId: executionId(source.chapterId, 'effectiveRequest.chapterId'), candidateVersionId: executionId(source.candidateVersionId, 'effectiveRequest.candidateVersionId'), currentContentVersionId: executionId(source.currentContentVersionId, 'effectiveRequest.currentContentVersionId'), reason: executionText(source.reason, 'effectiveRequest.reason', 1_000), ...(pageVersionSnapshot ? { pageVersionSnapshot } : {}) }; }
 function executionFullReviewRequest(value: unknown) { const source = executionRecord(value, ['policyProfileVersionId'], 'effectiveRequest'); return { policyProfileVersionId: executionId(source.policyProfileVersionId, 'effectiveRequest.policyProfileVersionId') }; }
-function executionDirectionGenerateRefs(value: unknown) { const source = executionRequiredRecord(value, ['currentDirectionVersionId'], 'sourceVersionRefs'); return { currentDirectionVersionId: executionNullableId(source.currentDirectionVersionId, 'sourceVersionRefs.currentDirectionVersionId') }; }
-function executionVersionRefs(value: unknown) { const source = executionRecord(value, ['sourceVersionIds'], 'sourceVersionRefs'); return { sourceVersionIds: executionIdArray(source.sourceVersionIds, 'sourceVersionRefs.sourceVersionIds', 1, 100) }; }
+function executionDirectionGenerateRefs(value: unknown) { const source = executionRequiredRecord(value, ['currentDirectionVersionId'], 'sourceVersionRefs'); return { currentDirectionVersionId: executionNullableAuthorityId(source.currentDirectionVersionId, 'sourceVersionRefs.currentDirectionVersionId') }; }
+function executionVersionRefs(value: unknown) { const source = executionRecord(value, ['sourceVersionIds'], 'sourceVersionRefs'); return { sourceVersionIds: executionAuthorityIdArray(source.sourceVersionIds, 'sourceVersionRefs.sourceVersionIds', 1, 100) }; }
 function executionStructureRefs(value: unknown, objectType: string) {
   const source = executionRequiredRecord(value, ['currentDirectionVersionId', 'currentSettingVersionId', 'currentOutlineVersionId', 'currentStageOutlineVersionId', 'objectType'], 'sourceVersionRefs');
   if (source.objectType !== objectType) executionUnsupported(`sourceVersionRefs.objectType must be ${objectType}`);
-  return { currentDirectionVersionId: executionNullableId(source.currentDirectionVersionId, 'sourceVersionRefs.currentDirectionVersionId'), currentSettingVersionId: executionNullableId(source.currentSettingVersionId, 'sourceVersionRefs.currentSettingVersionId'), currentOutlineVersionId: executionNullableId(source.currentOutlineVersionId, 'sourceVersionRefs.currentOutlineVersionId'), currentStageOutlineVersionId: executionNullableId(source.currentStageOutlineVersionId, 'sourceVersionRefs.currentStageOutlineVersionId'), objectType };
+  return { currentDirectionVersionId: executionNullableAuthorityId(source.currentDirectionVersionId, 'sourceVersionRefs.currentDirectionVersionId'), currentSettingVersionId: executionNullableAuthorityId(source.currentSettingVersionId, 'sourceVersionRefs.currentSettingVersionId'), currentOutlineVersionId: executionNullableAuthorityId(source.currentOutlineVersionId, 'sourceVersionRefs.currentOutlineVersionId'), currentStageOutlineVersionId: executionNullableAuthorityId(source.currentStageOutlineVersionId, 'sourceVersionRefs.currentStageOutlineVersionId'), objectType };
 }
 function executionTrialRefs(value: unknown, followup: boolean, objectId?: string) {
   const keys = ['currentDirectionVersionId', 'currentSettingVersionId', 'currentOutlineVersionId', 'currentStageOutlineVersionId', 'currentChapterPlanVersionId', 'objectType', ...(followup ? ['trialRunId', 'selectedChapterOneCandidateId'] : [])];
   const source = executionRecord(value, keys, 'sourceVersionRefs');
   for (const key of keys) if (key !== 'trialRunId' && !(key in source)) executionUnsupported(`sourceVersionRefs.${key} is required`);
   const base = executionStructureRefs(Object.fromEntries(['currentDirectionVersionId', 'currentSettingVersionId', 'currentOutlineVersionId', 'currentStageOutlineVersionId'].map((key) => [key, source[key]]).concat([['objectType', source.objectType]])), 'trial_run');
-  const trialRunId = followup ? executionId(source.trialRunId ?? objectId, 'sourceVersionRefs.trialRunId') : undefined;
+  const trialRunId = followup ? executionAuthorityId(source.trialRunId ?? objectId, 'sourceVersionRefs.trialRunId') : undefined;
   if (trialRunId && objectId && trialRunId !== objectId) executionUnsupported('sourceVersionRefs.trialRunId must match objectId');
-  return { ...base, currentChapterPlanVersionId: executionId(source.currentChapterPlanVersionId, 'sourceVersionRefs.currentChapterPlanVersionId'), ...(followup ? { trialRunId: trialRunId!, selectedChapterOneCandidateId: executionId(source.selectedChapterOneCandidateId, 'sourceVersionRefs.selectedChapterOneCandidateId') } : {}) };
+  return { ...base, currentChapterPlanVersionId: executionAuthorityId(source.currentChapterPlanVersionId, 'sourceVersionRefs.currentChapterPlanVersionId'), ...(followup ? { trialRunId: trialRunId!, selectedChapterOneCandidateId: executionAuthorityId(source.selectedChapterOneCandidateId, 'sourceVersionRefs.selectedChapterOneCandidateId') } : {}) };
 }
 function executionBodyRefs(value: unknown) {
   const keys = ['currentDirectionVersionId', 'currentSettingVersionId', 'currentOutlineVersionId', 'currentStageOutlineVersionId', 'currentChapterPlanVersionId', 'trialRunId', 'selectedChapterOneCandidateId', 'strategySnapshotId', 'strategySnapshotVersion', 'creationStage'];
   const source = executionRequiredRecord(value, keys, 'sourceVersionRefs');
   if (source.creationStage !== 'body') executionUnsupported('sourceVersionRefs.creationStage must be body');
-  return Object.fromEntries(keys.map((key) => [key, key === 'strategySnapshotVersion' ? executionInteger(source[key], `sourceVersionRefs.${key}`, 1, 1_000_000) : key === 'creationStage' ? 'body' : key === 'strategySnapshotId' ? executionId(source[key], `sourceVersionRefs.${key}`) : executionNullableId(source[key], `sourceVersionRefs.${key}`)])) as never;
+  return Object.fromEntries(keys.map((key) => [key, key === 'strategySnapshotVersion' ? executionInteger(source[key], `sourceVersionRefs.${key}`, 1, 1_000_000) : key === 'creationStage' ? 'body' : executionNullableAuthorityId(source[key], `sourceVersionRefs.${key}`)])) as never;
 }
-function executionContentRefs(value: unknown, candidate: boolean) { const source = executionRequiredRecord(value, ['currentContentVersionId', ...(candidate ? ['candidateVersionId'] : [])], 'sourceVersionRefs'); return { currentContentVersionId: executionId(source.currentContentVersionId, 'sourceVersionRefs.currentContentVersionId'), ...(candidate ? { candidateVersionId: executionId(source.candidateVersionId, 'sourceVersionRefs.candidateVersionId') } : {}) }; }
+function executionContentRefs(value: unknown, candidate: boolean) { const source = executionRequiredRecord(value, ['currentContentVersionId', ...(candidate ? ['candidateVersionId'] : [])], 'sourceVersionRefs'); return { currentContentVersionId: executionAuthorityId(source.currentContentVersionId, 'sourceVersionRefs.currentContentVersionId'), ...(candidate ? { candidateVersionId: executionAuthorityId(source.candidateVersionId, 'sourceVersionRefs.candidateVersionId') } : {}) }; }
 function executionFullReviewRefs(value: unknown) {
   const keys = ['currentDirectionVersionId', 'currentSettingVersionId', 'currentOutlineVersionId', 'currentStageOutlineVersionId', 'currentChapterPlanVersionId', 'chapterContentVersionIds'];
   const source = executionRecord(value, keys, 'sourceVersionRefs');
   if (!Array.isArray(source.chapterContentVersionIds) || source.chapterContentVersionIds.length > 100) executionUnsupported('sourceVersionRefs.chapterContentVersionIds must contain at most 100 items');
-  const chapters = source.chapterContentVersionIds.map((item, index) => { const row = executionRecord(item, ['chapterId', 'chapterNo', 'currentContentVersionId', 'currentFeatureCardVersionId', 'currentReviewReportId'], `sourceVersionRefs.chapterContentVersionIds[${index}]`); return { chapterId: executionId(row.chapterId, 'chapterId'), chapterNo: executionInteger(row.chapterNo, 'chapterNo', 1, 100_000), currentContentVersionId: executionId(row.currentContentVersionId, 'currentContentVersionId'), currentFeatureCardVersionId: executionNullableId(row.currentFeatureCardVersionId, 'currentFeatureCardVersionId'), currentReviewReportId: executionNullableId(row.currentReviewReportId, 'currentReviewReportId') }; }).sort((a, b) => a.chapterNo - b.chapterNo || a.chapterId.localeCompare(b.chapterId));
+  const chapters = source.chapterContentVersionIds.map((item, index) => { const row = executionRecord(item, ['chapterId', 'chapterNo', 'currentContentVersionId', 'currentFeatureCardVersionId', 'currentReviewReportId'], `sourceVersionRefs.chapterContentVersionIds[${index}]`); return { chapterId: executionAuthorityId(row.chapterId, 'chapterId'), chapterNo: executionInteger(row.chapterNo, 'chapterNo', 1, 100_000), currentContentVersionId: executionAuthorityId(row.currentContentVersionId, 'currentContentVersionId'), currentFeatureCardVersionId: executionNullableAuthorityId(row.currentFeatureCardVersionId, 'currentFeatureCardVersionId'), currentReviewReportId: executionNullableAuthorityId(row.currentReviewReportId, 'currentReviewReportId') }; }).sort((a, b) => a.chapterNo - b.chapterNo || a.chapterId.localeCompare(b.chapterId));
   if (new Set(chapters.map((row) => row.chapterId)).size !== chapters.length) executionUnsupported('chapterContentVersionIds must be unique');
-  return { ...Object.fromEntries(keys.slice(0, 5).map((key) => [key, executionId(source[key], `sourceVersionRefs.${key}`)])), chapterContentVersionIds: chapters } as never;
+  return { ...Object.fromEntries(keys.slice(0, 5).map((key) => [key, executionAuthorityId(source[key], `sourceVersionRefs.${key}`)])), chapterContentVersionIds: chapters } as never;
 }
 function executionRecord(value: unknown, keys: string[], path: string): Record<string, unknown> { if (!value || typeof value !== 'object' || Array.isArray(value)) executionUnsupported(`${path} must be an object`); const source = value as Record<string, unknown>; const unknown = Object.keys(source).filter((key) => !keys.includes(key)); if (unknown.length) executionUnsupported(`unknown field ${path}.${unknown[0]}`); return source; }
 function executionRequiredRecord(value: unknown, keys: string[], path: string) { const source = executionRecord(value, keys, path); for (const key of keys) if (!(key in source)) executionUnsupported(`${path}.${key} is required`); return source; }
 function executionRecordWithRequiredExtensions(value: unknown, requiredKeys: readonly string[], path: string) { if (!value || typeof value !== 'object' || Array.isArray(value)) executionUnsupported(`${path} must be an object`); const source = value as Record<string, unknown>; for (const key of requiredKeys) if (!(key in source)) executionUnsupported(`${path}.${key} is required`); return source; }
 function executionActionAuthorityRefs(action: NovelProviderAction, refs: Record<string, unknown>): AuthoritySourceVersionRefsV1 {
   if (refs.sourceIdentitySchemaVersion !== 1) executionUnsupported('sourceVersionRefs.sourceIdentitySchemaVersion must be 1');
-  const required = new Set<string>(['sourceIdentitySchemaVersion', 'novelProviderInputSnapshotHash']);
+  const required = new Set<string>(['sourceIdentitySchemaVersion', 'sourceIdentities', 'novelProviderInputSnapshotHash']);
   if (['direction_generate', 'direction_fuse', 'direction_optimize', 'setting_generate', 'outline_generate', 'stage_outline_generate', 'chapter_plan_generate', 'trial_chapter_one_generate', 'trial_followup_generate'].includes(action)) required.add('preferencesSnapshotHash');
   if (['trial_chapter_one_generate', 'trial_followup_generate', 'body_batch_generate', 'chapter_body_generate', 'chapter_rewrite', 'chapter_impact_assess', 'chapter_adopt_impact_assess', 'novel_full_review'].includes(action)) required.add('chapterProviderInputSnapshotHash');
   if (action === 'trial_chapter_one_generate' || action === 'trial_followup_generate') {
@@ -368,6 +391,7 @@ function executionActionAuthorityRefs(action: NovelProviderAction, refs: Record<
   }
   const result: AuthoritySourceVersionRefsV1 = {
     sourceIdentitySchemaVersion: 1,
+    sourceIdentities: executionAuthoritySourceIdentities(refs.sourceIdentities),
     novelProviderInputSnapshotHash: executionSha256(refs.novelProviderInputSnapshotHash, 'sourceVersionRefs.novelProviderInputSnapshotHash')
   };
   if (required.has('preferencesSnapshotHash')) result.preferencesSnapshotHash = executionSha256(refs.preferencesSnapshotHash, 'sourceVersionRefs.preferencesSnapshotHash');
@@ -375,11 +399,30 @@ function executionActionAuthorityRefs(action: NovelProviderAction, refs: Record<
   if (required.has('chapterRefs')) result.chapterRefs = executionAuthorityChapterRefs(refs.chapterRefs, 'sourceVersionRefs.chapterRefs', false);
   if (required.has('chapterInputSnapshotHash')) result.chapterInputSnapshotHash = executionSha256(refs.chapterInputSnapshotHash, 'sourceVersionRefs.chapterInputSnapshotHash');
   if (required.has('targetChapterRefs')) result.targetChapterRefs = executionAuthorityChapterRefs(refs.targetChapterRefs, 'sourceVersionRefs.targetChapterRefs', true) as AuthorityTargetChapterSourceRefV1[];
-  if (required.has('previousContentVersionId')) result.previousContentVersionId = executionNullableId(refs.previousContentVersionId, 'sourceVersionRefs.previousContentVersionId');
+  if (required.has('previousContentVersionId')) result.previousContentVersionId = executionNullableAuthorityId(refs.previousContentVersionId, 'sourceVersionRefs.previousContentVersionId');
   if (required.has('longTermMemoryIdentity')) result.longTermMemoryIdentity = executionLongTermMemoryIdentity(refs.longTermMemoryIdentity);
   if (required.has('previousBatchIdentity')) result.previousBatchIdentity = executionPreviousBatchIdentity(refs.previousBatchIdentity);
   if (required.has('strategyProviderInputSnapshotHash')) result.strategyProviderInputSnapshotHash = executionSha256(refs.strategyProviderInputSnapshotHash, 'sourceVersionRefs.strategyProviderInputSnapshotHash');
   return result;
+}
+function executionAuthoritySourceIdentities(value: unknown): AuthoritySourceIdentityV1[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 512) executionUnsupported('sourceVersionRefs.sourceIdentities must contain 1-512 items');
+  const rows = value.map((item, index) => {
+    const path = `sourceVersionRefs.sourceIdentities[${index}]`;
+    const row = executionRequiredRecord(item, ['sourceType', 'sourceId', 'revision', 'snapshotHash'], path);
+    const sourceType = executionText(row.sourceType, `${path}.sourceType`, 40) as AuthoritySourceType;
+    if (!(AUTHORITY_SOURCE_TYPES as readonly string[]).includes(sourceType)) executionUnsupported(`${path}.sourceType is unsupported`);
+    return {
+      sourceType,
+      sourceId: executionAuthorityId(row.sourceId, `${path}.sourceId`),
+      revision: executionAuthorityRevision(row.revision, `${path}.revision`),
+      snapshotHash: executionSha256(row.snapshotHash, `${path}.snapshotHash`)
+    };
+  });
+  const keys = rows.map((row) => `${row.sourceType}\u0000${row.sourceId}`);
+  if (new Set(keys).size !== rows.length) executionUnsupported('sourceVersionRefs.sourceIdentities must be unique');
+  if (keys.some((key, index) => index > 0 && key <= keys[index - 1]!)) executionUnsupported('sourceVersionRefs.sourceIdentities must be canonically ordered');
+  return rows;
 }
 function executionAuthorityChapterRefs(value: unknown, path: string, target: boolean): AuthorityChapterSourceRefV1[] | AuthorityTargetChapterSourceRefV1[] {
   if (!Array.isArray(value) || value.length < 1 || value.length > 100) executionUnsupported(`${path} must contain 1-100 items`);
@@ -387,10 +430,10 @@ function executionAuthorityChapterRefs(value: unknown, path: string, target: boo
     const keys = ['chapterId', 'chapterNo', 'planVersionId', 'currentContentVersionId', ...(target ? ['providerInputSnapshotHash'] : [])];
     const row = executionRequiredRecord(item, keys, `${path}[${index}]`);
     return {
-      chapterId: executionId(row.chapterId, `${path}[${index}].chapterId`),
+      chapterId: executionAuthorityId(row.chapterId, `${path}[${index}].chapterId`),
       chapterNo: executionInteger(row.chapterNo, `${path}[${index}].chapterNo`, 1, 100_000),
-      planVersionId: executionId(row.planVersionId, `${path}[${index}].planVersionId`),
-      currentContentVersionId: executionNullableId(row.currentContentVersionId, `${path}[${index}].currentContentVersionId`),
+      planVersionId: executionAuthorityId(row.planVersionId, `${path}[${index}].planVersionId`),
+      currentContentVersionId: executionNullableAuthorityId(row.currentContentVersionId, `${path}[${index}].currentContentVersionId`),
       ...(target ? { providerInputSnapshotHash: executionSha256(row.providerInputSnapshotHash, `${path}[${index}].providerInputSnapshotHash`) } : {})
     };
   });
@@ -401,24 +444,93 @@ function executionAuthorityChapterRefs(value: unknown, path: string, target: boo
 function executionLongTermMemoryIdentity(value: unknown): LongTermMemoryAuthorityIdentityV1 | null {
   if (value === null) return null;
   const row = executionRequiredRecord(value, ['id', 'sourceContentVersionId', 'snapshotHash'], 'sourceVersionRefs.longTermMemoryIdentity');
-  return { id: executionId(row.id, 'sourceVersionRefs.longTermMemoryIdentity.id'), sourceContentVersionId: executionId(row.sourceContentVersionId, 'sourceVersionRefs.longTermMemoryIdentity.sourceContentVersionId'), snapshotHash: executionSha256(row.snapshotHash, 'sourceVersionRefs.longTermMemoryIdentity.snapshotHash') };
+  return { id: executionAuthorityId(row.id, 'sourceVersionRefs.longTermMemoryIdentity.id'), sourceContentVersionId: executionAuthorityId(row.sourceContentVersionId, 'sourceVersionRefs.longTermMemoryIdentity.sourceContentVersionId'), snapshotHash: executionSha256(row.snapshotHash, 'sourceVersionRefs.longTermMemoryIdentity.snapshotHash') };
 }
 function executionPreviousBatchIdentity(value: unknown): PreviousBatchAuthorityIdentityV1 | null {
   if (value === null) return null;
   const row = executionRequiredRecord(value, ['id', 'summaryHash'], 'sourceVersionRefs.previousBatchIdentity');
-  return { id: executionId(row.id, 'sourceVersionRefs.previousBatchIdentity.id'), summaryHash: executionSha256(row.summaryHash, 'sourceVersionRefs.previousBatchIdentity.summaryHash') };
+  return { id: executionAuthorityId(row.id, 'sourceVersionRefs.previousBatchIdentity.id'), summaryHash: executionSha256(row.summaryHash, 'sourceVersionRefs.previousBatchIdentity.summaryHash') };
 }
 function executionId(value: unknown, path: string) { return executionText(value, path, 128); }
-function executionTrustedActorId(value: unknown, path: string, forbidden: string) { const id = executionId(value, path); if (id === forbidden) executionUnsupported(`${path} must not use a default actor`); return id; }
+function executionAuthorityId(value: unknown, path: string) { const id = executionId(value, path); if (isPlaceholderAuthorityIdentifier(id)) executionUnsupported(`${path} must identify a real authoritative source`); return id; }
+function executionAuthorityRevision(value: unknown, path: string): string | number { if (Number.isInteger(value) && (value as number) > 0) return value as number; return executionAuthorityId(value, path); }
+function executionTrustedActorId(value: unknown, path: string, forbidden: string) { const id = executionId(value, path); if (id === forbidden || isPlaceholderAuthorityIdentifier(id)) executionUnsupported(`${path} must identify a trusted actor`); return id; }
 function executionNullableId(value: unknown, path: string) { return value === null || value === undefined ? null : executionId(value, path); }
+function executionNullableAuthorityId(value: unknown, path: string) { return value === null || value === undefined ? null : executionAuthorityId(value, path); }
 function executionOptionalPageVersionSnapshot(value: unknown): Record<string, unknown> | undefined { if (value === undefined || value === null) return undefined; if (!value || typeof value !== 'object' || Array.isArray(value)) executionUnsupported('effectiveRequest.pageVersionSnapshot must be an object'); return structuredClone(value) as Record<string, unknown>; }
 function executionText(value: unknown, path: string, max: number) { const normalized = typeof value === 'string' ? value.trim() : ''; if (normalized.length < 1 || normalized.length > max) executionUnsupported(`${path} must be 1-${max} characters`); return normalized; }
 function executionOptionalText(value: unknown, path: string, max: number) { return value === undefined || value === null || value === '' ? undefined : executionText(value, path, max); }
 function executionInteger(value: unknown, path: string, min: number, max: number) { if (!Number.isInteger(value) || (value as number) < min || (value as number) > max) executionUnsupported(`${path} must be ${min}-${max}`); return value as number; }
-function executionSha256(value: unknown, path: string) { const text = executionText(value, path, 64); if (!/^[a-f0-9]{64}$/.test(text)) executionUnsupported(`${path} must be a SHA-256 hex digest`); return text; }
+function executionSha256(value: unknown, path: string) { const text = executionText(value, path, 64); if (!/^[a-f0-9]{64}$/.test(text) || /^0{64}$/.test(text)) executionUnsupported(`${path} must be a non-placeholder SHA-256 hex digest`); return text; }
 function executionIsoDate(value: unknown, path: string) { const text = executionText(value, path, 40); const parsed = new Date(text); if (Number.isNaN(parsed.getTime()) || parsed.toISOString() !== text) executionUnsupported(`${path} must be canonical ISO-8601`); return text; }
 function executionIdArray(value: unknown, path: string, min: number, max: number) { if (!Array.isArray(value)) executionUnsupported(`${path} must be an array`); const normalized = [...new Set(value.map((item, index) => executionId(item, `${path}[${index}]`)))].sort(); if (normalized.length < min || normalized.length > max) executionUnsupported(`${path} must contain ${min}-${max} unique items`); return normalized; }
+function executionAuthorityIdArray(value: unknown, path: string, min: number, max: number) { if (!Array.isArray(value)) executionUnsupported(`${path} must be an array`); const normalized = [...new Set(value.map((item, index) => executionAuthorityId(item, `${path}[${index}]`)))].sort(); if (normalized.length < min || normalized.length > max) executionUnsupported(`${path} must contain ${min}-${max} unique items`); return normalized; }
 function executionUnsupported(message: string): never { throw new WorkerPayloadUnsupportedError(message); }
+
+export function isPlaceholderAuthorityIdentifier(value: unknown): boolean {
+  if (typeof value !== 'string') return true;
+  const normalized = value.trim();
+  if (!normalized || /^0+$/.test(normalized)) return true;
+  if (/^policy_default_v[1-9]\d*$/i.test(normalized)) return false;
+  const camelSeparated = normalized.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase();
+  const tokens = camelSeparated.split(/[^a-z0-9]+/).filter(Boolean);
+  return tokens.some((token) => AUTHORITY_PLACEHOLDER_TOKENS.has(token))
+    || tokens.some((token, index) => token === 'object' && tokens[index + 1] === 'id');
+}
+
+function assertAuthoritySourceIdentityCoverage(envelope: ExecutionEnvelopeV1_1): void {
+  const identities = envelope.sourceVersionRefs.sourceIdentities;
+  const byKey = new Map(identities.map((identity) => [`${identity.sourceType}\u0000${identity.sourceId}`, identity]));
+  const expectedKeys = new Set<string>();
+  const requireIdentity = (sourceType: AuthoritySourceType, sourceId: string | null | undefined, path: string, revision?: string | number) => {
+    if (sourceId === null || sourceId === undefined) return;
+    const key = `${sourceType}\u0000${sourceId}`;
+    expectedKeys.add(key);
+    const identity = byKey.get(key);
+    if (!identity) executionUnsupported(`${path} is missing a matching source identity`);
+    if (revision !== undefined && identity.revision !== revision) executionUnsupported(`${path} source identity revision does not match`);
+  };
+  requireIdentity('novel', envelope.novelId, 'novelId');
+  const refs = envelope.sourceVersionRefs as unknown as Record<string, unknown>;
+  if ('preferencesSnapshotHash' in refs) requireIdentity('preferences', envelope.novelId, 'sourceVersionRefs.preferencesSnapshotHash');
+  const currentTypes: Array<[string, AuthoritySourceType]> = [
+    ['currentDirectionVersionId', 'direction'], ['currentSettingVersionId', 'setting'],
+    ['currentOutlineVersionId', 'outline'], ['currentStageOutlineVersionId', 'stage_outline'],
+    ['currentChapterPlanVersionId', 'chapter_plan']
+  ];
+  for (const [key, sourceType] of currentTypes) requireIdentity(sourceType, refs[key] as string | null | undefined, `sourceVersionRefs.${key}`);
+  if (Array.isArray(refs.sourceVersionIds)) {
+    for (const [index, id] of refs.sourceVersionIds.entries()) requireIdentity('direction', id as string, `sourceVersionRefs.sourceVersionIds[${index}]`);
+  }
+  requireIdentity('trial_run', refs.trialRunId as string | null | undefined, 'sourceVersionRefs.trialRunId');
+  requireIdentity('chapter_content', refs.selectedChapterOneCandidateId as string | null | undefined, 'sourceVersionRefs.selectedChapterOneCandidateId');
+  requireIdentity('body_strategy_snapshot', refs.strategySnapshotId as string | null | undefined, 'sourceVersionRefs.strategySnapshotId', refs.strategySnapshotVersion as number | undefined);
+  requireIdentity('chapter_content', refs.currentContentVersionId as string | null | undefined, 'sourceVersionRefs.currentContentVersionId');
+  requireIdentity('chapter_content', refs.candidateVersionId as string | null | undefined, 'sourceVersionRefs.candidateVersionId');
+  if (['chapter_body_generate', 'chapter_rewrite', 'chapter_impact_assess', 'chapter_adopt_impact_assess'].includes(envelope.action)) {
+    requireIdentity('chapter', envelope.objectId, 'objectId');
+  }
+  for (const key of ['chapterRefs', 'targetChapterRefs'] as const) {
+    if (!Array.isArray(refs[key])) continue;
+    for (const [index, item] of (refs[key] as Array<AuthorityChapterSourceRefV1>).entries()) {
+      requireIdentity('chapter', item.chapterId, `sourceVersionRefs.${key}[${index}].chapterId`);
+    }
+  }
+  requireIdentity('chapter_content', refs.previousContentVersionId as string | null | undefined, 'sourceVersionRefs.previousContentVersionId');
+  const memory = refs.longTermMemoryIdentity as LongTermMemoryAuthorityIdentityV1 | null | undefined;
+  requireIdentity('long_term_memory', memory?.id, 'sourceVersionRefs.longTermMemoryIdentity.id');
+  const batch = refs.previousBatchIdentity as PreviousBatchAuthorityIdentityV1 | null | undefined;
+  requireIdentity('body_batch', batch?.id, 'sourceVersionRefs.previousBatchIdentity.id');
+  if (Array.isArray(refs.chapterContentVersionIds)) {
+    for (const [index, item] of refs.chapterContentVersionIds.entries()) {
+      const row = item as FullReviewChapterSourceRefV1;
+      requireIdentity('chapter', row.chapterId, `sourceVersionRefs.chapterContentVersionIds[${index}].chapterId`);
+    }
+  }
+  if (expectedKeys.size !== identities.length || identities.some((identity) => !expectedKeys.has(`${identity.sourceType}\u0000${identity.sourceId}`))) {
+    executionUnsupported(`sourceVersionRefs.sourceIdentities contains an identity not used by ${envelope.action}`);
+  }
+}
 
 export interface RecommendedActionDTO {
   type: string;

@@ -3,6 +3,8 @@ import {
   NOVEL_PROVIDER_ACTIONS,
   createExecutionEnvelope,
   createExecutionEnvelopeV1_1,
+  isPlaceholderAuthorityIdentifier,
+  type AuthoritySourceIdentityV1,
   type AuthoritySourceVersionRefsV1,
   type ExecutionEnvelopeV1_1,
   type NovelProviderAction
@@ -23,7 +25,8 @@ import type {
   NovelChapterRecord,
   NovelRecord,
   NovelRepository,
-  RequestContext
+  RequestContext,
+  TrialRunRecord
 } from '../domain/novelDomain.js';
 import {
   getActionExecutionPlan,
@@ -569,6 +572,7 @@ function buildActionAuthoritySourceRefs(
   const planVersionId = refs.currentChapterPlanVersionId;
   const result: AuthoritySourceVersionRefsV1 = {
     sourceIdentitySchemaVersion: 1,
+    sourceIdentities: [],
     novelProviderInputSnapshotHash: hashCanonicalJson(novel)
   };
   if (actionNeedsPreferences(action)) result.preferencesSnapshotHash = hashCanonicalJson(preferences);
@@ -613,7 +617,120 @@ function buildActionAuthoritySourceRefs(
     if (!strategy || !isRealId(strategy.id)) throw sourceStale();
     result.strategyProviderInputSnapshotHash = hashCanonicalJson(projectBodyStrategyProviderInput(strategy));
   }
+  result.sourceIdentities = buildAuthoritySourceIdentities(
+    action,
+    facts,
+    refs,
+    novel,
+    preferences,
+    authorityChapters
+  );
   return result;
+}
+
+function buildAuthoritySourceIdentities(
+  action: NovelProviderAction,
+  facts: Record<string, unknown>,
+  refs: Record<string, unknown>,
+  novel: Record<string, unknown>,
+  preferences: Record<string, unknown>,
+  authorityChapters: NovelChapterRecord[]
+): AuthoritySourceIdentityV1[] {
+  const identities = new Map<string, AuthoritySourceIdentityV1>();
+  const add = (sourceType: AuthoritySourceIdentityV1['sourceType'], sourceId: unknown, revision: unknown, snapshot: unknown) => {
+    const id = requireRealId(sourceId);
+    const normalizedRevision = typeof revision === 'number' && Number.isInteger(revision) && revision > 0
+      ? revision
+      : requireRealId(revision);
+    const identity: AuthoritySourceIdentityV1 = {
+      sourceType,
+      sourceId: id,
+      revision: normalizedRevision,
+      snapshotHash: hashCanonicalJson(snapshot)
+    };
+    const key = `${sourceType}\u0000${id}`;
+    const previous = identities.get(key);
+    if (previous && hashCanonicalJson(previous) !== hashCanonicalJson(identity)) throw sourceStale();
+    identities.set(key, identity);
+  };
+  const addContent = (content: ChapterContentVersionRecord | null | undefined) => {
+    if (!content) return;
+    add('chapter_content', content.id, content.versionNo, projectChapterContentProviderInput(content));
+  };
+  const actualContents = [
+    facts.currentContent as ChapterContentVersionRecord | null,
+    facts.candidate as ChapterContentVersionRecord | null,
+    facts.bodyPreviousContent as ChapterContentVersionRecord | null
+  ].filter((content): content is ChapterContentVersionRecord => Boolean(content));
+  const novelHash = hashCanonicalJson(novel);
+  add('novel', novel.id, novelHash, novel);
+  if (actionNeedsPreferences(action)) {
+    const preferencesHash = hashCanonicalJson(preferences);
+    add('preferences', novel.id, preferencesHash, preferences);
+  }
+  const versions = Array.isArray(facts.versions) ? facts.versions as CreativeVersionRecord[] : [];
+  for (const version of versions) {
+    if (!isCreativeAuthoritySourceType(version.objectType)) throw sourceStale();
+    add(version.objectType, version.id, version.versionNo, creativeAuthoritySnapshot(version));
+  }
+  const planVersionId = refs.currentChapterPlanVersionId;
+  for (const chapter of authorityChapters) {
+    const chapterSnapshot = {
+      chapterId: chapter.id,
+      chapterNo: chapter.chapterNo,
+      planVersionId: planVersionId ?? null,
+      currentContentVersionId: chapter.currentContentVersionId,
+      currentFeatureCardVersionId: chapter.currentFeatureCardVersionId,
+      currentReviewReportId: chapter.currentReviewReportId,
+      providerInput: projectChapterProviderInput(chapter)
+    };
+    add('chapter', chapter.id, chapter.currentContentVersionId ?? planVersionId ?? hashCanonicalJson(chapterSnapshot), chapterSnapshot);
+  }
+  for (const content of actualContents) addContent(content);
+  const trialRun = facts.trialRun as TrialRunRecord | null;
+  if (trialRun) {
+    const snapshot = {
+      id: trialRun.id,
+      chapterPlanVersionId: trialRun.chapterPlanVersionId,
+      trialChapterCount: trialRun.trialChapterCount,
+      status: trialRun.status,
+      policyProfileVersionId: trialRun.policyProfileVersionId,
+      reviewReportId: trialRun.reviewReportId
+    };
+    add('trial_run', trialRun.id, trialRun.chapterPlanVersionId ?? hashCanonicalJson(snapshot), snapshot);
+  }
+  const strategy = facts.strategy as CreativeVersionRecord | null;
+  if (strategy) add('body_strategy_snapshot', strategy.id, strategy.versionNo, projectBodyStrategyProviderInput(strategy));
+  const memory = facts.bodyPreviousMemory as LongTermMemoryRecord | null;
+  if (memory) add('long_term_memory', memory.id, memory.sourceContentVersionId ?? hashCanonicalJson(projectLongTermMemoryProviderInput(memory)), projectLongTermMemoryProviderInput(memory));
+  const previousBatch = toRecord(facts.bodyPreviousBatch);
+  if (Object.keys(previousBatch).length) {
+    const summary = previousBatch.summary;
+    add('body_batch', previousBatch.id, previousBatch.taskId ?? hashCanonicalJson(summary), summary);
+  }
+  return [...identities.values()].sort((left, right) => {
+    const leftKey = `${left.sourceType}\u0000${left.sourceId}`;
+    const rightKey = `${right.sourceType}\u0000${right.sourceId}`;
+    return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+  });
+}
+
+function isCreativeAuthoritySourceType(value: string): value is 'direction' | 'setting' | 'outline' | 'stage_outline' | 'chapter_plan' {
+  return ['direction', 'setting', 'outline', 'stage_outline', 'chapter_plan'].includes(value);
+}
+
+function creativeAuthoritySnapshot(version: CreativeVersionRecord) {
+  return {
+    id: version.id,
+    objectType: version.objectType,
+    versionNo: version.versionNo,
+    status: version.status,
+    staleLevel: version.staleLevel,
+    content: version.content,
+    summary: version.summary,
+    score: version.score,
+    riskLevel: version.riskLevel
+  };
 }
 
 function actionNeedsPreferences(action: NovelProviderAction) {
@@ -637,21 +754,19 @@ function authorityChapterRef(chapter: NovelChapterRecord, planVersionId: string)
 function pickActionAuthoritySourceRefs(value: unknown): AuthoritySourceVersionRefsV1 {
   const refs = toRecord(value);
   return Object.fromEntries([
-    'sourceIdentitySchemaVersion', 'novelProviderInputSnapshotHash', 'preferencesSnapshotHash',
+    'sourceIdentitySchemaVersion', 'sourceIdentities', 'novelProviderInputSnapshotHash', 'preferencesSnapshotHash',
     'chapterProviderInputSnapshotHash', 'chapterRefs', 'chapterInputSnapshotHash', 'targetChapterRefs',
     'previousContentVersionId', 'longTermMemoryIdentity', 'previousBatchIdentity', 'strategyProviderInputSnapshotHash'
   ].filter((key) => key in refs).map((key) => [key, refs[key]])) as unknown as AuthoritySourceVersionRefsV1;
 }
 
 function isRealId(value: unknown): value is string {
-  return typeof value === 'string' && value.trim().length > 0
-    && !value.trim().startsWith('legacy-')
-    && !value.trim().startsWith('objectId-');
+  return typeof value === 'string' && !isPlaceholderAuthorityIdentifier(value);
 }
 
 function requireRealId(value: unknown): string {
   if (!isRealId(value)) throw sourceStale();
-  return value;
+  return value.trim();
 }
 
 function projectAuthorityDirection(version: CreativeVersionRecord | undefined) {
@@ -690,8 +805,8 @@ function assertTrustedContext(context: RequestContext) {
   if (
     !context.tenantId.trim()
     || !context.userId.trim()
-    || context.tenantId === 'tenant_default'
-    || context.userId === 'user_default'
+    || isPlaceholderAuthorityIdentifier(context.tenantId)
+    || isPlaceholderAuthorityIdentifier(context.userId)
   ) {
     throw new BusinessError(ErrorCode.Unauthorized, '当前请求缺少可信身份。');
   }
