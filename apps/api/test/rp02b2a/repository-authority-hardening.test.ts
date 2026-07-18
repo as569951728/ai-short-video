@@ -214,6 +214,13 @@ async function claimInput(
   const authority = await repository.loadGenerationAuthority(authorityInput);
   assert.ok(authority);
   const authoritySnapshotHash = hashCanonicalJson(authority);
+  const authorityFacts = authority.facts as {
+    novel: Record<string, unknown>;
+    preferences: Record<string, unknown> | null;
+  };
+  const novelSnapshotHash = hashCanonicalJson(authorityFacts.novel);
+  const preferencesSnapshot = authorityFacts.preferences ?? { appealPoints: [], targetAudience: null, stageCount: null };
+  const preferencesSnapshotHash = hashCanonicalJson(preferencesSnapshot);
   const envelope = createExecutionEnvelopeV1_1({
     tenantId: context.tenantId,
     novelId,
@@ -225,8 +232,12 @@ async function claimInput(
     sourceVersionRefs: {
       currentDirectionVersionId: null,
       sourceIdentitySchemaVersion: 1,
-      novelProviderInputSnapshotHash: '1'.repeat(64),
-      preferencesSnapshotHash: '2'.repeat(64),
+      sourceIdentities: [
+        { sourceType: 'novel', sourceId: novelId, revision: novelSnapshotHash, snapshotHash: novelSnapshotHash },
+        { sourceType: 'preferences', sourceId: novelId, revision: preferencesSnapshotHash, snapshotHash: preferencesSnapshotHash }
+      ],
+      novelProviderInputSnapshotHash: novelSnapshotHash,
+      preferencesSnapshotHash,
       authoritySnapshotHash,
       providerInputSnapshotHash: '3'.repeat(64)
     },
