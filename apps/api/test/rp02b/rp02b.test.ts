@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { describe, it } from 'node:test';
-import { createExecutionEnvelope, normalizeExecutionEnvelope, TaskStatus, type ExecutionEnvelopeV1, type NovelProviderAction } from '@ai-shortvideo/shared';
+import { createExecutionEnvelope, createExecutionEnvelopeV1_1, normalizeExecutionEnvelope, TaskStatus, type ExecutionEnvelopeV1, type NovelProviderAction } from '@ai-shortvideo/shared';
 import { createInMemoryNovelRepository } from '../../src/modules/novels/repositories/inMemoryNovelRepository.js';
 import { PrismaNovelRepository } from '../../src/modules/novels/repositories/prismaNovelRepository.js';
 import {
@@ -293,7 +293,7 @@ describe('RP-02B1 recoverable execution contract', () => {
     assert.equal(await repository.leaseNextQueuedTask('worker-a', 'token-a', at(2), at(30)), null);
     assert.equal(legacyActive.status, TaskStatus.Failed);
     assert.equal(legacyActive.errorCode, 'WORKER_PAYLOAD_UNSUPPORTED');
-    assert.equal(repository.getGenerationTaskEvents().filter((event) => event.taskId === legacyActive.id && event.eventType === 'task_failed').length, 1);
+    assert.equal(repository.getGenerationTaskEvents().filter((event) => event.taskId === legacyActive.id && event.eventType === 'task_failed').length, 0);
     assert.equal(terminal.status, TaskStatus.Completed);
     assert.equal(terminal.errorCode, null);
     const [schema, migration, prismaRepository] = await Promise.all([
@@ -398,19 +398,39 @@ function taskTypeFor(action: NovelProviderAction) {
 async function seedQueuedTask(repository: ReturnType<typeof createInMemoryNovelRepository>, suffix: string) {
   const context = { tenantId: 'tenant-rp02b', userId: 'user-1', requestId: `request-${suffix}` };
   const created = await repository.createDraft({ request: { title: `RP-02B1 ${suffix}` }, context, now: at(0) });
-  const envelope = createExecutionEnvelope({ ...envelopeInput('direction_generate'), objectId: created.novel.id });
+  const legacyEnvelope = createExecutionEnvelope({ ...envelopeInput('direction_generate'), objectId: created.novel.id });
   const authorityInput = {
     action: 'direction_generate' as const, tenantId: context.tenantId, novelId: created.novel.id,
-    objectId: created.novel.id, sourceVersionRefs: envelope.sourceVersionRefs, normalizedRequest: envelope.effectiveRequest
+    objectId: created.novel.id, sourceVersionRefs: legacyEnvelope.sourceVersionRefs, normalizedRequest: legacyEnvelope.effectiveRequest
   };
   const authority = await repository.loadGenerationAuthority(authorityInput);
   assert.ok(authority);
+  const authoritySnapshotHash = hashCanonicalJson(authority);
+  const envelope = createExecutionEnvelopeV1_1({
+    tenantId: context.tenantId,
+    novelId: created.novel.id,
+    auditContext: { requestedByUserId: context.userId, requestedAt: at(0).toISOString() },
+    action: 'direction_generate',
+    objectType: 'direction',
+    objectId: created.novel.id,
+    normalizedRequest: legacyEnvelope.effectiveRequest,
+    sourceVersionRefs: {
+      ...legacyEnvelope.sourceVersionRefs,
+      sourceIdentitySchemaVersion: 1,
+      novelProviderInputSnapshotHash: '1'.repeat(64),
+      preferencesSnapshotHash: '2'.repeat(64),
+      authoritySnapshotHash,
+      providerInputSnapshotHash: '3'.repeat(64)
+    },
+    policyProfileVersionId: legacyEnvelope.policyProfileVersionId,
+    modelRoutingVersion: legacyEnvelope.modelRoutingVersion
+  });
   const input: ClaimGenerationTaskInput = {
     tenantId: context.tenantId, novelId: created.novel.id, taskType: 'novel_direction_generate', objectType: 'direction', objectId: created.novel.id,
     conflictScope: 'novel_direction', conflictKey: suffix, activeClaimKey: `claim-${suffix}`, idempotencyToken: `token-${suffix}`,
     requestHash: hashCanonicalJson(envelope), sourceVersionRefs: envelope.sourceVersionRefs, executionEnvelopeJson: envelope,
     policyProfileVersionId: envelope.policyProfileVersionId, modelRoutingVersion: envelope.modelRoutingVersion,
-    inputSummary: 'test', authorityInput, expectedAuthoritySnapshotHash: hashCanonicalJson(authority), context, now: at(0)
+    inputSummary: 'test', authorityInput: { ...authorityInput, sourceVersionRefs: envelope.sourceVersionRefs }, expectedAuthoritySnapshotHash: authoritySnapshotHash, context, now: at(0)
   };
   const claim = await repository.claimGenerationTask(input);
   assert.equal(claim.outcome, 'created');

@@ -101,6 +101,7 @@ import {
 } from '../domain/novelDomain.js';
 import {
   matchGenerationAuthority,
+  validateExecutionEnvelopeV1_1ForTask,
   verifyHashedSafeResultReceipt
 } from '../domain/executionContract.js';
 import {
@@ -600,25 +601,23 @@ export class PrismaNovelRepository implements NovelRepository {
           orderBy: [{ createdAt: 'asc' }, { id: 'asc' }]
         });
         if (!candidate) return { kind: 'empty' as const };
-        if (!candidate.executionEnvelopeJson) {
-          const failed = await tx.generationTask.updateMany({
-            where: { id: candidate.id, tenantId: candidate.tenantId, status: PrismaTaskStatus.QUEUED, executionEnvelopeJson: { equals: Prisma.DbNull } },
+        try {
+          validateExecutionEnvelopeV1_1ForTask(mapGenerationTask(candidate));
+        } catch {
+          await tx.generationTask.updateMany({
+            where: { id: candidate.id, tenantId: candidate.tenantId, status: PrismaTaskStatus.QUEUED, leaseOwnerId: null, leaseToken: null },
             data: {
               status: PrismaTaskStatus.FAILED,
-              statusNote: '旧任务缺少可恢复执行合同，已安全失败。',
+              statusNote: '任务执行合同或可信身份无效，已安全失败。',
               currentStep: 'failed',
               failureCategory: 'worker_payload_unsupported',
               errorCode: 'WORKER_PAYLOAD_UNSUPPORTED',
-              errorMessage: 'Execution envelope is missing.',
+              errorMessage: 'Execution envelope V1.1 or trusted audit actor is invalid.',
               activeClaimKey: null,
               finishedAt: now,
               updatedAt: now
             }
           });
-          if (failed.count === 1) {
-            const task = await tx.generationTask.findFirstOrThrow({ where: { id: candidate.id, tenantId: candidate.tenantId } });
-            await createTaskEvent(tx, { task, eventType: 'task_failed', message: task.statusNote ?? 'Legacy task failed.', progress: task.progress, requestId: 'worker-legacy-envelope', createdAt: now });
-          }
           return { kind: 'retry' as const };
         }
         const providerAttemptId = randomUUID();
@@ -712,6 +711,11 @@ export class PrismaNovelRepository implements NovelRepository {
         leaseOwnerId: observed.leaseOwnerId, leaseToken: observed.leaseToken, leaseExpiresAt: observed.leaseExpiresAt
       } });
       if (!current || current.leaseExpiresAt === null || current.leaseExpiresAt.getTime() > authoritativeNow.getTime()) return { outcome: 'not_recovered' as const, task: null };
+      try {
+        validateExecutionEnvelopeV1_1ForTask(mapGenerationTask(current));
+      } catch {
+        return { outcome: 'not_recovered' as const, task: null };
+      }
       const dispatched = current.providerDispatchedAt !== null;
       const failure = {
         failureCategory: dispatched ? 'provider_outcome_unknown' : 'worker_lease_expired',
@@ -2502,11 +2506,24 @@ export class PrismaNovelRepository implements NovelRepository {
   }
 
   async findLatestBodyBatch(
-    _tenantId: string,
-    _novelId: string,
-    _prisma: Prisma.TransactionClient = this.prisma
+    tenantId: string,
+    novelId: string,
+    prisma: Prisma.TransactionClient = this.prisma
   ): Promise<BodyBatchRecord | null> {
-    return null;
+    const tasks = await prisma.generationTask.findMany({
+      where: {
+        tenantId,
+        novelId,
+        taskType: 'body_batch_generate',
+        resultObjectType: 'body_batch'
+      },
+      orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
+      select: { metadata: true }
+    });
+    return tasks
+      .map((task) => bodyBatchFromTaskMetadata(task.metadata, tenantId, novelId))
+      .filter((batch): batch is BodyBatchRecord => batch !== null)
+      .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime() || right.id.localeCompare(left.id))[0] ?? null;
   }
 
   async findBodyBatchByIdempotencyKey(_tenantId: string, _novelId: string, _idempotencyKey: string): Promise<BodyBatchRecord | null> {
@@ -4048,6 +4065,80 @@ function toDirectionContent(value: unknown) {
     recommendation: ''
   };
 }
+
+function bodyBatchFromTaskMetadata(metadata: unknown, tenantId: string, novelId: string): BodyBatchRecord | null {
+  try {
+    const batch = requiredRecord(requiredRecord(metadata, 'metadata').batch, 'metadata.batch');
+    if (requiredString(batch.tenantId, 'batch.tenantId') !== tenantId || requiredString(batch.novelId, 'batch.novelId') !== novelId) return null;
+    const chapterResults = requiredArray(batch.chapterResults, 'batch.chapterResults').map((value, index) => {
+      const row = requiredRecord(value, `batch.chapterResults[${index}]`);
+      return {
+        chapterId: requiredString(row.chapterId, 'chapterId'),
+        chapterNo: requiredInteger(row.chapterNo, 'chapterNo'),
+        title: requiredString(row.title, 'title'),
+        status: requiredOneOf(row.status, ['completed', 'failed', 'pending'] as const, 'status'),
+        statusText: requiredString(row.statusText, 'statusText'),
+        contentVersionId: nullableString(row.contentVersionId, 'contentVersionId'),
+        featureCardId: nullableString(row.featureCardId, 'featureCardId'),
+        reviewReportId: nullableString(row.reviewReportId, 'reviewReportId'),
+        longTermMemoryId: nullableString(row.longTermMemoryId, 'longTermMemoryId'),
+        score: nullableNumber(row.score, 'score'),
+        riskLevel: requiredOneOf(row.riskLevel, Object.values(RiskLevel), 'riskLevel'),
+        hardFailed: requiredBoolean(row.hardFailed, 'hardFailed'),
+        statusNote: nullableString(row.statusNote, 'statusNote'),
+        recommendedAction: requiredString(row.recommendedAction, 'recommendedAction')
+      };
+    });
+    const summary = requiredRecord(batch.summary, 'batch.summary');
+    if (JSON.stringify(requiredArray(summary.chapterResults, 'batch.summary.chapterResults')) !== JSON.stringify(batch.chapterResults)) return null;
+    return {
+      id: requiredString(batch.id, 'batch.id'),
+      tenantId,
+      novelId,
+      taskId: requiredString(batch.taskId, 'batch.taskId'),
+      idempotencyKey: requiredString(batch.idempotencyKey, 'batch.idempotencyKey'),
+      requestFingerprint: structuredClone(batch.requestFingerprint),
+      strategySnapshotId: requiredString(batch.strategySnapshotId, 'batch.strategySnapshotId'),
+      strategySnapshotVersion: requiredInteger(batch.strategySnapshotVersion, 'batch.strategySnapshotVersion'),
+      sourceVersionRefs: structuredClone(batch.sourceVersionRefs),
+      startChapterNo: requiredInteger(batch.startChapterNo, 'batch.startChapterNo'),
+      endChapterNo: requiredInteger(batch.endChapterNo, 'batch.endChapterNo'),
+      status: requiredOneOf(batch.status, ['completed', 'paused', 'cancelled'] as const, 'batch.status'),
+      statusNote: nullableString(batch.statusNote, 'batch.statusNote'),
+      completedCount: requiredInteger(batch.completedCount, 'batch.completedCount'),
+      failedCount: requiredInteger(batch.failedCount, 'batch.failedCount'),
+      pendingCount: requiredInteger(batch.pendingCount, 'batch.pendingCount'),
+      failedChapterNo: nullableInteger(batch.failedChapterNo, 'batch.failedChapterNo'),
+      chapterResults,
+      summary: {
+        id: requiredString(summary.id, 'batch.summary.id'),
+        batchId: requiredString(summary.batchId, 'batch.summary.batchId'),
+        conclusion: requiredString(summary.conclusion, 'batch.summary.conclusion'),
+        chapterResults,
+        riskTrend: requiredString(summary.riskTrend, 'batch.summary.riskTrend'),
+        nextBatchNotes: requiredStringArray(summary.nextBatchNotes, 'batch.summary.nextBatchNotes'),
+        riskChapterIds: requiredStringArray(summary.riskChapterIds, 'batch.summary.riskChapterIds'),
+        createdAt: requiredDate(summary.createdAt, 'batch.summary.createdAt')
+      },
+      createdAt: requiredDate(batch.createdAt, 'batch.createdAt'),
+      metadata: structuredClone(batch.metadata)
+    };
+  } catch {
+    return null;
+  }
+}
+
+function requiredRecord(value: unknown, path: string): Record<string, unknown> { if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError(`${path} must be an object`); return value as Record<string, unknown>; }
+function requiredArray(value: unknown, path: string): unknown[] { if (!Array.isArray(value)) throw new TypeError(`${path} must be an array`); return value; }
+function requiredString(value: unknown, path: string): string { if (typeof value !== 'string' || !value) throw new TypeError(`${path} must be a string`); return value; }
+function nullableString(value: unknown, path: string): string | null { return value === null ? null : requiredString(value, path); }
+function requiredInteger(value: unknown, path: string): number { if (!Number.isInteger(value) || (value as number) < 0) throw new TypeError(`${path} must be a non-negative integer`); return value as number; }
+function nullableInteger(value: unknown, path: string): number | null { return value === null ? null : requiredInteger(value, path); }
+function nullableNumber(value: unknown, path: string): number | null { if (value === null) return null; if (typeof value !== 'number' || !Number.isFinite(value)) throw new TypeError(`${path} must be a number`); return value; }
+function requiredBoolean(value: unknown, path: string): boolean { if (typeof value !== 'boolean') throw new TypeError(`${path} must be a boolean`); return value; }
+function requiredStringArray(value: unknown, path: string): string[] { return requiredArray(value, path).map((item, index) => requiredString(item, `${path}[${index}]`)); }
+function requiredDate(value: unknown, path: string): Date { const date = value instanceof Date ? new Date(value) : new Date(requiredString(value, path)); if (Number.isNaN(date.getTime())) throw new TypeError(`${path} must be a date`); return date; }
+function requiredOneOf<T extends string>(value: unknown, values: readonly T[], path: string): T { if (typeof value !== 'string' || !values.includes(value as T)) throw new TypeError(`${path} is unsupported`); return value as T; }
 
 function toJsonObject(value: unknown): Prisma.InputJsonObject {
   return JSON.parse(JSON.stringify(value ?? {})) as Prisma.InputJsonObject;
