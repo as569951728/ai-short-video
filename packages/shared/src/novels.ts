@@ -162,10 +162,10 @@ export function normalizeExecutionEnvelopeV1_1(input: unknown): ExecutionEnvelop
   const envelope = {
     ...legacyBase,
     schemaVersion: '1.1' as const,
-    tenantId: executionId(value.tenantId, 'tenantId'),
+    tenantId: executionTrustedActorId(value.tenantId, 'tenantId', 'tenant_default'),
     novelId: executionId(value.novelId, 'novelId'),
     auditContext: {
-      requestedByUserId: executionId(audit.requestedByUserId, 'auditContext.requestedByUserId'),
+      requestedByUserId: executionTrustedActorId(audit.requestedByUserId, 'auditContext.requestedByUserId', 'user_default'),
       requestedAt
     },
     normalizedRequest: effectiveRequest,
@@ -305,6 +305,7 @@ function executionRecord(value: unknown, keys: string[], path: string): Record<s
 function executionRequiredRecord(value: unknown, keys: string[], path: string) { const source = executionRecord(value, keys, path); for (const key of keys) if (!(key in source)) executionUnsupported(`${path}.${key} is required`); return source; }
 function executionRecordWithRequiredExtensions(value: unknown, extensions: string[], path: string) { if (!value || typeof value !== 'object' || Array.isArray(value)) executionUnsupported(`${path} must be an object`); const source = value as Record<string, unknown>; for (const key of extensions) if (!(key in source)) executionUnsupported(`${path}.${key} is required`); return source; }
 function executionId(value: unknown, path: string) { return executionText(value, path, 128); }
+function executionTrustedActorId(value: unknown, path: string, forbidden: string) { const id = executionId(value, path); if (id === forbidden) executionUnsupported(`${path} must not use a default actor`); return id; }
 function executionNullableId(value: unknown, path: string) { return value === null || value === undefined ? null : executionId(value, path); }
 function executionOptionalPageVersionSnapshot(value: unknown): Record<string, unknown> | undefined { if (value === undefined || value === null) return undefined; if (!value || typeof value !== 'object' || Array.isArray(value)) executionUnsupported('effectiveRequest.pageVersionSnapshot must be an object'); return structuredClone(value) as Record<string, unknown>; }
 function executionText(value: unknown, path: string, max: number) { const normalized = typeof value === 'string' ? value.trim() : ''; if (normalized.length < 1 || normalized.length > max) executionUnsupported(`${path} must be 1-${max} characters`); return normalized; }
