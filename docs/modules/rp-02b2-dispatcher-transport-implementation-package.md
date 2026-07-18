@@ -1,5 +1,9 @@
 # RP-02B2 Dispatcher、Fenced Finalize 与异步 Transport 实现包
 
+## G0-C1 CI 兼容修正（2026-07-18）
+
+`RP-02B2a2-G0-C1` 以 `59cedaf7150029fcbde03d2779662659727e8b4e` 为固定基线，独立修正 trusted admission、RP-01A 本地内存 E2E actor、RP-01C 新分支 push range、correction bootstrap 与 package-gate fixture 性能。最终修正包冻结为 14 个精确文件；新增范围只用于让 RP-01B 和 governance 在该修正进入 `main` 后产生同头 push 证据，并同步 E1 验收口径及原始 E1/A2 权威 ADR。校验同时拒绝清单外文件和任一冻结文件缺失，最终差异与完整矩阵计数必须在 amended commit 上重算。correction bootstrap 只识别该固定基线的单个原子直接子提交，并在校验完整 G0-C1 ADR、exact manifest、预算和 workflow 合同后，允许 PR range、显式 workflow dispatch、新建 ref、基线直推及两个独立有效 correction sibling 间的 force-with-lease 替换统一回放 `<59cedaf>..<candidate>`；replacement 前后的 RP-01C workflow 均从各自提交读取，不依赖当前 checkout。它不授权任何 A2-A5 业务包。该包不包含 A2 业务实现；修正提交落地并产生新的远程 E1 证据后，A2 必须重新授权并迁移，旧授权不得复用，当前 repository package/predecessor 授权保持 fail-closed。A2-v3 冻结为 20-file exact manifest 和 `20 / 3,250` 上限；迁移后必须重新计算自身实际差异，并显式包含 `apps/api/src/modules/tasks/routes/taskRoutes.ts` 与 `apps/api/test/rp02b2a/repository-authority-hardening.test.ts`。
+
 状态：`rp02b2a0_completed_b2a_single_package_superseded_split_round6_approved_asset_submission_pending_b2b_b2c_b3_frozen`
 
 问题：`RMD-TASK-002`，承接 `RMD-TASK-001` 的异步执行阶段；`RMD-TASK-003` 继续冻结到 `RP-02B3`
@@ -430,7 +434,7 @@ B2a0 使用独立命令 `test:rp02b2a0`，精确运行 API route、Admin service
 
 - `test:rp02b2a1:gate`：真实执行 `scripts/rp02b2a-package-gate.test.mjs`，该测试只通过子进程调用生产 `scripts/rp02b2a-package-gate.mjs`，并读取真实 `.github/workflows/rp01c-fixtures.yml` 与 `.github/workflows/rp02b2a-admission.yml`，不得复制 helper、正则模拟或跳过 YAML wiring。前者只承担 bootstrap/普通 CI/post-merge 回归，后者只有在 accepted G0 进入默认分支后才承担 A2-A5 authoritative admission；候选分支上的任一 workflow/gate 都不能自证准入。
 - `test:rp02b2a1:core`：显式运行真实存在的 `apps/api/test/rp02a/rp02a.test.ts` 与 `apps/api/src/modules/novels/novelRoutes.test.ts`，后者承载 A1 registry/strict ABI、同步 200 和 retry freeze 回归；并串行执行 `test:rp02b2a1:gate`。A1 从未交付 `apps/api/test/rp02b2a/registry-provider-abi.test.ts`，不得再把该不存在路径列为测试映射或验收证据；`test:rp02b2a1 = test:rp02b1 -> test:rp02b2a0 -> test:rp02b2a1:core`。
-- `test:rp02b2a2:core`：`authority-claim.test.ts` 与 A2 同步 200 回归；`test:rp02b2a2 = test:rp02b2a1 -> test:rp02b2a2:core`。
+- `test:rp02b2a2:core`：`authority-claim.test.ts`、`repository-authority-hardening.test.ts` 与 A2 同步 200 回归；`test:rp02b2a2 = test:rp02b2a1 -> test:rp02b2a2:core`。
 - `test:rp02b2a3:core`：`lease-dispatch-retry.test.ts`；`test:rp02b2a3 = test:rp02b2a2 -> test:rp02b2a3:core`。
 - `test:rp02b2a4:core`：`inmemory-fenced-finalize.test.ts` 与 A4 同步 200 回归；`test:rp02b2a4 = test:rp02b2a3 -> test:rp02b2a4:core`。
 - `test:rp02b2a5:core`：`prisma-fenced-finalize.test.ts`；`test:rp02b2a5 = test:rp02b2a4 -> test:rp02b2a5:core`。
@@ -441,7 +445,7 @@ B2a2 在 `package.json` 中的三个 script value 必须逐字符等于下列合
 ```json
 {
   "test:rp02b2a2:env-probe": "node -e \"const keys=['DATABASE_URL','DEEPSEEK_API_KEY','DEEPSEEK_BASE_URL','DEEPSEEK_MODEL','DEEPSEEK_STRUCTURE_MODEL','DEEPSEEK_REASONER_MODEL','DEEPSEEK_TIMEOUT_MS','DEEPSEEK_MAX_RETRIES','DEPLOYMENT_ACTOR_TENANT_ID','DEPLOYMENT_ACTOR_USER_ID']; if(keys.some((key)=>process.env[key]!==undefined)||process.env.NODE_ENV!=='production'||process.env.AI_PROVIDER_MODE!=='mock'||process.env.DOTENV_CONFIG_PATH!=='/dev/null') process.exit(1); console.log('RP02B2A2_ENV_CLEAN')\"",
-  "test:rp02b2a2:core": "env -u DATABASE_URL -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL -u DEEPSEEK_MODEL -u DEEPSEEK_STRUCTURE_MODEL -u DEEPSEEK_REASONER_MODEL -u DEEPSEEK_TIMEOUT_MS -u DEEPSEEK_MAX_RETRIES -u DEPLOYMENT_ACTOR_TENANT_ID -u DEPLOYMENT_ACTOR_USER_ID NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=/dev/null sh -c 'npm run test:rp02b2a2:env-probe && npm run build -w @ai-shortvideo/shared && npm run prisma:generate -w @ai-shortvideo/api && npm exec -w @ai-shortvideo/api -- tsx --test test/rp02b2a/authority-claim.test.ts src/modules/novels/novelRoutes.test.ts'",
+  "test:rp02b2a2:core": "env -u DATABASE_URL -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL -u DEEPSEEK_MODEL -u DEEPSEEK_STRUCTURE_MODEL -u DEEPSEEK_REASONER_MODEL -u DEEPSEEK_TIMEOUT_MS -u DEEPSEEK_MAX_RETRIES -u DEPLOYMENT_ACTOR_TENANT_ID -u DEPLOYMENT_ACTOR_USER_ID NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=/dev/null sh -c 'npm run test:rp02b2a2:env-probe && npm run build -w @ai-shortvideo/shared && npm run prisma:generate -w @ai-shortvideo/api && npm exec -w @ai-shortvideo/api -- tsx --test test/rp02b2a/authority-claim.test.ts test/rp02b2a/repository-authority-hardening.test.ts src/modules/novels/novelRoutes.test.ts'",
   "test:rp02b2a2": "env -u DATABASE_URL -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL -u DEEPSEEK_MODEL -u DEEPSEEK_STRUCTURE_MODEL -u DEEPSEEK_REASONER_MODEL -u DEEPSEEK_TIMEOUT_MS -u DEEPSEEK_MAX_RETRIES -u DEPLOYMENT_ACTOR_TENANT_ID -u DEPLOYMENT_ACTOR_USER_ID NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=/dev/null sh -c 'npm run test:rp02b2a2:env-probe && npm run test:rp02b2a1 && npm run test:rp02b2a2:core'"
 }
 ```
@@ -492,7 +496,7 @@ authoritative admission workflow 只能从 repository-controlled `RP02B2A_AUTHOR
 | 子包 | 场景编号 | 本包测试文件 | 必须累计回归 |
 | --- | --- | --- | --- |
 | B2a1 | 1、15、20、22；另含 package-gate workflow 正反例 | `apps/api/test/rp02a/rp02a.test.ts`、`apps/api/src/modules/novels/novelRoutes.test.ts`、`scripts/rp02b2a-package-gate.test.mjs` | B1、B2a0；同步 HTTP 200/非 202、公开 retry freeze、固定失败投影与八类零副作用 |
-| B2a2 | 2、3、4、13、18、21、24、25、26、27 | `apps/api/test/rp02b2a/authority-claim.test.ts`、`apps/api/src/modules/novels/novelRoutes.test.ts`、`scripts/rp02b2a-package-gate.test.mjs` | B2a1 全量；T0/T1 replay、可信 actor、action-specific authority/source refs、两阶段 15-action 八类零副作用、legacy fail-closed、candidate-HEAD exact/fail-fast 命令、同步 200 |
+| B2a2 | 2、3、4、13、18、21、24、25、26、27 | `apps/api/test/rp02b2a/authority-claim.test.ts`、`apps/api/test/rp02b2a/repository-authority-hardening.test.ts`、`apps/api/src/modules/novels/novelRoutes.test.ts`、`scripts/rp02b2a-package-gate.test.mjs` | B2a1 全量；T0/T1 replay、可信 actor、action-specific authority/source refs、repository authority、两阶段 15-action 八类零副作用、legacy fail-closed、candidate-HEAD exact/fail-fast 命令、同步 200 |
 | B2a3 | 6、8、14、16、19 | `lease-dispatch-retry.test.ts` | B2a2 全量；A1 public retry freeze、A2 authority gate、正常 leased action provider=0 |
 | B2a4 | 5、7、9、10、11、17、23（InMemory） | `inmemory-fenced-finalize.test.ts`、`novelRoutes.test.ts` | B2a3 全量；provider dispatch checkpoint 只在 A4 finalize capability 就绪后证明；InMemory 15 action、公开同步 200/非 202、leased result 仅 harness 可见 |
 | B2a5 | 12、23（Prisma） | `prisma-fenced-finalize.test.ts` | B2a4 全量；Prisma 9 enabled/6 unsupported、deterministic transaction/CAS、无 transport/UI 扩张 |
@@ -620,21 +624,21 @@ B2a0/B2a1-B2a5/B2b/B2c E3 可证明：风险参数同步链、单进程 determin
 #### RP-02B2a2-G0-E1 一次性证据发布
 
 - G0 最终代码提交必须先取得同一 HEAD 的 `RP-01A backend E2E`、`RP-01B admin DOM tests`、`RP-01C deterministic fixtures`、`Remediation governance` 四路远程成功。之后仅允许在专用 evidence 分支创建一个 package id 为 `RP-02B2a2-G0-E1` 的原子提交；它是该 evidence lineage 中唯一的 E1 提交，且直接父提交必须为 accepted G0 code head。该提交不得是 merge，不得与 G0 或 A2 合批，也不得存在第二个 E1。A2 实现分支必须从 accepted G0 code head 独立创建，与 E1 evidence 分支互为 sibling；生产 gate 必须显式拒绝 `E1 -> A2`。
-- E1 只允许修改 `docs/reviews/main-control-status.md`、`docs/reviews/main-control-event-ledger.md`、`docs/reviews/remediation-rmd-task-002-003-rp-02b2a1-verification-2026-07-15.md`，硬预算为 `3 files / additions <= 64 / deletions <= 16 / net additions <= 64`。这三个文件属于 E1 固定 evidence scope，不扩充或改写 G0 的 16-file manifest。
+- E1 只允许修改 `docs/reviews/main-control-status.md`、`docs/reviews/main-control-event-ledger.md`、`docs/reviews/remediation-rmd-task-002-003-rp-02b2a1-verification-2026-07-15.md`，硬预算为 `3 files / additions <= 64 / deletions <= 48 / net additions <= 64`。48 行删除预算只用于把三份文档中的旧父 SHA、旧四路 run 与旧状态段原位迁移到新 G0-C1；exact file scope、九字段白名单、唯一事件/状态/7.3 章节和 64 行 additions/net 上限继续独立阻断扩写。这三个文件属于 E1 固定 evidence scope，不扩充或改写已验收 G0-C1 的 exact manifest。
 - 三份 evidence 文档必须各自且仅出现一次并保持完全一致的精确九字段：`g0_evidence_parent_sha`、`g0_evidence_rp01a_run`、`g0_evidence_rp01b_run`、`g0_evidence_rp01c_run`、`g0_evidence_governance_run`、`g0_evidence_a2_authorization`、`g0_evidence_issue_closed_count`、`g0_evidence_rmd_task_002`、`g0_evidence_rmd_task_003`。这是完整白名单；任一字段重复，或新增 self/publication SHA、E1 run 及任何其他 `g0_evidence_*` 字段，均必须 fail closed。每个字段值必须非空并与字段名位于同一行，不能跨行借用下一字段或正文。
 - `g0_evidence_parent_sha` 必须是 E1 直接父提交的完整 G0 SHA；四个 run id 必须为互不相同的数字，并分别绑定父提交四个指定 workflow 的成功 run；其余状态字段必须精确为 `g0_evidence_a2_authorization=not_authorized`、`g0_evidence_issue_closed_count=9/42`、`g0_evidence_rmd_task_002=partial`、`g0_evidence_rmd_task_003=open`。E1 不得记录自身 SHA、E1 自身 run id、A2 实现或任何真实 DB/provider/media/E6 证据；三份 evidence 正文也不得正向宣称 A2/B2a2 已授权、授权通过或允许开始/进入业务实现。每个正向授权语句必须独立阻断，同句、邻句或其他位置出现 `not_authorized` 都不能掩蔽它。
-- `main-control-status.md` 必须原位更新“总体关闭进度”内的当前整改包和当前状态、`RP-02B2a2-G0 整改后最终复核` 行以及唯一编号 1 推荐动作：三处均绑定 accepted code head 与四路远程成功；最终复核行必须为已完成并记录最终 `16 files / <final actual_net_additions> net additions` 与最终实际 package-gate 计数，推荐动作不得继续出现待提交/pending。最终净增量和 gate 计数只在冻结差异并重新运行完整矩阵后由 main 回填，本合同不预判其值。
+- `main-control-status.md` 必须原位更新“总体关闭进度”内的当前整改包和当前状态、`RP-02B2a2-G0 整改后最终复核` 行以及唯一编号 1 推荐动作：三处均绑定 accepted G0-C1 code head 与四路同头 `main` push 成功；最终复核行必须为已完成并记录已验收 G0-C1 的 `<final actual_files> files / <final actual_net_additions> net additions` 与最终实际 package-gate 计数，推荐动作不得继续出现待提交/pending。最终文件数、净增量和 gate 计数只在冻结差异并重新运行完整矩阵后由 main 回填，本合同不预判其值。
 - `main-control-event-ledger.md` 必须恰好追加一个标题为 `### MCE-RP02B2A2-G0-E1-REMOTE-ACCEPTED` 的事件，包含 `event_type: governance_bootstrap_remote_accepted`、`package_id: RP-02B2a2-G0-E1`、完整 `accepted_code_head`，并明确 `RP-02B2a2-G0` 已关闭而 B2a2 继续 `not_authorized`。
-- verification 文档必须恰好新增一个 `### 7.3 G0 accepted code head 与远程关闭证据` 小节，逐项列出完整 accepted code head、最终 `16 files / <net> net additions`、最终实际 package-gate 计数、四个远程 run 及 B2a2 `not_authorized`。
+- verification 文档必须恰好新增一个 `### 7.3 G0 accepted code head 与远程关闭证据` 小节，逐项列出完整 accepted G0-C1 code head、最终 `<files> files / <net> net additions`、最终实际 package-gate 计数、四个 `head_branch=main` 的同头远程 run 及 B2a2 `not_authorized`。
 - E1 只追加九字段、保留任一当前状态为 pending/待提交、保留旧 net 或 gate 计数、缺失上述任一原位替换/唯一事件/唯一 7.3，均必须 fail closed。
 - G0 evidence workflow 必须在任何 install/test 前以只读权限和 `gh api` 校验四个 run 的 workflow name、repository workflow path、run path（精确 path 或受限 `path@ref`）、workflow id、event、`head_sha`、`status=completed`、`conclusion=success`；任一 run 不存在、身份错配、不同头、未完成或非成功均 fail closed。future A2-A5 authoritative admission evidence 还必须逐字绑定可信 `workflow_sha`、PR number、PR base、authorized predecessor 与 candidate SHA。fake `gh` 验收必须分别覆盖父 run 的 name/repository path/run path/id/event/head/status/conclusion，以及 authoritative admission 的 workflow SHA/PR/base/candidate 错配。
 - E1 通过只完成 G0 外部证据闭环，不自动授权 A2。未来 A2 仍须由 MC 显式授权，并从 accepted G0 code head 新建 sibling 实现分支，独立满足下一节 A2 合同；E1 commit 不得成为 A2 baseline，但 authoritative admission 必须通过独立 repository-controlled SHA 验证该 sibling E1 已合法存在。
-- 可执行负例至少覆盖：E1 `additions=64`、`deletions=16`、`net=64` 边界通过及任一维度超限；九字段重复或出现额外字段；G0+E1 合批；旧 G0 后追加 incremental G0；`E1 -> A2` 误拓扑；候选把 gate/workflow 改成 `exit 0` 仍不能获得准入；fake `gh` 的父 run name/repository path/精确或受限 `path@ref`/id/event/head/status/conclusion，以及 authoritative admission 的 workflow SHA/PR/base/candidate 失败矩阵。
+- 可执行负例至少覆盖：E1 `additions=64`、`deletions=48`、`net=64` 边界通过及任一维度超限；九字段重复或出现额外字段；G0+E1 合批；旧 G0 后追加 incremental G0；`E1 -> A2` 误拓扑；候选把 gate/workflow 改成 `exit 0` 仍不能获得准入；fake `gh` 的父 run name/repository path/精确或受限 `path@ref`/id/event/`head_branch=main`/head/status/conclusion，以及 authoritative admission 的 workflow SHA/PR/base/candidate 失败矩阵。
 
 ### RP-02B2a2 Authoritative Claim And Pre-provider Gate
 
-- 硬门禁：`18 files / 1,900 net additions`。
-- `docs/adr/rp-02b2a2-authority-claim-budget.md` 当前 `template_not_authorized` 中的 `15 files` 是未授权旧模板值，不构成有效预算声明，也不得由 G0 跨包改写。未来 A2 必须在同一累计实现 diff 中原子改为 `status=ready`、`hard_max_files=18`、`baseline_sha=<verified G0 commit>` 与真实计数；保留 15 时生产 gate 必须失败。
+- G0-C1 v3 后的 A2 权威模板硬门禁：`20 files / 3,250 net additions`；当前 ADR 保持 `template_not_authorized / not_authorized / actual=0`，不得把模板同步解释为研发授权。
+- `docs/adr/rp-02b2a2-authority-claim-budget.md` 已同步为 `RP-02B2a2-v3 / 20 / 3,250` 未授权模板。未来 A2 只有在 accepted G0-C1、合法 sibling E1、独立复核和新的 repository-controlled 授权收据齐备后，才可在同一累计实现 diff 中原子改为 `status=ready`、`baseline_sha=<accepted G0-C1 commit>` 与真实计数；任何旧 `15/1900`、`18/1900` 或实际计数为零的 ready ADR 都必须失败。
 - `packages/shared/src/api.ts`（新增 `UNAUTHORIZED` 与 `DEPENDENCY_UNAVAILABLE` 的公开错误定义）
 - `packages/shared/src/novels.ts`
 - `apps/api/src/config/env.ts`
@@ -650,6 +654,7 @@ B2a0/B2a1-B2a5/B2b/B2c E3 可证明：风险参数同步链、单进程 determin
 - `apps/api/src/main.ts`
 - `apps/api/test/rp02b2a/fixtures.ts`
 - `apps/api/test/rp02b2a/authority-claim.test.ts`
+- `apps/api/test/rp02b2a/repository-authority-hardening.test.ts`
 - `apps/api/src/modules/novels/novelRoutes.test.ts`
 - `docs/adr/rp-02b2a2-authority-claim-budget.md`
 - `package.json`

@@ -5,6 +5,8 @@ on:
   push:
     paths:
       - '.github/workflows/rp01b-dom.yml'
+      - '.github/workflows/rp02b2a-admission.yml'
+      - 'scripts/rp02b2a-package-gate.*'
       - 'apps/admin-web/src/**'
       - 'apps/admin-web/package.json'
       - 'apps/admin-web/tsconfig*.json'

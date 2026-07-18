@@ -31,13 +31,15 @@ valid_until: 2026-08-31
 
 ## 一次性 E1 证据发布合同
 
+> G0-C1 v3 修正附录：以下 E1 合同取代本节早期 `deletions <= 16` 口径。当前默认分支三份证据文档都已存在旧九字段与旧状态段，合法原位迁移实测需要 39 行删除，因此删除硬上限调整为 48；精确三文件、64 行 additions/net、九字段白名单、唯一章节和远程身份校验均不放宽。A2 仍未授权。
+
 - G0 的 16-file manifest 固定包含新增的 `.github/workflows/rp02b2a-admission.yml`、四路父工作流的 action 完整 SHA、根级只读 permissions、checkout 非持久化凭证硬化与单一 DOM 时序夹具修复，E1 不得扩充或改写该 manifest。G0 最终代码提交四路同头远程成功后，只允许在专用 evidence 分支创建一个 `RP-02B2a2-G0-E1` 原子提交；它是该 evidence lineage 中唯一的 E1 提交，且直接父提交必须为 accepted G0 code head。禁止 merge、重复 E1、G0+E1 合批或混入 A2。A2 实现分支与 E1 evidence 分支互为 sibling，`E1 -> A2` 拓扑必须拒绝，但每个 A2-A5 admission 都必须通过 repository-controlled SHA 独立验证该 sibling E1 已存在且合法。
-- E1 固定只改 `docs/reviews/main-control-status.md`、`docs/reviews/main-control-event-ledger.md`、`docs/reviews/remediation-rmd-task-002-003-rp-02b2a1-verification-2026-07-15.md`，预算为 `3 files / additions <= 64 / deletions <= 16 / net additions <= 64`。
+- E1 固定只改 `docs/reviews/main-control-status.md`、`docs/reviews/main-control-event-ledger.md`、`docs/reviews/remediation-rmd-task-002-003-rp-02b2a1-verification-2026-07-15.md`，预算为 `3 files / additions <= 64 / deletions <= 48 / net additions <= 64`。
 - 三份文档必须各自且仅出现一次、值完全一致地记录以下精确九字段：`g0_evidence_parent_sha`、`g0_evidence_rp01a_run`、`g0_evidence_rp01b_run`、`g0_evidence_rp01c_run`、`g0_evidence_governance_run`、`g0_evidence_a2_authorization`、`g0_evidence_issue_closed_count`、`g0_evidence_rmd_task_002`、`g0_evidence_rmd_task_003`。任何额外 `g0_evidence_*` 字段都必须拒绝，包括 self/publication SHA、E1 run 或同义字段；任一必需字段重复也必须拒绝。字段值必须非空且与字段名位于同一行，禁止跨行借用下一字段或正文。parent 必须是完整 G0 父 SHA；四个 run id 必须唯一且分别对应父提交的四路成功 workflow；状态必须精确保持 `not_authorized`、`9/42`、`partial`、`open`。
 - E1 不得记录自身 SHA/run，不得修改 A2 ADR、业务代码或 G0-only 文件；三份 evidence 正文不得正向宣称 A2/B2a2 已授权、授权通过或允许开始/进入业务实现。每个正向授权语句必须独立判定，不能因同句、邻句或文档其他位置出现 `not_authorized` 而被豁免。G0 evidence workflow 必须在任何 install/test 前使用只读权限与 `gh api` 校验四个 run 的 workflow name、repository workflow path、run path（精确 path 或受限 `path@ref`）、workflow id、event、head、completed status 和 success conclusion；任一条件不满足即拒绝证据发布。该 G0 四路证据不等同于未来 A2-A5 authoritative admission evidence。
 - `main-control-status.md` 必须原位把总体进度块、G0 最终复核行和唯一编号 1 推荐动作改为 accepted code head、四路远程成功、最终 `16 files / <final actual_net_additions> net additions` 与最终实际 gate 计数；不得残留待提交/pending、旧 `10/11 files` 或旧计数。`<final actual_net_additions>` 与 gate 计数只允许 main 在冻结最终差异并重新运行完整矩阵后回填，本合同不预判其值。
 - `main-control-event-ledger.md` 必须恰好追加一个 `### MCE-RP02B2A2-G0-E1-REMOTE-ACCEPTED` 事件，记录 E1 package id、完整 accepted code head，并明确 G0 关闭、B2a2 `not_authorized`。
 - verification 文档必须恰好新增一个 `### 7.3 G0 accepted code head 与远程关闭证据`，列出完整 head、最终 `16 files / <final actual_net_additions> net additions`、最终实际 gate 计数、四 run 和 `not_authorized`。
-- 生产验收必须覆盖 E1 `additions=64`、`deletions=16`、`net=64` 的边界通过及任一维度超限，重复/额外字段，G0+E1 合批，incremental G0，`E1 -> A2` 误拓扑，候选自改 gate/workflow 不生效，以及 fake `gh` 对父 run 的 name、repository workflow path、精确或受限 `path@ref`、workflow id、event、head、status、conclusion 各自错配的失败矩阵；future authoritative admission 的 `workflow_sha`、PR/base/candidate 身份仍须独立校验。只追加九字段而不完成三份文件的最终状态迁移，或保留任一 pending/旧计数，生产 gate 必须拒绝。
+- 生产验收必须覆盖 E1 `additions=64`、`deletions=48`、`net=64` 的边界通过及任一维度超限，重复/额外字段，G0+E1 合批，incremental G0，`E1 -> A2` 误拓扑，候选自改 gate/workflow 不生效，以及 fake `gh` 对父 run 的 name、repository workflow path、精确或受限 `path@ref`、workflow id、event、`head_branch=main`、head、status、conclusion 各自错配的失败矩阵；future authoritative admission 的 `workflow_sha`、PR/base/candidate 身份仍须独立校验。只追加九字段而不完成三份文件的最终状态迁移，或保留任一 pending/旧计数，生产 gate 必须拒绝。
 
 本包不授权 RP-02B2a2 业务实现、B2a3-B2a5、B2b、B2c、B3、真实数据库、真实模型供应商、真实媒体链路或 E6。
