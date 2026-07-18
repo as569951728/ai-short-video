@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { Writable } from 'node:stream';
 import { ErrorCode, NOVEL_PROVIDER_ACTIONS, RiskLevel, TaskStatus, type NovelProviderAction } from '@ai-shortvideo/shared';
 import Fastify from 'fastify';
-import { buildApp } from '../../app.js';
+import { buildApp as buildBaseApp } from '../../app.js';
 import type { LlmClient } from '../ai/llmClient.js';
 import { createInMemoryNovelRepository } from './repositories/inMemoryNovelRepository.js';
 import type { NovelRepository } from './domain/novelDomain.js';
@@ -22,7 +22,7 @@ import {
   type StructureCurrentAssetsProviderInputV1,
   type StructureProviderAction
 } from './services/actionExecutionPlan.js';
-import { hashCanonicalJson } from './services/taskClaim.js';
+import { createActorScopedIdempotencyToken, hashCanonicalJson } from './services/taskClaim.js';
 import { MockBodyProvider } from './providers/mockBodyProvider.js';
 import { MockDirectionProvider } from './providers/mockDirectionProvider.js';
 import { MockFullReviewProvider } from './providers/mockFullReviewProvider.js';
@@ -31,6 +31,10 @@ import { MockTrialProvider } from './providers/mockTrialProvider.js';
 import { DeepSeekNovelProvider } from './providers/deepseekNovelProvider.js';
 type MockBodyChapter = Awaited<ReturnType<MockBodyProvider['generateBodyChapter']>>;
 type MockTrialFollowup = Awaited<ReturnType<MockTrialProvider['generateFollowup']>>;
+const buildApp = (options: Parameters<typeof buildBaseApp>[0] = {}) => buildBaseApp({
+  requestContextResolver: async () => ({ tenantId: 'tenant_default', userId: 'user_test' }),
+  ...options
+});
 describe('novel package 1 routes', () => {
   it('creates a draft and returns it in the list with a status summary', async () => {
     const repository = createInMemoryNovelRepository();
@@ -1092,8 +1096,8 @@ describe('novel package 4 task center routes', () => {
     });
     const { novelId } = await createNovelWithAdoptedDirection(app);
     const failedDirectionTask = repository.getGenerationTasks().find((task) => task.taskType === 'novel_direction_generate')!; Object.assign(failedDirectionTask, { status: TaskStatus.Failed, failureCategory: 'provider_error', currentStep: 'RAW_DIRECTION_PROVIDER_CANARY', statusNote: 'RAW_DIRECTION_PROVIDER_CANARY', errorCode: 'RAW_DIRECTION_PROVIDER_CANARY', errorMessage: '生成服务暂时没有响应，请稍后重试。' });
-    const directionBefore = snapshotTaskRetrySideEffects(repository, providerCalls); const directionReplay = (await app.inject({ method: 'POST', url: `/novels/${novelId}/directions/generate`, payload: { idempotencyKey: failedDirectionTask.idempotencyToken } })).json().data.task;
-    assert.deepEqual([directionReplay.id, directionReplay.status, directionReplay.currentStep, directionReplay.statusNote, directionReplay.errorCode, directionReplay.errorMessage], [failedDirectionTask.id, 'failed', '生成任务失败，暂不支持直接重试', '任务执行失败，未写入新的候选或正式内容。', 'PROVIDER_ERROR', '任务执行失败，未写入新的候选或正式内容。']); assert.doesNotMatch(JSON.stringify(directionReplay), /RAW_DIRECTION_PROVIDER_CANARY|稍后重试/); assert.deepEqual(snapshotTaskRetrySideEffects(repository, providerCalls), directionBefore);
+    const directionBefore = snapshotTaskRetrySideEffects(repository, providerCalls); const directionReplay = await app.inject({ method: 'POST', url: `/novels/${novelId}/directions/generate`, payload: { idempotencyKey: requestFallbackIdempotencyKey(failedDirectionTask) } });
+    assert.equal(directionReplay.statusCode, 409); assert.equal(directionReplay.json().error.code, ErrorCode.VersionConflict); assert.equal(directionReplay.json().error.details.code, 'SOURCE_STALE'); assert.deepEqual(snapshotTaskRetrySideEffects(repository, providerCalls), directionBefore);
     const firstSetting = await postStructure(app, novelId, 'settings', 'generate');
     await postStructure(app, novelId, 'settings', 'adopt', firstSetting.candidate.id, {
       reason: '先采用设定。'
@@ -1107,7 +1111,7 @@ describe('novel package 4 task center routes', () => {
       errorCode: 'MOCK_PROVIDER_TIMEOUT',
       errorMessage: '生成服务暂时没有响应，请稍后重试。'
     });
-    const replayBefore = snapshotTaskRetrySideEffects(repository, providerCalls); const structureReplay = await postStructure(app, novelId, 'outlines', 'generate', undefined, { idempotencyKey: failedOutlineTask.idempotencyToken });
+    const replayBefore = snapshotTaskRetrySideEffects(repository, providerCalls); const structureReplay = await postStructure(app, novelId, 'outlines', 'generate', undefined, { idempotencyKey: requestFallbackIdempotencyKey(failedOutlineTask) });
     assert.deepEqual([structureReplay.task.id, structureReplay.task.currentStep, structureReplay.task.errorCode, structureReplay.task.errorMessage], [failedOutlineTask.id, '生成任务失败，暂不支持直接重试', 'PROVIDER_ERROR', '任务执行失败，未写入新的候选或正式内容。']);
     assert.doesNotMatch(JSON.stringify(structureReplay.task), /RAW_STRUCTURE_PROVIDER_CANARY|稍后重试/); assert.deepEqual(snapshotTaskRetrySideEffects(repository, providerCalls), replayBefore);
 
@@ -1468,8 +1472,8 @@ describe('novel package 5 trial writing routes', () => {
     assert.equal(followup.task.status, TaskStatus.WaitingConfirmation);
     assert.equal(repository.getGenerationTasks().filter((task) => task.taskType === 'trial_followup_generate').length, 1);
 
-    const terminalReplay = await postTrialGenerate(app, novelId, followupPayload);
-    assert.equal(terminalReplay.task.id, followup.task.id);
+    const terminalReplay = await app.inject({ method: 'POST', url: `/novels/${novelId}/trial/generate`, payload: followupPayload });
+    assert.equal(terminalReplay.statusCode, 409); assert.equal(terminalReplay.json().error.code, ErrorCode.VersionConflict); assert.equal(terminalReplay.json().error.details.code, 'SOURCE_STALE');
     assert.equal(repository.getGenerationTasks().filter((task) => task.taskType === 'trial_followup_generate').length, 1);
     const differentTokenResponse = await app.inject({
       method: 'POST',
@@ -1840,7 +1844,7 @@ describe('novel package 6 body generation routes', () => {
       try { const { novelId, strategySnapshot } = await createNovelReadyForBody(app, `正文跨字段拒绝测试-${route}`, 8); if (route === 'rewrite') await postBodyBatch(app, novelId, strategySnapshot); const chapter = repository.getNovelChapters().find((item) => item.novelId === novelId && item.chapterNo === 4)!; let providerReturns = 0; let finalizeCalls = 0; const finalizeBody = repository.generateBodyBatch; const finalizeRewrite = repository.rewriteChapter;
         repository.generateBodyBatch = async (input) => { finalizeCalls += 1; return finalizeBody(input); }; repository.rewriteChapter = async (input) => { finalizeCalls += 1; return finalizeRewrite(input); };
         for (const [name, mutate] of Object.entries(cases)) { MockBodyProvider.prototype.generateBodyChapter = async function(input) { const output = await generateBodyChapter.call(this, input); mutate(output); providerReturns += 1; return output; }; MockBodyProvider.prototype.rewriteChapter = async function(input) { const output = await rewriteChapter.call(this, input); mutate(output.candidate); providerReturns += 1; return output; };
-          const key = `body-provider-${route}-${name}`; const before = JSON.stringify(snapshotTaskRetrySideEffects(repository, 0, { novelId })); const providerBefore = providerReturns; const finalizeBefore = finalizeCalls; const bodyPayload = { strategySnapshotId: strategySnapshot.id, expectedStrategySnapshotVersion: strategySnapshot.versionNo, idempotencyKey: key }; const [url, payload] = route === 'batch' ? [`/novels/${novelId}/chapters/batch-generate`, bodyPayload] : route === 'chapter' ? [`/novels/${novelId}/chapters/${chapter.id}/generate`, bodyPayload] : [`/novels/${novelId}/chapters/${chapter.id}/rewrite`, { currentContentVersionId: chapter.currentContentVersionId, instruction: '保持主线，仅优化表达。', reason: '验证非法 provider 输出不落库。', idempotencyKey: key }]; const response = await app.inject({ method: 'POST', url, payload }); const task = repository.getGenerationTasks().find((item) => item.idempotencyToken === key); const label = `${route}:${name}`;
+          const key = `body-provider-${route}-${name}`; const before = JSON.stringify(snapshotTaskRetrySideEffects(repository, 0, { novelId })); const providerBefore = providerReturns; const finalizeBefore = finalizeCalls; const bodyPayload = { strategySnapshotId: strategySnapshot.id, expectedStrategySnapshotVersion: strategySnapshot.versionNo, idempotencyKey: key }; const [url, payload] = route === 'batch' ? [`/novels/${novelId}/chapters/batch-generate`, bodyPayload] : route === 'chapter' ? [`/novels/${novelId}/chapters/${chapter.id}/generate`, bodyPayload] : [`/novels/${novelId}/chapters/${chapter.id}/rewrite`, { currentContentVersionId: chapter.currentContentVersionId, instruction: '保持主线，仅优化表达。', reason: '验证非法 provider 输出不落库。', idempotencyKey: key }]; const response = await app.inject({ method: 'POST', url, payload }); const action = route === 'batch' ? 'body_batch_generate' : route === 'chapter' ? 'chapter_body_generate' : 'chapter_rewrite'; const task = repository.getGenerationTasks().find((item) => item.idempotencyToken === testActorScopedIdempotencyToken(action, route === 'batch' ? novelId : chapter.id, key)); const label = `${route}:${name}`;
           assert.ok(response.statusCode >= 400, label); assert.deepEqual([providerReturns - providerBefore, finalizeCalls - finalizeBefore, task?.failureCategory, task?.errorCode, task?.resultReceiptHash], [1, 0, 'provider_error', 'PROVIDER_ERROR', null], label); assert.equal(JSON.stringify(snapshotTaskRetrySideEffects(repository, 0, { novelId, excludedTaskId: task?.id })), before, label);
         }
       } finally { MockBodyProvider.prototype.generateBodyChapter = generateBodyChapter; MockBodyProvider.prototype.rewriteChapter = rewriteChapter; await app.close(); }
@@ -1933,7 +1937,8 @@ describe('novel package 6 body generation routes', () => {
 
     const bodyTasks = repository.getGenerationTasks().filter((task) => task.taskType === 'body_batch_generate');
     assert.equal(bodyTasks.length, taskCountBefore + 1);
-    const failedTasksForRequest = bodyTasks.filter((task) => task.idempotencyToken === 'body-batch-save-failed-1');
+    const failedTaskToken = testActorScopedIdempotencyToken('body_batch_generate', novelId, 'body-batch-save-failed-1');
+    const failedTasksForRequest = bodyTasks.filter((task) => task.idempotencyToken === failedTaskToken);
     assert.equal(failedTasksForRequest.length, 1);
     const failedTask = failedTasksForRequest[0];
     assert.equal(failedTask.status, TaskStatus.Failed);
@@ -1977,7 +1982,7 @@ describe('novel package 6 body generation routes', () => {
     assert.equal(
       repository
         .getGenerationTasks()
-        .filter((task) => task.taskType === 'body_batch_generate' && task.idempotencyToken === 'body-batch-save-failed-1').length,
+        .filter((task) => task.taskType === 'body_batch_generate' && task.idempotencyToken === failedTaskToken).length,
       1
     );
 
@@ -2304,18 +2309,17 @@ describe('novel package 6 body generation routes', () => {
       url: `/novels/${novelId}/chapters/${chapter4.id}/rewrite`,
       payload: rewritePayload
     });
-    assert.equal(rewriteAfterAdopt.statusCode, 200, rewriteAfterAdopt.body);
-    assert.equal(rewriteAfterAdopt.json().data.task.id, rewrite.task.id);
-    assert.equal(rewriteAfterAdopt.json().data.candidate.id, rewrite.candidate.id);
+    assert.equal(rewriteAfterAdopt.statusCode, 409, rewriteAfterAdopt.body);
+    assert.equal(rewriteAfterAdopt.json().error.code, ErrorCode.VersionConflict);
+    assert.equal(rewriteAfterAdopt.json().error.details.code, 'SOURCE_STALE');
     const adoptReplay = await app.inject({
       method: 'POST',
       url: `/novels/${novelId}/chapters/${chapter4.id}/content-versions/${rewrite.candidate.id}/adopt`,
       payload: adoptPayload
     });
-    assert.equal(adoptReplay.statusCode, 200, adoptReplay.body);
-    assert.equal(adoptReplay.json().data.task.id, adopted.task.id);
-    assert.equal(adoptReplay.json().data.impactCase.id, adopted.impactCase.id);
-    assert.deepEqual(adoptReplay.json().data.affectedObjects, []);
+    assert.equal(adoptReplay.statusCode, 409, adoptReplay.body);
+    assert.equal(adoptReplay.json().error.code, ErrorCode.VersionConflict);
+    assert.equal(adoptReplay.json().error.details.code, 'SOURCE_STALE');
     const adoptConflict = await app.inject({
       method: 'POST',
       url: `/novels/${novelId}/chapters/${chapter4.id}/content-versions/${rewrite.candidate.id}/adopt`,
@@ -2784,7 +2788,7 @@ describe('model integration M1 DeepSeek provider routes', () => {
     const detailBeforeReview = (await app.inject({ method: 'GET', url: `/novels/${novelId}` })).json().data;
     const reviewLogsBefore = repository.getOperationLogs().length;
     const rejectedReview = await app.inject({ method: 'POST', url: `/novels/${novelId}/full-review`, payload: { idempotencyKey: 'm1-fake-full-review-poison', expectedNovelVersion: detailBeforeReview.updatedAt } });
-    assert.equal(rejectedReview.statusCode, 500); const rejectedReviewTask = repository.getGenerationTasks().find((task) => task.idempotencyToken === 'm1-fake-full-review-poison'); assert.equal(rejectedReviewTask?.failureCategory, 'provider_error'); assert.equal(rejectedReviewTask?.resultReceiptHash, null); assert.equal(await repository.findLatestFullReview('tenant_default', novelId), null); assert.equal(repository.getOperationLogs().length, reviewLogsBefore);
+    assert.equal(rejectedReview.statusCode, 500); const rejectedReviewTask = repository.getGenerationTasks().find((task) => task.idempotencyToken === testActorScopedIdempotencyToken('novel_full_review', novelId, 'm1-fake-full-review-poison')); assert.equal(rejectedReviewTask?.failureCategory, 'provider_error'); assert.equal(rejectedReviewTask?.resultReceiptHash, null); assert.equal(await repository.findLatestFullReview('tenant_default', novelId), null); assert.equal(repository.getOperationLogs().length, reviewLogsBefore);
     fakeClient.allowFullReview();
     const reviewResponse = await app.inject({
       method: 'POST',
@@ -3003,8 +3007,24 @@ async function postBodyBatch(app: Awaited<ReturnType<typeof buildApp>>, novelId:
 
 async function postTrialGenerate(app: Awaited<ReturnType<typeof buildApp>>, novelId: string, payload: Record<string, unknown> = {}) {
   const response = await app.inject({ method: 'POST', url: `/novels/${novelId}/trial/generate`, payload });
-  assert.equal(response.statusCode, 200); assert.equal(response.json().success, true);
+  assert.equal(response.statusCode, 200, response.body); assert.equal(response.json().success, true);
   return response.json().data;
+}
+
+function requestFallbackIdempotencyKey(task: { metadata: unknown }) {
+  const requestId = (task.metadata as { requestId?: unknown } | null)?.requestId;
+  assert.equal(typeof requestId, 'string');
+  return `request:${requestId}`.slice(0, 120);
+}
+
+function testActorScopedIdempotencyToken(action: NovelProviderAction, objectId: string, rawIdempotencyKey: string) {
+  return createActorScopedIdempotencyToken({
+    tenantId: 'tenant_default',
+    userId: 'user_test',
+    action,
+    objectId,
+    rawIdempotencyKey
+  });
 }
 function captureTrialFollowupSideEffects(repository: ReturnType<typeof createInMemoryNovelRepository>, novelId: string) {
   const tasks = repository.getGenerationTasks().filter((task) => task.novelId === novelId);
@@ -3543,6 +3563,61 @@ function createProviderSet(calls: Array<{ action: NovelProviderAction; keys: str
   };
 }
 describe('RP-02B2a1 registry and strict provider ABI', () => {
+  it('fails closed for untrusted legacy raw-token actors while preserving trusted replay', async () => {
+    for (const actorCase of ['trusted', 'missing', 'null', 'default', 'mismatched'] as const) {
+      const repository = createInMemoryNovelRepository();
+      const providerCalls: Array<{ action: NovelProviderAction; payload: Record<string, unknown> }> = [];
+      const app = Fastify({ logger: false });
+      app.setErrorHandler((error, request, reply) => {
+        const { statusCode, body } = toErrorResponse(error, request.id);
+        reply.status(statusCode).send(body);
+      });
+      await registerNovelRoutes(app, {
+        repository,
+        requestContextResolver: async () => ({ tenantId: 'tenant_default', userId: 'user_test' }),
+        ...createRouteProviderSpies(providerCalls)
+      });
+      try {
+        const novelId = await routeCreateDraft(app);
+        const idempotencyKey = `legacy-raw-${actorCase}-0001`;
+        const firstResponse = await app.inject({
+          method: 'POST',
+          url: `/novels/${novelId}/directions/generate`,
+          payload: { idempotencyKey }
+        });
+        assert.equal(firstResponse.statusCode, 200, firstResponse.body);
+        const legacyTask = repository.getGenerationTasks().find((task) => task.taskType === 'novel_direction_generate');
+        assert.ok(legacyTask, actorCase);
+        Object.assign(legacyTask, { idempotencyToken: idempotencyKey, activeClaimKey: null });
+        if (actorCase === 'missing') delete (legacyTask as { createdBy?: string | null }).createdBy;
+        if (actorCase === 'null') legacyTask.createdBy = null;
+        if (actorCase === 'default') legacyTask.createdBy = 'user_default';
+        if (actorCase === 'mismatched') legacyTask.createdBy = 'user_other';
+
+        const before = { taskCount: repository.getGenerationTasks().length, providerCount: providerCalls.length };
+        const replayResponse = await app.inject({
+          method: 'POST',
+          url: `/novels/${novelId}/directions/generate`,
+          payload: { idempotencyKey }
+        });
+        if (actorCase === 'trusted') {
+          assert.equal(replayResponse.statusCode, 200, replayResponse.body);
+          assert.equal(replayResponse.json().data.task.id, legacyTask.id);
+        } else {
+          assert.equal(replayResponse.statusCode, 409, `${actorCase}:${replayResponse.body}`);
+          assert.equal(replayResponse.json().error.code, ErrorCode.IdempotencyConflict, actorCase);
+        }
+        assert.deepEqual(
+          { taskCount: repository.getGenerationTasks().length, providerCount: providerCalls.length },
+          before,
+          `${actorCase}:legacy raw task must not create or dispatch a second task`
+        );
+        assert.deepEqual(before, { taskCount: 1, providerCount: 1 }, `${actorCase}:exact baseline contract`);
+      } finally {
+        await app.close();
+      }
+    }
+  });
   it('covers all 15 actions with stable execution plans', () => {
     assert.deepEqual(Object.keys(ACTION_EXECUTION_PLANS).sort(), [...NOVEL_PROVIDER_ACTIONS].sort());
     assert.equal(listActionExecutionPlans().length, 15);
@@ -3645,6 +3720,7 @@ describe('RP-02B2a1 registry and strict provider ABI', () => {
     const providers = createRouteProviderSpies(captured);
     await registerNovelRoutes(app, {
       repository,
+      requestContextResolver: async () => ({ tenantId: 'tenant_default', userId: 'user_test' }),
       now: () => new Date('2026-07-14T00:00:00.000Z'),
       ...providers
     });
@@ -3800,7 +3876,7 @@ describe('RP-02B2a1 registry and strict provider ABI', () => {
     const captured: Array<{ action: NovelProviderAction; payload: Record<string, unknown> }> = [], poison: ProviderPoison = {};
     const logs: string[] = []; const app = Fastify({ logger: { level: 'info', stream: { write: (chunk: unknown) => logs.push(String(chunk)) } } as any });
     app.setErrorHandler((error, request, reply) => { const { statusCode, body } = toErrorResponse(error, request.id); reply.status(statusCode).send(body); });
-    const nodeEnv = process.env.NODE_ENV; process.env.NODE_ENV = 'test'; await registerNovelRoutes(app, { repository, now: () => new Date('2026-07-14T00:00:00.000Z'), ...createRouteProviderSpies(captured, poison, repository) }); process.env.NODE_ENV = nodeEnv;
+    const nodeEnv = process.env.NODE_ENV; process.env.NODE_ENV = 'test'; await registerNovelRoutes(app, { repository, requestContextResolver: async () => ({ tenantId: 'tenant_default', userId: 'user_test' }), now: () => new Date('2026-07-14T00:00:00.000Z'), ...createRouteProviderSpies(captured, poison, repository) }); process.env.NODE_ENV = nodeEnv;
     const seedOne = (await app.inject({ method: 'POST', url: '/dev/novels/acceptance-seeds/trial', payload: { title: 'chapter-one authority' } })).json().data, authoritativeChapterOne = repository.getNovelChapters().find((item) => item.novelId === seedOne.novelId && item.chapterNo === 1); assert.ok(authoritativeChapterOne);
     assert.deepEqual(seedOne.candidateIds.map((id: string) => repository.getChapterContentVersions().find((item) => item.id === id)?.chapterId), Array(seedOne.candidateIds.length).fill(authoritativeChapterOne.id), 'legal chapter-one candidates bind to the authoritative chapter');
     for (const mode of ['other_chapter', 'canary_id', 'wrong_chapter_no'] as const) {

@@ -1,5 +1,7 @@
 export enum ErrorCode {
   ValidationError = 'VALIDATION_ERROR',
+  Unauthorized = 'UNAUTHORIZED',
+  DependencyUnavailable = 'DEPENDENCY_UNAVAILABLE',
   NotFound = 'NOT_FOUND',
   PermissionDenied = 'PERMISSION_DENIED',
   LifecycleNotActive = 'LIFECYCLE_NOT_ACTIVE',
@@ -60,6 +62,16 @@ export const errorDefinitions: Record<ErrorCode, ErrorDefinition> = {
     code: ErrorCode.ValidationError,
     httpStatus: 400,
     message: '请求参数不合法'
+  },
+  [ErrorCode.Unauthorized]: {
+    code: ErrorCode.Unauthorized,
+    httpStatus: 401,
+    message: '身份认证失败'
+  },
+  [ErrorCode.DependencyUnavailable]: {
+    code: ErrorCode.DependencyUnavailable,
+    httpStatus: 503,
+    message: '身份服务暂时不可用'
   },
   [ErrorCode.NotFound]: {
     code: ErrorCode.NotFound,

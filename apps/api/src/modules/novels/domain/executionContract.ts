@@ -4,11 +4,18 @@ import {
   canonicalExecutionJson,
   createExecutionEnvelope,
   normalizeExecutionEnvelope,
+  normalizeExecutionEnvelopeV1_1,
   WorkerPayloadUnsupportedError,
   type ExecutionEnvelopeV1,
+  type ExecutionEnvelopeV1_1,
   type NovelProviderAction
 } from '@ai-shortvideo/shared';
-import type { GenerationTaskRecord, HashedSafeResultReceipt } from '../domain/novelDomain.js';
+import type {
+  GenerationAuthoritySnapshot,
+  GenerationTaskRecord,
+  HashedSafeResultReceipt,
+  LoadGenerationAuthorityInput
+} from '../domain/novelDomain.js';
 
 const TASK_ACTIONS: Record<string, readonly NovelProviderAction[]> = {
   novel_direction_generate: ['direction_generate'], novel_direction_fuse: ['direction_fuse'], novel_direction_optimize: ['direction_optimize'],
@@ -34,6 +41,52 @@ export function validateExecutionEnvelopeForTask(task: GenerationTaskRecord): Ex
     if (error instanceof WorkerPayloadUnsupportedError) throw error;
     unsupported('execution envelope cannot be deserialized');
   }
+}
+
+export function validateExecutionEnvelopeV1_1ForTask(task: GenerationTaskRecord): ExecutionEnvelopeV1_1 {
+  try {
+    if (!task.executionEnvelopeJson) unsupported('execution envelope is missing');
+    const envelope = normalizeExecutionEnvelopeV1_1(task.executionEnvelopeJson);
+    const expectedActions = TASK_ACTIONS[task.taskType];
+    if (
+      !expectedActions?.includes(envelope.action)
+      || envelope.objectType !== task.objectType
+      || envelope.objectId !== task.objectId
+      || envelope.tenantId !== task.tenantId
+      || envelope.novelId !== task.novelId
+      || envelope.auditContext.requestedByUserId !== task.createdBy
+      || canonicalExecutionJson(envelope.sourceVersionRefs) !== canonicalExecutionJson(task.sourceVersionRefs)
+      || envelope.policyProfileVersionId !== task.policyProfileVersionId
+      || envelope.modelRoutingVersion !== task.modelRoutingVersion
+      || hashCanonicalJson(envelope) !== task.requestHash
+    ) unsupported('task and execution envelope mismatch');
+    return envelope;
+  } catch (error) {
+    if (error instanceof WorkerPayloadUnsupportedError) throw error;
+    unsupported('execution envelope cannot be deserialized');
+  }
+}
+
+export type GenerationAuthorityMatchResult =
+  | { ok: true; sources: GenerationAuthoritySnapshot }
+  | { ok: false; code: 'SOURCE_STALE'; safeReason: string };
+
+export function matchGenerationAuthority(
+  expected: LoadGenerationAuthorityInput,
+  expectedSnapshotHash: string,
+  actual: GenerationAuthoritySnapshot | null
+): GenerationAuthorityMatchResult {
+  if (
+    !actual
+    || actual.action !== expected.action
+    || actual.tenantId !== expected.tenantId
+    || actual.novelId !== expected.novelId
+    || actual.objectId !== expected.objectId
+    || hashCanonicalJson(actual) !== expectedSnapshotHash
+  ) {
+    return { ok: false, code: 'SOURCE_STALE', safeReason: '生成来源已变化，请刷新后重试。' };
+  }
+  return { ok: true, sources: actual };
 }
 
 export function createSafeResultReceipt(task: GenerationTaskRecord, input: unknown): HashedSafeResultReceipt {
