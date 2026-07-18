@@ -161,6 +161,15 @@ describe('RP-01A Playwright backend E2E runner guards', () => {
     );
   });
 
+  it('injects a fixed trusted actor only for the explicit in-memory E2E profile', () => {
+    const serverSource = readFileSync(new URL('./api-e2e-server.ts', import.meta.url), 'utf8');
+    assert.match(serverSource, /process\.env\.E2E_PROFILE === 'rp01a-local-inmemory'/);
+    assert.match(serverSource, /requestContextResolver/);
+    assert.match(serverSource, /tenant_rp01a_e2e/);
+    assert.match(serverSource, /user_rp01a_e2e/);
+    assert.doesNotMatch(serverSource, /x-tenant-id|x-user-id/i);
+  });
+
   it('runs on API, admin and shared source changes in CI', () => {
     const workflowSource = readFileSync(new URL('../../.github/workflows/rp01a-e2e.yml', import.meta.url), 'utf8');
     for (const requiredPath of ['apps/api/src/**', 'apps/admin-web/src/**', 'packages/shared/src/**']) {

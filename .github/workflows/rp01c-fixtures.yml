@@ -38,10 +38,12 @@ on:
       - 'docs/reviews/remediation-rmd-task-002-003-rp-02b2a1-verification-2026-07-15.md'
       - 'docs/adr/rp-02b2a1-registry-abi-budget.md'
       - 'docs/adr/rp-02b2a2-gate-prep-budget.md'
+      - 'docs/adr/rp-02b2a2-g0-ci-compat-correction-budget.md'
       - 'docs/adr/rp-02b2a2-authority-claim-budget.md'
       - 'docs/adr/rp-02b2a3-lease-retry-budget.md'
       - 'docs/adr/rp-02b2a4-inmemory-finalize-budget.md'
       - 'docs/adr/rp-02b2a5-prisma-nine-six-budget.md'
+      - 'docs/reviews/rp-02b2a2-g0-ci-compat-correction-verification-2026-07-18.md'
       - 'package.json'
       - 'package-lock.json'
 permissions:
@@ -69,6 +71,7 @@ jobs:
         id: b2a-range
         env:
           EVENT_NAME: ${{ github.event_name }}
+          PUSH_CREATED: ${{ github.event.created }}
           PUSH_BEFORE_SHA: ${{ github.event.before }}
           PUSH_AFTER_SHA: ${{ github.event.after }}
           MANUAL_BASE_SHA: ${{ inputs.base_sha }}
@@ -78,7 +81,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$EVENT_NAME" == "push" ]]; then
-            env -u DATABASE_URL -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL -u DEEPSEEK_MODEL -u DEEPSEEK_STRUCTURE_MODEL -u DEEPSEEK_REASONER_MODEL -u DEEPSEEK_TIMEOUT_MS -u DEEPSEEK_MAX_RETRIES -u DEPLOYMENT_ACTOR_TENANT_ID -u DEPLOYMENT_ACTOR_USER_ID NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=/dev/null node scripts/rp02b2a-package-gate.mjs --print-range --event push --push-before "$PUSH_BEFORE_SHA" --push-head "$PUSH_AFTER_SHA" --authorized-package-id "$B2A_AUTHORIZED_PACKAGE_ID" --authorized-predecessor-sha "$B2A_AUTHORIZED_PREDECESSOR_SHA" >> "$GITHUB_OUTPUT"
+            env -u DATABASE_URL -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL -u DEEPSEEK_MODEL -u DEEPSEEK_STRUCTURE_MODEL -u DEEPSEEK_REASONER_MODEL -u DEEPSEEK_TIMEOUT_MS -u DEEPSEEK_MAX_RETRIES -u DEPLOYMENT_ACTOR_TENANT_ID -u DEPLOYMENT_ACTOR_USER_ID NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=/dev/null node scripts/rp02b2a-package-gate.mjs --print-range --event push --push-created "$PUSH_CREATED" --push-before "$PUSH_BEFORE_SHA" --push-head "$PUSH_AFTER_SHA" --authorized-package-id "$B2A_AUTHORIZED_PACKAGE_ID" --authorized-predecessor-sha "$B2A_AUTHORIZED_PREDECESSOR_SHA" >> "$GITHUB_OUTPUT"
           elif [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             env -u DATABASE_URL -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL -u DEEPSEEK_MODEL -u DEEPSEEK_STRUCTURE_MODEL -u DEEPSEEK_REASONER_MODEL -u DEEPSEEK_TIMEOUT_MS -u DEEPSEEK_MAX_RETRIES -u DEPLOYMENT_ACTOR_TENANT_ID -u DEPLOYMENT_ACTOR_USER_ID NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=/dev/null node scripts/rp02b2a-package-gate.mjs --print-range --event workflow_dispatch --manual-base "$MANUAL_BASE_SHA" --manual-head "$MANUAL_HEAD_SHA" --authorized-package-id "$B2A_AUTHORIZED_PACKAGE_ID" --authorized-predecessor-sha "$B2A_AUTHORIZED_PREDECESSOR_SHA" >> "$GITHUB_OUTPUT"
           else

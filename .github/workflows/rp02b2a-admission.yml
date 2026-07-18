@@ -139,8 +139,8 @@ jobs:
               exit 1
               ;;
           esac
-          [[ "$api_event" == "$EVENT_NAME" && "$api_head_sha" == "$WORKFLOW_SHA" ]] || {
-            echo "current run API event or workflow revision does not match" >&2
+          [[ "$api_event" == "$EVENT_NAME" && "$api_head_sha" == "$PR_HEAD_SHA" ]] || {
+            echo "current run API event or candidate revision does not match" >&2
             exit 1
           }
           [[ "$WORKFLOW_REF" == "$GITHUB_REPOSITORY/$WORKFLOW_PATH@$EVENT_REF" ]] || {

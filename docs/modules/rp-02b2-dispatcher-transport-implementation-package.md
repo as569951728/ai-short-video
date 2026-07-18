@@ -1,5 +1,9 @@
 # RP-02B2 Dispatcher、Fenced Finalize 与异步 Transport 实现包
 
+## G0-C1 CI 兼容修正（2026-07-18）
+
+`RP-02B2a2-G0-C1` 以 `59cedaf7150029fcbde03d2779662659727e8b4e` 为固定基线，独立修正 trusted admission、RP-01A 本地内存 E2E actor、RP-01C 新分支 push range、correction bootstrap 与 package-gate fixture 性能。最终修正包为 9 files / 372 additions / 64 deletions / 308 net additions；校验同时拒绝清单外文件和任一冻结文件缺失，完整矩阵 50/50 在本地 1,461.23 秒内通过。correction bootstrap 只识别该固定基线的单个原子直接子提交，并在校验完整 G0-C1 ADR、exact manifest、预算和 workflow 合同后，允许 PR range、显式 workflow dispatch、新建 ref、基线直推及两个独立有效 correction sibling 间的 force-with-lease 替换统一回放 `<59cedaf>..<candidate>`；replacement 前后的 RP-01C workflow 均从各自提交读取，不依赖当前 checkout。它不授权任何 A2-A5 业务包。该包不包含 A2 业务实现；修正提交落地并产生新的远程 E1 证据后，A2 必须重新授权并迁移，旧授权不得复用。A2-v3 冻结为 20-file exact manifest 和 `20 / 3,250` 上限；当前集成候选 `934d380` 相对旧 provisional G0 `01245feb51b50ec838cb405a67bcafd1b194eeae` 为 3,627 additions、395 deletions、3,232 net additions，并显式包含 `apps/api/src/modules/tasks/routes/taskRoutes.ts` 与 `apps/api/test/rp02b2a/repository-authority-hardening.test.ts`。
+
 状态：`rp02b2a0_completed_b2a_single_package_superseded_split_round6_approved_asset_submission_pending_b2b_b2c_b3_frozen`
 
 问题：`RMD-TASK-002`，承接 `RMD-TASK-001` 的异步执行阶段；`RMD-TASK-003` 继续冻结到 `RP-02B3`
@@ -430,7 +434,7 @@ B2a0 使用独立命令 `test:rp02b2a0`，精确运行 API route、Admin service
 
 - `test:rp02b2a1:gate`：真实执行 `scripts/rp02b2a-package-gate.test.mjs`，该测试只通过子进程调用生产 `scripts/rp02b2a-package-gate.mjs`，并读取真实 `.github/workflows/rp01c-fixtures.yml` 与 `.github/workflows/rp02b2a-admission.yml`，不得复制 helper、正则模拟或跳过 YAML wiring。前者只承担 bootstrap/普通 CI/post-merge 回归，后者只有在 accepted G0 进入默认分支后才承担 A2-A5 authoritative admission；候选分支上的任一 workflow/gate 都不能自证准入。
 - `test:rp02b2a1:core`：显式运行真实存在的 `apps/api/test/rp02a/rp02a.test.ts` 与 `apps/api/src/modules/novels/novelRoutes.test.ts`，后者承载 A1 registry/strict ABI、同步 200 和 retry freeze 回归；并串行执行 `test:rp02b2a1:gate`。A1 从未交付 `apps/api/test/rp02b2a/registry-provider-abi.test.ts`，不得再把该不存在路径列为测试映射或验收证据；`test:rp02b2a1 = test:rp02b1 -> test:rp02b2a0 -> test:rp02b2a1:core`。
-- `test:rp02b2a2:core`：`authority-claim.test.ts` 与 A2 同步 200 回归；`test:rp02b2a2 = test:rp02b2a1 -> test:rp02b2a2:core`。
+- `test:rp02b2a2:core`：`authority-claim.test.ts`、`repository-authority-hardening.test.ts` 与 A2 同步 200 回归；`test:rp02b2a2 = test:rp02b2a1 -> test:rp02b2a2:core`。
 - `test:rp02b2a3:core`：`lease-dispatch-retry.test.ts`；`test:rp02b2a3 = test:rp02b2a2 -> test:rp02b2a3:core`。
 - `test:rp02b2a4:core`：`inmemory-fenced-finalize.test.ts` 与 A4 同步 200 回归；`test:rp02b2a4 = test:rp02b2a3 -> test:rp02b2a4:core`。
 - `test:rp02b2a5:core`：`prisma-fenced-finalize.test.ts`；`test:rp02b2a5 = test:rp02b2a4 -> test:rp02b2a5:core`。
@@ -441,7 +445,7 @@ B2a2 在 `package.json` 中的三个 script value 必须逐字符等于下列合
 ```json
 {
   "test:rp02b2a2:env-probe": "node -e \"const keys=['DATABASE_URL','DEEPSEEK_API_KEY','DEEPSEEK_BASE_URL','DEEPSEEK_MODEL','DEEPSEEK_STRUCTURE_MODEL','DEEPSEEK_REASONER_MODEL','DEEPSEEK_TIMEOUT_MS','DEEPSEEK_MAX_RETRIES','DEPLOYMENT_ACTOR_TENANT_ID','DEPLOYMENT_ACTOR_USER_ID']; if(keys.some((key)=>process.env[key]!==undefined)||process.env.NODE_ENV!=='production'||process.env.AI_PROVIDER_MODE!=='mock'||process.env.DOTENV_CONFIG_PATH!=='/dev/null') process.exit(1); console.log('RP02B2A2_ENV_CLEAN')\"",
-  "test:rp02b2a2:core": "env -u DATABASE_URL -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL -u DEEPSEEK_MODEL -u DEEPSEEK_STRUCTURE_MODEL -u DEEPSEEK_REASONER_MODEL -u DEEPSEEK_TIMEOUT_MS -u DEEPSEEK_MAX_RETRIES -u DEPLOYMENT_ACTOR_TENANT_ID -u DEPLOYMENT_ACTOR_USER_ID NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=/dev/null sh -c 'npm run test:rp02b2a2:env-probe && npm run build -w @ai-shortvideo/shared && npm run prisma:generate -w @ai-shortvideo/api && npm exec -w @ai-shortvideo/api -- tsx --test test/rp02b2a/authority-claim.test.ts src/modules/novels/novelRoutes.test.ts'",
+  "test:rp02b2a2:core": "env -u DATABASE_URL -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL -u DEEPSEEK_MODEL -u DEEPSEEK_STRUCTURE_MODEL -u DEEPSEEK_REASONER_MODEL -u DEEPSEEK_TIMEOUT_MS -u DEEPSEEK_MAX_RETRIES -u DEPLOYMENT_ACTOR_TENANT_ID -u DEPLOYMENT_ACTOR_USER_ID NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=/dev/null sh -c 'npm run test:rp02b2a2:env-probe && npm run build -w @ai-shortvideo/shared && npm run prisma:generate -w @ai-shortvideo/api && npm exec -w @ai-shortvideo/api -- tsx --test test/rp02b2a/authority-claim.test.ts test/rp02b2a/repository-authority-hardening.test.ts src/modules/novels/novelRoutes.test.ts'",
   "test:rp02b2a2": "env -u DATABASE_URL -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL -u DEEPSEEK_MODEL -u DEEPSEEK_STRUCTURE_MODEL -u DEEPSEEK_REASONER_MODEL -u DEEPSEEK_TIMEOUT_MS -u DEEPSEEK_MAX_RETRIES -u DEPLOYMENT_ACTOR_TENANT_ID -u DEPLOYMENT_ACTOR_USER_ID NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=/dev/null sh -c 'npm run test:rp02b2a2:env-probe && npm run test:rp02b2a1 && npm run test:rp02b2a2:core'"
 }
 ```
@@ -492,7 +496,7 @@ authoritative admission workflow 只能从 repository-controlled `RP02B2A_AUTHOR
 | 子包 | 场景编号 | 本包测试文件 | 必须累计回归 |
 | --- | --- | --- | --- |
 | B2a1 | 1、15、20、22；另含 package-gate workflow 正反例 | `apps/api/test/rp02a/rp02a.test.ts`、`apps/api/src/modules/novels/novelRoutes.test.ts`、`scripts/rp02b2a-package-gate.test.mjs` | B1、B2a0；同步 HTTP 200/非 202、公开 retry freeze、固定失败投影与八类零副作用 |
-| B2a2 | 2、3、4、13、18、21、24、25、26、27 | `apps/api/test/rp02b2a/authority-claim.test.ts`、`apps/api/src/modules/novels/novelRoutes.test.ts`、`scripts/rp02b2a-package-gate.test.mjs` | B2a1 全量；T0/T1 replay、可信 actor、action-specific authority/source refs、两阶段 15-action 八类零副作用、legacy fail-closed、candidate-HEAD exact/fail-fast 命令、同步 200 |
+| B2a2 | 2、3、4、13、18、21、24、25、26、27 | `apps/api/test/rp02b2a/authority-claim.test.ts`、`apps/api/test/rp02b2a/repository-authority-hardening.test.ts`、`apps/api/src/modules/novels/novelRoutes.test.ts`、`scripts/rp02b2a-package-gate.test.mjs` | B2a1 全量；T0/T1 replay、可信 actor、action-specific authority/source refs、repository authority、两阶段 15-action 八类零副作用、legacy fail-closed、candidate-HEAD exact/fail-fast 命令、同步 200 |
 | B2a3 | 6、8、14、16、19 | `lease-dispatch-retry.test.ts` | B2a2 全量；A1 public retry freeze、A2 authority gate、正常 leased action provider=0 |
 | B2a4 | 5、7、9、10、11、17、23（InMemory） | `inmemory-fenced-finalize.test.ts`、`novelRoutes.test.ts` | B2a3 全量；provider dispatch checkpoint 只在 A4 finalize capability 就绪后证明；InMemory 15 action、公开同步 200/非 202、leased result 仅 harness 可见 |
 | B2a5 | 12、23（Prisma） | `prisma-fenced-finalize.test.ts` | B2a4 全量；Prisma 9 enabled/6 unsupported、deterministic transaction/CAS、无 transport/UI 扩张 |
@@ -650,6 +654,7 @@ B2a0/B2a1-B2a5/B2b/B2c E3 可证明：风险参数同步链、单进程 determin
 - `apps/api/src/main.ts`
 - `apps/api/test/rp02b2a/fixtures.ts`
 - `apps/api/test/rp02b2a/authority-claim.test.ts`
+- `apps/api/test/rp02b2a/repository-authority-hardening.test.ts`
 - `apps/api/src/modules/novels/novelRoutes.test.ts`
 - `docs/adr/rp-02b2a2-authority-claim-budget.md`
 - `package.json`
