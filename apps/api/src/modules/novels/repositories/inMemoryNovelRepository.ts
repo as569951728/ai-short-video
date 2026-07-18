@@ -172,7 +172,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     };
     const preference = preferences.find((item) => item.tenantId === input.tenantId && item.novelId === novel.id);
     const preferenceFacts = preference ? {
-      appealPoints: [...preference.appealPoints].sort(),
+      appealPoints: preference.appealPoints.map((item) => item.trim()).filter(Boolean).sort(),
       targetAudience: preference.targetAudience,
       stageCount: preference.stageCount
     } : null;

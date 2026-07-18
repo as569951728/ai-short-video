@@ -1,7 +1,9 @@
 import {
   ErrorCode,
   NOVEL_PROVIDER_ACTIONS,
+  createExecutionEnvelope,
   createExecutionEnvelopeV1_1,
+  type AuthoritySourceVersionRefsV1,
   type ExecutionEnvelopeV1_1,
   type NovelProviderAction
 } from '@ai-shortvideo/shared';
@@ -140,23 +142,32 @@ export async function executeClaimedGeneration<TProviderResult, TFinalResult>(
       persistedEnvelope.sourceVersionRefs.authoritySnapshotHash,
       replayAuthority
     ).ok) throw sourceStale();
+    const replayProviderInput = buildAuthoritativeProviderInput(
+      input.action,
+      replayAuthority!,
+      persistedEnvelope.normalizedRequest,
+      persistedEnvelope.sourceVersionRefs
+    );
+    const replayAuthorityRefs = buildActionAuthoritySourceRefs(
+      input.action,
+      replayAuthority!,
+      persistedEnvelope.normalizedRequest,
+      persistedEnvelope.sourceVersionRefs
+    );
+    if (
+      hashCanonicalJson(replayProviderInput) !== persistedEnvelope.sourceVersionRefs.providerInputSnapshotHash
+      || hashCanonicalJson(replayAuthorityRefs) !== hashCanonicalJson(pickActionAuthoritySourceRefs(persistedEnvelope.sourceVersionRefs))
+    ) throw sourceStale();
     return { reused: true, task: existingIdempotentTask, value: null };
   }
   const requestedAt = input.now().toISOString();
   try {
-    createExecutionEnvelopeV1_1({
-      tenantId: input.context.tenantId,
-      novelId: input.novel.id,
-      auditContext: { requestedByUserId: input.context.userId, requestedAt },
+    createExecutionEnvelope({
       action: input.action,
       objectType: spec.objectType,
       objectId,
-      normalizedRequest,
-      sourceVersionRefs: {
-        ...normalizedSourceVersionRefs,
-        authoritySnapshotHash: '0'.repeat(64),
-        providerInputSnapshotHash: '0'.repeat(64)
-      },
+      effectiveRequest: normalizedRequest,
+      sourceVersionRefs: normalizedSourceVersionRefs,
       policyProfileVersionId: input.novel.policyProfileVersionId,
       modelRoutingVersion
     });
@@ -179,6 +190,9 @@ export async function executeClaimedGeneration<TProviderResult, TFinalResult>(
   const authority = await input.repository.loadGenerationAuthority(authorityInput);
   if (!authority) throw sourceStale();
   const authoritySnapshotHash = hashCanonicalJson(authority);
+  const initialProviderInput = buildAuthoritativeProviderInput(input.action, authority, normalizedRequest, normalizedSourceVersionRefs);
+  const initialProviderInputSnapshotHash = hashCanonicalJson(initialProviderInput);
+  const initialActionAuthorityRefs = buildActionAuthoritySourceRefs(input.action, authority, normalizedRequest, normalizedSourceVersionRefs);
   await providerCapability?.assertAvailable?.();
   await input.repository.assertProviderActionSupported(spec.taskType);
   await input.authorityBarrier?.('after_first_authority_load');
@@ -191,6 +205,16 @@ export async function executeClaimedGeneration<TProviderResult, TFinalResult>(
     normalizedSourceVersionRefs
   );
   const providerInputSnapshotHash = hashCanonicalJson(authoritativeProviderInput);
+  const actionAuthorityRefs = buildActionAuthoritySourceRefs(
+    input.action,
+    providerAuthority!,
+    normalizedRequest,
+    normalizedSourceVersionRefs
+  );
+  if (
+    providerInputSnapshotHash !== initialProviderInputSnapshotHash
+    || hashCanonicalJson(actionAuthorityRefs) !== hashCanonicalJson(initialActionAuthorityRefs)
+  ) throw sourceStale();
   const executionEnvelopeJson = createExecutionEnvelopeV1_1({
     tenantId: input.context.tenantId,
     novelId: input.novel.id,
@@ -201,6 +225,7 @@ export async function executeClaimedGeneration<TProviderResult, TFinalResult>(
     normalizedRequest,
     sourceVersionRefs: {
       ...normalizedSourceVersionRefs,
+      ...actionAuthorityRefs,
       authoritySnapshotHash,
       providerInputSnapshotHash
     },
@@ -264,7 +289,16 @@ export async function executeClaimedGeneration<TProviderResult, TFinalResult>(
     normalizedRequest,
     normalizedSourceVersionRefs
   );
-  if (hashCanonicalJson(finalProviderInput) !== providerInputSnapshotHash) {
+  const finalActionAuthorityRefs = buildActionAuthoritySourceRefs(
+    input.action,
+    finalProviderAuthority!,
+    normalizedRequest,
+    normalizedSourceVersionRefs
+  );
+  if (
+    hashCanonicalJson(finalProviderInput) !== providerInputSnapshotHash
+    || hashCanonicalJson(finalActionAuthorityRefs) !== hashCanonicalJson(actionAuthorityRefs)
+  ) {
     const error = sourceStale();
     await failClaimedTask(input, claim.task, error, 'source_stale');
     throw error;
@@ -541,6 +575,108 @@ function buildAuthoritativeProviderInput(
   };
 }
 
+function buildActionAuthoritySourceRefs(
+  action: NovelProviderAction,
+  authority: GenerationAuthoritySnapshot,
+  normalizedRequest: unknown,
+  sourceVersionRefs: unknown
+): AuthoritySourceVersionRefsV1 {
+  const facts = toRecord(authority.facts);
+  const request = toRecord(normalizedRequest);
+  const refs = toRecord(sourceVersionRefs);
+  const novel = toRecord(facts.novel);
+  if (!isRealId(novel.id)) throw sourceStale();
+  const preferences = facts.preferences ? toRecord(facts.preferences) : { appealPoints: [], targetAudience: null, stageCount: null };
+  const chapters = Array.isArray(facts.chapters) ? facts.chapters as NovelChapterRecord[] : [];
+  const chapter = facts.chapter as NovelChapterRecord | null;
+  const planVersionId = refs.currentChapterPlanVersionId;
+  const result: AuthoritySourceVersionRefsV1 = {
+    sourceIdentitySchemaVersion: 1,
+    novelProviderInputSnapshotHash: hashCanonicalJson(novel)
+  };
+  if (actionNeedsPreferences(action)) result.preferencesSnapshotHash = hashCanonicalJson(preferences);
+  const authorityChapters = action === 'body_batch_generate'
+    ? chapters.filter((item) => item.chapterNo >= Number(request.startChapter) && item.chapterNo <= Number(request.endChapter))
+    : ['chapter_body_generate', 'chapter_rewrite', 'chapter_impact_assess', 'chapter_adopt_impact_assess'].includes(action)
+      ? chapter ? [chapter] : []
+      : actionNeedsChapterProjection(action) ? chapters : [];
+  if (actionNeedsChapterProjection(action)) {
+    if (authorityChapters.length < 1) throw sourceStale();
+    result.chapterProviderInputSnapshotHash = hashCanonicalJson(authorityChapters.map(projectChapterProviderInput));
+  }
+  if (action === 'trial_chapter_one_generate' || action === 'trial_followup_generate') {
+    if (!isRealId(planVersionId)) throw sourceStale();
+    result.chapterRefs = authorityChapters.map((item) => authorityChapterRef(item, planVersionId));
+    result.chapterInputSnapshotHash = hashCanonicalJson({
+      chapterRefs: result.chapterRefs,
+      providerInputs: authorityChapters.map(projectChapterProviderInput)
+    });
+  }
+  if (action === 'body_batch_generate' || action === 'chapter_body_generate') {
+    if (!isRealId(planVersionId)) throw sourceStale();
+    result.targetChapterRefs = authorityChapters.map((item) => ({
+      ...authorityChapterRef(item, planVersionId),
+      providerInputSnapshotHash: hashCanonicalJson(projectChapterProviderInput(item))
+    }));
+    const previousContent = facts.bodyPreviousContent as ChapterContentVersionRecord | null;
+    result.previousContentVersionId = previousContent?.id ?? null;
+    const memory = facts.bodyPreviousMemory as LongTermMemoryRecord | null;
+    if (memory && (!isRealId(memory.id) || !isRealId(memory.sourceContentVersionId))) throw sourceStale();
+    result.longTermMemoryIdentity = memory ? {
+      id: memory.id,
+      sourceContentVersionId: memory.sourceContentVersionId!,
+      snapshotHash: hashCanonicalJson(projectLongTermMemoryProviderInput(memory))
+    } : null;
+    const previousBatch = toRecord(facts.bodyPreviousBatch);
+    result.previousBatchIdentity = Object.keys(previousBatch).length ? {
+      id: requireRealId(previousBatch.id),
+      summaryHash: hashCanonicalJson(previousBatch.summary)
+    } : null;
+    const strategy = facts.strategy as CreativeVersionRecord | null;
+    if (!strategy || !isRealId(strategy.id)) throw sourceStale();
+    result.strategyProviderInputSnapshotHash = hashCanonicalJson(projectBodyStrategyProviderInput(strategy));
+  }
+  return result;
+}
+
+function actionNeedsPreferences(action: NovelProviderAction) {
+  return ['direction_generate', 'direction_fuse', 'direction_optimize', 'setting_generate', 'outline_generate', 'stage_outline_generate', 'chapter_plan_generate', 'trial_chapter_one_generate', 'trial_followup_generate'].includes(action);
+}
+
+function actionNeedsChapterProjection(action: NovelProviderAction) {
+  return ['trial_chapter_one_generate', 'trial_followup_generate', 'body_batch_generate', 'chapter_body_generate', 'chapter_rewrite', 'chapter_impact_assess', 'chapter_adopt_impact_assess', 'novel_full_review'].includes(action);
+}
+
+function authorityChapterRef(chapter: NovelChapterRecord, planVersionId: string) {
+  if (!isRealId(chapter.id)) throw sourceStale();
+  return {
+    chapterId: chapter.id,
+    chapterNo: chapter.chapterNo,
+    planVersionId,
+    currentContentVersionId: chapter.currentContentVersionId
+  };
+}
+
+function pickActionAuthoritySourceRefs(value: unknown): AuthoritySourceVersionRefsV1 {
+  const refs = toRecord(value);
+  return Object.fromEntries([
+    'sourceIdentitySchemaVersion', 'novelProviderInputSnapshotHash', 'preferencesSnapshotHash',
+    'chapterProviderInputSnapshotHash', 'chapterRefs', 'chapterInputSnapshotHash', 'targetChapterRefs',
+    'previousContentVersionId', 'longTermMemoryIdentity', 'previousBatchIdentity', 'strategyProviderInputSnapshotHash'
+  ].filter((key) => key in refs).map((key) => [key, refs[key]])) as unknown as AuthoritySourceVersionRefsV1;
+}
+
+function isRealId(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0
+    && !value.trim().startsWith('legacy-')
+    && !value.trim().startsWith('objectId-');
+}
+
+function requireRealId(value: unknown): string {
+  if (!isRealId(value)) throw sourceStale();
+  return value;
+}
+
 function projectAuthorityDirection(version: CreativeVersionRecord | undefined) {
   const content = toRecord(version?.content);
   const metadata = toRecord(version?.metadata);
@@ -577,6 +713,7 @@ function assertTrustedContext(context: RequestContext) {
   if (
     !context.tenantId.trim()
     || !context.userId.trim()
+    || context.tenantId === 'tenant_default'
     || context.userId === 'user_default'
   ) {
     throw new BusinessError(ErrorCode.Unauthorized, '当前请求缺少可信身份。');

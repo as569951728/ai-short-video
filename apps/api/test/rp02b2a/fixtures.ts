@@ -139,12 +139,12 @@ export async function createRouteAuthorityFixture(action: NovelProviderAction) {
   });
   await registerNovelRoutes(app, {
     repository,
-    requestContextResolver: async () => ({ tenantId: 'tenant_default', userId: 'user_test' }),
+    requestContextResolver: async () => ({ tenantId: 'tenant_test', userId: 'user_test' }),
     now: () => new Date('2026-07-17T00:00:00.000Z'),
     ...providers
   });
   const prepared = await prepareTarget(app, repository, action);
-  const novel = await repository.findById('tenant_default', prepared.novelId);
+  const novel = await repository.findById('tenant_test', prepared.novelId);
   if (!novel) throw new Error(`missing prepared novel for ${action}`);
   const originalLoad = repository.loadGenerationAuthority.bind(repository);
   let armed: { phase: AuthorityPhase; mutation: AuthorityMutation } | null = null;
@@ -244,8 +244,8 @@ export async function snapshotRouteSideEffects(fixture: Awaited<ReturnType<typeo
     ...chapters.map((item) => item.novelId),
     ...repository.getCreativeVersions().map((item) => item.novelId)
   ].filter((item): item is string => Boolean(item)))];
-  const novels = (await Promise.all(novelIds.map((id) => repository.findById('tenant_default', id)))).filter(Boolean);
-  const fullReviews = (await Promise.all(novelIds.map((id) => repository.findLatestFullReview('tenant_default', id)))).filter(Boolean);
+  const novels = (await Promise.all(novelIds.map((id) => repository.findById('tenant_test', id)))).filter(Boolean);
+  const fullReviews = (await Promise.all(novelIds.map((id) => repository.findLatestFullReview('tenant_test', id)))).filter(Boolean);
   return {
     task: tasks.length,
     event: repository.getGenerationTaskEvents().length,

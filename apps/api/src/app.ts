@@ -80,7 +80,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
   });
   await registerTaskRoutes(app, {
     repository: novelRepository,
-    now: options.now
+    now: options.now,
+    requestContextResolver: options.requestContextResolver ?? undefined
   });
   await registerVideoRoutes(app, {
     repository: videoRepository,

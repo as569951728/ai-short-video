@@ -93,6 +93,42 @@ export interface ExecutionAuditContextV1_1 {
   requestedAt: string;
 }
 
+export interface AuthorityChapterSourceRefV1 {
+  chapterId: string;
+  chapterNo: number;
+  planVersionId: string;
+  currentContentVersionId: string | null;
+}
+
+export interface AuthorityTargetChapterSourceRefV1 extends AuthorityChapterSourceRefV1 {
+  providerInputSnapshotHash: string;
+}
+
+export interface LongTermMemoryAuthorityIdentityV1 {
+  id: string;
+  sourceContentVersionId: string;
+  snapshotHash: string;
+}
+
+export interface PreviousBatchAuthorityIdentityV1 {
+  id: string;
+  summaryHash: string;
+}
+
+export interface AuthoritySourceVersionRefsV1 {
+  sourceIdentitySchemaVersion: 1;
+  novelProviderInputSnapshotHash: string;
+  preferencesSnapshotHash?: string;
+  chapterProviderInputSnapshotHash?: string;
+  chapterRefs?: AuthorityChapterSourceRefV1[];
+  chapterInputSnapshotHash?: string;
+  targetChapterRefs?: AuthorityTargetChapterSourceRefV1[];
+  previousContentVersionId?: string | null;
+  longTermMemoryIdentity?: LongTermMemoryAuthorityIdentityV1 | null;
+  previousBatchIdentity?: PreviousBatchAuthorityIdentityV1 | null;
+  strategyProviderInputSnapshotHash?: string;
+}
+
 export type ExecutionEnvelopeV1_1 = ExecutionEnvelopeV1 extends infer TEnvelope
   ? TEnvelope extends ExecutionEnvelopeV1
     ? Omit<TEnvelope, 'schemaVersion' | 'effectiveRequest'> & {
@@ -101,7 +137,7 @@ export type ExecutionEnvelopeV1_1 = ExecutionEnvelopeV1 extends infer TEnvelope
         novelId: string;
         auditContext: ExecutionAuditContextV1_1;
         normalizedRequest: TEnvelope['effectiveRequest'];
-        sourceVersionRefs: TEnvelope['sourceVersionRefs'] & {
+        sourceVersionRefs: TEnvelope['sourceVersionRefs'] & AuthoritySourceVersionRefsV1 & {
           authoritySnapshotHash: string;
           providerInputSnapshotHash: string;
         };
@@ -115,6 +151,16 @@ const MAX_EXECUTION_ENVELOPE_BYTES = 32 * 1024;
 const EXECUTION_SENSITIVE_KEY = /(?:api.?key|authorization|cookie|database.?url|access.?token|provider.*(?:body|header|response)|raw.?response|reasoning|messages?|system.?prompt|user.?prompt|user.?agent|ip.?address)/i;
 const EXECUTION_SENSITIVE_VALUE = /(?:\bBearer\s+[A-Za-z0-9._~+\/-]+=*|\bsk-[A-Za-z0-9_-]{8,}\b|\b(?:AKIA|ASIA|AIDA|AROA|AIPA|ANPA|ANVA|ASCA)[A-Z0-9]{16}\b|\bgh[pousr]_[A-Za-z0-9]{30,}\b|\bAIza[A-Za-z0-9_-]{30,}\b|\bxox[baprs]-[A-Za-z0-9-]{10,}\b|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|\b(?:mysql|mariadb|postgres(?:ql)?):\/\/[^\s]+|\b(?:DEEPSEEK_API_KEY|DATABASE_URL)\s*=|\b(?:system|user)\s*prompt\s*:|\bmessages\s*=|\bprovider\s+raw\s+response\s*:|\breasoning\s*:|\bclient\s+ip\s*:|\buser-agent\s*:)/i;
 const EXECUTION_ACTIONS = new Set<string>(NOVEL_PROVIDER_ACTIONS);
+const EXECUTION_AUTHORITY_REF_KEYS = [
+  'authoritySnapshotHash', 'providerInputSnapshotHash', 'sourceIdentitySchemaVersion',
+  'novelProviderInputSnapshotHash', 'preferencesSnapshotHash', 'chapterProviderInputSnapshotHash',
+  'chapterRefs', 'chapterInputSnapshotHash', 'targetChapterRefs', 'previousContentVersionId',
+  'longTermMemoryIdentity', 'previousBatchIdentity', 'strategyProviderInputSnapshotHash'
+] as const;
+const EXECUTION_REQUIRED_AUTHORITY_REF_KEYS = [
+  'authoritySnapshotHash', 'providerInputSnapshotHash', 'sourceIdentitySchemaVersion',
+  'novelProviderInputSnapshotHash'
+] as const;
 
 export class WorkerPayloadUnsupportedError extends Error { readonly code = 'WORKER_PAYLOAD_UNSUPPORTED'; }
 
@@ -140,14 +186,14 @@ export function normalizeExecutionEnvelopeV1_1(input: unknown): ExecutionEnvelop
   if (value.schemaVersion !== '1.1') executionUnsupported('schemaVersion must be 1.1');
   const audit = executionRecord(value.auditContext, ['requestedByUserId', 'requestedAt'], 'auditContext');
   const requestedAt = executionIsoDate(audit.requestedAt, 'auditContext.requestedAt');
-  const refs = executionRecordWithRequiredExtensions(
-    value.sourceVersionRefs,
-    ['authoritySnapshotHash', 'providerInputSnapshotHash'],
-    'sourceVersionRefs'
-  );
+  const refs = executionRecordWithRequiredExtensions(value.sourceVersionRefs, EXECUTION_REQUIRED_AUTHORITY_REF_KEYS, 'sourceVersionRefs');
   const authoritySnapshotHash = executionSha256(refs.authoritySnapshotHash, 'sourceVersionRefs.authoritySnapshotHash');
   const providerInputSnapshotHash = executionSha256(refs.providerInputSnapshotHash, 'sourceVersionRefs.providerInputSnapshotHash');
-  const legacyRefs = Object.fromEntries(Object.entries(refs).filter(([key]) => !['authoritySnapshotHash', 'providerInputSnapshotHash'].includes(key)));
+  const action = executionText(value.action, 'action', 128) as NovelProviderAction;
+  if (!EXECUTION_ACTIONS.has(action)) executionUnsupported(`unsupported action: ${action}`);
+  const authorityRefs = executionActionAuthorityRefs(action, refs);
+  const authorityKeys = new Set<string>(EXECUTION_AUTHORITY_REF_KEYS);
+  const legacyRefs = Object.fromEntries(Object.entries(refs).filter(([key]) => !authorityKeys.has(key)));
   const legacy = normalizeExecutionEnvelope({
     schemaVersion: 1,
     action: value.action,
@@ -171,6 +217,7 @@ export function normalizeExecutionEnvelopeV1_1(input: unknown): ExecutionEnvelop
     normalizedRequest: effectiveRequest,
     sourceVersionRefs: {
       ...legacy.sourceVersionRefs,
+      ...authorityRefs,
       authoritySnapshotHash,
       providerInputSnapshotHash
     }
@@ -303,7 +350,64 @@ function executionFullReviewRefs(value: unknown) {
 }
 function executionRecord(value: unknown, keys: string[], path: string): Record<string, unknown> { if (!value || typeof value !== 'object' || Array.isArray(value)) executionUnsupported(`${path} must be an object`); const source = value as Record<string, unknown>; const unknown = Object.keys(source).filter((key) => !keys.includes(key)); if (unknown.length) executionUnsupported(`unknown field ${path}.${unknown[0]}`); return source; }
 function executionRequiredRecord(value: unknown, keys: string[], path: string) { const source = executionRecord(value, keys, path); for (const key of keys) if (!(key in source)) executionUnsupported(`${path}.${key} is required`); return source; }
-function executionRecordWithRequiredExtensions(value: unknown, extensions: string[], path: string) { if (!value || typeof value !== 'object' || Array.isArray(value)) executionUnsupported(`${path} must be an object`); const source = value as Record<string, unknown>; for (const key of extensions) if (!(key in source)) executionUnsupported(`${path}.${key} is required`); return source; }
+function executionRecordWithRequiredExtensions(value: unknown, requiredKeys: readonly string[], path: string) { if (!value || typeof value !== 'object' || Array.isArray(value)) executionUnsupported(`${path} must be an object`); const source = value as Record<string, unknown>; for (const key of requiredKeys) if (!(key in source)) executionUnsupported(`${path}.${key} is required`); return source; }
+function executionActionAuthorityRefs(action: NovelProviderAction, refs: Record<string, unknown>): AuthoritySourceVersionRefsV1 {
+  if (refs.sourceIdentitySchemaVersion !== 1) executionUnsupported('sourceVersionRefs.sourceIdentitySchemaVersion must be 1');
+  const required = new Set<string>(['sourceIdentitySchemaVersion', 'novelProviderInputSnapshotHash']);
+  if (['direction_generate', 'direction_fuse', 'direction_optimize', 'setting_generate', 'outline_generate', 'stage_outline_generate', 'chapter_plan_generate', 'trial_chapter_one_generate', 'trial_followup_generate'].includes(action)) required.add('preferencesSnapshotHash');
+  if (['trial_chapter_one_generate', 'trial_followup_generate', 'body_batch_generate', 'chapter_body_generate', 'chapter_rewrite', 'chapter_impact_assess', 'chapter_adopt_impact_assess', 'novel_full_review'].includes(action)) required.add('chapterProviderInputSnapshotHash');
+  if (action === 'trial_chapter_one_generate' || action === 'trial_followup_generate') {
+    required.add('chapterRefs'); required.add('chapterInputSnapshotHash');
+  }
+  if (action === 'body_batch_generate' || action === 'chapter_body_generate') {
+    for (const key of ['targetChapterRefs', 'previousContentVersionId', 'longTermMemoryIdentity', 'previousBatchIdentity', 'strategyProviderInputSnapshotHash']) required.add(key);
+  }
+  for (const key of required) if (!(key in refs)) executionUnsupported(`sourceVersionRefs.${key} is required for ${action}`);
+  for (const key of EXECUTION_AUTHORITY_REF_KEYS.slice(4)) {
+    if (key in refs && !required.has(key)) executionUnsupported(`sourceVersionRefs.${key} is not allowed for ${action}`);
+  }
+  const result: AuthoritySourceVersionRefsV1 = {
+    sourceIdentitySchemaVersion: 1,
+    novelProviderInputSnapshotHash: executionSha256(refs.novelProviderInputSnapshotHash, 'sourceVersionRefs.novelProviderInputSnapshotHash')
+  };
+  if (required.has('preferencesSnapshotHash')) result.preferencesSnapshotHash = executionSha256(refs.preferencesSnapshotHash, 'sourceVersionRefs.preferencesSnapshotHash');
+  if (required.has('chapterProviderInputSnapshotHash')) result.chapterProviderInputSnapshotHash = executionSha256(refs.chapterProviderInputSnapshotHash, 'sourceVersionRefs.chapterProviderInputSnapshotHash');
+  if (required.has('chapterRefs')) result.chapterRefs = executionAuthorityChapterRefs(refs.chapterRefs, 'sourceVersionRefs.chapterRefs', false);
+  if (required.has('chapterInputSnapshotHash')) result.chapterInputSnapshotHash = executionSha256(refs.chapterInputSnapshotHash, 'sourceVersionRefs.chapterInputSnapshotHash');
+  if (required.has('targetChapterRefs')) result.targetChapterRefs = executionAuthorityChapterRefs(refs.targetChapterRefs, 'sourceVersionRefs.targetChapterRefs', true) as AuthorityTargetChapterSourceRefV1[];
+  if (required.has('previousContentVersionId')) result.previousContentVersionId = executionNullableId(refs.previousContentVersionId, 'sourceVersionRefs.previousContentVersionId');
+  if (required.has('longTermMemoryIdentity')) result.longTermMemoryIdentity = executionLongTermMemoryIdentity(refs.longTermMemoryIdentity);
+  if (required.has('previousBatchIdentity')) result.previousBatchIdentity = executionPreviousBatchIdentity(refs.previousBatchIdentity);
+  if (required.has('strategyProviderInputSnapshotHash')) result.strategyProviderInputSnapshotHash = executionSha256(refs.strategyProviderInputSnapshotHash, 'sourceVersionRefs.strategyProviderInputSnapshotHash');
+  return result;
+}
+function executionAuthorityChapterRefs(value: unknown, path: string, target: boolean): AuthorityChapterSourceRefV1[] | AuthorityTargetChapterSourceRefV1[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 100) executionUnsupported(`${path} must contain 1-100 items`);
+  const rows = value.map((item, index) => {
+    const keys = ['chapterId', 'chapterNo', 'planVersionId', 'currentContentVersionId', ...(target ? ['providerInputSnapshotHash'] : [])];
+    const row = executionRequiredRecord(item, keys, `${path}[${index}]`);
+    return {
+      chapterId: executionId(row.chapterId, `${path}[${index}].chapterId`),
+      chapterNo: executionInteger(row.chapterNo, `${path}[${index}].chapterNo`, 1, 100_000),
+      planVersionId: executionId(row.planVersionId, `${path}[${index}].planVersionId`),
+      currentContentVersionId: executionNullableId(row.currentContentVersionId, `${path}[${index}].currentContentVersionId`),
+      ...(target ? { providerInputSnapshotHash: executionSha256(row.providerInputSnapshotHash, `${path}[${index}].providerInputSnapshotHash`) } : {})
+    };
+  });
+  if (new Set(rows.map((row) => row.chapterId)).size !== rows.length) executionUnsupported(`${path} chapterId values must be unique`);
+  if (rows.some((row, index) => index > 0 && (row.chapterNo < rows[index - 1]!.chapterNo || (row.chapterNo === rows[index - 1]!.chapterNo && row.chapterId <= rows[index - 1]!.chapterId)))) executionUnsupported(`${path} must be canonically ordered`);
+  return rows;
+}
+function executionLongTermMemoryIdentity(value: unknown): LongTermMemoryAuthorityIdentityV1 | null {
+  if (value === null) return null;
+  const row = executionRequiredRecord(value, ['id', 'sourceContentVersionId', 'snapshotHash'], 'sourceVersionRefs.longTermMemoryIdentity');
+  return { id: executionId(row.id, 'sourceVersionRefs.longTermMemoryIdentity.id'), sourceContentVersionId: executionId(row.sourceContentVersionId, 'sourceVersionRefs.longTermMemoryIdentity.sourceContentVersionId'), snapshotHash: executionSha256(row.snapshotHash, 'sourceVersionRefs.longTermMemoryIdentity.snapshotHash') };
+}
+function executionPreviousBatchIdentity(value: unknown): PreviousBatchAuthorityIdentityV1 | null {
+  if (value === null) return null;
+  const row = executionRequiredRecord(value, ['id', 'summaryHash'], 'sourceVersionRefs.previousBatchIdentity');
+  return { id: executionId(row.id, 'sourceVersionRefs.previousBatchIdentity.id'), summaryHash: executionSha256(row.summaryHash, 'sourceVersionRefs.previousBatchIdentity.summaryHash') };
+}
 function executionId(value: unknown, path: string) { return executionText(value, path, 128); }
 function executionTrustedActorId(value: unknown, path: string, forbidden: string) { const id = executionId(value, path); if (id === forbidden) executionUnsupported(`${path} must not use a default actor`); return id; }
 function executionNullableId(value: unknown, path: string) { return value === null || value === undefined ? null : executionId(value, path); }

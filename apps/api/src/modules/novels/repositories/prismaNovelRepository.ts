@@ -413,7 +413,9 @@ export class PrismaNovelRepository implements NovelRepository {
       }));
       if (JSON.stringify(expected) !== JSON.stringify(actual)) return null;
     }
-    const strategy = versionById(refs.strategySnapshotId);
+    const strategy = typeof refs.strategySnapshotId === 'string'
+      ? await this.findStructureVersionById(input.tenantId, novel.id, 'body_strategy_snapshot', refs.strategySnapshotId, prisma)
+      : null;
     if (typeof refs.strategySnapshotId === 'string' && (
       !strategy
       || strategy.versionNo !== refs.strategySnapshotVersion
@@ -449,7 +451,7 @@ export class PrismaNovelRepository implements NovelRepository {
           policyProfileVersionId: novel.policyProfileVersionId
         },
         preferences: preference ? {
-          appealPoints: [...preference.appealPoints].sort(), targetAudience: preference.targetAudience, stageCount: preference.stageCount
+          appealPoints: preference.appealPoints.map((item) => item.trim()).filter(Boolean).sort(), targetAudience: preference.targetAudience, stageCount: preference.stageCount
         } : null,
         currentRefs,
         versions: selectedVersions.filter(Boolean),
@@ -1295,8 +1297,8 @@ export class PrismaNovelRepository implements NovelRepository {
     });
   }
 
-  async findStructureVersionById(tenantId: string, novelId: string, objectType: string, versionId: string) {
-    const version = await this.prisma.creativeVersion.findFirst({
+  async findStructureVersionById(tenantId: string, novelId: string, objectType: string, versionId: string, prisma: Prisma.TransactionClient = this.prisma) {
+    const version = await prisma.creativeVersion.findFirst({
       where: {
         id: versionId,
         tenantId,
