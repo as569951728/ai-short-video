@@ -640,7 +640,7 @@ B2a0/B2a1-B2a5/B2b/B2c E3 可证明：风险参数同步链、单进程 determin
 - `apps/api/src/config/env.ts`
 - `apps/api/src/modules/novels/domain/executionContract.ts`
 - `apps/api/src/modules/novels/domain/novelDomain.ts`
-- `apps/api/src/modules/novels/services/actionExecutionPlan.ts`
+- `apps/api/test/rp02b/rp02b.test.ts`
 - `apps/api/src/modules/novels/services/taskClaim.ts`
 - `apps/api/src/modules/novels/services/novelService.ts`
 - `apps/api/src/modules/novels/routes/novelRoutes.ts`
