@@ -104,6 +104,7 @@ import {
 import {
   hashCanonicalJson,
   matchGenerationAuthority,
+  validateExecutionEnvelopeV1_1ForTask,
   verifyHashedSafeResultReceipt
 } from '../domain/executionContract.js';
 import { BusinessError } from '../../../shared/errors.js';
@@ -473,6 +474,12 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       );
       if (activeTask) return { outcome: 'active_conflict', task: activeTask };
 
+      await input.afterClaimBarrier?.();
+      const commitAuthority = loadAuthority(input.authorityInput);
+      if (!matchGenerationAuthority(input.authorityInput, input.expectedAuthoritySnapshotHash, commitAuthority).ok) {
+        return { outcome: 'source_stale', task: null };
+      }
+
       const taskId = nextId('task');
       const task: GenerationTaskRecord = {
         id: taskId,
@@ -542,24 +549,20 @@ export function createInMemoryNovelRepository(): NovelRepository & {
         createdAt: input.now
       };
 
-      await input.afterClaimBarrier?.();
-      const commitAuthority = loadAuthority(input.authorityInput);
-      if (!matchGenerationAuthority(input.authorityInput, input.expectedAuthoritySnapshotHash, commitAuthority).ok) {
-        return { outcome: 'source_stale', task: null };
-      }
-
       generationTasks.unshift(task);
       generationTaskEvents.push(event);
       return { outcome: 'created', task };
     },
 
     async leaseNextQueuedTask(workerId: string, leaseToken: string, now: Date, leaseUntil: Date) {
+      if (leaseUntil.getTime() <= now.getTime()) return null;
       for (const task of generationTasks.filter((item) => item.status === TaskStatus.Queued).sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())) {
-        if (!task.executionEnvelopeJson) {
-          failLegacyQueuedTask(task, now);
+        try {
+          validateExecutionEnvelopeV1_1ForTask(task);
+        } catch {
+          failUnsupportedQueuedTask(task, now);
           continue;
         }
-        if (leaseUntil.getTime() <= now.getTime()) return null;
         task.status = TaskStatus.Processing;
         task.statusNote = 'Worker 已领取任务。';
         task.currentStep = 'worker_leased';
@@ -623,6 +626,11 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       const task = generationTasks.find((item) => item.tenantId === observed.tenantId && item.id === observed.taskId);
       if (!task || task.status !== TaskStatus.Processing || task.leaseOwnerId !== observed.leaseOwnerId || task.leaseToken !== observed.leaseToken
         || task.leaseExpiresAt?.getTime() !== observed.leaseExpiresAt.getTime() || task.leaseExpiresAt.getTime() > authoritativeNow.getTime()) {
+        return { outcome: 'not_recovered' as const, task: null };
+      }
+      try {
+        validateExecutionEnvelopeV1_1ForTask(task);
+      } catch {
         return { outcome: 'not_recovered' as const, task: null };
       }
       const dispatched = task.providerDispatchedAt !== null;
@@ -1778,7 +1786,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     async findLatestBodyBatch(tenantId: string, novelId: string) {
       return bodyBatches
         .filter((batch) => batch.tenantId === tenantId && batch.novelId === novelId)
-        .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())[0] ?? null;
+        .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime() || right.id.localeCompare(left.id))[0] ?? null;
     },
 
     async findBodyBatchByIdempotencyKey(tenantId: string, novelId: string, idempotencyKey: string) {
@@ -4286,13 +4294,16 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     appendLeaseEvent(task, eventType, failure.statusNote, now);
   }
 
-  function failLegacyQueuedTask(task: GenerationTaskRecord, now: Date) {
-    applyLeaseFailure(task, {
-      failureCategory: 'worker_payload_unsupported',
-      errorCode: 'WORKER_PAYLOAD_UNSUPPORTED',
-      errorMessage: 'Execution envelope is missing.',
-      statusNote: '旧任务缺少可恢复执行合同，已安全失败。'
-    }, now);
+  function failUnsupportedQueuedTask(task: GenerationTaskRecord, now: Date) {
+    task.status = TaskStatus.Failed;
+    task.statusNote = '任务执行合同或可信身份无效，已安全失败。';
+    task.currentStep = 'failed';
+    task.failureCategory = 'worker_payload_unsupported';
+    task.errorCode = 'WORKER_PAYLOAD_UNSUPPORTED';
+    task.errorMessage = 'Execution envelope V1.1 or trusted audit actor is invalid.';
+    task.activeClaimKey = null;
+    task.finishedAt = now;
+    task.updatedAt = now;
   }
 
   function appendLeaseEvent(task: GenerationTaskRecord, eventType: string, message: string, now: Date) {
