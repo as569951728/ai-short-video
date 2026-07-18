@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
-import { ErrorCode, TaskStatus, canonicalExecutionJson, type ExecutionEnvelopeV1_1, type NovelProviderAction } from '@ai-shortvideo/shared';
+import {
+  ErrorCode,
+  TaskStatus,
+  canonicalExecutionJson,
+  isPlaceholderAuthorityIdentifier,
+  type AuthoritySourceIdentityV1,
+  type ExecutionEnvelopeV1_1,
+  type NovelProviderAction
+} from '@ai-shortvideo/shared';
 import { buildApp } from '../../src/app.js';
 import { BusinessError } from '../../src/shared/errors.js';
 import { validateExecutionEnvelopeV1_1ForTask } from '../../src/modules/novels/domain/executionContract.js';
@@ -94,6 +102,12 @@ describe('RP-02B2a2 authoritative claim', () => {
         const invocations = fixture.providerInvocations();
         assert.ok(invocations.length > 0, `${action}:provider invoked`);
         assert.deepEqual([...new Set(invocations.map((item) => item.action))], [action], `${action}:provider action`);
+        for (const invocation of invocations) {
+          assert.equal(hasNestedKey(invocation.input, 'sourceIdentities'), false, `${action}:authority refs stay outside provider DTO`);
+          for (const rawEntityKey of ['tenantId', 'createdAt', 'updatedAt', 'deletedAt', 'sourceTaskId', 'metadata']) {
+            assert.equal(hasNestedKey(invocation.input, rawEntityKey), false, `${action}:no raw repository ${rawEntityKey}`);
+          }
+        }
         const task = fixture.repository.getGenerationTasks().findLast((item) =>
           (item.executionEnvelopeJson as { action?: unknown } | null)?.action === action
         );
@@ -104,6 +118,8 @@ describe('RP-02B2a2 authoritative claim', () => {
         assert.equal(envelope.sourceVersionRefs.providerInputSnapshotHash, hashCanonicalJson(providerProjection(action, invocations)), `${action}:provider projection`);
         assertActionAuthorityRefs(action, envelope, snapshots[0]!, providerProjection(action, invocations));
         await assertRepositoryAuthorityParity(fixture, envelope);
+        await assertMalformedLegacyReplayMatrix(fixture, task, envelope, `a2-success-${action}`);
+        await assertStaleLegacyReplay(fixture, task, envelope, `a2-success-${action}`);
       });
     });
   }
@@ -255,6 +271,34 @@ describe('RP-02B2a2 authoritative claim', () => {
     assert.equal(created.items[0]?.ownerId, 'user_server');
     await app.close();
   });
+  it('placeholder_detection_rejects_synthetic_tokens_without_blocking_stable_ids', async () => {
+    for (const value of [
+      'legacy-source', 'objectId-source', 'placeholder-source', 'synthetic-source', 'user_default',
+      'null', 'empty', 'unknown-source', 'dummy-source', '0'
+    ]) assert.equal(isPlaceholderAuthorityIdentifier(value), true, value);
+    for (const value of ['novel_000001', 'direction_v20260718', 'tenant_defaulting_v2', 'policy_default_v1']) {
+      assert.equal(isPlaceholderAuthorityIdentifier(value), false, value);
+    }
+    for (const actor of [
+      { tenantId: 'tenant_legacy', userId: 'user_real' },
+      { tenantId: 'tenant_real', userId: 'user_placeholder' },
+      { tenantId: 'synthetic', userId: 'user_real' },
+      { tenantId: 'tenant_real', userId: 'empty' }
+    ]) {
+      const app = await buildApp({ logger: false, requestContextResolver: async () => actor });
+      const response = await app.inject({ method: 'GET', url: '/tasks/task_missing' });
+      assert.equal(response.statusCode, 401, JSON.stringify(actor));
+      assert.equal(response.json().error.code, ErrorCode.Unauthorized, JSON.stringify(actor));
+      await app.close();
+    }
+    const app = await buildApp({
+      logger: false,
+      requestContextResolver: async () => ({ tenantId: 'tenant_defaulting_v2', userId: 'user_stable_v8' })
+    });
+    const response = await app.inject({ method: 'GET', url: '/tasks/task_missing' });
+    assert.equal(response.statusCode, 404);
+    await app.close();
+  });
   it('same_actor_legacy_raw_token_replay_is_supported_without_new_authority_provider_or_intent', async () => {
     const fixture = await createAuthorityFixture('direction_generate');
     const calls = { value: 0 };
@@ -344,6 +388,23 @@ function assertActionAuthorityRefs(
   const facts = authority.facts as Record<string, unknown>;
   const provider = providerInput as Record<string, unknown>;
   assert.equal(refs.sourceIdentitySchemaVersion, 1, `${action}:identity schema`);
+  const identities = refs.sourceIdentities as AuthoritySourceIdentityV1[];
+  assert.ok(Array.isArray(identities) && identities.length > 0, `${action}:source identities`);
+  assert.deepEqual(
+    identities.map((identity) => `${identity.sourceType}\u0000${identity.sourceId}`),
+    [...identities].map((identity) => `${identity.sourceType}\u0000${identity.sourceId}`).sort(),
+    `${action}:canonical source identity order`
+  );
+  assert.equal(new Set(identities.map((identity) => `${identity.sourceType}\u0000${identity.sourceId}`)).size, identities.length, `${action}:unique source identities`);
+  for (const identity of identities) {
+    assert.equal(isPlaceholderAuthorityIdentifier(identity.sourceId), false, `${action}:${identity.sourceType}:real source id`);
+    assert.equal(typeof identity.revision === 'number' ? identity.revision > 0 : !isPlaceholderAuthorityIdentifier(identity.revision), true, `${action}:${identity.sourceType}:real revision`);
+    assert.match(identity.snapshotHash, /^[a-f0-9]{64}$/, `${action}:${identity.sourceType}:source hash`);
+  }
+  assert.ok(identities.some((identity) => identity.sourceType === 'novel' && identity.sourceId === envelope.novelId), `${action}:novel identity tuple`);
+  for (const version of facts.versions as Array<{ id: string; objectType: AuthoritySourceIdentityV1['sourceType']; versionNo: number }>) {
+    assert.ok(identities.some((identity) => identity.sourceType === version.objectType && identity.sourceId === version.id && identity.revision === version.versionNo), `${action}:${version.objectType}:${version.id}:version identity`);
+  }
   assert.equal(refs.novelProviderInputSnapshotHash, hashCanonicalJson(facts.novel), `${action}:novel identity`);
   const preferenceActions: NovelProviderAction[] = [
     'direction_generate', 'direction_fuse', 'direction_optimize', 'setting_generate', 'outline_generate',
@@ -399,7 +460,178 @@ function assertActionAuthorityRefs(
     assert.equal(refs.strategyProviderInputSnapshotHash, hashCanonicalJson(provider.strategySnapshot), `${action}:strategy identity`);
   }
   const serialized = canonicalExecutionJson(refs);
-  assert.equal(/(?:legacy-|objectId-|"0{64}")/.test(serialized), false, `${action}:no synthetic authority identity`);
+  assert.equal(/(?:legacy-|objectId-|placeholder|synthetic|"0{64}")/i.test(serialized), false, `${action}:no synthetic authority identity`);
+}
+
+const AUTHORITY_EXTENSION_KEYS = new Set([
+  'authoritySnapshotHash', 'providerInputSnapshotHash', 'sourceIdentitySchemaVersion', 'sourceIdentities',
+  'novelProviderInputSnapshotHash', 'preferencesSnapshotHash', 'chapterProviderInputSnapshotHash',
+  'chapterRefs', 'chapterInputSnapshotHash', 'targetChapterRefs', 'previousContentVersionId',
+  'longTermMemoryIdentity', 'previousBatchIdentity', 'strategyProviderInputSnapshotHash'
+]);
+
+async function assertMalformedLegacyReplayMatrix(
+  fixture: Awaited<ReturnType<typeof createRouteAuthorityFixture>>,
+  task: ReturnType<typeof fixture.repository.getGenerationTasks>[number],
+  originalEnvelope: ExecutionEnvelopeV1_1,
+  rawKey: string
+) {
+  const originalTask = {
+    idempotencyToken: task.idempotencyToken,
+    sourceVersionRefs: task.sourceVersionRefs,
+    executionEnvelopeJson: task.executionEnvelopeJson
+  };
+  const mutations: Array<[string, (envelope: ExecutionEnvelopeV1_1) => unknown]> = [
+    ['legacy', (envelope) => ({ ...envelope, schemaVersion: 1 })],
+    ['missing-identities', (envelope) => ({ ...envelope, sourceVersionRefs: omitKey(envelope.sourceVersionRefs, 'sourceIdentities') })],
+    ['null-identities', (envelope) => ({ ...envelope, sourceVersionRefs: { ...envelope.sourceVersionRefs, sourceIdentities: null } })],
+    ['empty-identities', (envelope) => ({ ...envelope, sourceVersionRefs: { ...envelope.sourceVersionRefs, sourceIdentities: [] } })],
+    ['legacy-raw-source-ref', (envelope) => replaceActionSourceRef(envelope, 'legacy-source')],
+    ['extra-stable-identity', (envelope) => addExtraIdentity(envelope)],
+    ...['legacy-source', 'objectId-source', 'placeholder-source', 'synthetic-source', 'default', 'null', 'empty'].map((label) => [
+      `placeholder-${label}`,
+      (envelope: ExecutionEnvelopeV1_1) => replaceFirstIdentity(envelope, { sourceId: label })
+    ] as [string, (envelope: ExecutionEnvelopeV1_1) => unknown]),
+    ['placeholder-revision', (envelope) => replaceFirstIdentity(envelope, { revision: 'placeholder' })],
+    ['zero-hash', (envelope) => replaceFirstIdentity(envelope, { snapshotHash: '0'.repeat(64) })],
+    ['malformed-hash', (envelope) => replaceFirstIdentity(envelope, { snapshotHash: 'not-a-hash' })]
+  ];
+  task.idempotencyToken = rawKey;
+  try {
+    for (const [label, mutate] of mutations) {
+      const malformed = mutate(structuredClone(originalEnvelope)) as ExecutionEnvelopeV1_1;
+      task.executionEnvelopeJson = malformed;
+      task.sourceVersionRefs = malformed.sourceVersionRefs;
+      const beforeEffects = await snapshotRouteSideEffects(fixture);
+      const providerCalls = { value: 0 };
+      await assert.rejects(
+        replayPersistedTask(fixture, task, originalEnvelope, rawKey, providerCalls),
+        (error: unknown) => error instanceof BusinessError && error.code === ErrorCode.IdempotencyConflict,
+        `${fixture.action}:${label}`
+      );
+      assert.equal(providerCalls.value, 0, `${fixture.action}:${label}:provider=0`);
+      assertZeroDelta(beforeEffects, await snapshotRouteSideEffects(fixture), `${fixture.action}:${label}`);
+    }
+  } finally {
+    Object.assign(task, originalTask);
+  }
+}
+
+async function assertStaleLegacyReplay(
+  fixture: Awaited<ReturnType<typeof createRouteAuthorityFixture>>,
+  task: ReturnType<typeof fixture.repository.getGenerationTasks>[number],
+  envelope: ExecutionEnvelopeV1_1,
+  rawKey: string
+) {
+  const novel = await fixture.repository.findById('tenant_test', fixture.novelId);
+  assert.ok(novel, `${fixture.action}:stale replay novel`);
+  const originalTitle = novel.title;
+  const originalToken = task.idempotencyToken;
+  task.idempotencyToken = rawKey;
+  novel.title = `${originalTitle} stale replay`;
+  const beforeEffects = await snapshotRouteSideEffects(fixture);
+  const providerCalls = { value: 0 };
+  try {
+    await assert.rejects(
+      replayPersistedTask(fixture, task, envelope, rawKey, providerCalls),
+      (error: unknown) => error instanceof BusinessError
+        && error.code === ErrorCode.VersionConflict
+        && (error.details as { code?: unknown }).code === 'SOURCE_STALE',
+      `${fixture.action}:stale legacy replay`
+    );
+    assert.equal(providerCalls.value, 0, `${fixture.action}:stale legacy replay:provider=0`);
+    assertZeroDelta(beforeEffects, await snapshotRouteSideEffects(fixture), `${fixture.action}:stale legacy replay`);
+  } finally {
+    task.idempotencyToken = originalToken;
+    novel.title = originalTitle;
+  }
+}
+
+async function replayPersistedTask(
+  fixture: Awaited<ReturnType<typeof createRouteAuthorityFixture>>,
+  task: ReturnType<typeof fixture.repository.getGenerationTasks>[number],
+  envelope: ExecutionEnvelopeV1_1,
+  rawKey: string,
+  providerCalls: { value: number }
+) {
+  const novel = await fixture.repository.findById('tenant_test', fixture.novelId);
+  assert.ok(novel, `${fixture.action}:replay novel`);
+  return executeClaimedGeneration({
+    action: fixture.action,
+    repository: fixture.repository,
+    novel,
+    objectId: fixture.authorityObjectId,
+    idempotencyKey: rawKey,
+    effectiveRequest: fixture.action === 'body_batch_generate'
+      ? {
+          ...fixture.requestPayload,
+          startChapterNo: (envelope.normalizedRequest as { startChapter: number }).startChapter,
+          endChapterNo: (envelope.normalizedRequest as { endChapter: number }).endChapter
+        }
+      : fixture.requestPayload,
+    sourceVersionRefs: Object.fromEntries(Object.entries(envelope.sourceVersionRefs).filter(([key]) => !AUTHORITY_EXTENSION_KEYS.has(key))),
+    context: { tenantId: 'tenant_test', userId: 'user_test', requestId: `replay-${fixture.action}` },
+    now: () => new Date('2026-07-17T00:05:00.000Z'),
+    providerCapability: { getModelRoutingVersion: () => envelope.modelRoutingVersion },
+    provider: async () => { providerCalls.value += 1; return { ok: true }; },
+    finalize: async () => ({ ok: true })
+  });
+}
+
+function replaceFirstIdentity(envelope: ExecutionEnvelopeV1_1, patch: Partial<AuthoritySourceIdentityV1>): ExecutionEnvelopeV1_1 {
+  const identities = envelope.sourceVersionRefs.sourceIdentities;
+  return {
+    ...envelope,
+    sourceVersionRefs: {
+      ...envelope.sourceVersionRefs,
+      sourceIdentities: [{ ...identities[0]!, ...patch }, ...identities.slice(1)]
+    }
+  };
+}
+
+function replaceActionSourceRef(envelope: ExecutionEnvelopeV1_1, value: string): ExecutionEnvelopeV1_1 {
+  const refs = structuredClone(envelope.sourceVersionRefs) as unknown as Record<string, unknown>;
+  if (envelope.action === 'direction_generate') refs.currentDirectionVersionId = value;
+  else if (envelope.action === 'direction_fuse' || envelope.action === 'direction_optimize') refs.sourceVersionIds = [value];
+  else if (envelope.action === 'setting_generate') refs.currentDirectionVersionId = value;
+  else if (envelope.action === 'outline_generate') refs.currentSettingVersionId = value;
+  else if (envelope.action === 'stage_outline_generate') refs.currentOutlineVersionId = value;
+  else if (envelope.action === 'chapter_plan_generate') refs.currentStageOutlineVersionId = value;
+  else if (envelope.action === 'trial_chapter_one_generate') refs.currentChapterPlanVersionId = value;
+  else if (envelope.action === 'trial_followup_generate') refs.selectedChapterOneCandidateId = value;
+  else if (envelope.action === 'body_batch_generate' || envelope.action === 'chapter_body_generate') refs.strategySnapshotId = value;
+  else if (envelope.action === 'chapter_rewrite' || envelope.action === 'chapter_impact_assess') refs.currentContentVersionId = value;
+  else if (envelope.action === 'chapter_adopt_impact_assess') refs.candidateVersionId = value;
+  else {
+    const chapters = refs.chapterContentVersionIds as Array<Record<string, unknown>>;
+    chapters[0]!.currentContentVersionId = value;
+  }
+  return { ...envelope, sourceVersionRefs: refs } as ExecutionEnvelopeV1_1;
+}
+
+function addExtraIdentity(envelope: ExecutionEnvelopeV1_1): ExecutionEnvelopeV1_1 {
+  const extra: AuthoritySourceIdentityV1 = {
+    sourceType: 'novel',
+    sourceId: 'novel_extra_stable_v1',
+    revision: 1,
+    snapshotHash: 'a'.repeat(64)
+  };
+  const sourceIdentities = [...envelope.sourceVersionRefs.sourceIdentities, extra].sort((left, right) => {
+    const leftKey = `${left.sourceType}\u0000${left.sourceId}`;
+    const rightKey = `${right.sourceType}\u0000${right.sourceId}`;
+    return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+  });
+  return { ...envelope, sourceVersionRefs: { ...envelope.sourceVersionRefs, sourceIdentities } };
+}
+
+function omitKey(value: object, key: string) {
+  return Object.fromEntries(Object.entries(value).filter(([field]) => field !== key));
+}
+
+function hasNestedKey(value: unknown, key: string): boolean {
+  if (Array.isArray(value)) return value.some((item) => hasNestedKey(item, key));
+  if (!value || typeof value !== 'object') return false;
+  return Object.entries(value as Record<string, unknown>).some(([field, child]) => field === key || hasNestedKey(child, key));
 }
 
 async function assertRepositoryAuthorityParity(

@@ -211,7 +211,8 @@ export async function createRouteAuthorityFixture(action: NovelProviderAction) {
     authoritySnapshots: () => authoritySnapshots,
     providerInvocations: () => providerInvocations,
     novelId: prepared.novelId,
-    authorityObjectId: prepared.authorityObjectId
+    authorityObjectId: prepared.authorityObjectId,
+    requestPayload: prepared.requestPayload
   };
 }
 function captureRunState(action: NovelProviderAction, novel: NovelRecord, repository: ReturnType<typeof createInMemoryNovelRepository>, prepared: PreparedTarget) {
@@ -268,6 +269,7 @@ export async function snapshotRouteSideEffects(fixture: Awaited<ReturnType<typeo
 type PreparedTarget = {
   novelId: string;
   authorityObjectId: string;
+  requestPayload: Record<string, unknown>;
   sourceVersionId?: string;
   chapterId?: string;
   invoke: (idempotencyKey: string) => ReturnType<ReturnType<typeof Fastify>['inject']>;
@@ -281,6 +283,7 @@ async function prepareTarget(
   const target = (url: string, payload: Record<string, unknown> = {}, extra: Partial<PreparedTarget> = {}): PreparedTarget => ({
     novelId,
     authorityObjectId: novelId,
+    requestPayload: payload,
     ...extra,
     invoke: (idempotencyKey) => app.inject({ method: 'POST', url, payload: { ...payload, idempotencyKey } })
   });
