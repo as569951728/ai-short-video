@@ -1551,7 +1551,9 @@ async function resolveProviderContext(
   }
   const tenantId = actor?.tenantId?.trim() ?? '';
   const userId = actor?.userId?.trim() ?? '';
-  if (!tenantId || !userId) throw new BusinessError(ErrorCode.Unauthorized, '当前请求缺少可信身份。');
+  if (!tenantId || !userId || tenantId === 'tenant_default' || userId === 'user_default') {
+    throw new BusinessError(ErrorCode.Unauthorized, '当前请求缺少可信身份。');
+  }
   return Object.freeze({
     tenantId,
     userId,

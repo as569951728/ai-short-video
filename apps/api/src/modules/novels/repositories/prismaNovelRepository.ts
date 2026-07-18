@@ -449,7 +449,7 @@ export class PrismaNovelRepository implements NovelRepository {
           policyProfileVersionId: novel.policyProfileVersionId
         },
         preferences: preference ? {
-          appealPoints: [...preference.appealPoints], targetAudience: preference.targetAudience, stageCount: preference.stageCount
+          appealPoints: [...preference.appealPoints].sort(), targetAudience: preference.targetAudience, stageCount: preference.stageCount
         } : null,
         currentRefs,
         versions: selectedVersions.filter(Boolean),
@@ -461,6 +461,7 @@ export class PrismaNovelRepository implements NovelRepository {
         strategy,
         bodyPreviousContent,
         bodyPreviousMemory,
+        bodyPreviousBatch,
         bodyPreviousBatchNotes: bodyPreviousBatch?.summary.nextBatchNotes ?? []
       }
     };

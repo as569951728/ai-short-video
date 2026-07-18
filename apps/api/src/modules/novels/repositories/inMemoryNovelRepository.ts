@@ -172,7 +172,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     };
     const preference = preferences.find((item) => item.tenantId === input.tenantId && item.novelId === novel.id);
     const preferenceFacts = preference ? {
-      appealPoints: [...preference.appealPoints],
+      appealPoints: [...preference.appealPoints].sort(),
       targetAudience: preference.targetAudience,
       stageCount: preference.stageCount
     } : null;
@@ -261,18 +261,9 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     const bodyPreviousMemory = bodyAuthority ? longTermMemories
       .filter((item) => item.tenantId === input.tenantId && item.novelId === novel.id)
       .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())[0] ?? null : null;
-    const bodyPreviousBatchNotes = bodyAuthority ? bodyBatches
+    const bodyPreviousBatch = bodyAuthority ? bodyBatches
       .filter((item) => item.tenantId === input.tenantId && item.novelId === novel.id)
-      .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())[0]?.summary.nextBatchNotes ?? [] : [];
-    const bodyContentSnapshotHash = bodyAuthority ? hashCanonicalJson(chapterContentVersions
-      .filter((item) => item.tenantId === input.tenantId && item.novelId === novel.id)
-      .sort((left, right) => left.id.localeCompare(right.id))) : null;
-    const bodyMemorySnapshotHash = bodyAuthority ? hashCanonicalJson(longTermMemories
-      .filter((item) => item.tenantId === input.tenantId && item.novelId === novel.id)
-      .sort((left, right) => left.id.localeCompare(right.id))) : null;
-    const bodyBatchSnapshotHash = bodyAuthority ? hashCanonicalJson(bodyBatches
-      .filter((item) => item.tenantId === input.tenantId && item.novelId === novel.id)
-      .sort((left, right) => left.id.localeCompare(right.id))) : null;
+      .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())[0] ?? null : null;
     return {
       action: input.action,
       tenantId: input.tenantId,
@@ -291,10 +282,8 @@ export function createInMemoryNovelRepository(): NovelRepository & {
         strategy,
         bodyPreviousContent,
         bodyPreviousMemory,
-        bodyPreviousBatchNotes,
-        bodyContentSnapshotHash,
-        bodyMemorySnapshotHash,
-        bodyBatchSnapshotHash
+        bodyPreviousBatch,
+        bodyPreviousBatchNotes: bodyPreviousBatch?.summary.nextBatchNotes ?? []
       }
     };
   }
