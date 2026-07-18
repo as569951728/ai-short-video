@@ -49,7 +49,11 @@ export interface TrialExecutionSourceRefsV1 {
   currentStageOutlineVersionId: string | null;
   currentChapterPlanVersionId: string;
   objectType: 'trial_run';
-  selectedChapterOneCandidateId?: string;
+}
+
+export interface TrialFollowupExecutionSourceRefsV1 extends TrialExecutionSourceRefsV1 {
+  trialRunId: string;
+  selectedChapterOneCandidateId: string;
 }
 
 export interface FullReviewChapterSourceRefV1 {
@@ -64,17 +68,17 @@ export type ExecutionEnvelopeV1 =
   | ExecutionEnvelopeBaseV1<'direction_generate', 'direction', { regenerateReason?: string }, { currentDirectionVersionId: string | null }>
   | ExecutionEnvelopeBaseV1<'direction_fuse', 'direction', { versionIds: string[]; reason?: string }, { sourceVersionIds: string[] }>
   | ExecutionEnvelopeBaseV1<'direction_optimize', 'direction', { versionId: string; instruction?: string }, { sourceVersionIds: string[] }>
-  | ExecutionEnvelopeBaseV1<'setting_generate', 'setting', { currentDirectionVersionId: string }, StructureExecutionSourceRefsV1>
-  | ExecutionEnvelopeBaseV1<'outline_generate', 'outline', { currentDirectionVersionId: string; currentSettingVersionId: string }, StructureExecutionSourceRefsV1>
-  | ExecutionEnvelopeBaseV1<'stage_outline_generate', 'stage_outline', { currentOutlineVersionId: string }, StructureExecutionSourceRefsV1>
-  | ExecutionEnvelopeBaseV1<'chapter_plan_generate', 'chapter_plan', { currentOutlineVersionId: string; currentStageOutlineVersionId: string }, StructureExecutionSourceRefsV1>
-  | ExecutionEnvelopeBaseV1<'trial_chapter_one_generate', 'trial_run', { chapterPlanVersionId: string; chapterCount: number }, TrialExecutionSourceRefsV1>
-  | ExecutionEnvelopeBaseV1<'trial_followup_generate', 'trial_run', { selectedCandidateVersionId: string; chapterPlanVersionId: string }, TrialExecutionSourceRefsV1 & { selectedChapterOneCandidateId: string }>
+  | ExecutionEnvelopeBaseV1<'setting_generate', 'setting', { currentDirectionVersionId: string; regenerateReason?: string }, StructureExecutionSourceRefsV1>
+  | ExecutionEnvelopeBaseV1<'outline_generate', 'outline', { currentDirectionVersionId: string; currentSettingVersionId: string; regenerateReason?: string }, StructureExecutionSourceRefsV1>
+  | ExecutionEnvelopeBaseV1<'stage_outline_generate', 'stage_outline', { currentOutlineVersionId: string; regenerateReason?: string }, StructureExecutionSourceRefsV1>
+  | ExecutionEnvelopeBaseV1<'chapter_plan_generate', 'chapter_plan', { currentOutlineVersionId: string; currentStageOutlineVersionId: string; regenerateReason?: string }, StructureExecutionSourceRefsV1>
+  | ExecutionEnvelopeBaseV1<'trial_chapter_one_generate', 'trial_run', { chapterPlanVersionId: string; chapterCount: number; regenerateReason?: string }, TrialExecutionSourceRefsV1>
+  | ExecutionEnvelopeBaseV1<'trial_followup_generate', 'trial_run', { trialRunId: string; selectedCandidateVersionId: string; chapterPlanVersionId: string; selectionReason?: string; confirmRisk?: boolean }, TrialFollowupExecutionSourceRefsV1>
   | ExecutionEnvelopeBaseV1<'body_batch_generate', 'novel', { startChapter: number; endChapter: number; batchSize: number; strategySnapshotId: string }, BodyExecutionSourceRefsV1>
   | ExecutionEnvelopeBaseV1<'chapter_body_generate', 'chapter', { chapterId: string; strategySnapshotId: string; enhancedReview?: boolean }, BodyExecutionSourceRefsV1>
-  | ExecutionEnvelopeBaseV1<'chapter_rewrite', 'chapter', { chapterId: string; currentContentVersionId: string; instruction: string }, { currentContentVersionId: string }>
-  | ExecutionEnvelopeBaseV1<'chapter_impact_assess', 'chapter', { chapterId: string; currentContentVersionId: string; instruction?: string }, { currentContentVersionId: string }>
-  | ExecutionEnvelopeBaseV1<'chapter_adopt_impact_assess', 'chapter', { chapterId: string; candidateVersionId: string; currentContentVersionId: string; reason: string }, { currentContentVersionId: string; candidateVersionId: string }>
+  | ExecutionEnvelopeBaseV1<'chapter_rewrite', 'chapter', { chapterId: string; currentContentVersionId: string; instruction: string; reason?: string }, { currentContentVersionId: string }>
+  | ExecutionEnvelopeBaseV1<'chapter_impact_assess', 'chapter', { chapterId: string; currentContentVersionId: string; instruction?: string; reason?: string }, { currentContentVersionId: string }>
+  | ExecutionEnvelopeBaseV1<'chapter_adopt_impact_assess', 'chapter', { chapterId: string; candidateVersionId: string; currentContentVersionId: string; reason: string; pageVersionSnapshot?: Record<string, unknown> }, { currentContentVersionId: string; candidateVersionId: string }>
   | ExecutionEnvelopeBaseV1<'novel_full_review', 'novel', { policyProfileVersionId: string }, {
       currentDirectionVersionId: string;
       currentSettingVersionId: string;
@@ -83,6 +87,29 @@ export type ExecutionEnvelopeV1 =
       currentChapterPlanVersionId: string;
       chapterContentVersionIds: FullReviewChapterSourceRefV1[];
     }>;
+
+export interface ExecutionAuditContextV1_1 {
+  requestedByUserId: string;
+  requestedAt: string;
+}
+
+export type ExecutionEnvelopeV1_1 = ExecutionEnvelopeV1 extends infer TEnvelope
+  ? TEnvelope extends ExecutionEnvelopeV1
+    ? Omit<TEnvelope, 'schemaVersion' | 'effectiveRequest'> & {
+        schemaVersion: '1.1';
+        tenantId: string;
+        novelId: string;
+        auditContext: ExecutionAuditContextV1_1;
+        normalizedRequest: TEnvelope['effectiveRequest'];
+        sourceVersionRefs: TEnvelope['sourceVersionRefs'] & {
+          authoritySnapshotHash: string;
+          providerInputSnapshotHash: string;
+        };
+      }
+    : never
+  : never;
+
+export type ExecutionEnvelope = ExecutionEnvelopeV1 | ExecutionEnvelopeV1_1;
 
 const MAX_EXECUTION_ENVELOPE_BYTES = 32 * 1024;
 const EXECUTION_SENSITIVE_KEY = /(?:api.?key|authorization|cookie|database.?url|access.?token|provider.*(?:body|header|response)|raw.?response|reasoning|messages?|system.?prompt|user.?prompt|user.?agent|ip.?address)/i;
@@ -94,6 +121,64 @@ export class WorkerPayloadUnsupportedError extends Error { readonly code = 'WORK
 export function createExecutionEnvelope(input: unknown): ExecutionEnvelopeV1 {
   const source = executionRecord(input, ['action', 'objectType', 'objectId', 'effectiveRequest', 'sourceVersionRefs', 'policyProfileVersionId', 'modelRoutingVersion'], 'envelope');
   return normalizeExecutionEnvelope({ ...source, schemaVersion: 1 });
+}
+
+export function createExecutionEnvelopeV1_1(input: unknown): ExecutionEnvelopeV1_1 {
+  const source = executionRecord(input, [
+    'tenantId', 'novelId', 'auditContext', 'action', 'objectType', 'objectId', 'normalizedRequest',
+    'sourceVersionRefs', 'policyProfileVersionId', 'modelRoutingVersion'
+  ], 'envelope');
+  return normalizeExecutionEnvelopeV1_1({ ...source, schemaVersion: '1.1' });
+}
+
+export function normalizeExecutionEnvelopeV1_1(input: unknown): ExecutionEnvelopeV1_1 {
+  assertNoSensitiveExecutionPayload(input);
+  const value = executionRecord(input, [
+    'schemaVersion', 'tenantId', 'novelId', 'auditContext', 'action', 'objectType', 'objectId',
+    'normalizedRequest', 'sourceVersionRefs', 'policyProfileVersionId', 'modelRoutingVersion'
+  ], 'envelope');
+  if (value.schemaVersion !== '1.1') executionUnsupported('schemaVersion must be 1.1');
+  const audit = executionRecord(value.auditContext, ['requestedByUserId', 'requestedAt'], 'auditContext');
+  const requestedAt = executionIsoDate(audit.requestedAt, 'auditContext.requestedAt');
+  const refs = executionRecordWithRequiredExtensions(
+    value.sourceVersionRefs,
+    ['authoritySnapshotHash', 'providerInputSnapshotHash'],
+    'sourceVersionRefs'
+  );
+  const authoritySnapshotHash = executionSha256(refs.authoritySnapshotHash, 'sourceVersionRefs.authoritySnapshotHash');
+  const providerInputSnapshotHash = executionSha256(refs.providerInputSnapshotHash, 'sourceVersionRefs.providerInputSnapshotHash');
+  const legacyRefs = Object.fromEntries(Object.entries(refs).filter(([key]) => !['authoritySnapshotHash', 'providerInputSnapshotHash'].includes(key)));
+  const legacy = normalizeExecutionEnvelope({
+    schemaVersion: 1,
+    action: value.action,
+    objectType: value.objectType,
+    objectId: value.objectId,
+    effectiveRequest: value.normalizedRequest,
+    sourceVersionRefs: legacyRefs,
+    policyProfileVersionId: value.policyProfileVersionId,
+    modelRoutingVersion: value.modelRoutingVersion
+  });
+  const { effectiveRequest, ...legacyBase } = legacy;
+  const envelope = {
+    ...legacyBase,
+    schemaVersion: '1.1' as const,
+    tenantId: executionId(value.tenantId, 'tenantId'),
+    novelId: executionId(value.novelId, 'novelId'),
+    auditContext: {
+      requestedByUserId: executionId(audit.requestedByUserId, 'auditContext.requestedByUserId'),
+      requestedAt
+    },
+    normalizedRequest: effectiveRequest,
+    sourceVersionRefs: {
+      ...legacy.sourceVersionRefs,
+      authoritySnapshotHash,
+      providerInputSnapshotHash
+    }
+  };
+  if (new TextEncoder().encode(canonicalExecutionJson(envelope)).byteLength > MAX_EXECUTION_ENVELOPE_BYTES) {
+    executionUnsupported('normalized envelope exceeds 32 KiB');
+  }
+  return envelope as ExecutionEnvelopeV1_1;
 }
 
 export function normalizeExecutionEnvelope(input: unknown): ExecutionEnvelopeV1 {
@@ -115,7 +200,7 @@ export function normalizeExecutionEnvelope(input: unknown): ExecutionEnvelopeV1 
     case 'stage_outline_generate': envelope = executionExact(common, 'stage_outline', executionStructureRequest(request, ['currentOutlineVersionId']), executionStructureRefs(refs, 'stage_outline')); break;
     case 'chapter_plan_generate': envelope = executionExact(common, 'chapter_plan', executionStructureRequest(request, ['currentOutlineVersionId', 'currentStageOutlineVersionId']), executionStructureRefs(refs, 'chapter_plan')); break;
     case 'trial_chapter_one_generate': envelope = executionExact(common, 'trial_run', executionTrialOneRequest(request), executionTrialRefs(refs, false)); break;
-    case 'trial_followup_generate': envelope = executionExact(common, 'trial_run', executionTrialFollowupRequest(request), executionTrialRefs(refs, true)); break;
+    case 'trial_followup_generate': envelope = executionExact(common, 'trial_run', executionTrialFollowupRequest(request, common.objectId), executionTrialRefs(refs, true, common.objectId)); break;
     case 'body_batch_generate': envelope = executionExact(common, 'novel', executionBodyBatchRequest(request), executionBodyRefs(refs)); break;
     case 'chapter_body_generate': envelope = executionExact(common, 'chapter', executionChapterBodyRequest(request), executionBodyRefs(refs)); break;
     case 'chapter_rewrite': envelope = executionExact(common, 'chapter', executionChapterRewriteRequest(request), executionContentRefs(refs, false)); break;
@@ -155,7 +240,7 @@ function assertExecutionSourceConsistency(envelope: ExecutionEnvelopeV1) {
     case 'stage_outline_generate': return mismatch(envelope.effectiveRequest.currentOutlineVersionId !== envelope.sourceVersionRefs.currentOutlineVersionId);
     case 'chapter_plan_generate': return mismatch(envelope.effectiveRequest.currentOutlineVersionId !== envelope.sourceVersionRefs.currentOutlineVersionId || envelope.effectiveRequest.currentStageOutlineVersionId !== envelope.sourceVersionRefs.currentStageOutlineVersionId);
     case 'trial_chapter_one_generate': return mismatch(envelope.effectiveRequest.chapterPlanVersionId !== envelope.sourceVersionRefs.currentChapterPlanVersionId);
-    case 'trial_followup_generate': return mismatch(envelope.effectiveRequest.chapterPlanVersionId !== envelope.sourceVersionRefs.currentChapterPlanVersionId || envelope.effectiveRequest.selectedCandidateVersionId !== envelope.sourceVersionRefs.selectedChapterOneCandidateId);
+    case 'trial_followup_generate': return mismatch(envelope.effectiveRequest.trialRunId !== envelope.objectId || envelope.effectiveRequest.trialRunId !== envelope.sourceVersionRefs.trialRunId || envelope.effectiveRequest.chapterPlanVersionId !== envelope.sourceVersionRefs.currentChapterPlanVersionId || envelope.effectiveRequest.selectedCandidateVersionId !== envelope.sourceVersionRefs.selectedChapterOneCandidateId);
     case 'body_batch_generate': return mismatch(envelope.effectiveRequest.strategySnapshotId !== envelope.sourceVersionRefs.strategySnapshotId);
     case 'chapter_body_generate': return mismatch(envelope.objectId !== envelope.effectiveRequest.chapterId || envelope.effectiveRequest.strategySnapshotId !== envelope.sourceVersionRefs.strategySnapshotId);
     case 'chapter_rewrite': case 'chapter_impact_assess': return mismatch(envelope.objectId !== envelope.effectiveRequest.chapterId || envelope.effectiveRequest.currentContentVersionId !== envelope.sourceVersionRefs.currentContentVersionId);
@@ -171,9 +256,9 @@ function executionExact(common: { schemaVersion: 1; action: NovelProviderAction;
 function executionOptionalTextRequest(value: unknown, key: string, max: number) { const source = executionRecord(value, [key], 'effectiveRequest'); const text = executionOptionalText(source[key], `effectiveRequest.${key}`, max); return text === undefined ? {} : { [key]: text }; }
 function executionFuseRequest(value: unknown) { const source = executionRecord(value, ['versionIds', 'reason'], 'effectiveRequest'); const reason = executionOptionalText(source.reason, 'effectiveRequest.reason', 500); return { versionIds: executionIdArray(source.versionIds, 'effectiveRequest.versionIds', 2, 20), ...(reason ? { reason } : {}) }; }
 function executionOptimizeRequest(value: unknown) { const source = executionRecord(value, ['versionId', 'instruction'], 'effectiveRequest'); const instruction = executionOptionalText(source.instruction, 'effectiveRequest.instruction', 2_000); return { versionId: executionId(source.versionId, 'effectiveRequest.versionId'), ...(instruction ? { instruction } : {}) }; }
-function executionStructureRequest(value: unknown, keys: string[]) { const source = executionRecord(value, keys, 'effectiveRequest'); return Object.fromEntries(keys.map((key) => [key, executionId(source[key], `effectiveRequest.${key}`)])); }
-function executionTrialOneRequest(value: unknown) { const source = executionRecord(value, ['chapterPlanVersionId', 'chapterCount'], 'effectiveRequest'); return { chapterPlanVersionId: executionId(source.chapterPlanVersionId, 'effectiveRequest.chapterPlanVersionId'), chapterCount: executionInteger(source.chapterCount, 'effectiveRequest.chapterCount', 2, 5) }; }
-function executionTrialFollowupRequest(value: unknown) { const source = executionRecord(value, ['selectedCandidateVersionId', 'chapterPlanVersionId'], 'effectiveRequest'); return { selectedCandidateVersionId: executionId(source.selectedCandidateVersionId, 'effectiveRequest.selectedCandidateVersionId'), chapterPlanVersionId: executionId(source.chapterPlanVersionId, 'effectiveRequest.chapterPlanVersionId') }; }
+function executionStructureRequest(value: unknown, keys: string[]) { const source = executionRecord(value, [...keys, 'regenerateReason'], 'effectiveRequest'); const regenerateReason = executionOptionalText(source.regenerateReason, 'effectiveRequest.regenerateReason', 500); return { ...Object.fromEntries(keys.map((key) => [key, executionId(source[key], `effectiveRequest.${key}`)])), ...(regenerateReason ? { regenerateReason } : {}) }; }
+function executionTrialOneRequest(value: unknown) { const source = executionRecord(value, ['chapterPlanVersionId', 'chapterCount', 'regenerateReason'], 'effectiveRequest'); const regenerateReason = executionOptionalText(source.regenerateReason, 'effectiveRequest.regenerateReason', 500); return { chapterPlanVersionId: executionId(source.chapterPlanVersionId, 'effectiveRequest.chapterPlanVersionId'), chapterCount: executionInteger(source.chapterCount, 'effectiveRequest.chapterCount', 2, 5), ...(regenerateReason ? { regenerateReason } : {}) }; }
+function executionTrialFollowupRequest(value: unknown, objectId: string) { const source = executionRecord(value, ['trialRunId', 'selectedCandidateVersionId', 'chapterPlanVersionId', 'selectionReason', 'confirmRisk'], 'effectiveRequest'); const trialRunId = executionId(source.trialRunId ?? objectId, 'effectiveRequest.trialRunId'); if (trialRunId !== objectId) executionUnsupported('effectiveRequest.trialRunId must match objectId'); const selectionReason = executionOptionalText(source.selectionReason, 'effectiveRequest.selectionReason', 500); if (source.confirmRisk !== undefined && typeof source.confirmRisk !== 'boolean') executionUnsupported('effectiveRequest.confirmRisk must be boolean'); return { trialRunId, selectedCandidateVersionId: executionId(source.selectedCandidateVersionId, 'effectiveRequest.selectedCandidateVersionId'), chapterPlanVersionId: executionId(source.chapterPlanVersionId, 'effectiveRequest.chapterPlanVersionId'), ...(selectionReason ? { selectionReason } : {}), ...(source.confirmRisk === undefined ? {} : { confirmRisk: source.confirmRisk }) }; }
 function executionBodyBatchRequest(value: unknown) {
   const source = executionRecord(value, ['startChapter', 'endChapter', 'batchSize', 'strategySnapshotId'], 'effectiveRequest');
   const startChapter = executionInteger(source.startChapter, 'effectiveRequest.startChapter', 1, 100_000); const endChapter = executionInteger(source.endChapter, 'effectiveRequest.endChapter', startChapter, 100_000); const batchSize = executionInteger(source.batchSize, 'effectiveRequest.batchSize', 1, 20);
@@ -181,30 +266,33 @@ function executionBodyBatchRequest(value: unknown) {
   return { startChapter, endChapter, batchSize, strategySnapshotId: executionId(source.strategySnapshotId, 'effectiveRequest.strategySnapshotId') };
 }
 function executionChapterBodyRequest(value: unknown) { const source = executionRecord(value, ['chapterId', 'strategySnapshotId', 'enhancedReview'], 'effectiveRequest'); if (source.enhancedReview !== undefined && typeof source.enhancedReview !== 'boolean') executionUnsupported('effectiveRequest.enhancedReview must be boolean'); return { chapterId: executionId(source.chapterId, 'effectiveRequest.chapterId'), strategySnapshotId: executionId(source.strategySnapshotId, 'effectiveRequest.strategySnapshotId'), ...(source.enhancedReview === undefined ? {} : { enhancedReview: source.enhancedReview }) }; }
-function executionChapterRewriteRequest(value: unknown) { const source = executionRecord(value, ['chapterId', 'currentContentVersionId', 'instruction'], 'effectiveRequest'); return { chapterId: executionId(source.chapterId, 'effectiveRequest.chapterId'), currentContentVersionId: executionId(source.currentContentVersionId, 'effectiveRequest.currentContentVersionId'), instruction: executionText(source.instruction, 'effectiveRequest.instruction', 2_000) }; }
-function executionChapterImpactRequest(value: unknown) { const source = executionRecord(value, ['chapterId', 'currentContentVersionId', 'instruction'], 'effectiveRequest'); const instruction = executionOptionalText(source.instruction, 'effectiveRequest.instruction', 2_000); return { chapterId: executionId(source.chapterId, 'effectiveRequest.chapterId'), currentContentVersionId: executionId(source.currentContentVersionId, 'effectiveRequest.currentContentVersionId'), ...(instruction ? { instruction } : {}) }; }
-function executionChapterAdoptImpactRequest(value: unknown) { const source = executionRecord(value, ['chapterId', 'candidateVersionId', 'currentContentVersionId', 'reason'], 'effectiveRequest'); return { chapterId: executionId(source.chapterId, 'effectiveRequest.chapterId'), candidateVersionId: executionId(source.candidateVersionId, 'effectiveRequest.candidateVersionId'), currentContentVersionId: executionId(source.currentContentVersionId, 'effectiveRequest.currentContentVersionId'), reason: executionText(source.reason, 'effectiveRequest.reason', 500) }; }
+function executionChapterRewriteRequest(value: unknown) { const source = executionRecord(value, ['chapterId', 'currentContentVersionId', 'instruction', 'reason'], 'effectiveRequest'); const reason = executionOptionalText(source.reason, 'effectiveRequest.reason', 1_000); return { chapterId: executionId(source.chapterId, 'effectiveRequest.chapterId'), currentContentVersionId: executionId(source.currentContentVersionId, 'effectiveRequest.currentContentVersionId'), instruction: executionText(source.instruction, 'effectiveRequest.instruction', 2_000), ...(reason ? { reason } : {}) }; }
+function executionChapterImpactRequest(value: unknown) { const source = executionRecord(value, ['chapterId', 'currentContentVersionId', 'instruction', 'reason'], 'effectiveRequest'); const instruction = executionOptionalText(source.instruction, 'effectiveRequest.instruction', 2_000); const reason = executionOptionalText(source.reason, 'effectiveRequest.reason', 1_000); return { chapterId: executionId(source.chapterId, 'effectiveRequest.chapterId'), currentContentVersionId: executionId(source.currentContentVersionId, 'effectiveRequest.currentContentVersionId'), ...(instruction ? { instruction } : {}), ...(reason ? { reason } : {}) }; }
+function executionChapterAdoptImpactRequest(value: unknown) { const source = executionRecord(value, ['chapterId', 'candidateVersionId', 'currentContentVersionId', 'reason', 'pageVersionSnapshot'], 'effectiveRequest'); const pageVersionSnapshot = executionOptionalPageVersionSnapshot(source.pageVersionSnapshot); return { chapterId: executionId(source.chapterId, 'effectiveRequest.chapterId'), candidateVersionId: executionId(source.candidateVersionId, 'effectiveRequest.candidateVersionId'), currentContentVersionId: executionId(source.currentContentVersionId, 'effectiveRequest.currentContentVersionId'), reason: executionText(source.reason, 'effectiveRequest.reason', 1_000), ...(pageVersionSnapshot ? { pageVersionSnapshot } : {}) }; }
 function executionFullReviewRequest(value: unknown) { const source = executionRecord(value, ['policyProfileVersionId'], 'effectiveRequest'); return { policyProfileVersionId: executionId(source.policyProfileVersionId, 'effectiveRequest.policyProfileVersionId') }; }
-function executionDirectionGenerateRefs(value: unknown) { const source = executionRecord(value, ['currentDirectionVersionId'], 'sourceVersionRefs'); return { currentDirectionVersionId: executionNullableId(source.currentDirectionVersionId, 'sourceVersionRefs.currentDirectionVersionId') }; }
+function executionDirectionGenerateRefs(value: unknown) { const source = executionRequiredRecord(value, ['currentDirectionVersionId'], 'sourceVersionRefs'); return { currentDirectionVersionId: executionNullableId(source.currentDirectionVersionId, 'sourceVersionRefs.currentDirectionVersionId') }; }
 function executionVersionRefs(value: unknown) { const source = executionRecord(value, ['sourceVersionIds'], 'sourceVersionRefs'); return { sourceVersionIds: executionIdArray(source.sourceVersionIds, 'sourceVersionRefs.sourceVersionIds', 1, 100) }; }
 function executionStructureRefs(value: unknown, objectType: string) {
-  const source = executionRecord(value, ['currentDirectionVersionId', 'currentSettingVersionId', 'currentOutlineVersionId', 'currentStageOutlineVersionId', 'objectType'], 'sourceVersionRefs');
+  const source = executionRequiredRecord(value, ['currentDirectionVersionId', 'currentSettingVersionId', 'currentOutlineVersionId', 'currentStageOutlineVersionId', 'objectType'], 'sourceVersionRefs');
   if (source.objectType !== objectType) executionUnsupported(`sourceVersionRefs.objectType must be ${objectType}`);
   return { currentDirectionVersionId: executionNullableId(source.currentDirectionVersionId, 'sourceVersionRefs.currentDirectionVersionId'), currentSettingVersionId: executionNullableId(source.currentSettingVersionId, 'sourceVersionRefs.currentSettingVersionId'), currentOutlineVersionId: executionNullableId(source.currentOutlineVersionId, 'sourceVersionRefs.currentOutlineVersionId'), currentStageOutlineVersionId: executionNullableId(source.currentStageOutlineVersionId, 'sourceVersionRefs.currentStageOutlineVersionId'), objectType };
 }
-function executionTrialRefs(value: unknown, followup: boolean) {
-  const keys = ['currentDirectionVersionId', 'currentSettingVersionId', 'currentOutlineVersionId', 'currentStageOutlineVersionId', 'currentChapterPlanVersionId', 'objectType', ...(followup ? ['selectedChapterOneCandidateId'] : [])];
+function executionTrialRefs(value: unknown, followup: boolean, objectId?: string) {
+  const keys = ['currentDirectionVersionId', 'currentSettingVersionId', 'currentOutlineVersionId', 'currentStageOutlineVersionId', 'currentChapterPlanVersionId', 'objectType', ...(followup ? ['trialRunId', 'selectedChapterOneCandidateId'] : [])];
   const source = executionRecord(value, keys, 'sourceVersionRefs');
+  for (const key of keys) if (key !== 'trialRunId' && !(key in source)) executionUnsupported(`sourceVersionRefs.${key} is required`);
   const base = executionStructureRefs(Object.fromEntries(['currentDirectionVersionId', 'currentSettingVersionId', 'currentOutlineVersionId', 'currentStageOutlineVersionId'].map((key) => [key, source[key]]).concat([['objectType', source.objectType]])), 'trial_run');
-  return { ...base, currentChapterPlanVersionId: executionId(source.currentChapterPlanVersionId, 'sourceVersionRefs.currentChapterPlanVersionId'), ...(followup ? { selectedChapterOneCandidateId: executionId(source.selectedChapterOneCandidateId, 'sourceVersionRefs.selectedChapterOneCandidateId') } : {}) };
+  const trialRunId = followup ? executionId(source.trialRunId ?? objectId, 'sourceVersionRefs.trialRunId') : undefined;
+  if (trialRunId && objectId && trialRunId !== objectId) executionUnsupported('sourceVersionRefs.trialRunId must match objectId');
+  return { ...base, currentChapterPlanVersionId: executionId(source.currentChapterPlanVersionId, 'sourceVersionRefs.currentChapterPlanVersionId'), ...(followup ? { trialRunId: trialRunId!, selectedChapterOneCandidateId: executionId(source.selectedChapterOneCandidateId, 'sourceVersionRefs.selectedChapterOneCandidateId') } : {}) };
 }
 function executionBodyRefs(value: unknown) {
   const keys = ['currentDirectionVersionId', 'currentSettingVersionId', 'currentOutlineVersionId', 'currentStageOutlineVersionId', 'currentChapterPlanVersionId', 'trialRunId', 'selectedChapterOneCandidateId', 'strategySnapshotId', 'strategySnapshotVersion', 'creationStage'];
-  const source = executionRecord(value, keys, 'sourceVersionRefs');
+  const source = executionRequiredRecord(value, keys, 'sourceVersionRefs');
   if (source.creationStage !== 'body') executionUnsupported('sourceVersionRefs.creationStage must be body');
   return Object.fromEntries(keys.map((key) => [key, key === 'strategySnapshotVersion' ? executionInteger(source[key], `sourceVersionRefs.${key}`, 1, 1_000_000) : key === 'creationStage' ? 'body' : key === 'strategySnapshotId' ? executionId(source[key], `sourceVersionRefs.${key}`) : executionNullableId(source[key], `sourceVersionRefs.${key}`)])) as never;
 }
-function executionContentRefs(value: unknown, candidate: boolean) { const source = executionRecord(value, ['currentContentVersionId', ...(candidate ? ['candidateVersionId'] : [])], 'sourceVersionRefs'); return { currentContentVersionId: executionId(source.currentContentVersionId, 'sourceVersionRefs.currentContentVersionId'), ...(candidate ? { candidateVersionId: executionId(source.candidateVersionId, 'sourceVersionRefs.candidateVersionId') } : {}) }; }
+function executionContentRefs(value: unknown, candidate: boolean) { const source = executionRequiredRecord(value, ['currentContentVersionId', ...(candidate ? ['candidateVersionId'] : [])], 'sourceVersionRefs'); return { currentContentVersionId: executionId(source.currentContentVersionId, 'sourceVersionRefs.currentContentVersionId'), ...(candidate ? { candidateVersionId: executionId(source.candidateVersionId, 'sourceVersionRefs.candidateVersionId') } : {}) }; }
 function executionFullReviewRefs(value: unknown) {
   const keys = ['currentDirectionVersionId', 'currentSettingVersionId', 'currentOutlineVersionId', 'currentStageOutlineVersionId', 'currentChapterPlanVersionId', 'chapterContentVersionIds'];
   const source = executionRecord(value, keys, 'sourceVersionRefs');
@@ -214,11 +302,16 @@ function executionFullReviewRefs(value: unknown) {
   return { ...Object.fromEntries(keys.slice(0, 5).map((key) => [key, executionId(source[key], `sourceVersionRefs.${key}`)])), chapterContentVersionIds: chapters } as never;
 }
 function executionRecord(value: unknown, keys: string[], path: string): Record<string, unknown> { if (!value || typeof value !== 'object' || Array.isArray(value)) executionUnsupported(`${path} must be an object`); const source = value as Record<string, unknown>; const unknown = Object.keys(source).filter((key) => !keys.includes(key)); if (unknown.length) executionUnsupported(`unknown field ${path}.${unknown[0]}`); return source; }
+function executionRequiredRecord(value: unknown, keys: string[], path: string) { const source = executionRecord(value, keys, path); for (const key of keys) if (!(key in source)) executionUnsupported(`${path}.${key} is required`); return source; }
+function executionRecordWithRequiredExtensions(value: unknown, extensions: string[], path: string) { if (!value || typeof value !== 'object' || Array.isArray(value)) executionUnsupported(`${path} must be an object`); const source = value as Record<string, unknown>; for (const key of extensions) if (!(key in source)) executionUnsupported(`${path}.${key} is required`); return source; }
 function executionId(value: unknown, path: string) { return executionText(value, path, 128); }
 function executionNullableId(value: unknown, path: string) { return value === null || value === undefined ? null : executionId(value, path); }
+function executionOptionalPageVersionSnapshot(value: unknown): Record<string, unknown> | undefined { if (value === undefined || value === null) return undefined; if (!value || typeof value !== 'object' || Array.isArray(value)) executionUnsupported('effectiveRequest.pageVersionSnapshot must be an object'); return structuredClone(value) as Record<string, unknown>; }
 function executionText(value: unknown, path: string, max: number) { const normalized = typeof value === 'string' ? value.trim() : ''; if (normalized.length < 1 || normalized.length > max) executionUnsupported(`${path} must be 1-${max} characters`); return normalized; }
 function executionOptionalText(value: unknown, path: string, max: number) { return value === undefined || value === null || value === '' ? undefined : executionText(value, path, max); }
 function executionInteger(value: unknown, path: string, min: number, max: number) { if (!Number.isInteger(value) || (value as number) < min || (value as number) > max) executionUnsupported(`${path} must be ${min}-${max}`); return value as number; }
+function executionSha256(value: unknown, path: string) { const text = executionText(value, path, 64); if (!/^[a-f0-9]{64}$/.test(text)) executionUnsupported(`${path} must be a SHA-256 hex digest`); return text; }
+function executionIsoDate(value: unknown, path: string) { const text = executionText(value, path, 40); const parsed = new Date(text); if (Number.isNaN(parsed.getTime()) || parsed.toISOString() !== text) executionUnsupported(`${path} must be canonical ISO-8601`); return text; }
 function executionIdArray(value: unknown, path: string, min: number, max: number) { if (!Array.isArray(value)) executionUnsupported(`${path} must be an array`); const normalized = [...new Set(value.map((item, index) => executionId(item, `${path}[${index}]`)))].sort(); if (normalized.length < min || normalized.length > max) executionUnsupported(`${path} must contain ${min}-${max} unique items`); return normalized; }
 function executionUnsupported(message: string): never { throw new WorkerPayloadUnsupportedError(message); }
 

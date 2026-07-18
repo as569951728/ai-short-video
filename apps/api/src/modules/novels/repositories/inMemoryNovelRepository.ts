@@ -62,6 +62,8 @@ import {
   type CancelledTaskRecord,
   type ClaimGenerationTaskInput,
   type ClaimGenerationTaskResult,
+  type LoadGenerationAuthorityInput,
+  type GenerationAuthoritySnapshot,
   type HashedSafeResultReceipt,
   type LeasedTaskFailure,
   type ObservedTaskLease,
@@ -99,7 +101,11 @@ import {
   type VideoReadinessSnapshotRecord,
   normalizeDraftRequest
 } from '../domain/novelDomain.js';
-import { verifyHashedSafeResultReceipt } from '../domain/executionContract.js';
+import {
+  hashCanonicalJson,
+  matchGenerationAuthority,
+  verifyHashedSafeResultReceipt
+} from '../domain/executionContract.js';
 import { BusinessError } from '../../../shared/errors.js';
 
 export function createInMemoryNovelRepository(): NovelRepository & {
@@ -139,6 +145,158 @@ export function createInMemoryNovelRepository(): NovelRepository & {
 
   function nextId(prefix: string) {
     return `${prefix}_${String(sequence++).padStart(6, '0')}`;
+  }
+
+  function loadAuthority(input: LoadGenerationAuthorityInput): GenerationAuthoritySnapshot | null {
+    const novel = novels.find((item) => item.tenantId === input.tenantId && item.id === input.novelId && !item.deletedAt);
+    if (!novel || novel.lifecycleStatus !== NovelLifecycleStatus.Active) return null;
+    const refs = asRecord(input.sourceVersionRefs);
+    const currentRefs = {
+      currentDirectionVersionId: novel.currentDirectionVersionId,
+      currentSettingVersionId: novel.currentSettingVersionId,
+      currentOutlineVersionId: novel.currentOutlineVersionId,
+      currentStageOutlineVersionId: novel.currentStageOutlineVersionId,
+      currentChapterPlanVersionId: novel.currentChapterPlanVersionId
+    };
+    for (const [key, value] of Object.entries(currentRefs)) {
+      if (key in refs && refs[key] !== value) return null;
+    }
+    const novelFacts = {
+      id: novel.id,
+      title: novel.title,
+      genres: [...novel.genres].sort(),
+      chapterLimit: novel.chapterLimit,
+      chapterWordMin: novel.chapterWordMin,
+      chapterWordMax: novel.chapterWordMax,
+      policyProfileVersionId: novel.policyProfileVersionId
+    };
+    const preference = preferences.find((item) => item.tenantId === input.tenantId && item.novelId === novel.id);
+    const preferenceFacts = preference ? {
+      appealPoints: [...preference.appealPoints],
+      targetAudience: preference.targetAudience,
+      stageCount: preference.stageCount
+    } : null;
+    const versionById = (id: unknown) => typeof id === 'string'
+      ? creativeVersions.find((item) => item.tenantId === input.tenantId && item.novelId === novel.id && item.id === id)
+      : null;
+    const contentById = (id: unknown) => typeof id === 'string'
+      ? chapterContentVersions.find((item) => item.tenantId === input.tenantId && item.novelId === novel.id && item.id === id)
+      : null;
+    const selectedIds = input.action === 'direction_fuse' || input.action === 'direction_optimize'
+      ? (Array.isArray(refs.sourceVersionIds) ? refs.sourceVersionIds : [])
+      : [refs.currentDirectionVersionId, refs.currentSettingVersionId, refs.currentOutlineVersionId, refs.currentStageOutlineVersionId, refs.currentChapterPlanVersionId];
+    const selectedVersions = selectedIds.map(versionById);
+    if (selectedVersions.some((item, index) => selectedIds[index] !== null && selectedIds[index] !== undefined && !item)) return null;
+    if ((input.action === 'direction_fuse' || input.action === 'direction_optimize') && selectedVersions.some((item) =>
+      !item || item.objectType !== 'direction' || item.status === VersionStatus.Discarded
+    )) return null;
+    if (input.action !== 'direction_fuse' && input.action !== 'direction_optimize'
+      && selectedVersions.some((item) => item && item.status !== VersionStatus.Current)) return null;
+    const chapter = chapters.find((item) => item.tenantId === input.tenantId && item.novelId === novel.id && item.id === input.objectId);
+    if (['chapter_body_generate', 'chapter_rewrite', 'chapter_impact_assess', 'chapter_adopt_impact_assess'].includes(input.action) && !chapter) return null;
+    if (chapter && 'currentContentVersionId' in refs && chapter.currentContentVersionId !== refs.currentContentVersionId) return null;
+    const currentContent = contentById(refs.currentContentVersionId);
+    if (refs.currentContentVersionId && (!currentContent || currentContent.chapterId !== chapter?.id)) return null;
+    const candidateRefId = refs.candidateVersionId ?? refs.selectedChapterOneCandidateId;
+    const candidate = contentById(candidateRefId);
+    if (refs.candidateVersionId && (!candidate || candidate.chapterId !== chapter?.id || candidate.status === VersionStatus.Discarded)) return null;
+    const trialRunId = typeof refs.trialRunId === 'string'
+      ? refs.trialRunId
+      : input.action === 'trial_followup_generate' ? input.objectId : null;
+    const trialRun = typeof trialRunId === 'string'
+      ? trialRuns.find((item) => item.tenantId === input.tenantId && item.novelId === novel.id && item.id === trialRunId)
+      : null;
+    if (trialRunId && !trialRun) return null;
+    const selectedCandidateId = refs.selectedChapterOneCandidateId;
+    if (input.action === 'trial_followup_generate') {
+      if (!trialRun || trialRun.status !== 'waiting_chapter1_selection' || typeof selectedCandidateId !== 'string') return null;
+      const selected = contentById(selectedCandidateId);
+      if (
+        !selected
+        || asRecord(selected.metadata).trialRunId !== trialRun.id
+        || selected.status === VersionStatus.Discarded
+      ) return null;
+    }
+    const orderedChapters = chapters
+      .filter((item) => item.tenantId === input.tenantId && item.novelId === novel.id)
+      .sort((left, right) => left.chapterNo - right.chapterNo || left.id.localeCompare(right.id))
+      .map((item) => ({
+        id: item.id,
+        chapterNo: item.chapterNo,
+        title: item.title,
+        wordTarget: item.wordTarget,
+        statusNote: item.statusNote,
+        currentContentVersionId: item.currentContentVersionId,
+        currentFeatureCardVersionId: item.currentFeatureCardVersionId,
+        currentReviewReportId: item.currentReviewReportId
+      }));
+    if (input.action === 'novel_full_review') {
+      const expected = Array.isArray(refs.chapterContentVersionIds) ? refs.chapterContentVersionIds : [];
+      if (JSON.stringify(expected) !== JSON.stringify(orderedChapters.map((item) => ({
+        chapterId: item.id,
+        chapterNo: item.chapterNo,
+        currentContentVersionId: item.currentContentVersionId,
+        currentFeatureCardVersionId: item.currentFeatureCardVersionId,
+        currentReviewReportId: item.currentReviewReportId
+      })))) return null;
+    }
+    const strategy = versionById(refs.strategySnapshotId);
+    if (typeof refs.strategySnapshotId === 'string' && (
+      !strategy
+      || strategy.versionNo !== refs.strategySnapshotVersion
+      || strategy.status === VersionStatus.Discarded
+    )) return null;
+    const bodyAuthority = input.action === 'body_batch_generate' || input.action === 'chapter_body_generate';
+    const normalizedRequest = asRecord(input.normalizedRequest);
+    const authorityChapters = input.action === 'trial_followup_generate'
+      ? orderedChapters.slice(0, trialRun?.trialChapterCount ?? 0)
+      : orderedChapters;
+    const bodyStartChapterNo = input.action === 'body_batch_generate'
+      ? Number(normalizedRequest.startChapter)
+      : chapter?.chapterNo;
+    const previousChapter = bodyAuthority && Number.isInteger(bodyStartChapterNo)
+      ? orderedChapters.filter((item) => item.chapterNo < Number(bodyStartChapterNo)).at(-1)
+      : null;
+    const bodyPreviousContent = previousChapter ? contentById(previousChapter.currentContentVersionId) : null;
+    const bodyPreviousMemory = bodyAuthority ? longTermMemories
+      .filter((item) => item.tenantId === input.tenantId && item.novelId === novel.id)
+      .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())[0] ?? null : null;
+    const bodyPreviousBatchNotes = bodyAuthority ? bodyBatches
+      .filter((item) => item.tenantId === input.tenantId && item.novelId === novel.id)
+      .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())[0]?.summary.nextBatchNotes ?? [] : [];
+    const bodyContentSnapshotHash = bodyAuthority ? hashCanonicalJson(chapterContentVersions
+      .filter((item) => item.tenantId === input.tenantId && item.novelId === novel.id)
+      .sort((left, right) => left.id.localeCompare(right.id))) : null;
+    const bodyMemorySnapshotHash = bodyAuthority ? hashCanonicalJson(longTermMemories
+      .filter((item) => item.tenantId === input.tenantId && item.novelId === novel.id)
+      .sort((left, right) => left.id.localeCompare(right.id))) : null;
+    const bodyBatchSnapshotHash = bodyAuthority ? hashCanonicalJson(bodyBatches
+      .filter((item) => item.tenantId === input.tenantId && item.novelId === novel.id)
+      .sort((left, right) => left.id.localeCompare(right.id))) : null;
+    return {
+      action: input.action,
+      tenantId: input.tenantId,
+      novelId: novel.id,
+      objectId: input.objectId,
+      facts: {
+        novel: novelFacts,
+        preferences: preferenceFacts,
+        currentRefs,
+        versions: selectedVersions.filter(Boolean),
+        chapter: chapter ? orderedChapters.find((item) => item.id === chapter.id) : null,
+        chapters: ['trial_chapter_one_generate', 'trial_followup_generate', 'body_batch_generate', 'novel_full_review'].includes(input.action) ? authorityChapters : [],
+        currentContent,
+        candidate,
+        trialRun,
+        strategy,
+        bodyPreviousContent,
+        bodyPreviousMemory,
+        bodyPreviousBatchNotes,
+        bodyContentSnapshotHash,
+        bodyMemorySnapshotHash,
+        bodyBatchSnapshotHash
+      }
+    };
   }
 
   return {
@@ -299,7 +457,15 @@ export function createInMemoryNovelRepository(): NovelRepository & {
 
     async assertProviderActionSupported(_taskType: string) {},
 
+    async loadGenerationAuthority(input: LoadGenerationAuthorityInput): Promise<GenerationAuthoritySnapshot | null> {
+      return loadAuthority(input);
+    },
+
     async claimGenerationTask(input: ClaimGenerationTaskInput): Promise<ClaimGenerationTaskResult> {
+      const authority = loadAuthority(input.authorityInput);
+      if (!matchGenerationAuthority(input.authorityInput, input.expectedAuthoritySnapshotHash, authority).ok) {
+        return { outcome: 'source_stale', task: null };
+      }
       const idempotentTask = generationTasks.find(
         (task) =>
           task.tenantId === input.tenantId &&
@@ -1267,11 +1433,11 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       }
 
       const task = generationTasks.find((item) => item.id === input.task.id) ?? input.task;
+      const sourceVersionRefs = createTrialFollowupSourceVersionRefs(input.novel, input.selectedCandidate.id);
       task.status = TaskStatus.WaitingConfirmation;
       task.statusNote = '模型服务已生成试写结果，等待用户确认。';
       task.progress = 100;
       task.currentStep = input.review.trialResult === 'blocked' ? '第2章硬门槛未通过，试写暂停' : '前三章试写总评已生成，等待确认';
-      task.sourceVersionRefs = createTrialFollowupSourceVersionRefs(input.novel, input.selectedCandidate.id);
       task.updatedAt = input.now;
       task.activeClaimKey = null;
       const createdContentVersions: ChapterContentVersionRecord[] = [];
@@ -1287,7 +1453,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
                 input,
                 taskId: task.id,
                 chapterDraft,
-                sourceVersionRefs: task.sourceVersionRefs
+                sourceVersionRefs
               });
         if (chapterDraft.chapter.chapterNo !== 1) {
           createdContentVersions.push(contentVersion);
@@ -4172,6 +4338,10 @@ export function createInMemoryNovelRepository(): NovelRepository & {
 
   function toMutableMetadata(value: unknown): Record<string, unknown> {
     return value && typeof value === 'object' ? { ...(value as Record<string, unknown>) } : {};
+  }
+
+  function asRecord(value: unknown): Record<string, unknown> {
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
   }
 
   function getMetadataString(value: unknown, key: string) {
