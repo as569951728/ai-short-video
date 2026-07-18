@@ -421,6 +421,13 @@ export class PrismaNovelRepository implements NovelRepository {
       }));
       if (JSON.stringify(expected) !== JSON.stringify(actual)) return null;
     }
+    const loadedFullReviewContents = input.action === 'novel_full_review'
+      ? await Promise.all(orderedChapters.map((item) => this.findChapterContentVersionById(
+          input.tenantId, novel.id, item.currentContentVersionId!, prisma
+        )))
+      : [];
+    if (loadedFullReviewContents.some((item) => !item)) return null;
+    const fullReviewContents = loadedFullReviewContents.filter((item): item is ChapterContentVersionRecord => Boolean(item));
     const strategy = typeof refs.strategySnapshotId === 'string'
       ? await this.findStructureVersionById(input.tenantId, novel.id, 'body_strategy_snapshot', refs.strategySnapshotId, prisma)
       : null;
@@ -472,6 +479,7 @@ export class PrismaNovelRepository implements NovelRepository {
         bodyPreviousContent,
         bodyPreviousMemory,
         bodyPreviousBatch,
+        fullReviewContents,
         bodyPreviousBatchNotes: bodyPreviousBatch?.summary.nextBatchNotes ?? []
       }
     };

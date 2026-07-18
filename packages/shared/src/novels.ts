@@ -525,6 +525,7 @@ function assertAuthoritySourceIdentityCoverage(envelope: ExecutionEnvelopeV1_1):
     for (const [index, item] of refs.chapterContentVersionIds.entries()) {
       const row = item as FullReviewChapterSourceRefV1;
       requireIdentity('chapter', row.chapterId, `sourceVersionRefs.chapterContentVersionIds[${index}].chapterId`);
+      requireIdentity('chapter_content', row.currentContentVersionId, `sourceVersionRefs.chapterContentVersionIds[${index}].currentContentVersionId`);
     }
   }
   if (expectedKeys.size !== identities.length || identities.some((identity) => !expectedKeys.has(`${identity.sourceType}\u0000${identity.sourceId}`))) {

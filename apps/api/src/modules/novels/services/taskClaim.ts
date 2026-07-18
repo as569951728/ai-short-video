@@ -660,7 +660,8 @@ function buildAuthoritySourceIdentities(
   const actualContents = [
     facts.currentContent as ChapterContentVersionRecord | null,
     facts.candidate as ChapterContentVersionRecord | null,
-    facts.bodyPreviousContent as ChapterContentVersionRecord | null
+    facts.bodyPreviousContent as ChapterContentVersionRecord | null,
+    ...(Array.isArray(facts.fullReviewContents) ? facts.fullReviewContents as ChapterContentVersionRecord[] : [])
   ].filter((content): content is ChapterContentVersionRecord => Boolean(content));
   const novelHash = hashCanonicalJson(novel);
   add('novel', novel.id, novelHash, novel);

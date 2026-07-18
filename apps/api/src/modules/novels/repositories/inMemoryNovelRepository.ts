@@ -241,6 +241,11 @@ export function createInMemoryNovelRepository(): NovelRepository & {
         currentReviewReportId: item.currentReviewReportId
       })))) return null;
     }
+    const loadedFullReviewContents = input.action === 'novel_full_review'
+      ? orderedChapters.map((item) => contentById(item.currentContentVersionId))
+      : [];
+    if (loadedFullReviewContents.some((item) => !item)) return null;
+    const fullReviewContents = loadedFullReviewContents.filter((item): item is ChapterContentVersionRecord => Boolean(item));
     const strategy = versionById(refs.strategySnapshotId);
     if (typeof refs.strategySnapshotId === 'string' && (
       !strategy
@@ -284,6 +289,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
         bodyPreviousContent,
         bodyPreviousMemory,
         bodyPreviousBatch,
+        fullReviewContents,
         bodyPreviousBatchNotes: bodyPreviousBatch?.summary.nextBatchNotes ?? []
       }
     };

@@ -459,6 +459,15 @@ function assertActionAuthorityRefs(
     assert.deepEqual(refs.previousBatchIdentity, batch ? { id: batch.id, summaryHash: hashCanonicalJson(batch.summary) } : null, `${action}:batch identity`);
     assert.equal(refs.strategyProviderInputSnapshotHash, hashCanonicalJson(provider.strategySnapshot), `${action}:strategy identity`);
   }
+  if (action === 'novel_full_review') {
+    for (const row of refs.chapterContentVersionIds as Array<{ currentContentVersionId: string }>) {
+      const content = (facts.fullReviewContents as Array<{ id: string; versionNo: number }>).find((item) => item.id === row.currentContentVersionId);
+      assert.ok(content, `${action}:${row.currentContentVersionId}:loaded content`);
+      assert.ok(identities.some((identity) =>
+        identity.sourceType === 'chapter_content' && identity.sourceId === content.id && identity.revision === content.versionNo
+      ), `${action}:${row.currentContentVersionId}:content identity`);
+    }
+  }
   const serialized = canonicalExecutionJson(refs);
   assert.equal(/(?:legacy-|objectId-|placeholder|synthetic|"0{64}")/i.test(serialized), false, `${action}:no synthetic authority identity`);
 }
