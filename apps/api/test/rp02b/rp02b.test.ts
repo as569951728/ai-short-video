@@ -209,17 +209,20 @@ describe('RP-02B1 recoverable execution contract', () => {
         finalizeCalls += 1;
         return { unsafe: true };
       }
-    }), (error: unknown) => (error as { code?: string }).code === 'GATE_BLOCKED'); }
+    }), (error: unknown) => {
+      const failure = error as { code?: string; details?: { code?: string } };
+      return failure.code === 'VERSION_CONFLICT' && failure.details?.code === 'SOURCE_STALE';
+    }); }
     assert.equal(repository.getGenerationTasks().length, 0);
     assert.equal(providerCalls, 0);
     assert.equal(finalizeCalls, 0);
   });
   it('keeps idempotency conflict authoritative when provider configuration is unavailable', async () => {
     const repository = createInMemoryNovelRepository();
-    await seedQueuedTask(repository, 'idempotency-priority');
+    const queued = await seedQueuedTask(repository, 'idempotency-priority');
     let capabilityChecks = 0;
     await assert.rejects(() => executeClaimedGeneration({
-      action: 'direction_generate', repository, novel: { id: 'novel-1', tenantId: 'tenant-rp02b', policyProfileVersionId: 'policy-v1', currentDirectionVersionId: null } as NovelRecord,
+      action: 'direction_generate', repository, novel: { id: queued.novelId, tenantId: 'tenant-rp02b', policyProfileVersionId: 'policy-v1', currentDirectionVersionId: null } as NovelRecord,
       idempotencyKey: 'token-idempotency-priority', effectiveRequest: { regenerateReason: 'different' }, sourceVersionRefs: { currentDirectionVersionId: null },
       context: { tenantId: 'tenant-rp02b', userId: 'user-1', requestId: 'request-idempotency-priority' }, now: () => at(0),
       providerCapability: { assertAvailable: () => { capabilityChecks += 1; throw new Error('unavailable'); } }, provider: async () => null, finalize: async () => null
@@ -393,13 +396,21 @@ function taskTypeFor(action: NovelProviderAction) {
 }
 
 async function seedQueuedTask(repository: ReturnType<typeof createInMemoryNovelRepository>, suffix: string) {
-  const envelope = createExecutionEnvelope(envelopeInput('direction_generate'));
+  const context = { tenantId: 'tenant-rp02b', userId: 'user-1', requestId: `request-${suffix}` };
+  const created = await repository.createDraft({ request: { title: `RP-02B1 ${suffix}` }, context, now: at(0) });
+  const envelope = createExecutionEnvelope({ ...envelopeInput('direction_generate'), objectId: created.novel.id });
+  const authorityInput = {
+    action: 'direction_generate' as const, tenantId: context.tenantId, novelId: created.novel.id,
+    objectId: created.novel.id, sourceVersionRefs: envelope.sourceVersionRefs, normalizedRequest: envelope.effectiveRequest
+  };
+  const authority = await repository.loadGenerationAuthority(authorityInput);
+  assert.ok(authority);
   const input: ClaimGenerationTaskInput = {
-    tenantId: 'tenant-rp02b', novelId: 'novel-1', taskType: 'novel_direction_generate', objectType: 'direction', objectId: 'novel-1',
+    tenantId: context.tenantId, novelId: created.novel.id, taskType: 'novel_direction_generate', objectType: 'direction', objectId: created.novel.id,
     conflictScope: 'novel_direction', conflictKey: suffix, activeClaimKey: `claim-${suffix}`, idempotencyToken: `token-${suffix}`,
     requestHash: hashCanonicalJson(envelope), sourceVersionRefs: envelope.sourceVersionRefs, executionEnvelopeJson: envelope,
     policyProfileVersionId: envelope.policyProfileVersionId, modelRoutingVersion: envelope.modelRoutingVersion,
-    inputSummary: 'test', context: { tenantId: 'tenant-rp02b', userId: 'user-1', requestId: `request-${suffix}` }, now: at(0)
+    inputSummary: 'test', authorityInput, expectedAuthoritySnapshotHash: hashCanonicalJson(authority), context, now: at(0)
   };
   const claim = await repository.claimGenerationTask(input);
   assert.equal(claim.outcome, 'created');

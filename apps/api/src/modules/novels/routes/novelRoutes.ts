@@ -1,6 +1,8 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { ErrorCode } from '@ai-shortvideo/shared';
+import { BusinessError } from '../../../shared/errors.js';
 import { sendOk } from '../../../shared/reply.js';
-import { createDefaultRequestContext, NovelService, type NovelServiceOptions } from '../services/novelService.js';
+import { NovelService, type NovelServiceOptions } from '../services/novelService.js';
 import { resolveRequestIdempotencyKey } from '../services/taskClaim.js';
 import type {
   AdoptDirectionRequest,
@@ -29,6 +31,7 @@ import type {
   StartFullReviewRequest,
   UpdateChapterWordTargetsRequest
 } from '@ai-shortvideo/shared';
+import type { RequestContext, RequestContextResolver } from '../domain/novelDomain.js';
 
 const querySchema = {
   type: 'object',
@@ -119,7 +122,9 @@ const fullReviewParamsSchema = {
 
 const idempotencyKeySchema = { type: 'string', minLength: 8, maxLength: 120, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{7,119}$' } as const;
 
-export async function registerNovelRoutes(app: FastifyInstance, options: NovelServiceOptions) {
+type NovelRouteOptions = NovelServiceOptions & { requestContextResolver?: RequestContextResolver };
+
+export async function registerNovelRoutes(app: FastifyInstance, options: NovelRouteOptions) {
   const novelService = new NovelService(options);
   const devSeedNovelService = new NovelService({
     repository: options.repository,
@@ -147,7 +152,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
         const data = await createOutlineAcceptanceSeed(
           devSeedNovelService,
           request.body as { title?: string } | undefined,
-          createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+          await resolveProviderContext(options.requestContextResolver, request)
         );
 
         reply.status(201);
@@ -175,7 +180,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
         const data = await createTrialAcceptanceSeed(
           devSeedNovelService,
           request.body as { title?: string } | undefined,
-          createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+          await resolveProviderContext(options.requestContextResolver, request)
         );
 
         reply.status(201);
@@ -233,7 +238,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
     async (request, reply) => {
       const data = await novelService.createDraft(
         request.body as CreateNovelDraftRequest,
-        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        await resolveProviderContext(options.requestContextResolver, request)
       );
 
       reply.status(201);
@@ -264,7 +269,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
       const data = await novelService.generateDirections(
         novelId,
         withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as GenerateDirectionsRequest),
-        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        await resolveProviderContext(options.requestContextResolver, request)
       );
 
       return sendOk(request, reply, data);
@@ -301,7 +306,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
       const data = await novelService.fuseDirections(
         novelId,
         withRequestIdempotency(request.headers['idempotency-key'], request.body as FuseDirectionsRequest),
-        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        await resolveProviderContext(options.requestContextResolver, request)
       );
 
       return sendOk(request, reply, data);
@@ -332,7 +337,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
         novelId,
         versionId,
         withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as OptimizeDirectionRequest),
-        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        await resolveProviderContext(options.requestContextResolver, request)
       );
 
       return sendOk(request, reply, data);
@@ -380,7 +385,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
         novelId,
         versionId,
         request.body as EditDirectionCandidateRequest,
-        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        await resolveProviderContext(options.requestContextResolver, request)
       );
 
       return sendOk(request, reply, data);
@@ -413,7 +418,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
         novelId,
         versionId,
         (request.body ?? {}) as AdoptDirectionRequest,
-        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        await resolveProviderContext(options.requestContextResolver, request)
       );
 
       return sendOk(request, reply, data);
@@ -428,7 +433,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
       const data = await novelService.generateSetting(
         novelId,
         withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as GenerateStructureAssetRequest),
-        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        await resolveProviderContext(options.requestContextResolver, request)
       );
 
       return sendOk(request, reply, data);
@@ -444,7 +449,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
         novelId,
         versionId,
         (request.body ?? {}) as AdoptStructureAssetRequest,
-        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        await resolveProviderContext(options.requestContextResolver, request)
       );
 
       return sendOk(request, reply, data);
@@ -461,7 +466,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
         'setting',
         versionId,
         request.body as EditStructureAssetRequest,
-        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        await resolveProviderContext(options.requestContextResolver, request)
       );
 
       return sendOk(request, reply, data);
@@ -476,7 +481,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
       const data = await novelService.generateOutline(
         novelId,
         withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as GenerateStructureAssetRequest),
-        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        await resolveProviderContext(options.requestContextResolver, request)
       );
 
       return sendOk(request, reply, data);
@@ -492,7 +497,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
         novelId,
         versionId,
         (request.body ?? {}) as AdoptStructureAssetRequest,
-        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        await resolveProviderContext(options.requestContextResolver, request)
       );
 
       return sendOk(request, reply, data);
@@ -509,7 +514,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
         'outline',
         versionId,
         request.body as EditStructureAssetRequest,
-        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        await resolveProviderContext(options.requestContextResolver, request)
       );
 
       return sendOk(request, reply, data);
@@ -524,7 +529,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
       const data = await novelService.generateStageOutline(
         novelId,
         withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as GenerateStructureAssetRequest),
-        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        await resolveProviderContext(options.requestContextResolver, request)
       );
 
       return sendOk(request, reply, data);
@@ -540,7 +545,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
         novelId,
         versionId,
         (request.body ?? {}) as AdoptStructureAssetRequest,
-        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        await resolveProviderContext(options.requestContextResolver, request)
       );
 
       return sendOk(request, reply, data);
@@ -557,7 +562,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
         'stage_outline',
         versionId,
         request.body as EditStructureAssetRequest,
-        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        await resolveProviderContext(options.requestContextResolver, request)
       );
 
       return sendOk(request, reply, data);
@@ -572,7 +577,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
       const data = await novelService.generateChapterPlan(
         novelId,
         withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as GenerateStructureAssetRequest),
-        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        await resolveProviderContext(options.requestContextResolver, request)
       );
 
       return sendOk(request, reply, data);
@@ -589,7 +594,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
         'chapter_plan',
         versionId,
         request.body as EditStructureAssetRequest,
-        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        await resolveProviderContext(options.requestContextResolver, request)
       );
 
       return sendOk(request, reply, data);
@@ -605,7 +610,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
         novelId,
         versionId,
         (request.body ?? {}) as AdoptStructureAssetRequest,
-        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        await resolveProviderContext(options.requestContextResolver, request)
       );
 
       return sendOk(request, reply, data);
@@ -648,7 +653,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
       const data = await novelService.updateChapterWordTargets(
         novelId,
         (request.body ?? {}) as UpdateChapterWordTargetsRequest,
-        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        await resolveProviderContext(options.requestContextResolver, request)
       );
 
       return sendOk(request, reply, data);
@@ -683,7 +688,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
       const data = await novelService.generateTrial(
         novelId,
         withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as GenerateTrialRequest),
-        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        await resolveProviderContext(options.requestContextResolver, request)
       );
 
       return sendOk(request, reply, data);
@@ -716,7 +721,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
       const data = await novelService.confirmTrial(
         novelId,
         request.body as ConfirmTrialRequest,
-        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        await resolveProviderContext(options.requestContextResolver, request)
       );
 
       return sendOk(request, reply, data);
@@ -750,7 +755,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
       const data = await novelService.generateBodyBatch(
         novelId,
         withRequestIdempotency(request.headers['idempotency-key'], request.body as GenerateBodyBatchRequest),
-        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        await resolveProviderContext(options.requestContextResolver, request)
       );
 
       return sendOk(request, reply, data);
@@ -784,7 +789,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
         novelId,
         chapterId,
         withRequestIdempotency(request.headers['idempotency-key'], request.body as GenerateChapterBodyRequest),
-        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        await resolveProviderContext(options.requestContextResolver, request)
       );
 
       return sendOk(request, reply, data);
@@ -817,7 +822,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
         novelId,
         chapterId,
         withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as RewriteChapterRequest),
-        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        await resolveProviderContext(options.requestContextResolver, request)
       );
 
       return sendOk(request, reply, data);
@@ -851,7 +856,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
         chapterId,
         versionId,
         withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as AdoptChapterContentVersionRequest),
-        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        await resolveProviderContext(options.requestContextResolver, request)
       );
 
       return sendOk(request, reply, data);
@@ -883,7 +888,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
         novelId,
         chapterId,
         withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as CreateImpactAssessmentRequest),
-        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        await resolveProviderContext(options.requestContextResolver, request)
       );
 
       return sendOk(request, reply, data);
@@ -902,7 +907,8 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
     },
     async (request, reply) => {
       const { novelId, impactCaseId } = request.params as { novelId: string; impactCaseId: string };
-      const data = await novelService.getImpactCase(novelId, impactCaseId);
+      const context = await resolveProviderContext(options.requestContextResolver, request);
+      const data = await novelService.getImpactCase(novelId, impactCaseId, context.tenantId);
 
       return sendOk(request, reply, data);
     }
@@ -934,7 +940,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
         novelId,
         impactCaseId,
         request.body as ResolveImpactCaseRequest,
-        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        await resolveProviderContext(options.requestContextResolver, request)
       );
 
       return sendOk(request, reply, data);
@@ -965,7 +971,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
       const data = await novelService.startFullReview(
         novelId,
         withRequestIdempotency(request.headers['idempotency-key'], request.body as StartFullReviewRequest),
-        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        await resolveProviderContext(options.requestContextResolver, request)
       );
 
       return sendOk(request, reply, data);
@@ -984,7 +990,8 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
     },
     async (request, reply) => {
       const { novelId } = request.params as { novelId: string };
-      const data = await novelService.getLatestFullReview(novelId);
+      const context = await resolveProviderContext(options.requestContextResolver, request);
+      const data = await novelService.getLatestFullReview(novelId, context.tenantId);
 
       return sendOk(request, reply, data);
     }
@@ -1016,7 +1023,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
         novelId,
         reviewId,
         request.body as ResolveFullReviewIssueRequest,
-        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        await resolveProviderContext(options.requestContextResolver, request)
       );
 
       return sendOk(request, reply, data);
@@ -1051,7 +1058,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
         novelId,
         reviewId,
         request.body as ForcePassFullReviewRequest,
-        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        await resolveProviderContext(options.requestContextResolver, request)
       );
 
       return sendOk(request, reply, data);
@@ -1087,7 +1094,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
       const data = await novelService.confirmCompletion(
         novelId,
         request.body as ConfirmCompletionRequest,
-        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        await resolveProviderContext(options.requestContextResolver, request)
       );
 
       return sendOk(request, reply, data);
@@ -1106,7 +1113,8 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
     },
     async (request, reply) => {
       const { novelId } = request.params as { novelId: string };
-      const data = await novelService.getVideoReadiness(novelId);
+      const context = await resolveProviderContext(options.requestContextResolver, request);
+      const data = await novelService.getVideoReadiness(novelId, context.tenantId);
 
       return sendOk(request, reply, data);
     }
@@ -1134,7 +1142,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
       const data = await novelService.recheckVideoReadiness(
         novelId,
         (request.body ?? {}) as RecheckVideoReadinessRequest,
-        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        await resolveProviderContext(options.requestContextResolver, request)
       );
 
       return sendOk(request, reply, data);
@@ -1170,7 +1178,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
       const data = await novelService.confirmVideoReadiness(
         novelId,
         request.body as ConfirmVideoReadinessRequest,
-        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        await resolveProviderContext(options.requestContextResolver, request)
       );
 
       return sendOk(request, reply, data);
@@ -1189,7 +1197,8 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
     },
     async (request, reply) => {
       const { novelId, chapterId } = request.params as { novelId: string; chapterId: string };
-      const data = await novelService.getChapterWorkbench(novelId, chapterId);
+      const context = await resolveProviderContext(options.requestContextResolver, request);
+      const data = await novelService.getChapterWorkbench(novelId, chapterId, context.tenantId);
 
       return sendOk(request, reply, data);
     }
@@ -1207,7 +1216,8 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
     },
     async (request, reply) => {
       const query = request.query as NovelListQuery;
-      const data = await novelService.list(query);
+      const context = await resolveProviderContext(options.requestContextResolver, request);
+      const data = await novelService.list(query, context.tenantId);
 
       return sendOk(request, reply, data);
     }
@@ -1227,7 +1237,8 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
     },
     async (request, reply) => {
       const { novelId } = request.params as { novelId: string };
-      const data = await novelService.getDetail(novelId);
+      const context = await resolveProviderContext(options.requestContextResolver, request);
+      const data = await novelService.getDetail(novelId, context.tenantId);
 
       return sendOk(request, reply, data);
     }
@@ -1247,7 +1258,8 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelSe
     },
     async (request, reply) => {
       const { novelId } = request.params as { novelId: string };
-      const data = await novelService.getSummary(novelId);
+      const context = await resolveProviderContext(options.requestContextResolver, request);
+      const data = await novelService.getSummary(novelId, context.tenantId);
 
       return sendOk(request, reply, data);
     }
@@ -1281,7 +1293,7 @@ function withRequestIdempotency<T extends { idempotencyKey?: string | null }>(he
 async function createOutlineAcceptanceSeed(
   service: NovelService,
   body: { title?: string } | undefined,
-  context: ReturnType<typeof createDefaultRequestContext>
+  context: RequestContext
 ) {
   const suffix = new Date().toISOString().slice(5, 16).replace('T', ' ');
   const title = body?.title?.trim() || `验收种子：大纲设计 ${suffix}`;
@@ -1351,7 +1363,7 @@ async function createOutlineAcceptanceSeed(
     { regenerateReason: '本地验收种子：生成阶段大纲候选，停留待确认。' },
     context
   );
-  const detail = await service.getDetail(novelId);
+  const detail = await service.getDetail(novelId, context.tenantId);
 
   return {
     novelId,
@@ -1368,7 +1380,7 @@ async function createOutlineAcceptanceSeed(
 async function createTrialAcceptanceSeed(
   service: NovelService,
   body: { title?: string } | undefined,
-  context: ReturnType<typeof createDefaultRequestContext>
+  context: RequestContext
 ) {
   const suffix = new Date().toISOString().slice(5, 16).replace('T', ' ');
   const title = body?.title?.trim() || `验收种子：试写按钮链路 ${suffix}`;
@@ -1464,7 +1476,7 @@ async function createTrialAcceptanceSeed(
     { chapterCount: 3, regenerateReason: '本地验收种子：生成第 1 章试写候选，停留待选择。' },
     context
   );
-  const detail = await service.getDetail(novelId);
+  const detail = await service.getDetail(novelId, context.tenantId);
 
   return {
     novelId,
@@ -1524,6 +1536,29 @@ function createStructureEditRouteSchema() {
       }
     }
   } as const;
+}
+
+async function resolveProviderContext(
+  resolver: RequestContextResolver | undefined,
+  request: FastifyRequest
+): Promise<RequestContext> {
+  if (!resolver) throw new BusinessError(ErrorCode.Unauthorized, '当前请求缺少可信身份。');
+  let actor;
+  try {
+    actor = await resolver(request);
+  } catch {
+    throw new BusinessError(ErrorCode.DependencyUnavailable, '身份服务暂时不可用。');
+  }
+  const tenantId = actor?.tenantId?.trim() ?? '';
+  const userId = actor?.userId?.trim() ?? '';
+  if (!tenantId || !userId) throw new BusinessError(ErrorCode.Unauthorized, '当前请求缺少可信身份。');
+  return Object.freeze({
+    tenantId,
+    userId,
+    requestId: request.id,
+    ip: request.ip,
+    userAgent: getHeader(request.headers['user-agent'])
+  });
 }
 
 function getHeader(header: string | string[] | undefined) {
