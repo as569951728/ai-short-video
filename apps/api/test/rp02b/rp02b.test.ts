@@ -406,6 +406,13 @@ async function seedQueuedTask(repository: ReturnType<typeof createInMemoryNovelR
   const authority = await repository.loadGenerationAuthority(authorityInput);
   assert.ok(authority);
   const authoritySnapshotHash = hashCanonicalJson(authority);
+  const authorityFacts = authority.facts as {
+    novel: Record<string, unknown>;
+    preferences: Record<string, unknown> | null;
+  };
+  const novelSnapshotHash = hashCanonicalJson(authorityFacts.novel);
+  const preferencesSnapshot = authorityFacts.preferences ?? { appealPoints: [], targetAudience: null, stageCount: null };
+  const preferencesSnapshotHash = hashCanonicalJson(preferencesSnapshot);
   const envelope = createExecutionEnvelopeV1_1({
     tenantId: context.tenantId,
     novelId: created.novel.id,
@@ -417,8 +424,12 @@ async function seedQueuedTask(repository: ReturnType<typeof createInMemoryNovelR
     sourceVersionRefs: {
       ...legacyEnvelope.sourceVersionRefs,
       sourceIdentitySchemaVersion: 1,
-      novelProviderInputSnapshotHash: '1'.repeat(64),
-      preferencesSnapshotHash: '2'.repeat(64),
+      sourceIdentities: [
+        { sourceType: 'novel', sourceId: created.novel.id, revision: novelSnapshotHash, snapshotHash: novelSnapshotHash },
+        { sourceType: 'preferences', sourceId: created.novel.id, revision: preferencesSnapshotHash, snapshotHash: preferencesSnapshotHash }
+      ],
+      novelProviderInputSnapshotHash: novelSnapshotHash,
+      preferencesSnapshotHash,
       authoritySnapshotHash,
       providerInputSnapshotHash: '3'.repeat(64)
     },

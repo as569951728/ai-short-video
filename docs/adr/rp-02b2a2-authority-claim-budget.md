@@ -3,12 +3,12 @@
 status: ready
 package_id: RP-02B2a2
 manifest_id: RP-02B2a2-v3
-baseline_sha: f27442d159d7f9d6ef273128797be6085bbd8f9d
+baseline_sha: 81f567d4fb61765c9a5d407dae04011d08d5aa19
 hard_max_files: 20
 hard_max_net_additions: 3250
 exceeded_budget: false
 actual_files: 20
-actual_net_additions: 3196
+actual_net_additions: 3232
 split_reason: Trusted actor, per-asset source identities, canonical envelope, repository claim rollback, worker/recovery fail-closed behavior, Prisma snapshot parity, and the provider-before stale oracle form one fail-closed capability and must be independently verified before lease execution.
 owner: MC
 valid_until: 2026-08-31
