@@ -252,6 +252,9 @@ export async function executeClaimedGeneration<TProviderResult, TFinalResult>(
     inputSummary: spec.inputSummary,
     authorityInput,
     expectedAuthoritySnapshotHash: authoritySnapshotHash,
+    afterClaimBarrier: input.authorityBarrier
+      ? () => input.authorityBarrier?.('after_claim')
+      : undefined,
     context: input.context,
     now: input.now()
   });
@@ -276,33 +279,7 @@ export async function executeClaimedGeneration<TProviderResult, TFinalResult>(
     }
   }
 
-  await input.authorityBarrier?.('after_claim');
-  const finalProviderAuthority = await input.repository.loadGenerationAuthority(authorityInput);
-  if (!matchGenerationAuthority(authorityInput, authoritySnapshotHash, finalProviderAuthority).ok) {
-    const error = sourceStale();
-    await failClaimedTask(input, claim.task, error, 'source_stale');
-    throw error;
-  }
-  const finalProviderInput = buildAuthoritativeProviderInput(
-    input.action,
-    finalProviderAuthority!,
-    normalizedRequest,
-    normalizedSourceVersionRefs
-  );
-  const finalActionAuthorityRefs = buildActionAuthoritySourceRefs(
-    input.action,
-    finalProviderAuthority!,
-    normalizedRequest,
-    normalizedSourceVersionRefs
-  );
-  if (
-    hashCanonicalJson(finalProviderInput) !== providerInputSnapshotHash
-    || hashCanonicalJson(finalActionAuthorityRefs) !== hashCanonicalJson(actionAuthorityRefs)
-  ) {
-    const error = sourceStale();
-    await failClaimedTask(input, claim.task, error, 'source_stale');
-    throw error;
-  }
+  const finalProviderInput = authoritativeProviderInput;
 
   let providerResult: TProviderResult;
   try {

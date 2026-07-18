@@ -541,6 +541,13 @@ export function createInMemoryNovelRepository(): NovelRepository & {
         payload: { requestId: input.context.requestId },
         createdAt: input.now
       };
+
+      await input.afterClaimBarrier?.();
+      const commitAuthority = loadAuthority(input.authorityInput);
+      if (!matchGenerationAuthority(input.authorityInput, input.expectedAuthoritySnapshotHash, commitAuthority).ok) {
+        return { outcome: 'source_stale', task: null };
+      }
+
       generationTasks.unshift(task);
       generationTaskEvents.push(event);
       return { outcome: 'created', task };

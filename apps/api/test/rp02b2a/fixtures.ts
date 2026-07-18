@@ -47,8 +47,9 @@ export async function createAuthorityFixture(
   const counters = { intent: 0 };
   const originalClaim = repository.claimGenerationTask.bind(repository);
   repository.claimGenerationTask = async (input) => {
-    counters.intent += 1;
-    return originalClaim(input);
+    const result = await originalClaim(input);
+    if (result.outcome !== 'source_stale') counters.intent += 1;
+    return result;
   };
   const context: RequestContext = {
     ...identity,
@@ -123,12 +124,18 @@ export async function createRouteAuthorityFixture(action: NovelProviderAction) {
   const repository = createInMemoryNovelRepository();
   const counters = { provider: 0, intent: 0, authority: 0 };
   const providerInvocations: Array<{ action: NovelProviderAction; input: unknown }> = [];
-  let afterClaim: (() => void) | null = null;
+  let armed: { phase: AuthorityPhase; mutation: AuthorityMutation } | null = null;
+  let restore = () => {};
   const originalClaim = repository.claimGenerationTask.bind(repository);
   repository.claimGenerationTask = async (input) => {
-    counters.intent += 1;
-    const result = await originalClaim(input);
-    if (result.outcome === 'created') afterClaim?.();
+    const result = await originalClaim(armed?.phase === 'after_claim' ? {
+      ...input,
+      afterClaimBarrier: async () => {
+        await input.afterClaimBarrier?.();
+        restore = mutateAuthority(armed!.mutation, 'after_claim', action, novel, repository, prepared);
+      }
+    } : input);
+    if (result.outcome !== 'source_stale') counters.intent += 1;
     return result;
   };
   const providers = countedProviders(counters, providerInvocations);
@@ -147,11 +154,9 @@ export async function createRouteAuthorityFixture(action: NovelProviderAction) {
   const novel = await repository.findById('tenant_test', prepared.novelId);
   if (!novel) throw new Error(`missing prepared novel for ${action}`);
   const originalLoad = repository.loadGenerationAuthority.bind(repository);
-  let armed: { phase: AuthorityPhase; mutation: AuthorityMutation } | null = null;
   let captureAuthority = false;
   let loadCount = 0;
   let authoritySnapshots: Array<GenerationAuthoritySnapshot | null> = [];
-  let restore = () => {};
   let restorePreviousRunState = () => {};
   repository.loadGenerationAuthority = async (input) => {
     if (!captureAuthority || input.action !== action) return originalLoad(input);
@@ -176,9 +181,6 @@ export async function createRouteAuthorityFixture(action: NovelProviderAction) {
       restorePreviousRunState();
       restorePreviousRunState = captureRunState(action, novel, repository, prepared);
       armed = { phase, mutation };
-      afterClaim = phase === 'after_claim'
-        ? () => { restore = mutateAuthority(mutation, phase, action, novel, repository, prepared); }
-        : null;
       captureAuthority = true;
       loadCount = 0;
       authoritySnapshots = [];
@@ -189,7 +191,6 @@ export async function createRouteAuthorityFixture(action: NovelProviderAction) {
         restore();
         restore = () => {};
         armed = null;
-        afterClaim = null;
         captureAuthority = false;
       }
     },

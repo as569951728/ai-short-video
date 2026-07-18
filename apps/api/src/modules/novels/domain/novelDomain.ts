@@ -575,6 +575,7 @@ export interface ClaimGenerationTaskInput {
   inputSummary: string;
   authorityInput: LoadGenerationAuthorityInput;
   expectedAuthoritySnapshotHash: string;
+  afterClaimBarrier?: () => void | Promise<void>;
   context: RequestContext;
   now: Date;
 }
