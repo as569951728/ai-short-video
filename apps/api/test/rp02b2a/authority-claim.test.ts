@@ -4,6 +4,7 @@ import { ErrorCode, TaskStatus, canonicalExecutionJson, type ExecutionEnvelopeV1
 import { buildApp } from '../../src/app.js';
 import { BusinessError } from '../../src/shared/errors.js';
 import { validateExecutionEnvelopeV1_1ForTask } from '../../src/modules/novels/domain/executionContract.js';
+import { PrismaNovelRepository } from '../../src/modules/novels/repositories/prismaNovelRepository.js';
 import { createActorScopedIdempotencyToken, executeClaimedGeneration, hashCanonicalJson } from '../../src/modules/novels/services/taskClaim.js';
 import { createDefaultRequestContext } from '../../src/modules/novels/services/novelService.js';
 import { ACTIONS, ManualClock, ZERO_SIDE_EFFECTS, createAuthorityFixture, createRouteAuthorityFixture, sideEffects, snapshotRouteSideEffects } from './fixtures.js';
@@ -54,7 +55,7 @@ describe('RP-02B2a2 authoritative claim', () => {
             for (const snapshot of snapshots.filter((item) => item !== null)) {
               assert.deepEqual(
                 [snapshot.action, snapshot.tenantId, snapshot.novelId, snapshot.objectId],
-                [action, 'tenant_default', fixture.novelId, fixture.authorityObjectId],
+                [action, 'tenant_test', fixture.novelId, fixture.authorityObjectId],
                 `${label}:authority identity`
               );
             }
@@ -113,6 +114,8 @@ describe('RP-02B2a2 authoritative claim', () => {
         const envelope = validateExecutionEnvelopeV1_1ForTask(task);
         assert.equal(envelope.sourceVersionRefs.authoritySnapshotHash, hashCanonicalJson(snapshots[0]), `${action}:authority projection`);
         assert.equal(envelope.sourceVersionRefs.providerInputSnapshotHash, hashCanonicalJson(providerProjection(action, invocations)), `${action}:provider projection`);
+        assertActionAuthorityRefs(action, envelope, snapshots[0]!, providerProjection(action, invocations));
+        await assertRepositoryAuthorityParity(fixture, envelope);
       });
     });
   }
@@ -240,6 +243,9 @@ describe('RP-02B2a2 authoritative claim', () => {
       const response = await app.inject({ method: 'POST', url: '/novels/drafts', payload: { title: 'actor test' } });
       assert.equal(response.statusCode, status);
       assert.equal(response.json().error.code, code);
+      const taskResponse = await app.inject({ method: 'GET', url: '/tasks/task_missing' });
+      assert.equal(taskResponse.statusCode, status);
+      assert.equal(taskResponse.json().error.code, code);
       await app.close();
     }
     const fixture = await createAuthorityFixture('direction_generate');
@@ -337,4 +343,129 @@ function providerProjection(action: NovelProviderAction, invocations: Array<{ ac
     previousBatchNotes: first.previousBatchNotes,
     enhancedReview: first.enhancedReview
   };
+}
+
+function assertActionAuthorityRefs(
+  action: NovelProviderAction,
+  envelope: ExecutionEnvelopeV1_1,
+  authority: NonNullable<Awaited<ReturnType<Awaited<ReturnType<typeof createRouteAuthorityFixture>>['repository']['loadGenerationAuthority']>>>,
+  providerInput: unknown
+) {
+  const refs = envelope.sourceVersionRefs as unknown as Record<string, unknown>;
+  const facts = authority.facts as Record<string, unknown>;
+  const provider = providerInput as Record<string, unknown>;
+  assert.equal(refs.sourceIdentitySchemaVersion, 1, `${action}:identity schema`);
+  assert.equal(refs.novelProviderInputSnapshotHash, hashCanonicalJson(facts.novel), `${action}:novel identity`);
+  const preferenceActions: NovelProviderAction[] = [
+    'direction_generate', 'direction_fuse', 'direction_optimize', 'setting_generate', 'outline_generate',
+    'stage_outline_generate', 'chapter_plan_generate', 'trial_chapter_one_generate', 'trial_followup_generate'
+  ];
+  if (preferenceActions.includes(action)) {
+    assert.equal(refs.preferencesSnapshotHash, hashCanonicalJson(facts.preferences ?? { appealPoints: [], targetAudience: null, stageCount: null }), `${action}:preferences identity`);
+  } else assert.equal('preferencesSnapshotHash' in refs, false, `${action}:no unused preferences identity`);
+  const chapterInputs = action === 'body_batch_generate' || action === 'chapter_body_generate'
+    ? provider.targetChapters
+    : ['trial_chapter_one_generate', 'trial_followup_generate', 'novel_full_review'].includes(action)
+      ? provider.chapters
+      : ['chapter_rewrite', 'chapter_impact_assess', 'chapter_adopt_impact_assess'].includes(action)
+        ? [provider.chapter]
+        : null;
+  if (chapterInputs) assert.equal(refs.chapterProviderInputSnapshotHash, hashCanonicalJson(chapterInputs), `${action}:chapter provider identity`);
+  if (action === 'trial_chapter_one_generate' || action === 'trial_followup_generate') {
+    const chapters = facts.chapters as Array<{ id: string; chapterNo: number; currentContentVersionId: string | null }>;
+    const expected = chapters.map((chapter) => ({
+      chapterId: chapter.id,
+      chapterNo: chapter.chapterNo,
+      planVersionId: envelope.sourceVersionRefs.currentChapterPlanVersionId,
+      currentContentVersionId: chapter.currentContentVersionId
+    }));
+    assert.deepEqual(refs.chapterRefs, expected, `${action}:ordered chapter refs`);
+    assert.equal(refs.chapterInputSnapshotHash, hashCanonicalJson({ chapterRefs: expected, providerInputs: chapterInputs }), `${action}:chapter input identity`);
+  }
+  if (action === 'body_batch_generate' || action === 'chapter_body_generate') {
+    const authorityChapters = action === 'body_batch_generate'
+      ? (facts.chapters as Array<{ id: string; chapterNo: number; currentContentVersionId: string | null }>).filter((chapter) => {
+          const request = envelope.normalizedRequest as { startChapter: number; endChapter: number };
+          return chapter.chapterNo >= request.startChapter && chapter.chapterNo <= request.endChapter;
+        })
+      : [facts.chapter as { id: string; chapterNo: number; currentContentVersionId: string | null }];
+    const expectedTargets = authorityChapters.map((chapter, index) => ({
+      chapterId: chapter.id,
+      chapterNo: chapter.chapterNo,
+      planVersionId: envelope.sourceVersionRefs.currentChapterPlanVersionId,
+      currentContentVersionId: chapter.currentContentVersionId,
+      providerInputSnapshotHash: hashCanonicalJson((chapterInputs as unknown[])[index])
+    }));
+    assert.deepEqual(refs.targetChapterRefs, expectedTargets, `${action}:target refs`);
+    const previousContent = facts.bodyPreviousContent as { id?: unknown } | null;
+    assert.equal(refs.previousContentVersionId, previousContent?.id ?? null, `${action}:previous content identity`);
+    const memory = facts.bodyPreviousMemory as { id: string; sourceContentVersionId: string } | null;
+    assert.deepEqual(refs.longTermMemoryIdentity, memory ? {
+      id: memory.id,
+      sourceContentVersionId: memory.sourceContentVersionId,
+      snapshotHash: hashCanonicalJson(provider.previousMemory)
+    } : null, `${action}:memory identity`);
+    const batch = facts.bodyPreviousBatch as { id: string; summary: unknown } | null;
+    assert.deepEqual(refs.previousBatchIdentity, batch ? { id: batch.id, summaryHash: hashCanonicalJson(batch.summary) } : null, `${action}:batch identity`);
+    assert.equal(refs.strategyProviderInputSnapshotHash, hashCanonicalJson(provider.strategySnapshot), `${action}:strategy identity`);
+  }
+  const serialized = canonicalExecutionJson(refs);
+  assert.equal(/(?:legacy-|objectId-|"0{64}")/.test(serialized), false, `${action}:no synthetic authority identity`);
+}
+
+async function assertRepositoryAuthorityParity(
+  fixture: Awaited<ReturnType<typeof createRouteAuthorityFixture>>,
+  envelope: ExecutionEnvelopeV1_1
+) {
+  const authorityInput = {
+    action: fixture.action,
+    tenantId: 'tenant_test',
+    novelId: fixture.novelId,
+    objectId: fixture.authorityObjectId,
+    sourceVersionRefs: envelope.sourceVersionRefs,
+    normalizedRequest: envelope.normalizedRequest
+  };
+  const inMemoryNormal = await fixture.repository.loadGenerationAuthority(authorityInput);
+  const prismaNormal = await loadPrismaAuthorityThroughInMemoryData(fixture.repository, authorityInput);
+  assert.deepEqual(prismaNormal, inMemoryNormal, `${fixture.action}:normal repository parity`);
+  const legacyRefs = Object.fromEntries(Object.entries(envelope.sourceVersionRefs).filter(([key]) => ![
+    'authoritySnapshotHash', 'providerInputSnapshotHash', 'sourceIdentitySchemaVersion', 'novelProviderInputSnapshotHash',
+    'preferencesSnapshotHash', 'chapterProviderInputSnapshotHash', 'chapterRefs', 'chapterInputSnapshotHash',
+    'targetChapterRefs', 'previousContentVersionId', 'longTermMemoryIdentity', 'previousBatchIdentity',
+    'strategyProviderInputSnapshotHash'
+  ].includes(key)));
+  const legacyInput = { ...authorityInput, sourceVersionRefs: legacyRefs };
+  assert.deepEqual(
+    await loadPrismaAuthorityThroughInMemoryData(fixture.repository, legacyInput),
+    await fixture.repository.loadGenerationAuthority(legacyInput),
+    `${fixture.action}:legacy repository parity`
+  );
+  const novel = await fixture.repository.findById('tenant_test', fixture.novelId);
+  assert.ok(novel, `${fixture.action}:novel for stale parity`);
+  const title = novel.title;
+  novel.title = `${title} stale`;
+  try {
+    const inMemoryStale = await fixture.repository.loadGenerationAuthority(authorityInput);
+    const prismaStale = await loadPrismaAuthorityThroughInMemoryData(fixture.repository, authorityInput);
+    assert.deepEqual(prismaStale, inMemoryStale, `${fixture.action}:stale repository parity`);
+    if (inMemoryNormal && inMemoryStale) {
+      assert.notEqual(hashCanonicalJson(inMemoryStale), hashCanonicalJson(inMemoryNormal), `${fixture.action}:stale projection changes`);
+    }
+  } finally {
+    novel.title = title;
+  }
+}
+
+async function loadPrismaAuthorityThroughInMemoryData(
+  repository: Awaited<ReturnType<typeof createRouteAuthorityFixture>>['repository'],
+  input: Parameters<typeof repository.loadGenerationAuthority>[0]
+) {
+  const facade = Object.create(PrismaNovelRepository.prototype) as PrismaNovelRepository & Record<string, unknown>;
+  for (const method of [
+    'findById', 'findPreferencesByNovelId', 'listDirectionVersions', 'listStructureVersions', 'listNovelChapters',
+    'findChapterContentVersionById', 'findTrialRunById', 'findStructureVersionById', 'findLatestLongTermMemory', 'findLatestBodyBatch'
+  ]) {
+    (facade as Record<string, unknown>)[method] = (...args: unknown[]) => (repository as unknown as Record<string, (...values: unknown[]) => unknown>)[method]!(...args);
+  }
+  return PrismaNovelRepository.prototype.loadGenerationAuthority.call(facade, input, {} as never);
 }
