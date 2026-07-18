@@ -117,6 +117,13 @@ import {
 } from '../../../generated/prisma/enums.js';
 import { BusinessError } from '../../../shared/errors.js';
 
+class ClaimSourceStaleRollbackError extends Error {
+  constructor() {
+    super('claim authority changed before commit');
+    this.name = 'ClaimSourceStaleRollbackError';
+  }
+}
+
 export class PrismaNovelRepository implements NovelRepository {
   private readonly prisma = getPrismaClient();
 
@@ -537,9 +544,17 @@ export class PrismaNovelRepository implements NovelRepository {
             requestId: input.context.requestId,
             createdAt: input.now
           });
+          await input.afterClaimBarrier?.();
+          const commitAuthority = await this.loadGenerationAuthority(input.authorityInput, tx);
+          if (!matchGenerationAuthority(input.authorityInput, input.expectedAuthoritySnapshotHash, commitAuthority).ok) {
+            throw new ClaimSourceStaleRollbackError();
+          }
           return { outcome: 'created', task: mapGenerationTask(task) };
         });
       } catch (error) {
+        if (error instanceof ClaimSourceStaleRollbackError) {
+          return { outcome: 'source_stale', task: null };
+        }
         if (!isPrismaUniqueConstraintError(error)) throw error;
 
         const authority = await this.loadGenerationAuthority(input.authorityInput);

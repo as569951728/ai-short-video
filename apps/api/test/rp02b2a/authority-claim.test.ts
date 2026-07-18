@@ -45,12 +45,13 @@ describe('RP-02B2a2 authoritative claim', () => {
           it(`${action}:${phase}:${mutation}:authority`, async () => {
             const label = `${action}:${phase}:${mutation}`;
             const beforeEffects = await snapshotRouteSideEffects(fixture);
+            const beforeBusinessState = await snapshotNovelBusinessState(fixture);
             const beforeTaskIds = new Set(fixture.repository.getGenerationTasks().map((task) => task.id));
             const response = await fixture.run(phase, mutation, actionIndex * 6 + phaseIndex * 2 + mutationIndex + 1);
             assert.equal(response.statusCode, 409, `${label}:${response.body}`);
             assert.equal(response.json().error.code, ErrorCode.VersionConflict, label);
             assert.equal(response.json().error.details.code, 'SOURCE_STALE', `${label}:source stale`);
-            assert.equal(fixture.authorityReads(), phase === 'before_claim' ? 1 : phase === 'after_first_authority_read' ? 2 : 3, `${label}:loader`);
+            assert.equal(fixture.authorityReads(), phase === 'before_claim' ? 1 : 2, `${label}:loader`);
             const snapshots = fixture.authoritySnapshots();
             for (const snapshot of snapshots.filter((item) => item !== null)) {
               assert.deepEqual(
@@ -70,28 +71,15 @@ describe('RP-02B2a2 authoritative claim', () => {
             if (phase === 'after_claim') {
               assert.ok(snapshots[0] && snapshots[1], `${label}:pre-claim snapshots`);
               assert.equal(hashCanonicalJson(snapshots[1]), hashCanonicalJson(snapshots[0]), `${label}:authority stable through claim`);
-              if (mutation === 'changed') {
-                assert.ok(snapshots[2], `${label}:post-claim snapshot`);
-                assert.notEqual(hashCanonicalJson(snapshots[2]), hashCanonicalJson(snapshots[0]), `${label}:post-claim hash changed`);
-              } else {
-                assert.equal(snapshots[2], null, `${label}:post-claim authority missing`);
-              }
               const afterEffects = await snapshotRouteSideEffects(fixture);
-              assertAfterClaimFailClosed(beforeEffects, afterEffects, label);
+              assertZeroDelta(beforeEffects, afterEffects, label);
               const claimedTasks = fixture.repository.getGenerationTasks().filter((task) => !beforeTaskIds.has(task.id));
-              assert.equal(claimedTasks.length, 1, `${label}:one claimed task`);
-              const [task] = claimedTasks;
-              assert.ok(task, `${label}:claimed task`);
-              assert.equal(task.status, TaskStatus.Failed, `${label}:task status`);
-              assert.equal(task.failureCategory, 'source_stale', `${label}:failure category`);
-              assert.equal(task.errorCode, 'SOURCE_STALE', `${label}:task error code`);
-              assert.equal(task.activeClaimKey, null, `${label}:claim released`);
-              assert.deepEqual(task.resultVersionIds, [], `${label}:no result versions`);
-              assert.equal(task.resultReceiptHash, null, `${label}:no result receipt`);
+              assert.equal(claimedTasks.length, 0, `${label}:no visible claimed task`);
               assert.equal(fixture.providerInvocations().length, 0, `${label}:provider not invoked`);
             } else {
               assertZeroDelta(beforeEffects, await snapshotRouteSideEffects(fixture), label);
             }
+            assert.deepEqual(await snapshotNovelBusinessState(fixture), beforeBusinessState, `${label}:business state unchanged`);
           });
         }
       }
@@ -99,11 +87,10 @@ describe('RP-02B2a2 authoritative claim', () => {
         const response = await fixture.runSuccess(`a2-success-${action}`);
         assert.equal(response.statusCode, 200, `${action}:${response.body}`);
         assert.equal(response.json().success, true, action);
-        assert.equal(fixture.authorityReads(), 3, `${action}:authority reads`);
+        assert.equal(fixture.authorityReads(), 2, `${action}:authority reads`);
         const snapshots = fixture.authoritySnapshots();
-        assert.ok(snapshots[0] && snapshots[1] && snapshots[2], `${action}:authority snapshots`);
+        assert.ok(snapshots[0] && snapshots[1], `${action}:authority snapshots`);
         assert.equal(hashCanonicalJson(snapshots[1]), hashCanonicalJson(snapshots[0]), `${action}:stable authority`);
-        assert.equal(hashCanonicalJson(snapshots[2]), hashCanonicalJson(snapshots[0]), `${action}:post-claim authority`);
         const invocations = fixture.providerInvocations();
         assert.ok(invocations.length > 0, `${action}:provider invoked`);
         assert.deepEqual([...new Set(invocations.map((item) => item.action))], [action], `${action}:provider action`);
@@ -112,6 +99,7 @@ describe('RP-02B2a2 authoritative claim', () => {
         );
         assert.ok(task, `${action}:task`);
         const envelope = validateExecutionEnvelopeV1_1ForTask(task);
+        assert.deepEqual([task.tenantId, task.createdBy, envelope.tenantId, envelope.auditContext.requestedByUserId], ['tenant_test', 'user_test', 'tenant_test', 'user_test'], `${action}:non-placeholder actor`);
         assert.equal(envelope.sourceVersionRefs.authoritySnapshotHash, hashCanonicalJson(snapshots[0]), `${action}:authority projection`);
         assert.equal(envelope.sourceVersionRefs.providerInputSnapshotHash, hashCanonicalJson(providerProjection(action, invocations)), `${action}:provider projection`);
         assertActionAuthorityRefs(action, envelope, snapshots[0]!, providerProjection(action, invocations));
@@ -314,14 +302,15 @@ function assertZeroDelta(beforeEffects: Record<string, number>, afterEffects: Re
     assert.equal(afterEffects[key] - beforeEffects[key], 0, `${label}:${key}:absolute zero delta`);
   }
 }
-function assertAfterClaimFailClosed(beforeEffects: Record<string, number>, afterEffects: Record<string, number>, label: string) {
-  assert.deepEqual(Object.keys(afterEffects), Object.keys(beforeEffects), `${label}:effect keys`);
-  assert.equal(afterEffects.task - beforeEffects.task, 1, `${label}:one failed task`);
-  assert.equal(afterEffects.event - beforeEffects.event, 2, `${label}:claim and failure events`);
-  assert.equal(afterEffects.intent - beforeEffects.intent, 1, `${label}:one claim intent`);
-  for (const key of ['provider', 'asset', 'receipt', 'current', 'log', 'child']) {
-    assert.equal(afterEffects[key] - beforeEffects[key], 0, `${label}:${key}:no formal side effect`);
-  }
+async function snapshotNovelBusinessState(fixture: Awaited<ReturnType<typeof createRouteAuthorityFixture>>) {
+  const novel = await fixture.repository.findById('tenant_test', fixture.novelId);
+  assert.ok(novel, `${fixture.action}:novel`);
+  return {
+    creationStage: novel.creationStage,
+    stageStatus: novel.stageStatus,
+    updatedBy: novel.updatedBy,
+    updatedAt: novel.updatedAt.toISOString()
+  };
 }
 function providerProjection(action: NovelProviderAction, invocations: Array<{ action: NovelProviderAction; input: unknown }>) {
   if (action === 'chapter_impact_assess') {
