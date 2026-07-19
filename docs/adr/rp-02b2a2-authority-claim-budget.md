@@ -2,18 +2,18 @@
 
 status: ready
 package_id: RP-02B2a2
-manifest_id: RP-02B2a2-v3
-baseline_sha: 81f567d4fb61765c9a5d407dae04011d08d5aa19
-hard_max_files: 20
-hard_max_net_additions: 3250
+manifest_id: RP-02B2a2-v4
+baseline_sha: e020fb07d6279de5544ed15962b2a82d820a8247
+hard_max_files: 21
+hard_max_net_additions: 3900
 exceeded_budget: false
-actual_files: 20
-actual_net_additions: 3232
+actual_files: 21
+actual_net_additions: 3706
 split_reason: Trusted actor, per-asset source identities, canonical envelope, repository claim rollback, worker/recovery fail-closed behavior, Prisma snapshot parity, and the provider-before stale oracle form one fail-closed capability and must be independently verified before lease execution.
 owner: MC
 valid_until: 2026-08-31
 
-硬预算为 `20 files / 3,250 net additions`。本次实现绑定已验证 G0 基线并记录真实累计差异。任何 authority 缺失、跨租户或变化都必须在 provider 前零副作用失败；旧版、默认或合成 actor 也不得被 worker 领取或恢复。
+硬预算为 `21 files / 3,900 net additions`。本次实现绑定已验证 C4 基线 `e020fb07d6279de5544ed15962b2a82d820a8247`，并记录真实累计差异。任何 authority 缺失、跨租户或变化都必须在 provider 前零副作用失败；旧版、默认或合成 actor 也不得被 worker 领取或恢复。
 
 本 ADR 不允许正常 leased provider、finalize、HTTP 202、Admin transport、真实 DB/provider/media 或 E6。
 
