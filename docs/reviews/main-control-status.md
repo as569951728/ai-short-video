@@ -1,6 +1,6 @@
 # AIShortvideo 主控统一状态
 
-更新时间：2026-07-18 03:45 CST
+更新时间：2026-07-19 16:20 CST
 
 本文件是需求主控的当前状态入口。历史过程和详细证据仍保留在各模块设计、验收和工程质量文档中；发生冲突时，以当前代码、最新正式验收结论和本文件列出的证据为准。
 
@@ -22,11 +22,11 @@
 | 视频 P8-P9 | 工作台状态流与版本流程按限定范围验收 | P9c 无可播放音频，P9e 无真实 MP4/下载文件；不能称为真实视频生成闭环 |
 | P10-preflight | 已正式收口 | `creationSource` 的 shared/API/仓储/migration/admin 与浏览器链路通过 `CS-R3` 及条件项复验 |
 | P10 | `P10-R0` 已正式收口；R1 准入设计通过 | R1 准入文档已纳入当前远程分支；尚未授权，未启动业务代码 |
-| 整改计划 | RP-00A、RP-00B、RP-01A、RP-01B、RP-01C 已正式关闭；RP-02A、RP-02B1、RP-02B2a0、RP-02B2a1 限定阶段完成 | 唯一总账仍关闭 9/42；RMD-TASK-002 为 partial、003 为 open；替代 G0 已完成本地双审与四路远程验收，B2a2-B2a5/B2b/B2c/B3 仍未授权 |
+| 整改计划 | RP-00A、RP-00B、RP-01A、RP-01B、RP-01C 已正式关闭；RP-02A、RP-02B1、RP-02B2a0、RP-02B2a1 限定阶段完成 | 唯一总账仍关闭 9/42；RMD-TASK-002 为 partial、003 为 open；替代 G0 C3 已完成本地门禁与四路远程验收，B2a2-B2a5/B2b/B2c/B3 仍未授权 |
 | 测试 | RP-02B2a1 accepted head `4817abc` 的最终 TEST 与 clean-checkout 均 `APPROVED`，复合链 192/192；四路远程 CI 同头全绿 | 只证明 E3 registry/ABI/public retry freeze；仍不能外推真实 DB/provider/media/E6 |
 | 工程质量 | `review / high` | 最终 QUALITY `APPROVED`，P1/P2=0/0，14/14 负向变异被拒绝；小说真实完本与全书审稿 2 个既有 P0 仍未关闭 |
 | 本地服务 | 未运行 | `5173`、`3001` 当前无监听；用户需要浏览器验收时按需启动 |
-| 真实环境 | 冻结/待授权 | P8b-L1b、真实 DeepSeek/provider、外部渲染/云存储均无当前授权 |
+| 真实环境 | 数据库/模型已获阶段性授权，待安全前置 | P8b-L1b 与真实模型只在隔离、回滚、费用上限和密钥脱敏满足后执行；外部渲染/云存储仍未授权 |
 
 ### 1.1 复盘整改进度
 
@@ -35,10 +35,10 @@
 ```text
 总体关闭进度  [████░░░░░░░░░░░░░░░░]  9 / 42（21%）
 剩余问题      33
-当前整改包    RP-02B2a2-G0 accepted code head f27442d；四路远程 CI 已通过；14 files / 441 net additions，package gate 52/52，TEST/QUALITY LOCAL_ACCEPTED 0/0/0
+当前整改包    RP-02B2a2-G0 accepted code head 81f567d；四路远程 CI 已通过；5 files / 191 net additions，package gate 56/56
 拆包准入进度  [████████████████████]  7 / 7（100%）：第六轮四角色全部 approved，P0/P1=0
 研发交付进度  [████░░░░░░░░░░░░░░░░]  1 / 5（20%）：仅 B2a1 限定阶段完成
-当前状态      G0 accepted code head f27442d，远程 runs 29668083767/29668083766/29668083777/29668083784 均 completed/success；RP-02B2a2-G0 已关闭，B2a2 继续 not_authorized；总账 9/42、RMD-TASK-002=partial、RMD-TASK-003=open
+当前状态      G0 accepted code head 81f567d，远程 runs 29679243165/29679243180/29679243168/29679243184 均 completed/success；RP-02B2a2-G0 已关闭，B2a2 继续 not_authorized；总账 9/42、RMD-TASK-002=partial、RMD-TASK-003=open
 ```
 
 当前包阶段：
@@ -82,7 +82,7 @@
 | RP-02B2a1 阶段证据与总账同步 | 已完成 | accepted code head `4817abc` 与 immutable evidence publication head `6eaf60a` 分离绑定；Remediation governance run `29410503391` completed/success；`RMD-TASK-002=partial`、`RMD-TASK-003=open`，总览仍为 9/42 |
 | RP-02B2a2 四路准入 | 已拒绝 | 后端合同 `APPROVED P0=0/P1=0/P2=2`；TEST `REJECTED P0=0/P1=3/P2=1`；QUALITY 对当前实现 `REJECTED P0=3/P1=2/P2=1`；治理 `REJECTED P0=0/P1=3/P2=1`。四路未清零，B2a2 保持 `not_authorized` |
 | RP-02B2a2-G0 首轮独立复核 | 已拒绝 4/4 | TEST `0/2/0`、后端架构 `0/3/3`、QUALITY `0/5/1`、治理 `0/3/1`；共同 P1 为治理文件无独立 package 归属、range/命令/workflow 假绿及 actor/legacy 合同越界。当时按固定 `6eaf60a` 的 10-file G0 包整改，业务实现未启动 |
-| RP-02B2a2-G0 整改后最终复核 | 已完成 | accepted code head `f27442d`；14 files / 441 net additions；package gate 52/52；TEST/QUALITY `LOCAL_ACCEPTED 0/0/0`；四路远程 CI completed/success；B2a2 `not_authorized` |
+| RP-02B2a2-G0 整改后最终复核 | 已完成 | accepted code head `81f567d`；5 files / 191 net additions；package gate 56/56；四路远程 CI completed/success；B2a2 `not_authorized` |
 
 ## 2. 小说模块
 
@@ -196,23 +196,23 @@
 
 | 风险 | 状态 | 允许动作 |
 | --- | --- | --- |
-| P8b-L1b 真实 MySQL/Prisma live smoke | 待安全环境和明确授权 | 保持安全阻断；不能把 static/in-memory 结果当真实写路径 |
-| 真实 DeepSeek/provider smoke | 待明确授权和安全密钥边界 | 普通自动化不得读取 `.env` 或真实 key |
+| P8b-L1b 真实 MySQL/Prisma live smoke | 已获后续执行授权，待安全环境 | 仅在隔离测试库、可回滚写集和影响范围确认后执行；不能把 static/in-memory 结果当真实写路径 |
+| 真实 DeepSeek/provider smoke | 已获后续费用调用授权，待安全前置 | 仅在费用上限、密钥脱敏和本地链路收敛后执行；普通日志不得记录真实 key 或完整响应 |
 | 真实外部 TTS/字幕/渲染/云存储 | 未授权 | 不接入、不执行、不宣称通过 |
 | 平台上传/发布/API/token | P10 明确不做 | 仅可设计人工发布记录；不得出现自动执行入口 |
 | 本地前端/API 服务 | 当前停止 | 用户要求验收时按需启动并先检查 health/fixture |
 
 ## 7. 当前唯一推荐动作
 
-1. `RP-02B2a1` code head `4817abc` 与 immutable evidence publication head `6eaf60a` 已完成，run `29410503391` success。`RP-02B2a2-G0` accepted code head `f27442d` 四路远程 CI 已完成；G0 关闭，B2a2 继续 `not_authorized`，B2a3-B2a5、B2b、B2c、B3、真实 DB/provider/media/E6 继续冻结。
-2. `RP-01D` 涉及真实 MySQL，只能在安全环境和用户独立授权后执行；管理分组不得整体派发。每个子包独立研发、测试、关闭、commit 和 push。
+1. `RP-02B2a1` code head `4817abc` 与 immutable evidence publication head `6eaf60a` 已完成，run `29410503391` success。`RP-02B2a2-G0` accepted code head `81f567d` 四路远程 CI 已完成；G0 关闭，B2a2 继续 `not_authorized`，B2a3-B2a5、B2b、B2c、B3 和真实媒体/E6 继续冻结。
+2. `RP-01D` 真实 MySQL 与真实模型费用调用已获用户后续执行授权；仍须在隔离测试库、可回滚写集、费用上限和密钥脱敏满足后执行。每个子包独立研发、测试、关闭、commit 和 push。
 3. 小说真实完本金丝雀通过后，再执行 P9-real；P10-R1 只在 `RP-10` 重新决策。
-4. 继续保持真实 DB/provider、外部媒体和平台发布的独立授权门禁。
-g0_evidence_parent_sha: f27442d159d7f9d6ef273128797be6085bbd8f9d
-g0_evidence_rp01a_run: 29668083767
-g0_evidence_rp01b_run: 29668083766
-g0_evidence_rp01c_run: 29668083777
-g0_evidence_governance_run: 29668083784
+4. 真实 DB/provider 按已授权的安全前置执行；外部媒体和平台发布继续保持独立授权门禁。
+g0_evidence_parent_sha: 81f567d4fb61765c9a5d407dae04011d08d5aa19
+g0_evidence_rp01a_run: 29679243165
+g0_evidence_rp01b_run: 29679243180
+g0_evidence_rp01c_run: 29679243168
+g0_evidence_governance_run: 29679243184
 g0_evidence_a2_authorization: not_authorized
 g0_evidence_issue_closed_count: 9/42
 g0_evidence_rmd_task_002: partial
