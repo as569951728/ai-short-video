@@ -1,31 +1,487 @@
-import{describe,it}from"node:test";import assert from"node:assert/strict";import{execFileSync,spawnSync}from"node:child_process";import{createHash}from"node:crypto";import{chmodSync,mkdtempSync,mkdirSync,readFileSync,realpathSync,symlinkSync,unlinkSync,writeFileSync}from"node:fs";import{tmpdir}from"node:os";import{dirname,resolve}from"node:path";import{PACKAGE_DEFINITIONS,analyzePackageGate}from"./rp02b2a-package-gate.mjs";const ROOT=resolve("."),GATE_SCRIPT="scripts/rp02b2a-package-gate.mjs",WORKFLOW=resolve(".github/workflows/rp01c-fixtures.yml"),ADMISSION_WORKFLOW=resolve(".github/workflows/rp02b2a-admission.yml"),TRUSTED_WORKFLOW_ORACLE_SHA256="bd744804b87d6359b86ff05de71edb0a094962d43215c7b5010a8a82ae18f8a8",
-BASELINE="501a3cfcdf12341d9f611f0fdd6a6336d4ade483",B2A2_BASELINE="6eaf60af4155a8b95ff77d53261f5896d3a8f77d",STALE_B2A2_BASELINE="4817abc67cf916772b317aff027403b97ab4df76",A1_ADR="docs/adr/rp-02b2a1-registry-abi-budget.md",GATE_PREP_ID="RP-02B2a2-G0",GATE_PREP_ADR="docs/adr/rp-02b2a2-gate-prep-budget.md",CORRECTION_ID="RP-02B2a2-G0-C1",CORRECTION_BASELINE="59cedaf7150029fcbde03d2779662659727e8b4e",CORRECTION_ADR="docs/adr/rp-02b2a2-g0-ci-compat-correction-budget.md",VERIFIED_GATE_PREP="verified-gate-prep";const GOVERNANCE_REMEDIATION_FILES=Object.freeze([".github/workflows/rp01a-e2e.yml",".github/workflows/rp01b-dom.yml",".github/workflows/rp01c-fixtures.yml",".github/workflows/remediation-governance.yml",".github/workflows/rp02b2a-admission.yml","apps/admin-web/src/modules/novels/components/TaskProgressPanel.dom.spec.ts","apps/api/test/rp01c/fixtureFactory.test.ts","docs/modules/rp-02b2-dispatcher-transport-implementation-package\
-.md","docs/remediation/acceptance-matrix.md","docs/reviews/main-control-event-ledger.md","docs/reviews/main-control-status.md","docs/reviews/remediation-rmd-task-002-003-rp-02b2a1-verification-2026-07-15.md",GATE_SCRIPT,"scripts/rp02b2a-package-gate.test.mjs","package.json"]);const CLEAN_ENV="env -u DATABASE_URL -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL -u DEEPSEEK_MODEL -u DEEPSEEK_STRUCTURE_MODEL -u DEEPSEEK_REASONER_MODEL -u DEEPSEEK_TIMEOUT_MS -u DEEPSEEK_MAX_RETRIES -u DEPLOYMENT_ACTOR_TENANT_ID -u DEPLOYMENT_ACTOR_USER_ID NODE_ENV=production AI_PROVIDER_MODE=moc\
-k DOTENV_CONFIG_PATH=/dev/null";const B2A2_SCRIPTS=Object.freeze({"test:rp02b2a2:env-probe":`node -e "const keys=['DATABASE_URL','DEEPSEEK_API_KEY','DEEPSEEK_BASE_URL','DEEPSEEK_MODEL','DEEPSEEK_STRUCTURE_MODEL','DEEPSEEK_REASONER_MODEL','DEEPSEEK_TIMEOUT_MS','DEEPSEEK_MAX_RETRIES','DEPLOYMENT_ACTOR_TENANT_ID','DEPLOYMENT_ACTOR_USER_ID']; if(keys.some((key)=>process.env[key]!==undefined)||process.env.NODE_ENV!=='production'||process.env.AI_PROVIDER_MODE!=='mock'||process.env.DOTENV_CONFIG_PATH!=='/dev/null') process.exit(1); console.log('RP02B2A2_ENV\
-_CLEAN')"`,"test:rp02b2a2:core":`${CLEAN_ENV} sh -c 'npm run test:rp02b2a2:env-probe && npm run build -w @ai-shortvideo/shared && npm run prisma:generate -w @ai-shortvideo/api && npm exec -w @ai-shortvideo/api -- tsx --test test/rp02b2a/authority-claim.test.ts test/rp02b2a/repository-authority-hardening.test.ts src/modules/novels/novelRoutes.test.ts'`,"test:rp02b2a2":`${CLEAN_ENV} sh -c 'npm run test:rp02b2a2:env-probe && npm run test:rp02b2a1 && npm run test:rp02b2a2:core'`});const BUSINESS_PACKAGE_SEQUENCE=Object.freeze(["RP-02B2a2","RP-02B2a3","RP-02B2a4","RP-02B2a5"]),BUSINESS_PREDECESSOR=Object.freeze({"RP-02B2a2":CORRECTION_ID,"RP-02B2a3":"RP-02B2a2","RP-02B2a4":"RP-02B2a3","RP-02B2a5":"RP-02B2a4"}),BUSINESS_SCRIPT_ADDITIONS=Object.freeze({"RP-02B2a2":B2A2_SCRIPTS,"RP-02B2a3":Object.freeze({"test:rp02b2a3:core":`${CLEAN_ENV} sh -c 'npm run test:rp02b2a2:env-probe && npm exec -w @ai-shortvideo/api -- tsx --test test/rp02b2a/lease-dispatch-retry.test.ts'`,"test:rp02b2a3":`${CLEAN_ENV} sh -c 'npm run test:rp02b2a2:env-probe && npm run test:rp02b2a2 && npm run test:rp02b2a3:core'`}),"RP-02B2a4":Object.freeze({"test:rp02b2a4:core":`${CLEAN_ENV} sh -c 'npm run test:rp02b2a2:env-probe && npm exec -w @ai-shortvideo/api -- tsx --test test/rp02b2a/inmemory-fenced-finalize.test.ts src/modules/novels/novelRoutes.test.ts'`,"test:rp02b2a4":`${CLEAN_ENV} sh -c 'npm run test:rp02b2a2:env-probe && npm run test:rp02b2a3 && npm run test:rp02b2a4:core'`}),"RP-02B2a5":Object.freeze({"test:rp02b2a5:core":`${CLEAN_ENV} sh -c 'npm run test:rp02b2a2:env-probe && npm run prisma:generate -w @ai-shortvideo/api && npm exec -w @ai-shortvideo/api -- tsx --test test/rp02b2a/prisma-fenced-finalize.test.ts'`,"test:rp02b2a5":`${CLEAN_ENV} sh -c 'npm run test:rp02b2a2:env-probe && npm run test:rp02b2a4 && npm run test:rp02b2a5:core'`})});const COMMANDS=Object.freeze({"RP-02B2a1":"test:rp02b2a1",[GATE_PREP_ID]:"\
-test:rp02b2a1:gate",[CORRECTION_ID]:"test:rp02b2a1:gate","RP-02B2a2":"test:rp02b2a2","RP-02B2a3":"test:rp02b2a3","RP-02B2a4":"test:rp02b2a4","RP-02B2a5":"test:rp02b2a5"});const RANGE_PACKAGES=Object.freeze(["RP-02B2a3","RP-02B2a4","RP-02B2a5"]);const ORACLE=Object.freeze({"RP-02B2a1":["RP-02B2a1-v1",A1_ADR,18,1900],[GATE_PREP_ID]:["RP-02B2a2-G0-v1",GATE_PREP_ADR,16,2e3],[CORRECTION_ID]:["RP-02B2a2-G0-C1-v3",CORRECTION_ADR,14,700],"RP-02B2a2":["RP-02B2a2-v3","docs/adr/rp-02b2a2-authority-claim-budget.md",20,3250],"RP-02B2a3":["RP-02B2a3-v1","docs/adr/rp-02b2a3-lease-retry-budget.md",14,1800],"\
-RP-02B2a4":["RP-02B2a4-v1","docs/adr/rp-02b2a4-inmemory-finalize-budget.md",12,1900],"RP-02B2a5":["RP-02B2a5-v1","docs/adr/rp-02b2a5-prisma-nine-six-budget.md",10,1900]});const BASELINES=Object.freeze({"RP-02B2a1":BASELINE,[GATE_PREP_ID]:B2A2_BASELINE,[CORRECTION_ID]:CORRECTION_BASELINE,"RP-02B2a2":VERIFIED_GATE_PREP,"RP-02B2a3":"range-base","RP-02B2a4":"range-base","RP-02B2a5":"range-base"});const REQUIRED_CATEGORIES=Object.freeze({"RP-02B2a1":Object.freeze(["production","test","adr"]),[GATE_PREP_ID]:Object.freeze(["governance","test","adr"]),[CORRECTION_ID]:Object.freeze(["governance","test","adr"]),"RP-02B2a2":Object.freeze(["production","test","adr"]),"RP-02B2a3":Object.freeze(["production","test","adr"]),"RP-02B2a4":Object.freeze(["production","test","adr"]),"RP-02B2a5":Object.freeze(["production","test","adr"])}),manifest=text=>Object.freeze(text.split("|").sort());const MANIFESTS=Object.freeze({"RP-02B2a1":manifest(".github/workflows/rp01c-fixtures.y\
+import { describe, it } from "node:test";
+import assert from "node:assert/strict";
+import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import {
+  chmodSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, resolve } from "node:path";
+import {
+  PACKAGE_DEFINITIONS,
+  analyzePackageGate,
+} from "./rp02b2a-package-gate.mjs";
+const ROOT = resolve("."),
+  GATE_SCRIPT = "scripts/rp02b2a-package-gate.mjs",
+  WORKFLOW = resolve(".github/workflows/rp01c-fixtures.yml"),
+  ADMISSION_WORKFLOW = resolve(".github/workflows/rp02b2a-admission.yml"),
+  TRUSTED_WORKFLOW_ORACLE_SHA256 =
+    "0e070572c4ef1357380e12975396eba9aea5d03c65f342bb354c0b47f98b5dfc",
+  BASELINE = "501a3cfcdf12341d9f611f0fdd6a6336d4ade483",
+  B2A2_BASELINE = "6eaf60af4155a8b95ff77d53261f5896d3a8f77d",
+  STALE_B2A2_BASELINE = "4817abc67cf916772b317aff027403b97ab4df76",
+  A1_ADR = "docs/adr/rp-02b2a1-registry-abi-budget.md",
+  GATE_PREP_ID = "RP-02B2a2-G0",
+  GATE_PREP_ADR = "docs/adr/rp-02b2a2-gate-prep-budget.md",
+  CORRECTION_ID = "RP-02B2a2-G0-C1",
+  CORRECTION_BASELINE = "59cedaf7150029fcbde03d2779662659727e8b4e",
+  CORRECTION_ADR = "docs/adr/rp-02b2a2-g0-ci-compat-correction-budget.md",
+  TEST_LAYER_ID = "RP-02B2a2-G0-C2",
+  TEST_LAYER_BASELINE = "9e0f5fcf30ef78b605f13465458ec19e84a9d8fa",
+  TEST_LAYER_ADR = "docs/adr/rp-02b2a2-g0-self-reference-correction-budget.md",
+  VERIFIED_GATE_PREP = "verified-gate-prep";
+const GOVERNANCE_REMEDIATION_FILES = Object.freeze([
+  ".github/workflows/rp01a-e2e.yml",
+  ".github/workflows/rp01b-dom.yml",
+  ".github/workflows/rp01c-fixtures.yml",
+  ".github/workflows/remediation-governance.yml",
+  ".github/workflows/rp02b2a-admission.yml",
+  "apps/admin-web/src/modules/novels/components/TaskProgressPanel.dom.spec.ts",
+  "apps/api/test/rp01c/fixtureFactory.test.ts",
+  "docs/modules/rp-02b2-dispatcher-transport-implementation-package\
+.md",
+  "docs/remediation/acceptance-matrix.md",
+  "docs/reviews/main-control-event-ledger.md",
+  "docs/reviews/main-control-status.md",
+  "docs/reviews/remediation-rmd-task-002-003-rp-02b2a1-verification-2026-07-15.md",
+  GATE_SCRIPT,
+  "scripts/rp02b2a-package-gate.test.mjs",
+  "package.json",
+]);
+const CLEAN_ENV =
+  "env -u DATABASE_URL -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL -u DEEPSEEK_MODEL -u DEEPSEEK_STRUCTURE_MODEL -u DEEPSEEK_REASONER_MODEL -u DEEPSEEK_TIMEOUT_MS -u DEEPSEEK_MAX_RETRIES -u DEPLOYMENT_ACTOR_TENANT_ID -u DEPLOYMENT_ACTOR_USER_ID NODE_ENV=production AI_PROVIDER_MODE=moc\
+k DOTENV_CONFIG_PATH=/dev/null";
+const B2A2_SCRIPTS = Object.freeze({
+  "test:rp02b2a2:env-probe": `node -e "const keys=['DATABASE_URL','DEEPSEEK_API_KEY','DEEPSEEK_BASE_URL','DEEPSEEK_MODEL','DEEPSEEK_STRUCTURE_MODEL','DEEPSEEK_REASONER_MODEL','DEEPSEEK_TIMEOUT_MS','DEEPSEEK_MAX_RETRIES','DEPLOYMENT_ACTOR_TENANT_ID','DEPLOYMENT_ACTOR_USER_ID']; if(keys.some((key)=>process.env[key]!==undefined)||process.env.NODE_ENV!=='production'||process.env.AI_PROVIDER_MODE!=='mock'||process.env.DOTENV_CONFIG_PATH!=='/dev/null') process.exit(1); console.log('RP02B2A2_ENV\
+_CLEAN')"`,
+  "test:rp02b2a2:core": `${CLEAN_ENV} sh -c 'npm run test:rp02b2a2:env-probe && npm run build -w @ai-shortvideo/shared && npm run prisma:generate -w @ai-shortvideo/api && npm exec -w @ai-shortvideo/api -- tsx --test test/rp02b2a/authority-claim.test.ts test/rp02b2a/repository-authority-hardening.test.ts src/modules/novels/novelRoutes.test.ts'`,
+  "test:rp02b2a2": `${CLEAN_ENV} sh -c 'npm run test:rp02b2a2:env-probe && npm run test:rp02b2a1 && npm run test:rp02b2a2:core'`,
+});
+const BUSINESS_PACKAGE_SEQUENCE = Object.freeze([
+    "RP-02B2a2",
+    "RP-02B2a3",
+    "RP-02B2a4",
+    "RP-02B2a5",
+  ]),
+  BUSINESS_PREDECESSOR = Object.freeze({
+    "RP-02B2a2": TEST_LAYER_ID,
+    "RP-02B2a3": "RP-02B2a2",
+    "RP-02B2a4": "RP-02B2a3",
+    "RP-02B2a5": "RP-02B2a4",
+  }),
+  BUSINESS_SCRIPT_ADDITIONS = Object.freeze({
+    "RP-02B2a2": B2A2_SCRIPTS,
+    "RP-02B2a3": Object.freeze({
+      "test:rp02b2a3:core": `${CLEAN_ENV} sh -c 'npm run test:rp02b2a2:env-probe && npm exec -w @ai-shortvideo/api -- tsx --test test/rp02b2a/lease-dispatch-retry.test.ts'`,
+      "test:rp02b2a3": `${CLEAN_ENV} sh -c 'npm run test:rp02b2a2:env-probe && npm run test:rp02b2a2 && npm run test:rp02b2a3:core'`,
+    }),
+    "RP-02B2a4": Object.freeze({
+      "test:rp02b2a4:core": `${CLEAN_ENV} sh -c 'npm run test:rp02b2a2:env-probe && npm exec -w @ai-shortvideo/api -- tsx --test test/rp02b2a/inmemory-fenced-finalize.test.ts src/modules/novels/novelRoutes.test.ts'`,
+      "test:rp02b2a4": `${CLEAN_ENV} sh -c 'npm run test:rp02b2a2:env-probe && npm run test:rp02b2a3 && npm run test:rp02b2a4:core'`,
+    }),
+    "RP-02B2a5": Object.freeze({
+      "test:rp02b2a5:core": `${CLEAN_ENV} sh -c 'npm run test:rp02b2a2:env-probe && npm run prisma:generate -w @ai-shortvideo/api && npm exec -w @ai-shortvideo/api -- tsx --test test/rp02b2a/prisma-fenced-finalize.test.ts'`,
+      "test:rp02b2a5": `${CLEAN_ENV} sh -c 'npm run test:rp02b2a2:env-probe && npm run test:rp02b2a4 && npm run test:rp02b2a5:core'`,
+    }),
+  });
+const COMMANDS = Object.freeze({
+  "RP-02B2a1": "test:rp02b2a1",
+  [GATE_PREP_ID]:
+    "\
+test:rp02b2a1:gate",
+  [CORRECTION_ID]: "test:rp02b2a1:gate",
+  [TEST_LAYER_ID]: "test:rp02b2a1:gate",
+  "RP-02B2a2": "test:rp02b2a2",
+  "RP-02B2a3": "test:rp02b2a3",
+  "RP-02B2a4": "test:rp02b2a4",
+  "RP-02B2a5": "test:rp02b2a5",
+});
+const RANGE_PACKAGES = Object.freeze(["RP-02B2a3", "RP-02B2a4", "RP-02B2a5"]);
+const ORACLE = Object.freeze({
+  "RP-02B2a1": ["RP-02B2a1-v1", A1_ADR, 18, 1900],
+  [GATE_PREP_ID]: ["RP-02B2a2-G0-v1", GATE_PREP_ADR, 16, 2e3],
+  [CORRECTION_ID]: ["RP-02B2a2-G0-C1-v3", CORRECTION_ADR, 14, 700],
+  [TEST_LAYER_ID]: ["RP-02B2a2-G0-C2-v1", TEST_LAYER_ADR, 5, 600],
+  "RP-02B2a2": [
+    "RP-02B2a2-v3",
+    "docs/adr/rp-02b2a2-authority-claim-budget.md",
+    20,
+    3250,
+  ],
+  "RP-02B2a3": [
+    "RP-02B2a3-v1",
+    "docs/adr/rp-02b2a3-lease-retry-budget.md",
+    14,
+    1800,
+  ],
+  "\
+RP-02B2a4": [
+    "RP-02B2a4-v1",
+    "docs/adr/rp-02b2a4-inmemory-finalize-budget.md",
+    12,
+    1900,
+  ],
+  "RP-02B2a5": [
+    "RP-02B2a5-v1",
+    "docs/adr/rp-02b2a5-prisma-nine-six-budget.md",
+    10,
+    1900,
+  ],
+});
+const BASELINES = Object.freeze({
+  "RP-02B2a1": BASELINE,
+  [GATE_PREP_ID]: B2A2_BASELINE,
+  [CORRECTION_ID]: CORRECTION_BASELINE,
+  [TEST_LAYER_ID]: TEST_LAYER_BASELINE,
+  "RP-02B2a2": VERIFIED_GATE_PREP,
+  "RP-02B2a3": "range-base",
+  "RP-02B2a4": "range-base",
+  "RP-02B2a5": "range-base",
+});
+const REQUIRED_CATEGORIES = Object.freeze({
+    "RP-02B2a1": Object.freeze(["production", "test", "adr"]),
+    [GATE_PREP_ID]: Object.freeze(["governance", "test", "adr"]),
+    [CORRECTION_ID]: Object.freeze(["governance", "test", "adr"]),
+    [TEST_LAYER_ID]: Object.freeze(["governance", "test", "adr"]),
+    "RP-02B2a2": Object.freeze(["production", "test", "adr"]),
+    "RP-02B2a3": Object.freeze(["production", "test", "adr"]),
+    "RP-02B2a4": Object.freeze(["production", "test", "adr"]),
+    "RP-02B2a5": Object.freeze(["production", "test", "adr"]),
+  }),
+  manifest = (text) => Object.freeze(text.split("|").sort());
+const MANIFESTS = Object.freeze({
+  "RP-02B2a1": manifest(
+    ".github/workflows/rp01c-fixtures.y\
 ml|apps/api/src/modules/novels/novelRoutes.test.ts|apps/api/src/modules/novels/providers/deepseekNovelProvider.ts|apps/api/src/modules/novels/providers/mockBodyProvider.ts|apps/api/src/modules/novels/providers/mockDirectionProvider.ts|apps/api/src/modules/novels/providers/mockFullReviewProvider.ts|apps/api/src/modules/novels/providers/mockStructureProvider.ts|apps/api/src/modules/novels/providers/mockTrialProvider.ts|apps/api/src/modules/novels/services/actionExecutionPlan.ts|apps/api/src/module\
-s/novels/services/novelService.ts|apps/api/src/modules/tasks/services/taskService.ts|apps/api/test/rp01c/fixtureFactory.test.ts|apps/api/test/rp02a/rp02a.test.ts|docs/adr/rp-02b2a1-registry-abi-budget.md|package.json|packages/shared/src/api.ts|packages/shared/src/novels.ts|scripts/rp02b2a-package-gate.mjs|scripts/rp02b2a-package-gate.test.mjs"),[GATE_PREP_ID]:manifest(`${GOVERNANCE_REMEDIATION_FILES.join("|")}|${GATE_PREP_ADR}`),[CORRECTION_ID]:manifest(".github/workflows/rp01b-dom.yml|.github/workflows/rp01c-fixtures.yml|.github/workflows/remediation-governance.yml|.github/workflows/rp02b2a-admission.yml|scripts/e2e/api-e2e-server.ts|scripts/e2e/run-playwright-backend-e2e.test.mjs|scripts/rp02b2a-package-gate.mjs|scripts/rp02b2a-package-gate.test.mjs|docs/adr/rp-02b2a2-gate-prep-budget.md|docs/adr/rp-02b2a2-authority-claim-budget.md|docs/adr/rp-02b2a2-g0-ci-compat-correction-budget.md|docs/modules/rp-02b2-dispatcher-transport-implementation-package.md|docs/remediation/acceptance-matrix.md|docs/reviews/rp-02b2a2-g0-ci-compat-correction-verification-2026-07-18.md"),"RP-02B2a2":manifest("packages/shared/src/api.ts|packages/shared/src/novels.ts|apps/api/src/co\
+s/novels/services/novelService.ts|apps/api/src/modules/tasks/services/taskService.ts|apps/api/test/rp01c/fixtureFactory.test.ts|apps/api/test/rp02a/rp02a.test.ts|docs/adr/rp-02b2a1-registry-abi-budget.md|package.json|packages/shared/src/api.ts|packages/shared/src/novels.ts|scripts/rp02b2a-package-gate.mjs|scripts/rp02b2a-package-gate.test.mjs",
+  ),
+  [GATE_PREP_ID]: manifest(
+    `${GOVERNANCE_REMEDIATION_FILES.join("|")}|${GATE_PREP_ADR}`,
+  ),
+  [CORRECTION_ID]: manifest(
+    ".github/workflows/rp01b-dom.yml|.github/workflows/rp01c-fixtures.yml|.github/workflows/remediation-governance.yml|.github/workflows/rp02b2a-admission.yml|scripts/e2e/api-e2e-server.ts|scripts/e2e/run-playwright-backend-e2e.test.mjs|scripts/rp02b2a-package-gate.mjs|scripts/rp02b2a-package-gate.test.mjs|docs/adr/rp-02b2a2-gate-prep-budget.md|docs/adr/rp-02b2a2-authority-claim-budget.md|docs/adr/rp-02b2a2-g0-ci-compat-correction-budget.md|docs/modules/rp-02b2-dispatcher-transport-implementation-package.md|docs/remediation/acceptance-matrix.md|docs/reviews/rp-02b2a2-g0-ci-compat-correction-verification-2026-07-18.md",
+  ),
+  [TEST_LAYER_ID]: manifest(
+    `.github/workflows/rp01c-fixtures.yml|.github/workflows/rp02b2a-admission.yml|${GATE_SCRIPT}|scripts/rp02b2a-package-gate.test.mjs|${TEST_LAYER_ADR}`,
+  ),
+  "RP-02B2a2": manifest(
+    "packages/shared/src/api.ts|packages/shared/src/novels.ts|apps/api/src/co\
 nfig/env.ts|apps/api/src/modules/novels/domain/executionContract.ts|apps/api/src/modules/novels/domain/novelDomain.ts|apps/api/test/rp02b/rp02b.test.ts|apps/api/src/modules/novels/services/taskClaim.ts|apps/api/src/modules/novels/services/novelService.ts|apps/api/src/modules/novels/routes/novelRoutes.ts|apps/api/src/modules/tasks/routes/taskRoutes.ts|apps/api/src/modules/novels/repositories/inMemoryNovelRepository.ts|apps/api/src/modules/novels/repositories/prismaNovelRepository.ts|apps/api/src/app.ts|apps/api/src/ma\
-in.ts|apps/api/test/rp02b2a/fixtures.ts|apps/api/test/rp02b2a/authority-claim.test.ts|apps/api/test/rp02b2a/repository-authority-hardening.test.ts|apps/api/src/modules/novels/novelRoutes.test.ts|docs/adr/rp-02b2a2-authority-claim-budget.md|package.json"),"RP-02B2a3":manifest("packages/shared/src/api.ts|packages/shared/src/novels.ts|apps/api/src/modules/novels/domain/executionContract.ts|apps/api/src/modules/novels/domain/novelDomain.ts|apps/api/src/modules/novels/services/actionExecutionPlan.ts|apps/api/src/modules/novels/services/taskClaim.ts|apps/api/sr\
-c/modules/tasks/services/taskService.ts|apps/api/src/modules/novels/repositories/inMemoryNovelRepository.ts|apps/api/src/modules/novels/repositories/prismaNovelRepository.ts|apps/api/src/modules/novels/novelRoutes.test.ts|apps/api/test/rp02b2a/fixtures.ts|apps/api/test/rp02b2a/lease-dispatch-retry.test.ts|docs/adr/rp-02b2a3-lease-retry-budget.md|package.json"),"RP-02B2a4":manifest("packages/shared/src/novels.ts|apps/api/src/modules/novels/domain/executionContract.ts|apps/api/src/modules/novels/d\
-omain/novelDomain.ts|apps/api/src/modules/novels/services/actionExecutionPlan.ts|apps/api/src/modules/novels/services/taskClaim.ts|apps/api/src/modules/novels/services/novelService.ts|apps/api/src/modules/novels/repositories/inMemoryNovelRepository.ts|apps/api/test/rp02b2a/fixtures.ts|apps/api/test/rp02b2a/inmemory-fenced-finalize.test.ts|apps/api/src/modules/novels/novelRoutes.test.ts|docs/adr/rp-02b2a4-inmemory-finalize-budget.md|package.json"),"RP-02B2a5":manifest("apps/api/src/modules/novels\
-/domain/executionContract.ts|apps/api/src/modules/novels/domain/novelDomain.ts|apps/api/src/modules/novels/services/actionExecutionPlan.ts|apps/api/src/modules/novels/services/taskClaim.ts|apps/api/src/modules/novels/repositories/prismaNovelRepository.ts|apps/api/src/modules/novels/novelRoutes.test.ts|apps/api/test/rp02b2a/fixtures.ts|apps/api/test/rp02b2a/prisma-fenced-finalize.test.ts|docs/adr/rp-02b2a5-prisma-nine-six-budget.md|package.json")});const A1_FILES=["apps/api/src/modules/novels/ser\
-vices/actionExecutionPlan.ts","apps/api/test/rp02a/rp02a.test.ts",A1_ADR],EXCLUSIVE=Object.freeze({"RP-02B2a1":"apps/api/src/modules/novels/providers/mockDirectionProvider.ts",[GATE_PREP_ID]:GATE_SCRIPT,"RP-02B2a2":"apps/api/src/app.ts","RP-02B2a3":"apps/api/test/rp02b2a/lease-dispatch-retry.test.ts","RP-02B2a4":"apps/api/src/modules/novels/repositories/inMemoryNovelRepository.ts","RP-02B2a5":"apps/api/src/modules/novels/repositories/prismaNovelRepository.ts"});function sh(cwd,args,options={}){return execFileSync(args[0],
-args.slice(1),{cwd,encoding:"utf8",...options})}function write(repo2,file,content){mkdirSync(dirname(resolve(repo2,file)),{recursive:true});writeFileSync(resolve(repo2,file),content)}function commit(repo2,message){sh(repo2,["git","add","-A"]);sh(repo2,["git","commit","-q","-m",message]);return sh(repo2,["git","rev-parse","HEAD"]).trim()}function repo(fixed=false){const path=mkdtempSync(resolve(tmpdir(),"rp02b2a-gate-")),fixedSha=fixed===true?BASELINE:fixed||void 0;if(fixedSha)sh(tmpdir(),["git",
-"clone","-q","--shared","--no-checkout",ROOT,path]);else sh(path,["git","init","-q"]);sh(path,["git","config","user.email","rp02b2a@example.test"]);sh(path,["git","config","user.name","RP02B2a Gate"]);if(fixedSha){sh(path,["git","checkout","-q","--detach",fixedSha]);write(path,GATE_SCRIPT,readFileSync(resolve(ROOT,GATE_SCRIPT)))}else{write(path,"README.md","base\n");write(path,GATE_SCRIPT,readFileSync(resolve(ROOT,GATE_SCRIPT)));commit(path,"base")}return path}function stats(repoPath,base){sh(repoPath,
-["git","add","-N","--","."]);let added=0,deleted=0,files=0;for(const line of sh(repoPath,["git","diff","--text","--numstat",base]).split("\n").filter(Boolean)){const[a,d]=line.split("	",2);added+=Number(a);deleted+=Number(d);files+=1}return{files,net:Math.max(0,added-deleted)}}function adr(values){return`${Object.entries(values).map(([key,value])=>`${key}: ${value}`).join("\n")}
-`}function select(packageId){const all=MANIFESTS[packageId];if(packageId===GATE_PREP_ID||packageId===CORRECTION_ID)return[...all];const production=packageId==="RP-02B2a1"?A1_FILES[0]:category(EXCLUSIVE[packageId])==="production"?EXCLUSIVE[packageId]:all.find(file=>category(file)==="production"),test=BUSINESS_PACKAGE_SEQUENCE.includes(packageId)?all.find(file=>file.startsWith("apps/api/test/rp02b2a/")&&file.endsWith(".test.ts")):all.find(file=>category(file)==="test");return[production,test,ORACLE[packageId][1]]}function category(file){if(file.startsWith("docs/adr/"))return"adr";if(file.includes(".test.")||file.includes("/test/")||file.endsWith("novelRoutes.test.ts"))return"test";if(file.startsWith("scripts/")||file.startsWith(
-".github/"))return"governance";return"production"}function writeBusinessPackageJson(repoPath,packageId,mutate2=scripts=>scripts){const packageJson=JSON.parse(readFileSync(resolve(repoPath,"package.json"),"utf8")),additions=BUSINESS_SCRIPT_ADDITIONS[packageId];packageJson.scripts={...packageJson.scripts,...mutate2({...additions})};write(repoPath,"package.json",`${JSON.stringify(packageJson,null,2)}
-`)}function writeB2a2PackageJson(repoPath,mutate2=scripts=>scripts){writeBusinessPackageJson(repoPath,"RP-02B2a2",mutate2)}function prepareUncached(packageId="RP-02B2a1",files,options={}){const[manifestId,defaultAdr,hardMaxFiles,hardMaxNetAdditions]=ORACLE[packageId];let path;let base;let gateSource;let g0EvidenceSha;if(BUSINESS_PACKAGE_SEQUENCE.includes(packageId)){const predecessor=prepare(BUSINESS_PREDECESSOR[packageId]);path=predecessor.repo;base=predecessor.head;gateSource=predecessor.gateSource??(BUSINESS_PREDECESSOR[packageId]===CORRECTION_ID?predecessor.head:void 0);g0EvidenceSha=predecessor.g0EvidenceSha;if(predecessor.packageId===CORRECTION_ID){g0EvidenceSha=publishEvidence(predecessor).head;sh(path,["git","checkout","-q","--detach",predecessor.head])}}else{const fixed=BASELINES[packageId]==="range-base"?false:BASELINES[packageId];path=repo(fixed);base=sh(path,["git","rev-parse","HEAD"]).trim()}const chosen=files??select(packageId);for(const file of chosen.filter(item=>packageId===CORRECTION_ID?item!==defaultAdr:!item.startsWith("\
-docs/adr/"))){if(packageId===GATE_PREP_ID&&GOVERNANCE_REMEDIATION_FILES.includes(file))copyGatePrepFile(path,file);else if(packageId===CORRECTION_ID)copyCorrectionFile(path,file);else if(file===GATE_SCRIPT)write(path,file,readFileSync(resolve(ROOT,file)));else write(path,file,`${file}
-`)}if(BUSINESS_PACKAGE_SEQUENCE.includes(packageId))writeBusinessPackageJson(path,packageId,options.mutateScripts);if(options.includeAdr!==false){const adrPath=options.adrPath??defaultAdr,render=(filesCount,net)=>adr({status:"ready",package_id:packageId,manifest_id:manifestId,baseline_sha:["range-base",VERIFIED_GATE_PREP].includes(BASELINES[packageId])?base:BASELINES[packageId],hard_max_files:hardMaxFiles,hard_max_net_additions:hardMaxNetAdditions,actual_files:filesCount,actual_net_additions:net,...options.overrides});write(path,adrPath,
-render(0,0));const actual=stats(path,base);write(path,adrPath,render(actual.files,actual.net))}return{repo:path,base,head:commit(path,packageId),packageId,gateSource:gateSource??options.gateSource,g0EvidenceSha:g0EvidenceSha??options.g0EvidenceSha,authorizedPredecessorSha:base}}
-const PREPARED_FIXTURE_CACHE=new Map();
-function clonePreparedFixture(item){const path=mkdtempSync(resolve(tmpdir(),"rp02b2a-prepared-"));sh(tmpdir(),["git","clone","-q","--shared","--no-checkout",item.repo,path]);sh(path,["git","config","user.email","rp02b2a@example.test"]);sh(path,["git","config","user.name","RP02B2a Gate"]);sh(path,["git","checkout","-q","--detach",item.head]);return{...item,repo:path}}
-function prepare(packageId="RP-02B2a1",files,options={}){if(files!==undefined||Object.keys(options).length>0)return prepareUncached(packageId,files,options);if(!PREPARED_FIXTURE_CACHE.has(packageId))PREPARED_FIXTURE_CACHE.set(packageId,prepareUncached(packageId));return clonePreparedFixture(PREPARED_FIXTURE_CACHE.get(packageId))}
-function changedBusinessPackage(item){const changed=new Set(sh(item.repo,["git","diff","--name-only",item.base,item.head]).split(/\r?\n/).filter(Boolean));return BUSINESS_PACKAGE_SEQUENCE.find(id=>changed.has(ORACLE[id][1]))}function authorizedArgs(item){const packageId=item.authorizedPackageId??changedBusinessPackage(item);return packageId?["--gate-source",item.gateSource??"","--g0-evidence-sha",item.g0EvidenceSha??"","--authorized-package-id",packageId,"--authorized-predecessor-sha",item.authorizedPredecessorSha??item.base]:[]}function gate(item){return spawnSync(process.execPath,[realpathSync(resolve(item.repo,GATE_SCRIPT)),"--base",item.base,"--head",item.head,...authorizedArgs(item)],{cwd:item.repo,encoding:"utf8"})}function run(repoPath,args,env){return spawnSync(process.execPath,[realpathSync(resolve(repoPath,GATE_SCRIPT)),...args],{cwd:repoPath,encoding:"utf8",env:env&&{...process.env,...env}})}function githubOutput(item){return run(item.repo,["--github-output","--base",item.base,"--head",item.head,...authorizedArgs(item)])}function authoritativeGate(item,{eventBase=item.base,eventHead=item.head,gateSource=item.gateSource,g0EvidenceSha=item.g0EvidenceSha,authorizedPackageId=item.authorizedPackageId??changedBusinessPackage(item),authorizedPredecessorSha=item.authorizedPredecessorSha??item.base,extra=[]}={}){const authorization=authorizedPackageId===void 0?[]:["--gate-source",gateSource??"","--g0-evidence-sha",g0EvidenceSha??"","--authorized-package-id",authorizedPackageId,"--authorized-predecessor-sha",authorizedPredecessorSha??""];return run(item.repo,["--github-output","--event","pull_request_target","--event-base",eventBase,"--event-head",eventHead,...authorization,...extra])}
+in.ts|apps/api/test/rp02b2a/fixtures.ts|apps/api/test/rp02b2a/authority-claim.test.ts|apps/api/test/rp02b2a/repository-authority-hardening.test.ts|apps/api/src/modules/novels/novelRoutes.test.ts|docs/adr/rp-02b2a2-authority-claim-budget.md|package.json",
+  ),
+  "RP-02B2a3": manifest(
+    "packages/shared/src/api.ts|packages/shared/src/novels.ts|apps/api/src/modules/novels/domain/executionContract.ts|apps/api/src/modules/novels/domain/novelDomain.ts|apps/api/src/modules/novels/services/actionExecutionPlan.ts|apps/api/src/modules/novels/services/taskClaim.ts|apps/api/sr\
+c/modules/tasks/services/taskService.ts|apps/api/src/modules/novels/repositories/inMemoryNovelRepository.ts|apps/api/src/modules/novels/repositories/prismaNovelRepository.ts|apps/api/src/modules/novels/novelRoutes.test.ts|apps/api/test/rp02b2a/fixtures.ts|apps/api/test/rp02b2a/lease-dispatch-retry.test.ts|docs/adr/rp-02b2a3-lease-retry-budget.md|package.json",
+  ),
+  "RP-02B2a4": manifest(
+    "packages/shared/src/novels.ts|apps/api/src/modules/novels/domain/executionContract.ts|apps/api/src/modules/novels/d\
+omain/novelDomain.ts|apps/api/src/modules/novels/services/actionExecutionPlan.ts|apps/api/src/modules/novels/services/taskClaim.ts|apps/api/src/modules/novels/services/novelService.ts|apps/api/src/modules/novels/repositories/inMemoryNovelRepository.ts|apps/api/test/rp02b2a/fixtures.ts|apps/api/test/rp02b2a/inmemory-fenced-finalize.test.ts|apps/api/src/modules/novels/novelRoutes.test.ts|docs/adr/rp-02b2a4-inmemory-finalize-budget.md|package.json",
+  ),
+  "RP-02B2a5": manifest(
+    "apps/api/src/modules/novels\
+/domain/executionContract.ts|apps/api/src/modules/novels/domain/novelDomain.ts|apps/api/src/modules/novels/services/actionExecutionPlan.ts|apps/api/src/modules/novels/services/taskClaim.ts|apps/api/src/modules/novels/repositories/prismaNovelRepository.ts|apps/api/src/modules/novels/novelRoutes.test.ts|apps/api/test/rp02b2a/fixtures.ts|apps/api/test/rp02b2a/prisma-fenced-finalize.test.ts|docs/adr/rp-02b2a5-prisma-nine-six-budget.md|package.json",
+  ),
+});
+const A1_FILES = [
+    "apps/api/src/modules/novels/ser\
+vices/actionExecutionPlan.ts",
+    "apps/api/test/rp02a/rp02a.test.ts",
+    A1_ADR,
+  ],
+  EXCLUSIVE = Object.freeze({
+    "RP-02B2a1":
+      "apps/api/src/modules/novels/providers/mockDirectionProvider.ts",
+    [GATE_PREP_ID]: GATE_SCRIPT,
+    [TEST_LAYER_ID]: GATE_SCRIPT,
+    "RP-02B2a2": "apps/api/src/app.ts",
+    "RP-02B2a3": "apps/api/test/rp02b2a/lease-dispatch-retry.test.ts",
+    "RP-02B2a4":
+      "apps/api/src/modules/novels/repositories/inMemoryNovelRepository.ts",
+    "RP-02B2a5":
+      "apps/api/src/modules/novels/repositories/prismaNovelRepository.ts",
+  });
+function sh(cwd, args, options = {}) {
+  return execFileSync(args[0], args.slice(1), {
+    cwd,
+    encoding: "utf8",
+    ...options,
+  });
+}
+function write(repo2, file, content) {
+  mkdirSync(dirname(resolve(repo2, file)), { recursive: true });
+  writeFileSync(resolve(repo2, file), content);
+}
+function commit(repo2, message) {
+  sh(repo2, ["git", "add", "-A"]);
+  sh(repo2, ["git", "commit", "-q", "-m", message]);
+  return sh(repo2, ["git", "rev-parse", "HEAD"]).trim();
+}
+function repo(fixed = false) {
+  const path = mkdtempSync(resolve(tmpdir(), "rp02b2a-gate-")),
+    fixedSha = fixed === true ? BASELINE : fixed || void 0;
+  if (fixedSha)
+    sh(tmpdir(), [
+      "git",
+      "clone",
+      "-q",
+      "--shared",
+      "--no-checkout",
+      ROOT,
+      path,
+    ]);
+  else sh(path, ["git", "init", "-q"]);
+  sh(path, ["git", "config", "user.email", "rp02b2a@example.test"]);
+  sh(path, ["git", "config", "user.name", "RP02B2a Gate"]);
+  if (fixedSha) {
+    sh(path, ["git", "checkout", "-q", "--detach", fixedSha]);
+    write(path, GATE_SCRIPT, readFileSync(resolve(ROOT, GATE_SCRIPT)));
+  } else {
+    write(path, "README.md", "base\n");
+    write(path, GATE_SCRIPT, readFileSync(resolve(ROOT, GATE_SCRIPT)));
+    commit(path, "base");
+  }
+  return path;
+}function stats(repoPath, base) {
+  sh(repoPath, ["git", "add", "-N", "--", "."]);
+  let added = 0,
+    deleted = 0,
+    files = 0;
+  for (const line of sh(repoPath, ["git", "diff", "--text", "--numstat", base])
+    .split("\n")
+    .filter(Boolean)) {
+    const [a, d] = line.split("	", 2);
+    added += Number(a);
+    deleted += Number(d);
+    files += 1;
+  }
+  return { files, net: Math.max(0, added - deleted) };
+}
+function adr(values) {
+  return `${Object.entries(values)
+    .map(([key, value]) => `${key}: ${value}`)
+    .join("\n")}
+`;
+}
+function select(packageId) {
+  const all = MANIFESTS[packageId];
+  if (
+    packageId === GATE_PREP_ID ||
+    packageId === CORRECTION_ID ||
+    packageId === TEST_LAYER_ID
+  )
+    return [...all];
+  const production =
+      packageId === "RP-02B2a1"
+        ? A1_FILES[0]
+        : category(EXCLUSIVE[packageId]) === "production"
+          ? EXCLUSIVE[packageId]
+          : all.find((file) => category(file) === "production"),
+    test = BUSINESS_PACKAGE_SEQUENCE.includes(packageId)
+      ? all.find(
+          (file) =>
+            file.startsWith("apps/api/test/rp02b2a/") &&
+            file.endsWith(".test.ts"),
+        )
+      : all.find((file) => category(file) === "test");
+  return [production, test, ORACLE[packageId][1]];
+}
+function category(file) {
+  if (file.startsWith("docs/adr/")) return "adr";
+  if (
+    file.includes(".test.") ||
+    file.includes("/test/") ||
+    file.endsWith("novelRoutes.test.ts")
+  )
+    return "test";
+  if (file.startsWith("scripts/") || file.startsWith(".github/"))
+    return "governance";
+  return "production";
+}
+function writeBusinessPackageJson(
+  repoPath,
+  packageId,
+  mutate2 = (scripts) => scripts,
+) {
+  const packageJson = JSON.parse(
+      readFileSync(resolve(repoPath, "package.json"), "utf8"),
+    ),
+    additions = BUSINESS_SCRIPT_ADDITIONS[packageId];
+  packageJson.scripts = {
+    ...packageJson.scripts,
+    ...mutate2({ ...additions }),
+  };
+  write(
+    repoPath,
+    "package.json",
+    `${JSON.stringify(packageJson, null, 2)}
+`,
+  );
+}
+function writeB2a2PackageJson(repoPath, mutate2 = (scripts) => scripts) {
+  writeBusinessPackageJson(repoPath, "RP-02B2a2", mutate2);
+}
+function prepareUncached(packageId = "RP-02B2a1", files, options = {}) {
+  const [manifestId, defaultAdr, hardMaxFiles, hardMaxNetAdditions] =
+    ORACLE[packageId];
+  let path;
+  let base;
+  let gateSource;
+  let g0EvidenceSha;
+  if (BUSINESS_PACKAGE_SEQUENCE.includes(packageId)) {
+    const predecessor = prepare(BUSINESS_PREDECESSOR[packageId]);
+    path = predecessor.repo;
+    base = predecessor.head;
+    gateSource =
+      predecessor.gateSource ??
+      (BUSINESS_PREDECESSOR[packageId] === TEST_LAYER_ID
+        ? predecessor.head
+        : void 0);
+    g0EvidenceSha = predecessor.g0EvidenceSha;
+    if (predecessor.packageId === TEST_LAYER_ID) {
+      g0EvidenceSha = publishEvidence(predecessor).head;
+      sh(path, ["git", "checkout", "-q", "--detach", predecessor.head]);
+    }
+  } else {
+    const fixed =
+      BASELINES[packageId] === "range-base" ? false : BASELINES[packageId];
+    path = repo(fixed);
+    base = sh(path, ["git", "rev-parse", "HEAD"]).trim();
+  }
+  const chosen = files ?? select(packageId);
+  for (const file of chosen.filter((item) =>
+    packageId === CORRECTION_ID || packageId === TEST_LAYER_ID
+      ? item !== defaultAdr
+      : !item.startsWith(
+          "\
+docs/adr/",
+        ),
+  )) {
+    if (
+      packageId === GATE_PREP_ID &&
+      GOVERNANCE_REMEDIATION_FILES.includes(file)
+    )
+      copyGatePrepFile(path, file);
+    else if (packageId === CORRECTION_ID) copyCorrectionFile(path, file);
+    else if (packageId === TEST_LAYER_ID) copyTestLayerFile(path, file);
+    else if (file === GATE_SCRIPT)
+      write(path, file, readFileSync(resolve(ROOT, file)));
+    else
+      write(
+        path,
+        file,
+        `${file}
+`,
+      );
+  }
+  if (BUSINESS_PACKAGE_SEQUENCE.includes(packageId))
+    writeBusinessPackageJson(path, packageId, options.mutateScripts);
+  if (options.includeAdr !== false) {
+    const adrPath = options.adrPath ?? defaultAdr,
+      render = (filesCount, net) =>
+        adr({
+          status: "ready",
+          package_id: packageId,
+          manifest_id: manifestId,
+          baseline_sha: ["range-base", VERIFIED_GATE_PREP].includes(
+            BASELINES[packageId],
+          )
+            ? base
+            : BASELINES[packageId],
+          hard_max_files: hardMaxFiles,
+          hard_max_net_additions: hardMaxNetAdditions,
+          actual_files: filesCount,
+          actual_net_additions: net,
+          ...options.overrides,
+        });
+    write(path, adrPath, render(0, 0));
+    const actual = stats(path, base);
+    write(path, adrPath, render(actual.files, actual.net));
+  }
+  return {
+    repo: path,
+    base,
+    head: commit(path, packageId),
+    packageId,
+    gateSource: gateSource ?? options.gateSource,
+    g0EvidenceSha: g0EvidenceSha ?? options.g0EvidenceSha,
+    authorizedPredecessorSha: base,
+  };
+}
+const PREPARED_FIXTURE_CACHE = new Map();
+function clonePreparedFixture(item) {
+  const path = mkdtempSync(resolve(tmpdir(), "rp02b2a-prepared-"));
+  sh(tmpdir(), [
+    "git",
+    "clone",
+    "-q",
+    "--shared",
+    "--no-checkout",
+    item.repo,
+    path,
+  ]);
+  sh(path, ["git", "config", "user.email", "rp02b2a@example.test"]);
+  sh(path, ["git", "config", "user.name", "RP02B2a Gate"]);
+  sh(path, ["git", "checkout", "-q", "--detach", item.head]);
+  return { ...item, repo: path };
+}
+function prepare(packageId = "RP-02B2a1", files, options = {}) {
+  if (files !== undefined || Object.keys(options).length > 0)
+    return prepareUncached(packageId, files, options);
+  if (!PREPARED_FIXTURE_CACHE.has(packageId))
+    PREPARED_FIXTURE_CACHE.set(packageId, prepareUncached(packageId));
+  return clonePreparedFixture(PREPARED_FIXTURE_CACHE.get(packageId));
+}
+function changedBusinessPackage(item) {
+  const changed = new Set(
+    sh(item.repo, ["git", "diff", "--name-only", item.base, item.head])
+      .split(/\r?\n/)
+      .filter(Boolean),
+  );
+  return BUSINESS_PACKAGE_SEQUENCE.find((id) => changed.has(ORACLE[id][1]));
+}
+function authorizedArgs(item) {
+  const packageId = item.authorizedPackageId ?? changedBusinessPackage(item);
+  return packageId
+    ? [
+        "--gate-source",
+        item.gateSource ?? "",
+        "--g0-evidence-sha",
+        item.g0EvidenceSha ?? "",
+        "--authorized-package-id",
+        packageId,
+        "--authorized-predecessor-sha",
+        item.authorizedPredecessorSha ?? item.base,
+      ]
+    : [];
+}
+function gate(item) {
+  return spawnSync(
+    process.execPath,
+    [
+      realpathSync(resolve(item.repo, GATE_SCRIPT)),
+      "--base",
+      item.base,
+      "--head",
+      item.head,
+      ...authorizedArgs(item),
+    ],
+    { cwd: item.repo, encoding: "utf8" },
+  );
+}
+function run(repoPath, args, env) {
+  return spawnSync(
+    process.execPath,
+    [realpathSync(resolve(repoPath, GATE_SCRIPT)), ...args],
+    { cwd: repoPath, encoding: "utf8", env: env && { ...process.env, ...env } },
+  );
+}function githubOutput(item){return run(item.repo,["--github-output","--base",item.base,"--head",item.head,...authorizedArgs(item)])}function authoritativeGate(item,{eventBase=item.base,eventHead=item.head,gateSource=item.gateSource,g0EvidenceSha=item.g0EvidenceSha,authorizedPackageId=item.authorizedPackageId??changedBusinessPackage(item),authorizedPredecessorSha=item.authorizedPredecessorSha??item.base,extra=[]}={}){const authorization=authorizedPackageId===void 0?[]:["--gate-source",gateSource??"","--g0-evidence-sha",g0EvidenceSha??"","--authorized-package-id",authorizedPackageId,"--authorized-predecessor-sha",authorizedPredecessorSha??""];return run(item.repo,["--github-output","--event","pull_request_target","--event-base",eventBase,"--event-head",eventHead,...authorization,...extra])}
 const invokePackageGate=gate;gate=item=>{const packageId=changedBusinessPackage(item);return invokePackageGate(packageId==="RP-02B2a2"&&!item.gateSource?{...item,gateSource:item.base,authorizedPackageId:packageId,authorizedPredecessorSha:item.base}:item)};
 function trustedCheckoutGate(item) {
   const trusted = mkdtempSync(resolve(tmpdir(), "rp02b2a-trusted-checkout-"));
@@ -47,6 +503,8 @@ function expectedManifestDigest(item) {
 const GATE_PREP_SCRIPT_NAMES=Object.freeze(["test:rp02b2a1:env-probe","test:rp02b2a1:gate","test:rp02b2a1:core","test:rp02b2a1"]);
 function gatePrepPackageJson(sourcePackageJson=JSON.parse(readFileSync(resolve(ROOT,"package.json"),"utf8"))){const baselinePackageJson=JSON.parse(sh(ROOT,["git","show",`${B2A2_BASELINE}:package.json`]));baselinePackageJson.scripts={...baselinePackageJson.scripts,...Object.fromEntries(GATE_PREP_SCRIPT_NAMES.map(name=>[name,sourcePackageJson.scripts?.[name]]))};return`${JSON.stringify(baselinePackageJson,null,2)}\n`}
 const ACCEPTED_G0_SHA = "01245feb51b50ec838cb405a67bcafd1b194eeae";
+const ACCEPTED_G0_C1_SHA = "f27442d159d7f9d6ef273128797be6085bbd8f9d";
+const G0_C1_AUTHORITY_ADR = "docs/adr/rp-02b2a2-authority-claim-budget.md";
 const CORRECTION_SOURCE_FILES = new Set();
 function copyGatePrepFile(repoPath,file,sourcePackageJson){
   if(file==="package.json") return write(repoPath,file,gatePrepPackageJson(sourcePackageJson));
@@ -56,7 +514,15 @@ function copyGatePrepFile(repoPath,file,sourcePackageJson){
   write(repoPath,file,content);
 }
 function copyCorrectionFile(repoPath,file){
-  write(repoPath,file,readFileSync(resolve(ROOT,file)));
+  const content = sh(
+    ROOT,
+    ["git", "show", `${ACCEPTED_G0_C1_SHA}:${file}`],
+    { encoding: null },
+  );
+  write(repoPath,file,content);
+}
+function copyTestLayerFile(repoPath, file) {
+  write(repoPath, file, readFileSync(resolve(ROOT, file)));
 }
 function addCorrectionSibling(repoPath,label,mutateWorkflow=(text)=>text){
   const [manifestId,adrPath,hardMaxFiles,hardMaxNetAdditions]=ORACLE[CORRECTION_ID];
@@ -91,6 +557,7 @@ function mutateCorrectionCandidateFile(file, transform) {
   return item;
 }
 it("freezes temporary gate-prep package scripts when the outer candidate contains A2 scripts",()=>{const sourcePackageJson=JSON.parse(readFileSync(resolve(ROOT,"package.json"),"utf8"));sourcePackageJson.scripts={...sourcePackageJson.scripts,...B2A2_SCRIPTS};const frozen=JSON.parse(gatePrepPackageJson(sourcePackageJson));for(const name of Object.keys(B2A2_SCRIPTS))assert.equal(frozen.scripts[name],void 0);for(const name of GATE_PREP_SCRIPT_NAMES)assert.equal(frozen.scripts[name],sourcePackageJson.scripts[name])});
+it("freezes the accepted G0-C1 authority template when the outer candidate marks A2 ready",()=>{const path=repo(CORRECTION_BASELINE);copyCorrectionFile(path,G0_C1_AUTHORITY_ADR);const fixture=readFileSync(resolve(path,G0_C1_AUTHORITY_ADR),"utf8"),accepted=sh(ROOT,["git","show",`${ACCEPTED_G0_C1_SHA}:${G0_C1_AUTHORITY_ADR}`]);assert.equal(fixture,accepted);assert.match(fixture,/^status: template_not_authorized$/m);assert.match(fixture,/^baseline_sha: not_authorized$/m);assert.doesNotMatch(fixture,/^status: ready$/m)});
 function copyCurrentFiles(repoPath,files){for(const file of files)copyGatePrepFile(repoPath,file)}function addMinimalB2a2Candidate(repoPath,base){const[,adrPath,hardMaxFiles,hardMaxNetAdditions]=ORACLE["RP-02B2a2"];for(const file of select("RP-02B2a2").filter(item=>item!==adrPath))write(repoPath,file,`${file}
 `);writeB2a2PackageJson(repoPath);const render=(files,net)=>adr({status:"ready",package_id:"RP-02B2a2",manifest_id:"RP-02B2a2-v3",baseline_sha:base,hard_max_files:hardMaxFiles,hard_max_net_additions:hardMaxNetAdditions,actual_files:files,actual_net_additions:net});write(repoPath,adrPath,render(0,0));const actual=stats(repoPath,base);write(repoPath,adrPath,render(actual.files,actual.net));return commit(repoPath,"minimal B2a2 candidate after governance remediation")}function createB2a2CommandHarness(item){
 const packageJson=JSON.parse(sh(item.repo,["git","show",`${item.head}:package.json`])),scripts=packageJson.scripts,directory=mkdtempSync(resolve(tmpdir(),"rp02b2a2-command-")),shim=resolve(directory,"npm-shim.mjs"),npm=resolve(directory,"npm"),log=resolve(directory,"stages.log"),canary="RP02B2A2_ENV_CANARY",canaries=Object.fromEntries(["DATABASE_URL","DEEPSEEK_API_KEY","DEEPSEEK_BASE_URL","DEEPSEEK_MODEL","DEEPSEEK_STRUCTURE_MODEL","DEEPSEEK_REASONER_MODEL","DEEPSEEK_TIMEOUT_MS","DEEPSEEK_MAX_RE\
@@ -136,7 +603,7 @@ ${passed.stderr}`,new RegExp(harness.canary))}for(const[failedStage,expectedStag
 `);const result=gate({repo:path,base,head:commit(path,"candidate-owned gate script")});assert.equal(result.status,23);expectRejected(result,new RegExp(marker))});it("fails closed for ADR field and category drift",()=>{for(const[overrides,pattern]of[[{status:"draft"},/status mismatch/],[{package_id:"RP-02B2a2"},/package_id mismatch/],[{manifest_id:"wrong"},/manifest_id mismatch/],[{baseline_sha:"1".repeat(40)},/baseline_sha mismatch/],[{actual_files:2},/actual_files mismatch/],[{actual_net_additions:3},
 /actual_net_additions mismatch/]])fail(overrides,pattern);const path=repo(true);write(path,A1_ADR,adr({status:"ready",package_id:"RP-02B2a1",manifest_id:"RP-02B2a1-v1",baseline_sha:BASELINE,hard_max_files:18,hard_max_net_additions:1900,actual_files:1,actual_net_additions:0}));expectRejected(gate({repo:path,base:BASELINE,head:commit(path,"adr only")}),/missing required production/)});it("fixes A1 and gate-prep baselines, binds B2a2 to verified G0, and keeps A3-A5 range-bound",()=>{const path=repo(),
 base=sh(path,["git","rev-parse","HEAD"]).trim();write(path,A1_FILES[0],"production\n");write(path,A1_FILES[1],"test\n");write(path,A1_ADR,adr({status:"ready",package_id:"RP-02B2a1",manifest_id:"RP-02B2a1-v1",baseline_sha:base,hard_max_files:18,hard_max_net_additions:1900,actual_files:3,actual_net_additions:11}));expectRejected(gate({repo:path,base,head:commit(path,"random A1")}),/requires fixed baseline/);const b2a2=prepare("RP-02B2a2");assert.notEqual(b2a2.base,B2A2_BASELINE);assert.equal(
-sh(b2a2.repo,["git","rev-parse",`${b2a2.base}^`]).trim(),CORRECTION_BASELINE);const b2a2Result=gate(b2a2);assert.equal(b2a2Result.status,0,b2a2Result.stderr);expectRejected(gate({...b2a2,base:B2A2_BASELINE}),/requires exactly one changed ADR, got [23]|cannot batch RP-02B2a2-G0-E1 publication evidence/);for(const id of RANGE_PACKAGES){const item=prepare(id),result=gate(item);assert.notEqual(item.base,BASELINE);assert.equal(result.status,0,`${id}: ${result.stderr}`);expectRejected(gate(prepare(id,void 0,{overrides:{baseline_sha:"f".repeat(40)}})),/baseline_sha mismatch/)}});it("requires the\
+sh(b2a2.repo,["git","rev-parse",`${b2a2.base}^`]).trim(),TEST_LAYER_BASELINE);const b2a2Result=gate(b2a2);assert.equal(b2a2Result.status,0,b2a2Result.stderr);expectRejected(gate({...b2a2,base:B2A2_BASELINE}),/requires exactly one changed ADR, got [23]|cannot batch RP-02B2a2-G0-E1 publication evidence/);for(const id of RANGE_PACKAGES){const item=prepare(id),result=gate(item);assert.notEqual(item.base,BASELINE);assert.equal(result.status,0,`${id}: ${result.stderr}`);expectRejected(gate(prepare(id,void 0,{overrides:{baseline_sha:"f".repeat(40)}})),/baseline_sha mismatch/)}});it("requires the\
  candidate HEAD B2a2 env-probe, core, and composite commands",()=>{const valid=prepare("RP-02B2a2"),passed=gate(valid);assert.equal(passed.status,0,passed.stderr);writeB2a2PackageJson(valid.repo,scripts=>({...scripts,"test:rp02b2a2":"true"}));assert.equal(gate(valid).status,0,"the gate must read the committed candidate HEAD, not the dirty worktree");const cases=[scripts=>({...scripts,"test:rp02b2a2:env-probe":"true"}),scripts=>({...scripts,"test:rp02b2a2:core":`${CLEAN_ENV} sh -c ''`}),scripts=>({
 ...scripts,"test:rp02b2a2:core":`${scripts["test:rp02b2a2:core"]} || true`}),scripts=>({...scripts,"test:rp02b2a2:core":scripts["test:rp02b2a2:core"].replace("env -u DATABASE_URL ","env ")}),scripts=>({...scripts,"test:rp02b2a2:core":scripts["test:rp02b2a2:core"].replace("-u DEPLOYMENT_ACTOR_TENANT_ID ","")}),scripts=>({...scripts,"test:rp02b2a2:core":scripts["test:rp02b2a2:core"].replace("env-probe && npm run build","env-probe; npm run build")}),scripts=>({...scripts,"test:rp02b2a2:core":scripts["test:rp02b2a2:core"].replace("npm run build -w @ai-shortvideo/shared && npm run prisma:generate","npm run build -w @ai-shortvideo/shared; npm run prisma:generate")}),scripts=>({...scripts,"test:rp02b2a2:core":scripts["test:rp02b2a2:core"].replace("test/rp02b2a/authority-claim.test.ts ","")}),scripts=>({...scripts,"test:rp02b2a2:core":scripts["test:rp02b2a2:core"].replace("test/rp02b2a/repository-authority-hardening.test.ts ","")}),scripts=>({...scripts,"test:rp02b2a2:core":scripts["\
 test:rp02b2a2:core"].replace(" src/modules/novels/novelRoutes.test.ts","")}),scripts=>({...scripts,"test:rp02b2a2":scripts["test:rp02b2a2"].replace("npm run test:rp02b2a1 && ","")}),scripts=>({...scripts,"test:rp02b2a2":scripts["test:rp02b2a2"].replace("env-probe && npm run test:rp02b2a1","env-probe; npm run test:rp02b2a1")})];for(const mutateScripts of cases)expectRejected(gate(prepare("RP-02B2a2",void 0,{mutateScripts})),/script test:rp02b2a2.*env-clean fail-fast contract/)});it("keeps the documented A2 exact scripts aligned with the production gate",()=>{const document=readFileSync(resolve("docs/modules/rp-02b2-dispatcher-transport-implementation-package.md"),"utf8"),block=/B2a2 在 `package\.json`[\s\S]*?```json\n([\s\S]*?)\n```/.exec(document);assert.ok(block,"missing documented B2a2 JSON script contract");assert.deepEqual(JSON.parse(block[1]),B2A2_SCRIPTS)});it("rejects inherited script rewrites and root lifecycle hooks",()=>{expectRejected(gate(prepare("RP-02B2a2",void 0,{mutateScripts:scripts=>({...scripts,"test:rp02b2a1":"true"})})),/cannot rewrite inherited package\.json script test:rp02b2a1/);for(const lifecycle of["preinstall","install","postinstall","prepare"])expectRejected(gate(prepare("RP-02B2a2",void 0,{mutateScripts:scripts=>({...scripts,[lifecycle]:"true"})})),new RegExp(`rejects root npm lifecycle script ${lifecycle}`))});it("freezes gate-prep A1 actor-clean scripts and all other inherited scripts",()=>{const reject=mutate=>{const item=prepare(GATE_PREP_ID),packageJson=JSON.parse(readFileSync(resolve(item.repo,"package.json"),"utf8"));packageJson.scripts=mutate({...packageJson.scripts});write(item.repo,"package.json",`${JSON.stringify(packageJson,null,2)}\n`);item.head=commit(item.repo,"invalid gate-prep package scripts");return gate(item)};for(const mutate of[scripts=>({...scripts,"test:rp02b2a1:env-probe":scripts["test:rp02b2a1:env-probe"].replace(",\'DEPLOYMENT_ACTOR_USER_ID\'","")}),scripts=>({...scripts,"test:rp02b2a1:gate":scripts["test:rp02b2a1:gate"].replace("-u DEPLOYMENT_ACTOR_TENANT_ID ","")}),scripts=>({...scripts,"test:rp02b2a1:core":"true"}),scripts=>({...scripts,"test:governance":"true"}),scripts=>({...scripts,"test:unapproved":"true"}),scripts=>({...scripts,prepare:"true"})])expectRejected(reject(mutate),/cannot rewrite inherited package\.json script|cannot add package\.json script|rejects root npm lifecycle script|does not match the actor-clean contract/)});it("rejects the obsolete 15-file A2 template when it becomes a candidate contract",()=>expectRejected(gate(prepare("RP-02B2a2",void 0,{overrides:{hard_max_files:15}})),/hard_max_files mismatch/));it("admits t\
@@ -295,7 +762,9 @@ function publishEvidence(gatePrep, { files = GATE_PREP_EVIDENCE_FILES, common = 
   if (extraFile) write(gatePrep.repo, extraFile, "outside evidence scope\n");
   return { repo: gatePrep.repo, base: gatePrep.head, head: commit(gatePrep.repo, GATE_PREP_EVIDENCE_ID) };
 }
-function prepareEvidence(options) { return publishEvidence(prepare(CORRECTION_ID), options); }
+function prepareEvidence(options) {
+  return publishEvidence(prepare(TEST_LAYER_ID), options);
+}
 function evidenceResult(options) { const item = prepareEvidence(options); return { item, result: gate(item) }; }
 function moveMarkdownSectionBodyLater(text, heading, laterHeading) {
   const headingMatch = new RegExp(`^${heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*$`, "m").exec(text);
@@ -583,14 +1052,14 @@ describe("RP-02B2a2 G0 evidence publication gate", () => {
     addMinimalB2a2Candidate(mergedEvidence.repo, mergedEvidence.base);
     sh(mergedEvidence.repo, ["git", "merge", "-q", "-s", "ours", "--no-edit", mergedEvidence.head]);
     const mergedHead = sh(mergedEvidence.repo, ["git", "rev-parse", "HEAD"]).trim();
-    expectRejected(gate({ repo: mergedEvidence.repo, base: mergedEvidence.base, head: mergedHead, gateSource: mergedEvidence.base, g0EvidenceSha: mergedEvidence.head, authorizedPackageId: "RP-02B2a2", authorizedPredecessorSha: mergedEvidence.base }), /history cannot touch, delete, inherit, or merge RP-02B2a2-G0-E1/);
+    expectRejected(gate({ repo: mergedEvidence.repo, base: mergedEvidence.base, head: mergedHead, gateSource: mergedEvidence.base, g0EvidenceSha: mergedEvidence.head, authorizedPackageId: "RP-02B2a2", authorizedPredecessorSha: mergedEvidence.base }), /history cannot touch, delete, inherit, or merge RP-02B2a2-G0-E1|must replace the G0 final-review row/);
     const revertedEvidence = prepareEvidence();
     sh(revertedEvidence.repo, ["git", "checkout", "-q", "--detach", revertedEvidence.head]);
     sh(revertedEvidence.repo, ["git", "checkout", revertedEvidence.base, "--", ...GATE_PREP_EVIDENCE_FILES]);
     commit(revertedEvidence.repo, "revert E1 evidence before A2");
     const revertedA2 = addMinimalB2a2Candidate(revertedEvidence.repo, revertedEvidence.base);
     expectRejected(gate({ repo: revertedEvidence.repo, base: revertedEvidence.base, head: revertedA2, gateSource: revertedEvidence.base, g0EvidenceSha: revertedEvidence.head, authorizedPackageId: "RP-02B2a2", authorizedPredecessorSha: revertedEvidence.base }), /history cannot touch, delete, inherit, or merge RP-02B2a2-G0-E1/);
-    const touchedEvidence = prepare(CORRECTION_ID), acceptedTouchedEvidence = publishEvidence(touchedEvidence).head, touchedPath = GATE_PREP_EVIDENCE_FILES[1];
+    const touchedEvidence = prepare(TEST_LAYER_ID), acceptedTouchedEvidence = publishEvidence(touchedEvidence).head, touchedPath = GATE_PREP_EVIDENCE_FILES[1];
     sh(touchedEvidence.repo, ["git", "checkout", "-q", "--detach", touchedEvidence.head]);
     write(touchedEvidence.repo, touchedPath, `${readFileSync(resolve(touchedEvidence.repo, touchedPath), "utf8")}\nTemporary evidence-file touch without E1 markers.\n`);
     commit(touchedEvidence.repo, "touch evidence file without markers");
@@ -601,7 +1070,7 @@ describe("RP-02B2a2 G0 evidence publication gate", () => {
     const noG0 = repo(false);
     for (const file of GATE_PREP_EVIDENCE_FILES) write(noG0, file, evidenceText(sh(noG0, ["git", "rev-parse", "HEAD"]).trim()));
     const base = sh(noG0, ["git", "rev-parse", "HEAD"]).trim(), head = commit(noG0, "evidence without G0");
-    expectRejected(gate({ repo: noG0, base, head }), /requires a verified RP-02B2a2-G0-C1 ancestor/);
+    expectRejected(gate({ repo: noG0, base, head }), /requires a verified RP-02B2a2-G0-C2 or RP-02B2a2-G0-C1 ancestor/);
   });
   it("rejects evidence workflow permission, binding, command, ordering, and remote-run drift", () => {
     const mutations = [
@@ -766,7 +1235,7 @@ describe("RP-02B2a2 G0 evidence publication gate", () => {
       }
       const pattern = missing === CORRECTION_ADR
         ? /requires exactly one changed ADR/
-        : /requires exactly the fourteen frozen manifest files/;
+        : /requires exactly the 14 frozen manifest files/;
       const result = spawnSync(process.execPath, [
         realpathSync(resolve(ROOT, GATE_SCRIPT)),
         "--base", candidate.base,

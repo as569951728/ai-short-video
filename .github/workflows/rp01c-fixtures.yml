@@ -39,6 +39,7 @@ on:
       - 'docs/adr/rp-02b2a1-registry-abi-budget.md'
       - 'docs/adr/rp-02b2a2-gate-prep-budget.md'
       - 'docs/adr/rp-02b2a2-g0-ci-compat-correction-budget.md'
+      - 'docs/adr/rp-02b2a2-g0-self-reference-correction-budget.md'
       - 'docs/adr/rp-02b2a2-authority-claim-budget.md'
       - 'docs/adr/rp-02b2a3-lease-retry-budget.md'
       - 'docs/adr/rp-02b2a4-inmemory-finalize-budget.md'
