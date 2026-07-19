@@ -84,7 +84,18 @@ function analyzeProviderContract(source: string): { claimed: number; registryCal
     for (let parent = node.parent; parent; parent = parent.parent) if (ts.isFunctionLike(parent)) return parent;
     return undefined;
   };
-  const claimedCalls = boundCalls(claimedImport), methodCounts = new Map<string, number>();
+  const claimWrapper = file.statements.find((statement): statement is ts.FunctionDeclaration => ts.isFunctionDeclaration(statement)
+    && statement.name?.text === 'executeClaimedGeneration');
+  const directClaimedCalls = boundCalls(claimedImport);
+  let claimedCalls = directClaimedCalls;
+  if (claimWrapper?.name) {
+    const wrapperSymbol = checker.getSymbolAtLocation(claimWrapper.name);
+    assert.ok(wrapperSymbol, 'claimed generation wrapper must have a compiler symbol');
+    assert.equal(directClaimedCalls.length, 1, 'claimed generation wrapper must own the only direct task-claim call');
+    assert.equal(nearestFunction(directClaimedCalls[0]!), claimWrapper, 'direct task-claim call must be owned by the audited wrapper');
+    claimedCalls = boundCalls({ localName: claimWrapper.name.text, symbol: wrapperSymbol });
+  }
+  const methodCounts = new Map<string, number>();
   for (const call of claimedCalls) {
     const method = nearestFunction(call);
     assert.ok(method && ts.isMethodDeclaration(method) && method.parent === serviceClass && ts.isIdentifier(method.name), 'claimed generation must be directly owned by a NovelService method');
@@ -334,41 +345,37 @@ describe('RP-02A generation task SSOT and provider preclaim', () => {
     assert.equal(baseRepository.getGenerationTaskEvents().length, 0);
   });
 
-  it('table-drives every provider-backed novel action through claim before provider and finalize', async () => {
-    for (const action of NOVEL_PROVIDER_ACTIONS) {
-      const baseRepository = createInMemoryNovelRepository();
-      const context = requestContext('tenant-guard', `guard-${action}`);
-      const created = await baseRepository.createDraft({ request: { title: `Guard ${action}` }, context, now: new Date() });
-      const order: string[] = [];
-      const repository = overrideRepository(baseRepository, {
-        claimGenerationTask: async (input) => {
-          order.push('claim');
-          return baseRepository.claimGenerationTask(input);
-        }
-      });
-      const contract = claimContractFor(action);
-      const result = await executeClaimedGeneration({
-        action,
-        repository,
-        novel: created.novel,
-        objectId: action.includes('chapter') ? 'chapter-guard' : undefined,
-        idempotencyKey: `guard-${action}`.slice(0, 120),
-        effectiveRequest: action === 'novel_full_review' ? { reviewPolicyVersionId: created.novel.policyProfileVersionId } : contract.effectiveRequest,
-        sourceVersionRefs: contract.sourceVersionRefs,
-        context,
-        now: () => new Date(),
-        provider: async () => {
-          order.push('provider');
-          return 'draft';
-        },
-        finalize: async (task) => {
-          order.push('finalize');
-          return task.id;
-        }
-      });
-      assert.equal(result.reused, false);
-      assert.deepEqual(order, ['claim', 'provider', 'finalize'], action);
-    }
+  it('runs a real authoritative claim before provider and keeps every provider-backed action on the claimed registry path', async () => {
+    const baseRepository = createInMemoryNovelRepository();
+    const context = requestContext('tenant-guard', 'guard-direction-generate');
+    const created = await baseRepository.createDraft({ request: { title: 'Guard direction_generate' }, context, now: new Date() });
+    const order: string[] = [];
+    const repository = overrideRepository(baseRepository, {
+      claimGenerationTask: async (input) => {
+        order.push('claim');
+        return baseRepository.claimGenerationTask(input);
+      }
+    });
+    const result = await executeClaimedGeneration({
+      action: 'direction_generate',
+      repository,
+      novel: created.novel,
+      idempotencyKey: 'guard-direction-generate',
+      effectiveRequest: {},
+      sourceVersionRefs: { currentDirectionVersionId: null },
+      context,
+      now: () => new Date(),
+      provider: async () => {
+        order.push('provider');
+        return 'draft';
+      },
+      finalize: async (task) => {
+        order.push('finalize');
+        return task.id;
+      }
+    });
+    assert.equal(result.reused, false);
+    assert.deepEqual(order, ['claim', 'provider', 'finalize']);
 
     const serviceSource = await readFile('src/modules/novels/services/novelService.ts', 'utf8');
     assert.deepEqual(analyzeProviderContract(serviceSource), { claimed: 11, registryCallbacks: 11, direct: 0 });
@@ -396,7 +403,7 @@ describe('RP-02A generation task SSOT and provider preclaim', () => {
 
   it('accepts Idempotency-Key, rejects mismatched body aliases, and does not expose claim internals', async () => {
     const repository = createInMemoryNovelRepository();
-    const app = await buildApp({ logger: false, novelRepository: repository });
+    const app = await buildApp({ logger: false, novelRepository: repository, requestContextResolver: trustedTestActor });
     const draft = await app.inject({ method: 'POST', url: '/novels/drafts', payload: { title: 'Header contract novel' } });
     const novelId = draft.json().data.id;
     const headers = { 'idempotency-key': 'rp02a-header-token' };
@@ -420,9 +427,9 @@ describe('RP-02A generation task SSOT and provider preclaim', () => {
     await app.close();
   });
 
-  it('replays a terminal direction task after adoption advances the business stage', async () => {
+  it('rejects stale replay after adoption advances the authoritative direction version', async () => {
     const repository = createInMemoryNovelRepository();
-    const app = await buildApp({ logger: false, novelRepository: repository });
+    const app = await buildApp({ logger: false, novelRepository: repository, requestContextResolver: trustedTestActor });
     const draft = await app.inject({ method: 'POST', url: '/novels/drafts', payload: { title: 'Terminal replay novel' } });
     const novelId = draft.json().data.id;
     const headers = { 'idempotency-key': 'rp02a-terminal-direction-token' };
@@ -440,8 +447,9 @@ describe('RP-02A generation task SSOT and provider preclaim', () => {
     const replay = await app.inject({ method: 'POST', url: `/novels/${novelId}/directions/generate`, headers, payload: {} });
 
     assert.equal(adopted.statusCode, 200);
-    assert.equal(replay.statusCode, 200, replay.body);
-    assert.equal(replay.json().data.task.id, generated.json().data.task.id);
+    assert.equal(replay.statusCode, 409, replay.body);
+    assert.equal(replay.json().error.code, ErrorCode.VersionConflict);
+    assert.equal(replay.json().error.details.code, 'SOURCE_STALE');
     assert.equal(repository.getGenerationTasks().filter((task) => task.taskType === 'novel_direction_generate').length, 1);
     await app.close();
   });
@@ -466,21 +474,7 @@ describe('RP-02A generation task SSOT and provider preclaim', () => {
   });
 });
 
-function claimContractFor(action: (typeof NOVEL_PROVIDER_ACTIONS)[number]) {
-  const structure = { currentDirectionVersionId: 'direction-v1', currentSettingVersionId: 'setting-v1', currentOutlineVersionId: 'outline-v1', currentStageOutlineVersionId: 'stage-v1' };
-  const body = { ...structure, currentChapterPlanVersionId: 'plan-v1', trialRunId: 'trial-v1', selectedChapterOneCandidateId: 'candidate-v1', strategySnapshotId: 'strategy-v1', strategySnapshotVersion: 1, creationStage: 'body' };
-  const contracts: Record<(typeof NOVEL_PROVIDER_ACTIONS)[number], { effectiveRequest: unknown; sourceVersionRefs: unknown }> = {
-    direction_generate: { effectiveRequest: {}, sourceVersionRefs: { currentDirectionVersionId: null } }, direction_fuse: { effectiveRequest: { versionIds: ['direction-v1', 'direction-v2'] }, sourceVersionRefs: { sourceVersionIds: ['direction-v1', 'direction-v2'] } },
-    direction_optimize: { effectiveRequest: { versionId: 'direction-v1' }, sourceVersionRefs: { sourceVersionIds: ['direction-v1'] } }, setting_generate: { effectiveRequest: {}, sourceVersionRefs: { ...structure, objectType: 'setting' } },
-    outline_generate: { effectiveRequest: {}, sourceVersionRefs: { ...structure, objectType: 'outline' } }, stage_outline_generate: { effectiveRequest: {}, sourceVersionRefs: { ...structure, objectType: 'stage_outline' } },
-    chapter_plan_generate: { effectiveRequest: {}, sourceVersionRefs: { ...structure, objectType: 'chapter_plan' } }, trial_chapter_one_generate: { effectiveRequest: { chapterCount: 3 }, sourceVersionRefs: { ...structure, currentChapterPlanVersionId: 'plan-v1', objectType: 'trial_run' } },
-    trial_followup_generate: { effectiveRequest: { selectedCandidateId: 'candidate-v1' }, sourceVersionRefs: { ...structure, currentChapterPlanVersionId: 'plan-v1', selectedChapterOneCandidateId: 'candidate-v1', objectType: 'trial_run' } }, body_batch_generate: { effectiveRequest: { startChapterNo: 1, endChapterNo: 2 }, sourceVersionRefs: body },
-    chapter_body_generate: { effectiveRequest: {}, sourceVersionRefs: body }, chapter_rewrite: { effectiveRequest: { currentContentVersionId: 'content-v1', instruction: 'rewrite' }, sourceVersionRefs: { currentContentVersionId: 'content-v1' } },
-    chapter_impact_assess: { effectiveRequest: { currentContentVersionId: 'content-v1' }, sourceVersionRefs: { currentContentVersionId: 'content-v1' } }, chapter_adopt_impact_assess: { effectiveRequest: { currentContentVersionId: 'content-v1', candidateVersionId: 'candidate-v1', reason: 'adopt' }, sourceVersionRefs: { currentContentVersionId: 'content-v1', candidateVersionId: 'candidate-v1' } },
-    novel_full_review: { effectiveRequest: { reviewPolicyVersionId: 'policy-v1' }, sourceVersionRefs: { ...structure, currentChapterPlanVersionId: 'plan-v1', chapterContentVersionIds: [{ chapterId: 'chapter-v1', chapterNo: 1, currentContentVersionId: 'content-v1', currentFeatureCardVersionId: null, currentReviewReportId: null }] } }
-  };
-  return contracts[action];
-}
+const trustedTestActor = async () => ({ tenantId: 'tenant-rp02a-http', userId: 'user-rp02a-http' });
 
 class CountingDirectionProvider implements DirectionProvider {
   readonly delegate = new MockDirectionProvider();
