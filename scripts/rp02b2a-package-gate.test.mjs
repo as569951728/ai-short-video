@@ -36,6 +36,9 @@ const ROOT = resolve("."),
   TEST_LAYER_ID = "RP-02B2a2-G0-C2",
   TEST_LAYER_BASELINE = "9e0f5fcf30ef78b605f13465458ec19e84a9d8fa",
   TEST_LAYER_ADR = "docs/adr/rp-02b2a2-g0-self-reference-correction-budget.md",
+  EVIDENCE_TRIGGER_ID = "RP-02B2a2-G0-C3",
+  EVIDENCE_TRIGGER_BASELINE = "e15b59b1eef9165501d534a183577617512df5d3",
+  EVIDENCE_TRIGGER_ADR = "docs/adr/rp-02b2a2-g0-evidence-trigger-correction-budget.md",
   VERIFIED_GATE_PREP = "verified-gate-prep";
 const GOVERNANCE_REMEDIATION_FILES = Object.freeze([
   ".github/workflows/rp01a-e2e.yml",
@@ -71,7 +74,7 @@ const BUSINESS_PACKAGE_SEQUENCE = Object.freeze([
     "RP-02B2a5",
   ]),
   BUSINESS_PREDECESSOR = Object.freeze({
-    "RP-02B2a2": TEST_LAYER_ID,
+    "RP-02B2a2": EVIDENCE_TRIGGER_ID,
     "RP-02B2a3": "RP-02B2a2",
     "RP-02B2a4": "RP-02B2a3",
     "RP-02B2a5": "RP-02B2a4",
@@ -98,6 +101,7 @@ const COMMANDS = Object.freeze({
 test:rp02b2a1:gate",
   [CORRECTION_ID]: "test:rp02b2a1:gate",
   [TEST_LAYER_ID]: "test:rp02b2a1:gate",
+  [EVIDENCE_TRIGGER_ID]: "test:rp02b2a1:gate",
   "RP-02B2a2": "test:rp02b2a2",
   "RP-02B2a3": "test:rp02b2a3",
   "RP-02B2a4": "test:rp02b2a4",
@@ -109,6 +113,7 @@ const ORACLE = Object.freeze({
   [GATE_PREP_ID]: ["RP-02B2a2-G0-v1", GATE_PREP_ADR, 16, 2e3],
   [CORRECTION_ID]: ["RP-02B2a2-G0-C1-v3", CORRECTION_ADR, 14, 700],
   [TEST_LAYER_ID]: ["RP-02B2a2-G0-C2-v1", TEST_LAYER_ADR, 5, 600],
+  [EVIDENCE_TRIGGER_ID]: ["RP-02B2a2-G0-C3-v1", EVIDENCE_TRIGGER_ADR, 5, 500],
   "RP-02B2a2": [
     "RP-02B2a2-v3",
     "docs/adr/rp-02b2a2-authority-claim-budget.md",
@@ -140,6 +145,7 @@ const BASELINES = Object.freeze({
   [GATE_PREP_ID]: B2A2_BASELINE,
   [CORRECTION_ID]: CORRECTION_BASELINE,
   [TEST_LAYER_ID]: TEST_LAYER_BASELINE,
+  [EVIDENCE_TRIGGER_ID]: EVIDENCE_TRIGGER_BASELINE,
   "RP-02B2a2": VERIFIED_GATE_PREP,
   "RP-02B2a3": "range-base",
   "RP-02B2a4": "range-base",
@@ -150,6 +156,7 @@ const REQUIRED_CATEGORIES = Object.freeze({
     [GATE_PREP_ID]: Object.freeze(["governance", "test", "adr"]),
     [CORRECTION_ID]: Object.freeze(["governance", "test", "adr"]),
     [TEST_LAYER_ID]: Object.freeze(["governance", "test", "adr"]),
+    [EVIDENCE_TRIGGER_ID]: Object.freeze(["governance", "test", "adr"]),
     "RP-02B2a2": Object.freeze(["production", "test", "adr"]),
     "RP-02B2a3": Object.freeze(["production", "test", "adr"]),
     "RP-02B2a4": Object.freeze(["production", "test", "adr"]),
@@ -170,6 +177,9 @@ s/novels/services/novelService.ts|apps/api/src/modules/tasks/services/taskServic
   ),
   [TEST_LAYER_ID]: manifest(
     `.github/workflows/rp01c-fixtures.yml|.github/workflows/rp02b2a-admission.yml|${GATE_SCRIPT}|scripts/rp02b2a-package-gate.test.mjs|${TEST_LAYER_ADR}`,
+  ),
+  [EVIDENCE_TRIGGER_ID]: manifest(
+    `.github/workflows/rp01a-e2e.yml|.github/workflows/rp01c-fixtures.yml|${GATE_SCRIPT}|scripts/rp02b2a-package-gate.test.mjs|${EVIDENCE_TRIGGER_ADR}`,
   ),
   "RP-02B2a2": manifest(
     "packages/shared/src/api.ts|packages/shared/src/novels.ts|apps/api/src/co\
@@ -200,6 +210,7 @@ vices/actionExecutionPlan.ts",
       "apps/api/src/modules/novels/providers/mockDirectionProvider.ts",
     [GATE_PREP_ID]: GATE_SCRIPT,
     [TEST_LAYER_ID]: GATE_SCRIPT,
+    [EVIDENCE_TRIGGER_ID]: GATE_SCRIPT,
     "RP-02B2a2": "apps/api/src/app.ts",
     "RP-02B2a3": "apps/api/test/rp02b2a/lease-dispatch-retry.test.ts",
     "RP-02B2a4":
@@ -274,7 +285,7 @@ function select(packageId) {
   if (
     packageId === GATE_PREP_ID ||
     packageId === CORRECTION_ID ||
-    packageId === TEST_LAYER_ID
+    packageId === TEST_LAYER_ID || packageId === EVIDENCE_TRIGGER_ID
   )
     return [...all];
   const production =
@@ -340,11 +351,11 @@ function prepareUncached(packageId = "RP-02B2a1", files, options = {}) {
     base = predecessor.head;
     gateSource =
       predecessor.gateSource ??
-      (BUSINESS_PREDECESSOR[packageId] === TEST_LAYER_ID
+      (BUSINESS_PREDECESSOR[packageId] === EVIDENCE_TRIGGER_ID
         ? predecessor.head
         : void 0);
     g0EvidenceSha = predecessor.g0EvidenceSha;
-    if (predecessor.packageId === TEST_LAYER_ID) {
+    if (predecessor.packageId === EVIDENCE_TRIGGER_ID) {
       g0EvidenceSha = publishEvidence(predecessor).head;
       sh(path, ["git", "checkout", "-q", "--detach", predecessor.head]);
     }
@@ -356,7 +367,7 @@ function prepareUncached(packageId = "RP-02B2a1", files, options = {}) {
   }
   const chosen = files ?? select(packageId);
   for (const file of chosen.filter((item) =>
-    packageId === CORRECTION_ID || packageId === TEST_LAYER_ID
+    packageId === CORRECTION_ID || packageId === TEST_LAYER_ID || packageId === EVIDENCE_TRIGGER_ID
       ? item !== defaultAdr
       : !item.startsWith(
           "\
@@ -369,7 +380,8 @@ docs/adr/",
     )
       copyGatePrepFile(path, file);
     else if (packageId === CORRECTION_ID) copyCorrectionFile(path, file);
-    else if (packageId === TEST_LAYER_ID) copyTestLayerFile(path, file);
+    else if (packageId === TEST_LAYER_ID) copyTestLayerFile(path, file, ACCEPTED_G0_C2_SHA);
+    else if (packageId === EVIDENCE_TRIGGER_ID) copyTestLayerFile(path, file);
     else if (file === GATE_SCRIPT)
       write(path, file, readFileSync(resolve(ROOT, file)));
     else
@@ -380,6 +392,8 @@ docs/adr/",
 `,
       );
   }
+  if (packageId === EVIDENCE_TRIGGER_ID && !chosen.includes(GATE_SCRIPT))
+    sh(path, ["git", "checkout", base, "--", GATE_SCRIPT]);
   if (BUSINESS_PACKAGE_SEQUENCE.includes(packageId))
     writeBusinessPackageJson(path, packageId, options.mutateScripts);
   if (options.includeAdr !== false) {
@@ -475,6 +489,13 @@ function gate(item) {
     { cwd: item.repo, encoding: "utf8" },
   );
 }
+function currentGate(item) {
+  return spawnSync(
+    process.execPath,
+    [resolve(ROOT, GATE_SCRIPT), "--base", item.base, "--head", item.head, ...authorizedArgs(item)],
+    { cwd: item.repo, encoding: "utf8" },
+  );
+}
 function run(repoPath, args, env) {
   return spawnSync(
     process.execPath,
@@ -504,6 +525,7 @@ const GATE_PREP_SCRIPT_NAMES=Object.freeze(["test:rp02b2a1:env-probe","test:rp02
 function gatePrepPackageJson(sourcePackageJson=JSON.parse(readFileSync(resolve(ROOT,"package.json"),"utf8"))){const baselinePackageJson=JSON.parse(sh(ROOT,["git","show",`${B2A2_BASELINE}:package.json`]));baselinePackageJson.scripts={...baselinePackageJson.scripts,...Object.fromEntries(GATE_PREP_SCRIPT_NAMES.map(name=>[name,sourcePackageJson.scripts?.[name]]))};return`${JSON.stringify(baselinePackageJson,null,2)}\n`}
 const ACCEPTED_G0_SHA = "01245feb51b50ec838cb405a67bcafd1b194eeae";
 const ACCEPTED_G0_C1_SHA = "f27442d159d7f9d6ef273128797be6085bbd8f9d";
+const ACCEPTED_G0_C2_SHA = "e15b59b1eef9165501d534a183577617512df5d3";
 const G0_C1_AUTHORITY_ADR = "docs/adr/rp-02b2a2-authority-claim-budget.md";
 const CORRECTION_SOURCE_FILES = new Set();
 function copyGatePrepFile(repoPath,file,sourcePackageJson){
@@ -521,8 +543,11 @@ function copyCorrectionFile(repoPath,file){
   );
   write(repoPath,file,content);
 }
-function copyTestLayerFile(repoPath, file) {
-  write(repoPath, file, readFileSync(resolve(ROOT, file)));
+function copyTestLayerFile(repoPath, file, sourceRef) {
+  const content = sourceRef
+    ? sh(ROOT, ["git", "show", `${sourceRef}:${file}`], { encoding: null })
+    : readFileSync(resolve(ROOT, file));
+  write(repoPath, file, content);
 }
 function addCorrectionSibling(repoPath,label,mutateWorkflow=(text)=>text){
   const [manifestId,adrPath,hardMaxFiles,hardMaxNetAdditions]=ORACLE[CORRECTION_ID];
@@ -548,6 +573,25 @@ function mutateCorrectionCandidateFile(file, transform) {
     .replace(/^actual_net_additions:.*$/m, "actual_net_additions: 0");
   write(item.repo, adrPath, reset);
   const actual = stats(item.repo, CORRECTION_BASELINE);
+  write(item.repo, adrPath, reset
+    .replace("actual_files: 0", `actual_files: ${actual.files}`)
+    .replace("actual_net_additions: 0", `actual_net_additions: ${actual.net}`));
+  sh(item.repo, ["git", "add", "--", file, adrPath]);
+  sh(item.repo, ["git", "commit", "-q", "--amend", "--no-edit"]);
+  item.head = sh(item.repo, ["git", "rev-parse", "HEAD"]).trim();
+  return item;
+}
+function mutateEvidenceTriggerCandidateFile(file, transform) {
+  const item = prepare(EVIDENCE_TRIGGER_ID), adrPath = EVIDENCE_TRIGGER_ADR;
+  const original = readFileSync(resolve(item.repo, file), "utf8");
+  const changed = transform(original);
+  assert.notEqual(changed, original, `${file} mutation did not change fixture`);
+  write(item.repo, file, changed);
+  const reset = readFileSync(resolve(item.repo, adrPath), "utf8")
+    .replace(/^actual_files:.*$/m, "actual_files: 0")
+    .replace(/^actual_net_additions:.*$/m, "actual_net_additions: 0");
+  write(item.repo, adrPath, reset);
+  const actual = stats(item.repo, EVIDENCE_TRIGGER_BASELINE);
   write(item.repo, adrPath, reset
     .replace("actual_files: 0", `actual_files: ${actual.files}`)
     .replace("actual_net_additions: 0", `actual_net_additions: ${actual.net}`));
@@ -603,7 +647,7 @@ ${passed.stderr}`,new RegExp(harness.canary))}for(const[failedStage,expectedStag
 `);const result=gate({repo:path,base,head:commit(path,"candidate-owned gate script")});assert.equal(result.status,23);expectRejected(result,new RegExp(marker))});it("fails closed for ADR field and category drift",()=>{for(const[overrides,pattern]of[[{status:"draft"},/status mismatch/],[{package_id:"RP-02B2a2"},/package_id mismatch/],[{manifest_id:"wrong"},/manifest_id mismatch/],[{baseline_sha:"1".repeat(40)},/baseline_sha mismatch/],[{actual_files:2},/actual_files mismatch/],[{actual_net_additions:3},
 /actual_net_additions mismatch/]])fail(overrides,pattern);const path=repo(true);write(path,A1_ADR,adr({status:"ready",package_id:"RP-02B2a1",manifest_id:"RP-02B2a1-v1",baseline_sha:BASELINE,hard_max_files:18,hard_max_net_additions:1900,actual_files:1,actual_net_additions:0}));expectRejected(gate({repo:path,base:BASELINE,head:commit(path,"adr only")}),/missing required production/)});it("fixes A1 and gate-prep baselines, binds B2a2 to verified G0, and keeps A3-A5 range-bound",()=>{const path=repo(),
 base=sh(path,["git","rev-parse","HEAD"]).trim();write(path,A1_FILES[0],"production\n");write(path,A1_FILES[1],"test\n");write(path,A1_ADR,adr({status:"ready",package_id:"RP-02B2a1",manifest_id:"RP-02B2a1-v1",baseline_sha:base,hard_max_files:18,hard_max_net_additions:1900,actual_files:3,actual_net_additions:11}));expectRejected(gate({repo:path,base,head:commit(path,"random A1")}),/requires fixed baseline/);const b2a2=prepare("RP-02B2a2");assert.notEqual(b2a2.base,B2A2_BASELINE);assert.equal(
-sh(b2a2.repo,["git","rev-parse",`${b2a2.base}^`]).trim(),TEST_LAYER_BASELINE);const b2a2Result=gate(b2a2);assert.equal(b2a2Result.status,0,b2a2Result.stderr);expectRejected(gate({...b2a2,base:B2A2_BASELINE}),/requires exactly one changed ADR, got [23]|cannot batch RP-02B2a2-G0-E1 publication evidence/);for(const id of RANGE_PACKAGES){const item=prepare(id),result=gate(item);assert.notEqual(item.base,BASELINE);assert.equal(result.status,0,`${id}: ${result.stderr}`);expectRejected(gate(prepare(id,void 0,{overrides:{baseline_sha:"f".repeat(40)}})),/baseline_sha mismatch/)}});it("requires the\
+sh(b2a2.repo,["git","rev-parse",`${b2a2.base}^`]).trim(),EVIDENCE_TRIGGER_BASELINE);const b2a2Result=gate(b2a2);assert.equal(b2a2Result.status,0,b2a2Result.stderr);expectRejected(gate({...b2a2,base:B2A2_BASELINE}),/requires exactly one changed ADR, got [23]|cannot batch RP-02B2a2-G0-E1 publication evidence/);for(const id of RANGE_PACKAGES){const item=prepare(id),result=gate(item);assert.notEqual(item.base,BASELINE);assert.equal(result.status,0,`${id}: ${result.stderr}`);expectRejected(gate(prepare(id,void 0,{overrides:{baseline_sha:"f".repeat(40)}})),/baseline_sha mismatch/)}});it("requires the\
  candidate HEAD B2a2 env-probe, core, and composite commands",()=>{const valid=prepare("RP-02B2a2"),passed=gate(valid);assert.equal(passed.status,0,passed.stderr);writeB2a2PackageJson(valid.repo,scripts=>({...scripts,"test:rp02b2a2":"true"}));assert.equal(gate(valid).status,0,"the gate must read the committed candidate HEAD, not the dirty worktree");const cases=[scripts=>({...scripts,"test:rp02b2a2:env-probe":"true"}),scripts=>({...scripts,"test:rp02b2a2:core":`${CLEAN_ENV} sh -c ''`}),scripts=>({
 ...scripts,"test:rp02b2a2:core":`${scripts["test:rp02b2a2:core"]} || true`}),scripts=>({...scripts,"test:rp02b2a2:core":scripts["test:rp02b2a2:core"].replace("env -u DATABASE_URL ","env ")}),scripts=>({...scripts,"test:rp02b2a2:core":scripts["test:rp02b2a2:core"].replace("-u DEPLOYMENT_ACTOR_TENANT_ID ","")}),scripts=>({...scripts,"test:rp02b2a2:core":scripts["test:rp02b2a2:core"].replace("env-probe && npm run build","env-probe; npm run build")}),scripts=>({...scripts,"test:rp02b2a2:core":scripts["test:rp02b2a2:core"].replace("npm run build -w @ai-shortvideo/shared && npm run prisma:generate","npm run build -w @ai-shortvideo/shared; npm run prisma:generate")}),scripts=>({...scripts,"test:rp02b2a2:core":scripts["test:rp02b2a2:core"].replace("test/rp02b2a/authority-claim.test.ts ","")}),scripts=>({...scripts,"test:rp02b2a2:core":scripts["test:rp02b2a2:core"].replace("test/rp02b2a/repository-authority-hardening.test.ts ","")}),scripts=>({...scripts,"test:rp02b2a2:core":scripts["\
 test:rp02b2a2:core"].replace(" src/modules/novels/novelRoutes.test.ts","")}),scripts=>({...scripts,"test:rp02b2a2":scripts["test:rp02b2a2"].replace("npm run test:rp02b2a1 && ","")}),scripts=>({...scripts,"test:rp02b2a2":scripts["test:rp02b2a2"].replace("env-probe && npm run test:rp02b2a1","env-probe; npm run test:rp02b2a1")})];for(const mutateScripts of cases)expectRejected(gate(prepare("RP-02B2a2",void 0,{mutateScripts})),/script test:rp02b2a2.*env-clean fail-fast contract/)});it("keeps the documented A2 exact scripts aligned with the production gate",()=>{const document=readFileSync(resolve("docs/modules/rp-02b2-dispatcher-transport-implementation-package.md"),"utf8"),block=/B2a2 在 `package\.json`[\s\S]*?```json\n([\s\S]*?)\n```/.exec(document);assert.ok(block,"missing documented B2a2 JSON script contract");assert.deepEqual(JSON.parse(block[1]),B2A2_SCRIPTS)});it("rejects inherited script rewrites and root lifecycle hooks",()=>{expectRejected(gate(prepare("RP-02B2a2",void 0,{mutateScripts:scripts=>({...scripts,"test:rp02b2a1":"true"})})),/cannot rewrite inherited package\.json script test:rp02b2a1/);for(const lifecycle of["preinstall","install","postinstall","prepare"])expectRejected(gate(prepare("RP-02B2a2",void 0,{mutateScripts:scripts=>({...scripts,[lifecycle]:"true"})})),new RegExp(`rejects root npm lifecycle script ${lifecycle}`))});it("freezes gate-prep A1 actor-clean scripts and all other inherited scripts",()=>{const reject=mutate=>{const item=prepare(GATE_PREP_ID),packageJson=JSON.parse(readFileSync(resolve(item.repo,"package.json"),"utf8"));packageJson.scripts=mutate({...packageJson.scripts});write(item.repo,"package.json",`${JSON.stringify(packageJson,null,2)}\n`);item.head=commit(item.repo,"invalid gate-prep package scripts");return gate(item)};for(const mutate of[scripts=>({...scripts,"test:rp02b2a1:env-probe":scripts["test:rp02b2a1:env-probe"].replace(",\'DEPLOYMENT_ACTOR_USER_ID\'","")}),scripts=>({...scripts,"test:rp02b2a1:gate":scripts["test:rp02b2a1:gate"].replace("-u DEPLOYMENT_ACTOR_TENANT_ID ","")}),scripts=>({...scripts,"test:rp02b2a1:core":"true"}),scripts=>({...scripts,"test:governance":"true"}),scripts=>({...scripts,"test:unapproved":"true"}),scripts=>({...scripts,prepare:"true"})])expectRejected(reject(mutate),/cannot rewrite inherited package\.json script|cannot add package\.json script|rejects root npm lifecycle script|does not match the actor-clean contract/)});it("rejects the obsolete 15-file A2 template when it becomes a candidate contract",()=>expectRejected(gate(prepare("RP-02B2a2",void 0,{overrides:{hard_max_files:15}})),/hard_max_files mismatch/));it("admits t\
@@ -763,7 +807,7 @@ function publishEvidence(gatePrep, { files = GATE_PREP_EVIDENCE_FILES, common = 
   return { repo: gatePrep.repo, base: gatePrep.head, head: commit(gatePrep.repo, GATE_PREP_EVIDENCE_ID) };
 }
 function prepareEvidence(options) {
-  return publishEvidence(prepare(TEST_LAYER_ID), options);
+  return publishEvidence(prepare(EVIDENCE_TRIGGER_ID), options);
 }
 function evidenceResult(options) { const item = prepareEvidence(options); return { item, result: gate(item) }; }
 function moveMarkdownSectionBodyLater(text, heading, laterHeading) {
@@ -1059,7 +1103,7 @@ describe("RP-02B2a2 G0 evidence publication gate", () => {
     commit(revertedEvidence.repo, "revert E1 evidence before A2");
     const revertedA2 = addMinimalB2a2Candidate(revertedEvidence.repo, revertedEvidence.base);
     expectRejected(gate({ repo: revertedEvidence.repo, base: revertedEvidence.base, head: revertedA2, gateSource: revertedEvidence.base, g0EvidenceSha: revertedEvidence.head, authorizedPackageId: "RP-02B2a2", authorizedPredecessorSha: revertedEvidence.base }), /history cannot touch, delete, inherit, or merge RP-02B2a2-G0-E1/);
-    const touchedEvidence = prepare(TEST_LAYER_ID), acceptedTouchedEvidence = publishEvidence(touchedEvidence).head, touchedPath = GATE_PREP_EVIDENCE_FILES[1];
+    const touchedEvidence = prepare(EVIDENCE_TRIGGER_ID), acceptedTouchedEvidence = publishEvidence(touchedEvidence).head, touchedPath = GATE_PREP_EVIDENCE_FILES[1];
     sh(touchedEvidence.repo, ["git", "checkout", "-q", "--detach", touchedEvidence.head]);
     write(touchedEvidence.repo, touchedPath, `${readFileSync(resolve(touchedEvidence.repo, touchedPath), "utf8")}\nTemporary evidence-file touch without E1 markers.\n`);
     commit(touchedEvidence.repo, "touch evidence file without markers");
@@ -1070,7 +1114,7 @@ describe("RP-02B2a2 G0 evidence publication gate", () => {
     const noG0 = repo(false);
     for (const file of GATE_PREP_EVIDENCE_FILES) write(noG0, file, evidenceText(sh(noG0, ["git", "rev-parse", "HEAD"]).trim()));
     const base = sh(noG0, ["git", "rev-parse", "HEAD"]).trim(), head = commit(noG0, "evidence without G0");
-    expectRejected(gate({ repo: noG0, base, head }), /requires a verified RP-02B2a2-G0-C2 or RP-02B2a2-G0-C1 ancestor/);
+    expectRejected(gate({ repo: noG0, base, head }), /requires a verified RP-02B2a2-G0-C3, RP-02B2a2-G0-C2, or RP-02B2a2-G0-C1 ancestor/);
   });
   it("rejects evidence workflow permission, binding, command, ordering, and remote-run drift", () => {
     const mutations = [
@@ -1274,5 +1318,71 @@ describe("RP-02B2a2 G0 evidence publication gate", () => {
       (text) => text.replace("最终修正包冻结为 14 个精确文件", "最终修正包冻结为 12 个精确文件"),
     );
     expectRejected(gate(implementation), /implementation contract must freeze the 14-file correction and A2 v3 20\/3250 template/);
+  });
+  it("accepts only the fixed-baseline five-file C3 evidence-trigger correction", () => {
+    const valid = prepare(EVIDENCE_TRIGGER_ID), passed = gate(valid);
+    assert.equal(passed.status, 0, passed.stderr);
+    assert.match(passed.stdout, /RP-02B2a2-G0-C3 package gate passed: files=5/);
+    const files = select(EVIDENCE_TRIGGER_ID);
+    assert.equal(files.length, 5);
+    for (const missing of files) {
+      const reduced = files.filter((file) => file !== missing);
+      const candidate = missing === EVIDENCE_TRIGGER_ADR
+        ? prepare(EVIDENCE_TRIGGER_ID, reduced, { includeAdr: false })
+        : prepare(EVIDENCE_TRIGGER_ID, reduced);
+      const rejected = currentGate(candidate);
+      expectRejected(
+        rejected,
+        /requires exactly the 5 frozen manifest files|requires exactly one changed ADR|unsupported ADR/,
+        `${missing}:\n${rejected.stdout}\n${rejected.stderr}`,
+      );
+    }
+    write(valid.repo, "outside/c3.txt", "outside manifest\n");
+    valid.head = commit(valid.repo, "expand C3 manifest");
+    expectRejected(gate(valid), /manifest violation|requires exactly the 5 frozen manifest files/);
+    const second = prepare(EVIDENCE_TRIGGER_ID);
+    sh(second.repo, ["git", "commit", "-q", "--allow-empty", "-m", "second C3 commit"]);
+    second.head = sh(second.repo, ["git", "rev-parse", "HEAD"]).trim();
+    expectRejected(gate(second), /direct child|fixed baseline/);
+  });
+  it("requires exact symmetric RP-01A and RP-01C C3 trigger contracts", () => {
+    for (const token of [
+      "      - '.github/workflows/rp01c-fixtures.yml'\n",
+      "      - '.github/workflows/rp02b2a-admission.yml'\n",
+      "      - 'scripts/rp02b2a-package-gate.*'\n",
+      "      - 'docs/adr/rp-02b2a2-g0-*.md'\n",
+    ]) {
+      const firstOnly = mutateEvidenceTriggerCandidateFile(
+        ".github/workflows/rp01a-e2e.yml",
+        (text) => text.replace(token, ""),
+      );
+      expectRejected(gate(firstOnly), /rp01a-e2e\.yml must add only the frozen G0 evidence-parent push paths/, token);
+    }
+    const broad = mutateEvidenceTriggerCandidateFile(
+      ".github/workflows/rp01a-e2e.yml",
+      (text) => text.replace("scripts/rp02b2a-package-gate.*", "scripts/**"),
+    );
+    expectRejected(gate(broad), /rp01a-e2e\.yml must add only the frozen G0 evidence-parent push paths/);
+    const rp01c = mutateEvidenceTriggerCandidateFile(
+      ".github/workflows/rp01c-fixtures.yml",
+      (text) => text.replace(`      - '${EVIDENCE_TRIGGER_ADR}'\n`, ""),
+    );
+    expectRejected(gate(rp01c), /rp01c-fixtures\.yml must add only the C3 ADR trigger|requires exactly the 5 frozen manifest files/);
+  });
+  it("rejects C2 as the current E1 parent or A2 gate source", () => {
+    const staleGate = prepare(TEST_LAYER_ID);
+    const staleEvidence = publishEvidence(staleGate);
+    expectRejected(currentGate(staleEvidence), /requires accepted G0 package RP-02B2a2-G0-C3/);
+    sh(staleGate.repo, ["git", "checkout", "-q", "--detach", staleGate.head]);
+    const staleA2 = addMinimalB2a2Candidate(staleGate.repo, staleGate.head);
+    expectRejected(currentGate({
+      repo: staleGate.repo,
+      base: staleGate.head,
+      head: staleA2,
+      gateSource: staleGate.head,
+      g0EvidenceSha: staleGate.head,
+      authorizedPackageId: "RP-02B2a2",
+      authorizedPredecessorSha: staleGate.head,
+    }), /requires accepted G0 package RP-02B2a2-G0-C3/);
   });
 });

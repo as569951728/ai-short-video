@@ -5,6 +5,10 @@ on:
   push:
     paths:
       - '.github/workflows/rp01a-e2e.yml'
+      - '.github/workflows/rp01c-fixtures.yml'
+      - '.github/workflows/rp02b2a-admission.yml'
+      - 'scripts/rp02b2a-package-gate.*'
+      - 'docs/adr/rp-02b2a2-g0-*.md'
       - 'playwright.config.mjs'
       - 'scripts/e2e/**'
       - 'tests/e2e/**'
@@ -24,6 +28,10 @@ on:
   pull_request:
     paths:
       - '.github/workflows/rp01a-e2e.yml'
+      - '.github/workflows/rp01c-fixtures.yml'
+      - '.github/workflows/rp02b2a-admission.yml'
+      - 'scripts/rp02b2a-package-gate.*'
+      - 'docs/adr/rp-02b2a2-g0-*.md'
       - 'playwright.config.mjs'
       - 'scripts/e2e/**'
       - 'tests/e2e/**'
