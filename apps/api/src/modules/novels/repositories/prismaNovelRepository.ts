@@ -60,6 +60,8 @@ import {
   type CancelledTaskRecord,
   type GenerationTaskEventRecord,
   type GenerationTaskRecord,
+  type GenerationAuthorityFenceInput,
+  type GenerationAuthorityFenceResult,
   type ListedNovelRecords,
   type ListNovelRecordsQuery,
   type LongTermMemoryRecord,
@@ -600,6 +602,61 @@ export class PrismaNovelRepository implements NovelRepository {
     throw new BusinessError(ErrorCode.InternalError, '生成任务 claim 未返回结果。');
   }
 
+  async fenceGenerationAuthority(input: GenerationAuthorityFenceInput): Promise<GenerationAuthorityFenceResult> {
+    return this.prisma.$transaction(async (tx) => {
+      await lockGenerationAuthority(tx, input.authorityInput);
+      await tx.$queryRaw(
+        Prisma.sql`SELECT id FROM generation_task WHERE tenant_id = ${input.tenantId} AND id = ${input.taskId} FOR UPDATE`
+      );
+      const current = await tx.generationTask.findFirst({
+        where: { id: input.taskId, tenantId: input.tenantId }
+      });
+      if (!current || current.status !== PrismaTaskStatus.PROCESSING) {
+        return { outcome: 'task_not_writable' as const, task: current ? mapGenerationTask(current) : null };
+      }
+      const authority = await this.loadGenerationAuthority(input.authorityInput, tx);
+      if (!matchGenerationAuthority(input.authorityInput, input.expectedAuthoritySnapshotHash, authority).ok) {
+        const failed = await tx.generationTask.update({
+          where: { id: current.id, tenantId: input.tenantId },
+          data: {
+            status: PrismaTaskStatus.FAILED,
+            statusNote: '生成来源已变化，模型结果已安全丢弃。',
+            currentStep: '生成来源已变化',
+            failureCategory: 'source_stale',
+            errorCode: 'SOURCE_STALE',
+            errorMessage: '生成来源已变化，请刷新后重试。',
+            activeClaimKey: null,
+            finishedAt: input.now,
+            updatedAt: input.now
+          }
+        });
+        await createTaskEvent(tx, {
+          task: failed,
+          eventType: 'failed',
+          message: '生成来源已变化，请刷新后重试。',
+          progress: failed.progress,
+          requestId: input.context.requestId,
+          createdAt: input.now
+        });
+        return { outcome: 'source_stale' as const, task: mapGenerationTask(failed) };
+      }
+      const authorized = await tx.generationTask.update({
+        where: { id: current.id, tenantId: input.tenantId },
+        data: input.phase === 'provider_dispatch'
+          ? {
+              providerAttemptPhase: PrismaProviderAttemptPhase.PROVIDER_CALL_STARTED,
+              providerDispatchedAt: input.now,
+              updatedAt: input.now
+            }
+          : {
+              providerAttemptPhase: PrismaProviderAttemptPhase.FINALIZING,
+              updatedAt: input.now
+            }
+      });
+      return { outcome: 'authorized' as const, task: mapGenerationTask(authorized) };
+    });
+  }
+
   async leaseNextQueuedTask(workerId: string, leaseToken: string, now: Date, leaseUntil: Date) {
     if (leaseUntil.getTime() <= now.getTime()) return null;
     for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -826,6 +883,7 @@ export class PrismaNovelRepository implements NovelRepository {
 
   async createDirectionCandidates(input: DirectionCreationInput): Promise<CreatedDirectionCandidatesRecord> {
     return this.prisma.$transaction(async (tx) => {
+      await assertNoActiveAuthorityClaim(tx, input.context.tenantId, input.novel.id, input.task.id);
       const task = await transitionClaimedTask(tx, {
         taskId: input.task.id,
         tenantId: input.context.tenantId,
@@ -911,6 +969,7 @@ export class PrismaNovelRepository implements NovelRepository {
 
   async createDirectionRevision(input: DirectionRevisionInput): Promise<CreatedDirectionRevisionRecord> {
     return this.prisma.$transaction(async (tx) => {
+      await assertNoActiveAuthorityClaim(tx, input.context.tenantId, input.novel.id, input.task?.id);
       const task = input.task
         ? await transitionClaimedTask(tx, {
             taskId: input.task.id,
@@ -1003,6 +1062,7 @@ export class PrismaNovelRepository implements NovelRepository {
 
   async adoptDirection(input: DirectionAdoptionInput): Promise<AdoptedDirectionRecord> {
     return this.prisma.$transaction(async (tx) => {
+      await assertNoActiveAuthorityClaim(tx, input.context.tenantId, input.novel.id);
       const currentVersionIdBefore = input.novel.currentDirectionVersionId;
       const decisionRecord = await tx.assetDecisionRecord.create({
         data: {
@@ -1166,6 +1226,7 @@ export class PrismaNovelRepository implements NovelRepository {
 
   async createStructureCandidate(input: StructureCreationInput): Promise<CreatedStructureAssetRecord> {
     return this.prisma.$transaction(async (tx) => {
+      await assertNoActiveAuthorityClaim(tx, input.context.tenantId, input.novel.id, input.task?.id);
       const task = input.task
         ? await transitionClaimedTask(tx, {
             taskId: input.task.id,
@@ -1339,6 +1400,7 @@ export class PrismaNovelRepository implements NovelRepository {
 
   async adoptStructureAsset(input: StructureAdoptionInput): Promise<AdoptedStructureAssetRecord> {
     return this.prisma.$transaction(async (tx) => {
+      await assertNoActiveAuthorityClaim(tx, input.context.tenantId, input.novel.id);
       const currentVersionIdBefore = getCurrentVersionId(input.novel, input.objectType);
       const downstream = getDownstreamObjectTypes(input.objectType);
       const decisionRecord = await tx.assetDecisionRecord.create({
@@ -1519,6 +1581,7 @@ export class PrismaNovelRepository implements NovelRepository {
     }
 
     await this.prisma.$transaction(async (tx) => {
+      await assertNoActiveAuthorityClaim(tx, input.context.tenantId, input.novel.id);
       const currentAsset = await tx.creativeVersion.findFirst({
         where: {
           id: currentPlanId,
@@ -1808,6 +1871,7 @@ export class PrismaNovelRepository implements NovelRepository {
 
   async createTrialChapterOneCandidates(input: TrialCandidateCreationInput): Promise<CreatedTrialCandidatesRecord> {
     return this.prisma.$transaction(async (tx) => {
+      await assertNoActiveAuthorityClaim(tx, input.context.tenantId, input.novel.id, input.task.id);
       const trialRunId = createId('trial');
       const task = await transitionClaimedTask(tx, {
         taskId: input.task.id,
@@ -2035,6 +2099,7 @@ export class PrismaNovelRepository implements NovelRepository {
 
   async selectTrialChapterOneAndGenerateFollowup(input: TrialFollowupGenerationInput): Promise<GeneratedTrialFollowupRecord> {
     return this.prisma.$transaction(async (tx) => {
+      await assertNoActiveAuthorityClaim(tx, input.context.tenantId, input.novel.id, input.task.id);
       const selectedMetadata = { ...toRecord(input.selectedCandidate.metadata), trialStatus: 'selected_for_trial', isSelected: true, followupStatus: 'completed' };
       const selected = await tx.chapterContentVersion.update({
         where: { id: input.selectedCandidate.id },
@@ -2295,6 +2360,7 @@ export class PrismaNovelRepository implements NovelRepository {
 
   async confirmTrial(input: TrialConfirmationInput): Promise<ConfirmedTrialRecord> {
     return this.prisma.$transaction(async (tx) => {
+      await assertNoActiveAuthorityClaim(tx, input.context.tenantId, input.novel.id);
       const isReturnUpstream = input.decision === 'return_upstream';
       let snapshot: any = null;
       if (!isReturnUpstream) {
@@ -2698,6 +2764,32 @@ async function lockGenerationAuthority(tx: Prisma.TransactionClient, input: Load
   await lock('chapter_content_version');
   await lock('trial_run');
   await lock('long_term_memory');
+}
+
+async function assertNoActiveAuthorityClaim(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  novelId: string,
+  allowedTaskId?: string
+) {
+  // The novel row is the shared lock root for claim, fences, finalizers, and authority-changing user writes.
+  await tx.$queryRaw(
+    Prisma.sql`SELECT id FROM novel WHERE tenant_id = ${tenantId} AND id = ${novelId} FOR UPDATE`
+  );
+  const activeTask = await tx.generationTask.findFirst({
+    where: {
+      tenantId,
+      novelId,
+      status: PrismaTaskStatus.PROCESSING,
+      activeClaimKey: { not: null },
+      ...(allowedTaskId ? { id: { not: allowedTaskId } } : {})
+    }
+  });
+  if (!activeTask) return;
+  throw new BusinessError(ErrorCode.ConflictTaskExists, '小说权威来源正在被生成任务使用，请等待任务结束或先取消任务。', {
+    taskId: activeTask.id,
+    taskType: activeTask.taskType
+  });
 }
 
 function createId(prefix: string) {
