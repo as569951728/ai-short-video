@@ -3,6 +3,8 @@ import { execFileSync, spawnSync } from 'node:child_process'; import { createHas
 const B2A1_BASELINE_SHA = '501a3cfcdf12341d9f611f0fdd6a6336d4ade483', B2A2_GATE_PREP_BASELINE_SHA = '6eaf60af4155a8b95ff77d53261f5896d3a8f77d', GATE_PREP_BASELINE = 'verified-gate-prep', RANGE_BASELINE = 'range-base', ZERO_SHA = '0'.repeat(40), FALLBACK_PACKAGE_ID = 'RP-01C', FALLBACK_TEST_COMMAND = 'test:rp02b1';
 const B2A2_GATE_PREP_ID = 'RP-02B2a2-G0', B2A2_GATE_PREP_ADR = 'docs/adr/rp-02b2a2-gate-prep-budget.md';
 const G0_CORRECTION_ID = 'RP-02B2a2-G0-C1', G0_CORRECTION_BASELINE_SHA = '59cedaf7150029fcbde03d2779662659727e8b4e', G0_CORRECTION_ADR = 'docs/adr/rp-02b2a2-g0-ci-compat-correction-budget.md';
+const G0_TEST_LAYER_ID = 'RP-02B2a2-G0-C2', G0_TEST_LAYER_BASELINE_SHA = '9e0f5fcf30ef78b605f13465458ec19e84a9d8fa', G0_TEST_LAYER_ADR = 'docs/adr/rp-02b2a2-g0-self-reference-correction-budget.md';
+const ACCEPTED_G0_C1_SHA = 'f27442d159d7f9d6ef273128797be6085bbd8f9d';
 const G0_CORRECTION_ADRS = new Set([G0_CORRECTION_ADR, B2A2_GATE_PREP_ADR, 'docs/adr/rp-02b2a2-authority-claim-budget.md']);
 const GATE_PREP_EVIDENCE_ID = 'RP-02B2a2-G0-E1', GATE_PREP_EVIDENCE_COMMAND = 'test:governance', GATE_PREP_EVIDENCE_MAX_ADDITIONS = 64, GATE_PREP_EVIDENCE_MAX_DELETIONS = 48, GATE_PREP_EVIDENCE_MAX_NET_ADDITIONS = 64;
 const GATE_PREP_EVIDENCE_FILES = new Set(['docs/reviews/main-control-status.md', 'docs/reviews/main-control-event-ledger.md', 'docs/reviews/remediation-rmd-task-002-003-rp-02b2a1-verification-2026-07-15.md']);
@@ -13,14 +15,14 @@ const GIT_MAX_BUFFER = 16 * 1024 * 1024;
 const MAX_RENDERED_HTML_COMMENTS = 1024, MAX_RENDERED_HTML_COMMENT_LENGTH = 4096;
 const GATE_ENV_COMMAND = 'env -u DATABASE_URL -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL -u DEEPSEEK_MODEL -u DEEPSEEK_STRUCTURE_MODEL -u DEEPSEEK_REASONER_MODEL -u DEEPSEEK_TIMEOUT_MS -u DEEPSEEK_MAX_RETRIES -u DEPLOYMENT_ACTOR_TENANT_ID -u DEPLOYMENT_ACTOR_USER_ID NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=/dev/null';
 const TRUSTED_ADMISSION_WORKFLOW = '.github/workflows/rp02b2a-admission.yml';
-const TRUSTED_ADMISSION_WORKFLOW_CANONICAL_SHA256 = 'bd744804b87d6359b86ff05de71edb0a094962d43215c7b5010a8a82ae18f8a8';
+const TRUSTED_ADMISSION_WORKFLOW_CANONICAL_SHA256 = '0e070572c4ef1357380e12975396eba9aea5d03c65f342bb354c0b47f98b5dfc';
 const B2A2_PACKAGE_SCRIPTS = Object.freeze({
   'test:rp02b2a2:env-probe': `node -e "const keys=['DATABASE_URL','DEEPSEEK_API_KEY','DEEPSEEK_BASE_URL','DEEPSEEK_MODEL','DEEPSEEK_STRUCTURE_MODEL','DEEPSEEK_REASONER_MODEL','DEEPSEEK_TIMEOUT_MS','DEEPSEEK_MAX_RETRIES','DEPLOYMENT_ACTOR_TENANT_ID','DEPLOYMENT_ACTOR_USER_ID']; if(keys.some((key)=>process.env[key]!==undefined)||process.env.NODE_ENV!=='production'||process.env.AI_PROVIDER_MODE!=='mock'||process.env.DOTENV_CONFIG_PATH!=='/dev/null') process.exit(1); console.log('RP02B2A2_ENV_CLEAN')"`,
   'test:rp02b2a2:core': `${GATE_ENV_COMMAND} sh -c 'npm run test:rp02b2a2:env-probe && npm run build -w @ai-shortvideo/shared && npm run prisma:generate -w @ai-shortvideo/api && npm exec -w @ai-shortvideo/api -- tsx --test test/rp02b2a/authority-claim.test.ts test/rp02b2a/repository-authority-hardening.test.ts src/modules/novels/novelRoutes.test.ts'`,
   'test:rp02b2a2': `${GATE_ENV_COMMAND} sh -c 'npm run test:rp02b2a2:env-probe && npm run test:rp02b2a1 && npm run test:rp02b2a2:core'`
 });
 const BUSINESS_PACKAGE_SEQUENCE = Object.freeze(['RP-02B2a2', 'RP-02B2a3', 'RP-02B2a4', 'RP-02B2a5']);
-const BUSINESS_PACKAGE_PREDECESSOR = Object.freeze({ 'RP-02B2a2': G0_CORRECTION_ID, 'RP-02B2a3': 'RP-02B2a2', 'RP-02B2a4': 'RP-02B2a3', 'RP-02B2a5': 'RP-02B2a4' });
+const BUSINESS_PACKAGE_PREDECESSOR = Object.freeze({ 'RP-02B2a2': G0_TEST_LAYER_ID, 'RP-02B2a3': 'RP-02B2a2', 'RP-02B2a4': 'RP-02B2a3', 'RP-02B2a5': 'RP-02B2a4' });
 const BUSINESS_PACKAGE_SCRIPT_ADDITIONS = Object.freeze({
   'RP-02B2a2': B2A2_PACKAGE_SCRIPTS,
   'RP-02B2a3': Object.freeze({
@@ -56,12 +58,13 @@ const YAML_AST_TO_JSON = String.raw`def convert(node, anchors = {}, resolving = 
 end
 stream = Psych.parse_stream(STDIN.read); raise 'workflow YAML must contain exactly one document' unless stream.children.length == 1; puts JSON.generate(convert(stream.children.first))`;
 const COMMON_GATE_FILES = 'scripts/rp02b2a-package-gate.mjs|scripts/rp02b2a-package-gate.test.mjs|.github/workflows/rp01c-fixtures.yml|package.json'.split('|');
-const FIXED_BASELINES = Object.freeze({ 'RP-02B2a1': B2A1_BASELINE_SHA, [B2A2_GATE_PREP_ID]: B2A2_GATE_PREP_BASELINE_SHA, [G0_CORRECTION_ID]: G0_CORRECTION_BASELINE_SHA, 'RP-02B2a2': GATE_PREP_BASELINE });
+const FIXED_BASELINES = Object.freeze({ 'RP-02B2a1': B2A1_BASELINE_SHA, [B2A2_GATE_PREP_ID]: B2A2_GATE_PREP_BASELINE_SHA, [G0_CORRECTION_ID]: G0_CORRECTION_BASELINE_SHA, [G0_TEST_LAYER_ID]: G0_TEST_LAYER_BASELINE_SHA, 'RP-02B2a2': GATE_PREP_BASELINE });
 const definition = (packageId, manifestId, adrPath, testCommand, hardMaxFiles, hardMaxNetAdditions, manifest, requiredCategories = ['production', 'test', 'adr']) => ({ packageId, manifestId, adrPath, testCommand, hardMaxFiles, hardMaxNetAdditions, baselinePolicy: FIXED_BASELINES[packageId] ?? RANGE_BASELINE, manifest: new Set(manifest), requiredCategories });
 export const PACKAGE_DEFINITIONS = {
   'RP-02B2a1': definition('RP-02B2a1', 'RP-02B2a1-v1', 'docs/adr/rp-02b2a1-registry-abi-budget.md', 'test:rp02b2a1', 18, 1900, [...'packages/shared/src/api.ts|packages/shared/src/novels.ts|apps/api/src/modules/novels/services/actionExecutionPlan.ts|apps/api/src/modules/novels/services/novelService.ts|apps/api/src/modules/tasks/services/taskService.ts|apps/api/src/modules/novels/providers/mockDirectionProvider.ts|apps/api/src/modules/novels/providers/mockStructureProvider.ts|apps/api/src/modules/novels/providers/mockTrialProvider.ts|apps/api/src/modules/novels/providers/mockBodyProvider.ts|apps/api/src/modules/novels/providers/mockFullReviewProvider.ts|apps/api/src/modules/novels/providers/deepseekNovelProvider.ts|apps/api/test/rp01c/fixtureFactory.test.ts|apps/api/test/rp02a/rp02a.test.ts|apps/api/src/modules/novels/novelRoutes.test.ts|docs/adr/rp-02b2a1-registry-abi-budget.md'.split('|'), ...COMMON_GATE_FILES]),
   [B2A2_GATE_PREP_ID]: definition(B2A2_GATE_PREP_ID, 'RP-02B2a2-G0-v1', B2A2_GATE_PREP_ADR, 'test:rp02b2a1:gate', 16, 2000, '.github/workflows/rp01a-e2e.yml|.github/workflows/rp01b-dom.yml|.github/workflows/rp01c-fixtures.yml|.github/workflows/remediation-governance.yml|.github/workflows/rp02b2a-admission.yml|apps/admin-web/src/modules/novels/components/TaskProgressPanel.dom.spec.ts|apps/api/test/rp01c/fixtureFactory.test.ts|docs/modules/rp-02b2-dispatcher-transport-implementation-package.md|docs/remediation/acceptance-matrix.md|docs/reviews/main-control-event-ledger.md|docs/reviews/main-control-status.md|docs/reviews/remediation-rmd-task-002-003-rp-02b2a1-verification-2026-07-15.md|scripts/rp02b2a-package-gate.mjs|scripts/rp02b2a-package-gate.test.mjs|docs/adr/rp-02b2a2-gate-prep-budget.md|package.json'.split('|'), ['governance', 'test', 'adr']),
   [G0_CORRECTION_ID]: definition(G0_CORRECTION_ID, 'RP-02B2a2-G0-C1-v3', G0_CORRECTION_ADR, 'test:rp02b2a1:gate', 14, 700, '.github/workflows/rp01b-dom.yml|.github/workflows/rp01c-fixtures.yml|.github/workflows/remediation-governance.yml|.github/workflows/rp02b2a-admission.yml|scripts/e2e/api-e2e-server.ts|scripts/e2e/run-playwright-backend-e2e.test.mjs|scripts/rp02b2a-package-gate.mjs|scripts/rp02b2a-package-gate.test.mjs|docs/adr/rp-02b2a2-gate-prep-budget.md|docs/adr/rp-02b2a2-authority-claim-budget.md|docs/adr/rp-02b2a2-g0-ci-compat-correction-budget.md|docs/modules/rp-02b2-dispatcher-transport-implementation-package.md|docs/remediation/acceptance-matrix.md|docs/reviews/rp-02b2a2-g0-ci-compat-correction-verification-2026-07-18.md'.split('|'), ['governance', 'test', 'adr']),
+  [G0_TEST_LAYER_ID]: definition(G0_TEST_LAYER_ID, 'RP-02B2a2-G0-C2-v1', G0_TEST_LAYER_ADR, 'test:rp02b2a1:gate', 5, 600, '.github/workflows/rp01c-fixtures.yml|.github/workflows/rp02b2a-admission.yml|scripts/rp02b2a-package-gate.mjs|scripts/rp02b2a-package-gate.test.mjs|docs/adr/rp-02b2a2-g0-self-reference-correction-budget.md'.split('|'), ['governance', 'test', 'adr']),
   'RP-02B2a2': definition('RP-02B2a2', 'RP-02B2a2-v3', 'docs/adr/rp-02b2a2-authority-claim-budget.md', 'test:rp02b2a2', 20, 3250, 'packages/shared/src/api.ts|packages/shared/src/novels.ts|apps/api/src/config/env.ts|apps/api/src/modules/novels/domain/executionContract.ts|apps/api/src/modules/novels/domain/novelDomain.ts|apps/api/test/rp02b/rp02b.test.ts|apps/api/src/modules/novels/services/taskClaim.ts|apps/api/src/modules/novels/services/novelService.ts|apps/api/src/modules/novels/routes/novelRoutes.ts|apps/api/src/modules/tasks/routes/taskRoutes.ts|apps/api/src/modules/novels/repositories/inMemoryNovelRepository.ts|apps/api/src/modules/novels/repositories/prismaNovelRepository.ts|apps/api/src/app.ts|apps/api/src/main.ts|apps/api/test/rp02b2a/fixtures.ts|apps/api/test/rp02b2a/authority-claim.test.ts|apps/api/test/rp02b2a/repository-authority-hardening.test.ts|apps/api/src/modules/novels/novelRoutes.test.ts|docs/adr/rp-02b2a2-authority-claim-budget.md|package.json'.split('|')),
   'RP-02B2a3': definition('RP-02B2a3', 'RP-02B2a3-v1', 'docs/adr/rp-02b2a3-lease-retry-budget.md', 'test:rp02b2a3', 14, 1800, 'packages/shared/src/api.ts|packages/shared/src/novels.ts|apps/api/src/modules/novels/domain/executionContract.ts|apps/api/src/modules/novels/domain/novelDomain.ts|apps/api/src/modules/novels/services/actionExecutionPlan.ts|apps/api/src/modules/novels/services/taskClaim.ts|apps/api/src/modules/tasks/services/taskService.ts|apps/api/src/modules/novels/repositories/inMemoryNovelRepository.ts|apps/api/src/modules/novels/repositories/prismaNovelRepository.ts|apps/api/src/modules/novels/novelRoutes.test.ts|apps/api/test/rp02b2a/fixtures.ts|apps/api/test/rp02b2a/lease-dispatch-retry.test.ts|docs/adr/rp-02b2a3-lease-retry-budget.md|package.json'.split('|')),
   'RP-02B2a4': definition('RP-02B2a4', 'RP-02B2a4-v1', 'docs/adr/rp-02b2a4-inmemory-finalize-budget.md', 'test:rp02b2a4', 12, 1900, 'packages/shared/src/novels.ts|apps/api/src/modules/novels/domain/executionContract.ts|apps/api/src/modules/novels/domain/novelDomain.ts|apps/api/src/modules/novels/services/actionExecutionPlan.ts|apps/api/src/modules/novels/services/taskClaim.ts|apps/api/src/modules/novels/services/novelService.ts|apps/api/src/modules/novels/repositories/inMemoryNovelRepository.ts|apps/api/test/rp02b2a/fixtures.ts|apps/api/test/rp02b2a/inmemory-fenced-finalize.test.ts|apps/api/src/modules/novels/novelRoutes.test.ts|docs/adr/rp-02b2a4-inmemory-finalize-budget.md|package.json'.split('|')),
@@ -91,8 +94,9 @@ export function analyzePackageGate({ files, netAdditions, addedLines = netAdditi
   assertUsableSha('BASE', base); assertUsableSha('HEAD', head);
   if (!worktree && base === head) throw new Error('RP-02B2a package gate rejects identical BASE/HEAD');
   const changedFiles = [...new Set(files)].sort(), changedAdrs = changedFiles.filter((file) => file.startsWith('docs/adr/rp-02b2a') && file.endsWith('.md')), touchesManifest = changedFiles.some((file) => Object.values(PACKAGE_DEFINITIONS).some((item) => item.manifest.has(file))), touchesEvidence = changedFiles.some((file) => GATE_PREP_EVIDENCE_FILES.has(file));
-  if (changedAdrs.includes(G0_CORRECTION_ADR) && [...GATE_PREP_EVIDENCE_FILES].every((file) => changedFiles.includes(file))) {
-    throw new Error(`${G0_CORRECTION_ID} cannot batch ${GATE_PREP_EVIDENCE_ID} publication evidence`);
+  const changedGovernanceCorrection = changedAdrs.includes(G0_TEST_LAYER_ADR) ? G0_TEST_LAYER_ID : changedAdrs.includes(G0_CORRECTION_ADR) ? G0_CORRECTION_ID : undefined;
+  if (changedGovernanceCorrection && [...GATE_PREP_EVIDENCE_FILES].every((file) => changedFiles.includes(file))) {
+    throw new Error(`${changedGovernanceCorrection} cannot batch ${GATE_PREP_EVIDENCE_ID} publication evidence`);
   }
   if (changedAdrs.length === 0 && touchesEvidence) {
     if (!sameFileSet(changedFiles, GATE_PREP_EVIDENCE_FILES)) throw new Error(`${GATE_PREP_EVIDENCE_ID} requires exactly the three frozen evidence files`);
@@ -113,9 +117,9 @@ export function analyzePackageGate({ files, netAdditions, addedLines = netAdditi
   if (![RANGE_BASELINE, GATE_PREP_BASELINE].includes(definition.baselinePolicy) && base !== definition.baselinePolicy) throw new Error(`${definition.packageId} requires fixed baseline ${definition.baselinePolicy}, got ${base}`);
   const outsideManifest = changedFiles.filter((file) => !definition.manifest.has(file));
   if (outsideManifest.length > 0) throw new Error(`${definition.packageId} manifest violation: ${outsideManifest.join(', ')}`);
-  if (definition.packageId === G0_CORRECTION_ID && !sameFileSet(changedFiles, definition.manifest)) {
+  if ([G0_CORRECTION_ID, G0_TEST_LAYER_ID].includes(definition.packageId) && !sameFileSet(changedFiles, definition.manifest)) {
     const missing = [...definition.manifest].filter((file) => !changedFiles.includes(file));
-    throw new Error(`${G0_CORRECTION_ID} requires exactly the fourteen frozen manifest files${missing.length > 0 ? `; missing: ${missing.join(', ')}` : ''}`);
+    throw new Error(`${definition.packageId} requires exactly the ${definition.hardMaxFiles} frozen manifest files${missing.length > 0 ? `; missing: ${missing.join(', ')}` : ''}`);
   }
   if (changedFiles.length > definition.hardMaxFiles) throw new Error(`${definition.packageId} file budget exceeded: ${changedFiles.length}/${definition.hardMaxFiles}`);
   if (netAdditions > definition.hardMaxNetAdditions) throw new Error(`${definition.packageId} net additions budget exceeded: ${netAdditions}/${definition.hardMaxNetAdditions}`);
@@ -145,11 +149,11 @@ function changedFiles(base, head) { return splitNulBuffer(gitBuffer(['diff', '--
 function adrExistsAt(ref, definition) { return spawnSync('git', ['cat-file', '-e', `${ref}:${definition.adrPath}`], { stdio: 'ignore' }).status === 0; }
 function adrReadyAt(ref, definition) { try { return parseAdr(gitText(['show', `${ref}:${definition.adrPath}`])).status === 'ready'; } catch { return false; } }
 function gatePrepCommitForHead(head) {
-  const candidates = [G0_CORRECTION_ADR].flatMap((adrPath) =>
+  const candidates = [G0_TEST_LAYER_ADR, G0_CORRECTION_ADR].flatMap((adrPath) =>
     gitText(['log', '--format=%H', '--diff-filter=A', head, '--', adrPath]).trim().split(/\r?\n/).filter(Boolean)
   );
   for (const candidate of candidates) { try { validateGatePrepBase(candidate); if (isAncestor(candidate, head)) return candidate; } catch {} }
-  throw new Error(`RP-02B2a2 candidate HEAD requires a verified ${G0_CORRECTION_ID} ancestor rooted at ${G0_CORRECTION_BASELINE_SHA}`);
+  throw new Error(`RP-02B2a2 candidate HEAD requires a verified ${G0_TEST_LAYER_ID} or ${G0_CORRECTION_ID} ancestor`);
 }
 function fixedPackageBase(base, head) {
   const directFiles = changedFiles(base, head);
@@ -193,11 +197,14 @@ function externallyAuthorizedRange(input, head) {
   return { base, head };
 }
 function correctionBootstrapRange(head) {
-  const definition = PACKAGE_DEFINITIONS[G0_CORRECTION_ID];
   const commitAndParents = gitText(['rev-list', '--parents', '-n', '1', head]).trim().split(/\s+/);
-  if (commitAndParents.length !== 2 || commitAndParents[1] !== G0_CORRECTION_BASELINE_SHA || !adrExistsAt(head, definition)) return undefined;
-  validateGatePrepBase(head);
-  return { base: G0_CORRECTION_BASELINE_SHA, head };
+  for (const packageId of [G0_TEST_LAYER_ID, G0_CORRECTION_ID]) {
+    const definition = PACKAGE_DEFINITIONS[packageId], fixedBase = FIXED_BASELINES[packageId];
+    if (commitAndParents.length !== 2 || commitAndParents[1] !== fixedBase || !adrExistsAt(head, definition)) continue;
+    validateGatePrepBase(head);
+    return { base: fixedBase, head, packageId };
+  }
+  return undefined;
 }
 export function resolvePackageGateRange(input) {
   const event = input.event;
@@ -220,7 +227,7 @@ export function resolvePackageGateRange(input) {
     assertUsableSha('PR_HEAD', head); assertGitCommit('PR_HEAD', head); const base = gitText(['merge-base', baseRef, head]).trim(); assertUsableSha('PR_BASE', base); assertGitCommit('PR_BASE', base);
     const correction = correctionBootstrapRange(head);
     if (correction) {
-      if (base !== G0_CORRECTION_BASELINE_SHA) throw new Error(`${G0_CORRECTION_ID} pull request must have fixed merge-base ${G0_CORRECTION_BASELINE_SHA}`);
+      if (base !== correction.base) throw new Error(`${correction.packageId} pull request must have fixed merge-base ${correction.base}`);
       return correction;
     }
     return externallyAuthorizedRange(input, head) ?? { base: fixedPackageBase(base, head), head };
@@ -239,9 +246,9 @@ export function resolvePackageGateRange(input) {
     if (input.pushCreated === 'true') throw new Error('RP-02B2a package gate rejects inconsistent created push with non-zero PUSH_BEFORE');
     assertUsableSha('PUSH_BEFORE', base); assertGitCommit('PUSH_BEFORE', base);
     if (correction) {
-      if (base === G0_CORRECTION_BASELINE_SHA) return correction;
-      if (correctionBootstrapRange(base)) return correction;
-      throw new Error(`${G0_CORRECTION_ID} replacement push requires the fixed baseline or a separately valid correction candidate as PUSH_BEFORE`);
+      if (base === correction.base) return correction;
+      if (correctionBootstrapRange(base)?.packageId === correction.packageId) return correction;
+      throw new Error(`${correction.packageId} replacement push requires the fixed baseline or a separately valid correction candidate as PUSH_BEFORE`);
     }
     if (!isAncestor(base, head)) throw new Error('RP-02B2a package gate rejects push before that is not an ancestor of after');
     return externallyAuthorizedRange(input, head) ?? { base: fixedPackageBase(base, head), head };
@@ -250,7 +257,7 @@ export function resolvePackageGateRange(input) {
     const base = input.manualBase, head = input.manualHead; assertUsableSha('MANUAL_BASE', base); assertUsableSha('MANUAL_HEAD', head); assertGitCommit('MANUAL_BASE', base); assertGitCommit('MANUAL_HEAD', head);
     const correction = correctionBootstrapRange(head);
     if (correction) {
-      if (base !== G0_CORRECTION_BASELINE_SHA) throw new Error(`${G0_CORRECTION_ID} manual replay requires fixed base ${G0_CORRECTION_BASELINE_SHA}`);
+      if (base !== correction.base) throw new Error(`${correction.packageId} manual replay requires fixed base ${correction.base}`);
       return correction;
     }
     if (!isAncestor(base, head)) throw new Error('RP-02B2a package gate rejects manual base that is not an ancestor of head');
@@ -316,6 +323,16 @@ export function validateGatePrepBase(base) {
   const commitAndParents = gitText(['rev-list', '--parents', '-n', '1', base]).trim().split(/\s+/);
   if (commitAndParents.length === 2 && commitAndParents[1] === B2A2_GATE_PREP_BASELINE_SHA) {
     return validateOriginalGatePrepBase(base);
+  }
+  if (commitAndParents.length === 2 && commitAndParents[1] === G0_TEST_LAYER_BASELINE_SHA) {
+    if (!isAncestor(ACCEPTED_G0_C1_SHA, G0_TEST_LAYER_BASELINE_SHA)) throw new Error(`${G0_TEST_LAYER_ID} baseline must contain accepted ${G0_CORRECTION_ID}`);
+    const { files, netAdditions } = readGitDiff({ base: G0_TEST_LAYER_BASELINE_SHA, head: base, worktree: false });
+    const adrTextByPath = { [G0_TEST_LAYER_ADR]: readAdrText(G0_TEST_LAYER_ADR, base, false) };
+    const result = analyzePackageGate({ files, netAdditions, adrTextByPath, base: G0_TEST_LAYER_BASELINE_SHA, head: base, worktree: false });
+    if (result.packageId !== G0_TEST_LAYER_ID) throw new Error(`RP-02B2a2 baseline is not a verified ${G0_TEST_LAYER_ID} package`);
+    verifyTrustedAdmissionWorkflowContract({ workflowPath: TRUSTED_ADMISSION_WORKFLOW, head: base });
+    verifyTestLayerCorrectionContracts({ head: base, worktree: false });
+    return result;
   }
   if (commitAndParents.length !== 2 || commitAndParents[1] !== G0_CORRECTION_BASELINE_SHA) {
     throw new Error(`${G0_CORRECTION_ID} must be one atomic direct child commit of ${G0_CORRECTION_BASELINE_SHA}`);
@@ -525,7 +542,7 @@ function validateAcceptedBusinessPackage(packageId, head, gateSource, seen = new
   assertUsableSha(`${packageId}_BASELINE`, base); assertGitCommit(`${packageId}_BASELINE`, base);
   if (!isAncestor(base, head)) throw new Error(`${packageId} accepted predecessor baseline is not an ancestor of its head`);
   const expectedPredecessor = BUSINESS_PACKAGE_PREDECESSOR[packageId];
-  if (expectedPredecessor === G0_CORRECTION_ID) {
+  if ([G0_CORRECTION_ID, G0_TEST_LAYER_ID].includes(expectedPredecessor)) {
     if (base !== gateSource) throw new Error(`${packageId} accepted predecessor must be rooted at the repository-controlled G0 gate source`);
     validateGatePrepBase(base);
   } else validateAcceptedBusinessPackage(expectedPredecessor, base, gateSource, seen);
@@ -547,7 +564,7 @@ function validateBusinessAuthorization({ packageId, base, head, gateSource, g0Ev
   if (base !== authorizedPredecessorSha) throw new Error(`RP-02B2a trusted admission must analyze the cumulative authorized-predecessor range: ${base ?? '<missing>'} != ${authorizedPredecessorSha}`);
   if (!isAncestor(gateSource, base) || !isAncestor(base, head)) throw new Error('RP-02B2a trusted admission rejects stale, unrelated, or non-ancestor authorization topology');
   const predecessorPackage = BUSINESS_PACKAGE_PREDECESSOR[packageId];
-  if (predecessorPackage === G0_CORRECTION_ID) {
+  if ([G0_CORRECTION_ID, G0_TEST_LAYER_ID].includes(predecessorPackage)) {
     if (authorizedPredecessorSha !== gateSource) throw new Error('RP-02B2a2 authorized predecessor must equal the accepted G0 gate source and must not be E1');
   } else validateAcceptedBusinessPackage(predecessorPackage, authorizedPredecessorSha, gateSource);
   assertA2HistoryDoesNotInheritEvidencePublication(gateSource, head);
@@ -690,6 +707,18 @@ function verifyCorrectionAuthorityContracts({ head, worktree }) {
       !a2Section.includes('`RP-02B2a2-v3 / 20 / 3,250`') ||
       a2Section.includes('`18 files / 1,900 net additions`')) {
     throw new Error(`${G0_CORRECTION_ID} implementation contract must freeze the 14-file correction and A2 v3 20/3250 template`);
+  }
+}
+function verifyTestLayerCorrectionContracts({ head, worktree }) {
+  const authorityPath = 'docs/adr/rp-02b2a2-authority-claim-budget.md';
+  const acceptedAuthority = readAdrText(authorityPath, ACCEPTED_G0_C1_SHA, false);
+  const currentAuthority = readAdrText(authorityPath, head, worktree);
+  if (currentAuthority !== acceptedAuthority) throw new Error(`${G0_TEST_LAYER_ID} must preserve the accepted G0-C1 A2 authority template`);
+  const oracle = readAdrText(GATE_PREP_TEST_PATH, head, worktree);
+  if (!oracle.includes(`ACCEPTED_G0_C1_SHA = "${ACCEPTED_G0_C1_SHA}"`) ||
+      !oracle.includes('`${ACCEPTED_G0_C1_SHA}:${file}`') ||
+      !oracle.includes('status: template_not_authorized')) {
+    throw new Error(`${G0_TEST_LAYER_ID} must bind the historical G0-C1 fixture instead of the downstream candidate worktree`);
   }
 }
 export function verifyWorkflowContract({ workflowPath, packageId, testCommand, triggerFile, head }) {
@@ -863,6 +892,14 @@ export function runCli(argv = process.argv.slice(2)) {
       verifyWorkflowContract({ workflowPath: '.github/workflows/rp01c-fixtures.yml' });
       verifyCorrectionEvidenceParentWorkflows({ head: effectiveHead, worktree: true });
       verifyCorrectionAuthorityContracts({ head: effectiveHead, worktree: true });
+    } else validateGatePrepBase(effectiveHead);
+  }
+  if (result.packageId === G0_TEST_LAYER_ID) {
+    if (worktree) {
+      const parents = gitText(['rev-list', '--parents', '-n', '1', effectiveHead]).trim().split(/\s+/);
+      if (parents.length !== 2 || parents[1] !== G0_TEST_LAYER_BASELINE_SHA) throw new Error(`${G0_TEST_LAYER_ID} worktree must remain the fixed baseline direct child`);
+      verifyTrustedAdmissionWorkflowContract({ workflowPath: TRUSTED_ADMISSION_WORKFLOW });
+      verifyTestLayerCorrectionContracts({ head: effectiveHead, worktree: true });
     } else validateGatePrepBase(effectiveHead);
   }
   if (args.has('authorized-g0')) throw new Error('RP-02B2a trusted admission rejects retired --authorized-g0; use the repository-controlled package/predecessor tuple');
