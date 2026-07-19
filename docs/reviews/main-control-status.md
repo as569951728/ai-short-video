@@ -35,10 +35,10 @@
 ```text
 总体关闭进度  [████░░░░░░░░░░░░░░░░]  9 / 42（21%）
 剩余问题      33
-当前整改包    RP-02B2a2-G0 accepted code head 01245fe；四路远程 CI 已通过；16 files / 1,999 net additions，package gate 47/47，TEST/QUALITY APPROVED 0/0/0
+当前整改包    RP-02B2a2-G0 accepted code head f27442d；四路远程 CI 已通过；14 files / 441 net additions，package gate 52/52，TEST/QUALITY LOCAL_ACCEPTED 0/0/0
 拆包准入进度  [████████████████████]  7 / 7（100%）：第六轮四角色全部 approved，P0/P1=0
 研发交付进度  [████░░░░░░░░░░░░░░░░]  1 / 5（20%）：仅 B2a1 限定阶段完成
-当前状态      G0 accepted code head 01245fe，远程 runs 29608314069/29608314153/29608314165/29608314134 均 completed/success；RP-02B2a2-G0 已关闭，B2a2 继续 not_authorized；总账 9/42、RMD-TASK-002=partial、RMD-TASK-003=open
+当前状态      G0 accepted code head f27442d，远程 runs 29668083767/29668083766/29668083777/29668083784 均 completed/success；RP-02B2a2-G0 已关闭，B2a2 继续 not_authorized；总账 9/42、RMD-TASK-002=partial、RMD-TASK-003=open
 ```
 
 当前包阶段：
@@ -82,7 +82,7 @@
 | RP-02B2a1 阶段证据与总账同步 | 已完成 | accepted code head `4817abc` 与 immutable evidence publication head `6eaf60a` 分离绑定；Remediation governance run `29410503391` completed/success；`RMD-TASK-002=partial`、`RMD-TASK-003=open`，总览仍为 9/42 |
 | RP-02B2a2 四路准入 | 已拒绝 | 后端合同 `APPROVED P0=0/P1=0/P2=2`；TEST `REJECTED P0=0/P1=3/P2=1`；QUALITY 对当前实现 `REJECTED P0=3/P1=2/P2=1`；治理 `REJECTED P0=0/P1=3/P2=1`。四路未清零，B2a2 保持 `not_authorized` |
 | RP-02B2a2-G0 首轮独立复核 | 已拒绝 4/4 | TEST `0/2/0`、后端架构 `0/3/3`、QUALITY `0/5/1`、治理 `0/3/1`；共同 P1 为治理文件无独立 package 归属、range/命令/workflow 假绿及 actor/legacy 合同越界。当时按固定 `6eaf60a` 的 10-file G0 包整改，业务实现未启动 |
-| RP-02B2a2-G0 整改后最终复核 | 已完成 | accepted code head `01245fe`；16 files / 1999 net additions；package gate 47/47；TEST/QUALITY `APPROVED 0/0/0`；四路远程 CI completed/success；B2a2 `not_authorized` |
+| RP-02B2a2-G0 整改后最终复核 | 已完成 | accepted code head `f27442d`；14 files / 441 net additions；package gate 52/52；TEST/QUALITY `LOCAL_ACCEPTED 0/0/0`；四路远程 CI completed/success；B2a2 `not_authorized` |
 
 ## 2. 小说模块
 
@@ -204,15 +204,15 @@
 
 ## 7. 当前唯一推荐动作
 
-1. `RP-02B2a1` code head `4817abc` 与 immutable evidence publication head `6eaf60a` 已完成，run `29410503391` success。`RP-02B2a2-G0` accepted code head `01245fe` 四路远程 CI 已完成；G0 关闭，B2a2 继续 `not_authorized`，B2a3-B2a5、B2b、B2c、B3、真实 DB/provider/media/E6 继续冻结。
+1. `RP-02B2a1` code head `4817abc` 与 immutable evidence publication head `6eaf60a` 已完成，run `29410503391` success。`RP-02B2a2-G0` accepted code head `f27442d` 四路远程 CI 已完成；G0 关闭，B2a2 继续 `not_authorized`，B2a3-B2a5、B2b、B2c、B3、真实 DB/provider/media/E6 继续冻结。
 2. `RP-01D` 涉及真实 MySQL，只能在安全环境和用户独立授权后执行；管理分组不得整体派发。每个子包独立研发、测试、关闭、commit 和 push。
 3. 小说真实完本金丝雀通过后，再执行 P9-real；P10-R1 只在 `RP-10` 重新决策。
 4. 继续保持真实 DB/provider、外部媒体和平台发布的独立授权门禁。
-g0_evidence_parent_sha: 01245feb51b50ec838cb405a67bcafd1b194eeae
-g0_evidence_rp01a_run: 29608314069
-g0_evidence_rp01b_run: 29608314153
-g0_evidence_rp01c_run: 29608314165
-g0_evidence_governance_run: 29608314134
+g0_evidence_parent_sha: f27442d159d7f9d6ef273128797be6085bbd8f9d
+g0_evidence_rp01a_run: 29668083767
+g0_evidence_rp01b_run: 29668083766
+g0_evidence_rp01c_run: 29668083777
+g0_evidence_governance_run: 29668083784
 g0_evidence_a2_authorization: not_authorized
 g0_evidence_issue_closed_count: 9/42
 g0_evidence_rmd_task_002: partial
