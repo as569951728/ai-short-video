@@ -161,6 +161,130 @@ describe('RP-02B2a2 A2 repository authority hardening', () => {
     assert.equal(recoveryRow.status, 'PROCESSING');
   });
 
+  it('keeps InMemory and Prisma authority-fence contracts aligned across dispatch and stale finalize', async () => {
+    const context = { tenantId: 'tenant_fence', userId: 'user_fence', requestId: 'request-fence' };
+    const inMemory = createInMemoryNovelRepository();
+    const created = await inMemory.createDraft({ request: { title: 'in-memory fence' }, context, now: at(0) });
+    const inMemoryClaimInput = await claimInput(inMemory, created.novel.id, context, 'fence-contract');
+    const inMemoryClaim = await inMemory.claimGenerationTask(inMemoryClaimInput);
+    assert.equal(inMemoryClaim.outcome, 'created');
+
+    const inMemoryDispatch = await inMemory.fenceGenerationAuthority({
+      tenantId: context.tenantId,
+      taskId: inMemoryClaim.task.id,
+      phase: 'provider_dispatch',
+      authorityInput: inMemoryClaimInput.authorityInput,
+      expectedAuthoritySnapshotHash: inMemoryClaimInput.expectedAuthoritySnapshotHash,
+      context,
+      now: at(1)
+    });
+    const inMemoryDispatchContract = fenceContract(inMemoryDispatch);
+    assert.equal(inMemoryDispatch.outcome, 'authorized');
+    created.novel.title = 'in-memory fence changed';
+    const inMemoryFinalize = await inMemory.fenceGenerationAuthority({
+      tenantId: context.tenantId,
+      taskId: inMemoryClaim.task.id,
+      phase: 'result_finalize',
+      authorityInput: inMemoryClaimInput.authorityInput,
+      expectedAuthoritySnapshotHash: inMemoryClaimInput.expectedAuthoritySnapshotHash,
+      context,
+      now: at(2)
+    });
+
+    const prismaSource = createInMemoryNovelRepository();
+    const prismaCreated = await prismaSource.createDraft({ request: { title: 'prisma fence' }, context, now: at(0) });
+    const prismaClaimInput = await claimInput(prismaSource, prismaCreated.novel.id, context, 'fence-contract');
+    const prismaClaim = await prismaSource.claimGenerationTask(prismaClaimInput);
+    assert.equal(prismaClaim.outcome, 'created');
+    const prismaRow = toPrismaTask(prismaClaim.task);
+    let currentAuthority = await prismaSource.loadGenerationAuthority(prismaClaimInput.authorityInput);
+    let prismaEvents = 0;
+    const prisma = prismaRepositoryWithTransaction({
+      $queryRaw: async () => [],
+      generationTask: {
+        findFirst: async () => prismaRow,
+        update: async ({ data }: { data: Record<string, unknown> }) => {
+          Object.assign(prismaRow, data);
+          return prismaRow;
+        }
+      },
+      generationTaskEvent: {
+        create: async () => { prismaEvents += 1; return {}; }
+      }
+    });
+    prisma.loadGenerationAuthority = async () => currentAuthority;
+    const prismaDispatch = await prisma.fenceGenerationAuthority({
+      tenantId: context.tenantId,
+      taskId: prismaClaim.task.id,
+      phase: 'provider_dispatch',
+      authorityInput: prismaClaimInput.authorityInput,
+      expectedAuthoritySnapshotHash: prismaClaimInput.expectedAuthoritySnapshotHash,
+      context,
+      now: at(1)
+    });
+    const prismaDispatchContract = fenceContract(prismaDispatch);
+    currentAuthority = null;
+    const prismaFinalize = await prisma.fenceGenerationAuthority({
+      tenantId: context.tenantId,
+      taskId: prismaClaim.task.id,
+      phase: 'result_finalize',
+      authorityInput: prismaClaimInput.authorityInput,
+      expectedAuthoritySnapshotHash: prismaClaimInput.expectedAuthoritySnapshotHash,
+      context,
+      now: at(2)
+    });
+
+    assert.deepEqual(inMemoryDispatchContract, prismaDispatchContract);
+    assert.deepEqual(fenceContract(inMemoryFinalize), fenceContract(prismaFinalize));
+    assert.deepEqual(fenceContract(inMemoryFinalize), {
+      outcome: 'source_stale',
+      status: TaskStatus.Failed,
+      phase: 'provider_call_started',
+      failureCategory: 'source_stale',
+      errorCode: 'SOURCE_STALE',
+      activeClaimKey: null
+    });
+    assert.equal(inMemory.getGenerationTaskEvents().at(-1)?.eventType, 'failed');
+    assert.equal(prismaEvents, 1);
+  });
+
+  it('keeps authority-changing writes blocked by an active claim in both repositories', async () => {
+    const context = { tenantId: 'tenant_writer', userId: 'user_writer', requestId: 'request-writer' };
+    const inMemory = createInMemoryNovelRepository();
+    const created = await inMemory.createDraft({ request: { title: 'writer guard' }, context, now: at(0) });
+    created.novel.currentChapterPlanVersionId = 'plan-current';
+    const input = await claimInput(inMemory, created.novel.id, context, 'writer-guard');
+    const claim = await inMemory.claimGenerationTask(input);
+    assert.equal(claim.outcome, 'created');
+
+    await assert.rejects(
+      inMemory.updateChapterWordTargets({
+        novel: created.novel,
+        updates: [{ chapterNo: 1, wordTarget: 2000 }],
+        reason: 'must be blocked',
+        context,
+        now: at(1)
+      }),
+      isActiveClaimConflict
+    );
+
+    const prismaRow = toPrismaTask(claim.task);
+    const prisma = prismaRepositoryWithTransaction({
+      $queryRaw: async () => [],
+      generationTask: { findFirst: async () => prismaRow }
+    });
+    await assert.rejects(
+      prisma.updateChapterWordTargets({
+        novel: created.novel,
+        updates: [{ chapterNo: 1, wordTarget: 2000 }],
+        reason: 'must be blocked',
+        context,
+        now: at(1)
+      }),
+      isActiveClaimConflict
+    );
+  });
+
   it('queries Prisma generation-task metadata directly and returns the latest authoritative body batch', async () => {
     const older = storedBodyBatch('batch-old', '2026-07-18T00:00:01.000Z');
     const latest = storedBodyBatch('batch-latest', '2026-07-18T00:00:02.000Z');
@@ -303,6 +427,23 @@ function prismaRepositoryWithTransaction(tx: unknown) {
   const repository = Object.create(PrismaNovelRepository.prototype) as PrismaNovelRepository & { prisma: unknown };
   Object.defineProperty(repository, 'prisma', { value: { $transaction: async (callback: (client: unknown) => unknown) => callback(tx) } });
   return repository;
+}
+
+function fenceContract(result: Awaited<ReturnType<ReturnType<typeof createInMemoryNovelRepository>['fenceGenerationAuthority']>>) {
+  return {
+    outcome: result.outcome,
+    status: result.task?.status ?? null,
+    phase: result.task?.providerAttemptPhase ?? null,
+    failureCategory: result.task?.failureCategory ?? null,
+    errorCode: result.task?.errorCode ?? null,
+    activeClaimKey: result.task?.activeClaimKey ?? null
+  };
+}
+
+function isActiveClaimConflict(error: unknown) {
+  return error instanceof Error
+    && 'code' in error
+    && error.code === 'CONFLICT_TASK_EXISTS';
 }
 
 function toInMemoryBatch(batch: ReturnType<typeof storedBodyBatch>): BodyBatchRecord {

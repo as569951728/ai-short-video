@@ -47,6 +47,8 @@ import {
   type FullReviewIssueResolutionInput,
   type GenerationTaskRecord,
   type GenerationTaskEventRecord,
+  type GenerationAuthorityFenceInput,
+  type GenerationAuthorityFenceResult,
   type GeneratedBodyBatchRecord,
   type ListedNovelRecords,
   type ListNovelRecordsQuery,
@@ -560,6 +562,37 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       return { outcome: 'created', task };
     },
 
+    async fenceGenerationAuthority(input: GenerationAuthorityFenceInput): Promise<GenerationAuthorityFenceResult> {
+      const task = generationTasks.find((item) => item.id === input.taskId && item.tenantId === input.tenantId) ?? null;
+      if (!task || task.status !== TaskStatus.Processing) {
+        return { outcome: 'task_not_writable', task };
+      }
+      const authority = loadAuthority(input.authorityInput);
+      if (!matchGenerationAuthority(input.authorityInput, input.expectedAuthoritySnapshotHash, authority).ok) {
+        task.status = TaskStatus.Failed;
+        task.statusNote = '生成来源已变化，模型结果已安全丢弃。';
+        task.currentStep = '生成来源已变化';
+        task.failureCategory = 'source_stale';
+        task.errorCode = 'SOURCE_STALE';
+        task.errorMessage = '生成来源已变化，请刷新后重试。';
+        task.activeClaimKey = null;
+        task.finishedAt = input.now;
+        task.updatedAt = input.now;
+        appendTaskEvent(task, {
+          eventType: 'failed',
+          message: task.errorMessage,
+          progress: task.progress,
+          requestId: input.context.requestId,
+          createdAt: input.now
+        });
+        return { outcome: 'source_stale', task };
+      }
+      task.providerAttemptPhase = input.phase === 'provider_dispatch' ? 'provider_call_started' : 'finalizing';
+      if (input.phase === 'provider_dispatch') task.providerDispatchedAt = input.now;
+      task.updatedAt = input.now;
+      return { outcome: 'authorized', task };
+    },
+
     async leaseNextQueuedTask(workerId: string, leaseToken: string, now: Date, leaseUntil: Date) {
       if (leaseUntil.getTime() <= now.getTime()) return null;
       for (const task of generationTasks.filter((item) => item.status === TaskStatus.Queued).sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())) {
@@ -689,6 +722,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async createDirectionCandidates(input: DirectionCreationInput): Promise<CreatedDirectionCandidatesRecord> {
+      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task?.id);
       const task = input.task
         ? requireClaimedTask(input.task, input.context.tenantId)
         : createTask({ input, taskId: nextId('task'), status: TaskStatus.WaitingConfirmation, progress: 100, currentStep: getDirectionRevisionTaskStep(input.taskType) });
@@ -727,6 +761,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async createDirectionRevision(input: DirectionRevisionInput): Promise<CreatedDirectionRevisionRecord> {
+      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task?.id);
       const task = input.task
         ? requireClaimedTask(input.task, input.context.tenantId)
         : createTask({ input, taskId: nextId('task'), status: TaskStatus.WaitingConfirmation, progress: 100, currentStep: getDirectionRevisionTaskStep(input.taskType) });
@@ -772,6 +807,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async adoptDirection(input: DirectionAdoptionInput): Promise<AdoptedDirectionRecord> {
+      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id);
       const currentVersionIdBefore = input.novel.currentDirectionVersionId;
       const decisionRecord: AssetDecisionRecord = {
         id: nextId('decision'),
@@ -898,6 +934,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async createStructureCandidate(input: StructureCreationInput): Promise<CreatedStructureAssetRecord> {
+      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task?.id);
       const effectiveTask = input.task
         ? requireClaimedTask(input.task, input.context.tenantId)
         : createTask({ input, objectType: input.asset.objectType, taskId: nextId('task'), status: TaskStatus.WaitingConfirmation, progress: 100, currentStep: getStructureGenerateStep(input.asset.objectType) });
@@ -992,6 +1029,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async adoptStructureAsset(input: StructureAdoptionInput): Promise<AdoptedStructureAssetRecord> {
+      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id);
       const currentVersionIdBefore = getCurrentVersionId(input.novel, input.objectType);
       const downstream = getDownstreamObjectTypes(input.objectType);
       const decisionRecord: AssetDecisionRecord = {
@@ -1219,6 +1257,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async createTrialChapterOneCandidates(input: TrialCandidateCreationInput): Promise<CreatedTrialCandidatesRecord> {
+      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task.id);
       const trialRunId = nextId('trial');
       const task = requireClaimedTask(input.task, input.context.tenantId);
       const versions = input.candidates.map((candidate) => {
@@ -1400,6 +1439,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async selectTrialChapterOneAndGenerateFollowup(input: TrialFollowupGenerationInput): Promise<GeneratedTrialFollowupRecord> {
+      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task.id);
       const selectedMetadata = toMutableMetadata(input.selectedCandidate.metadata);
       selectedMetadata.trialStatus = 'selected_for_trial';
       selectedMetadata.isSelected = true;
@@ -1589,6 +1629,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async confirmTrial(input: TrialConfirmationInput): Promise<ConfirmedTrialRecord> {
+      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id);
       const isReturnUpstream = input.decision === 'return_upstream';
       let snapshot: CreativeVersionRecord | null = null;
       const snapshotVersionId = isReturnUpstream ? null : nextId('cv');
@@ -2224,6 +2265,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async generateBodyBatch(input: BodyBatchGenerationInput): Promise<GeneratedBodyBatchRecord> {
+      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task.id);
       const task = generationTasks.find((item) => item.id === input.task.id && item.tenantId === input.context.tenantId) ?? input.task;
       task.status = TaskStatus.Processing;
       task.statusNote = '模型已返回，正在保存正文版本和批次总结。';
@@ -2404,6 +2446,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async rewriteChapter(input: ChapterRewriteInput): Promise<RewrittenChapterRecord> {
+      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task.id);
       const task = requireClaimedTask(input.task, input.context.tenantId);
       const candidate = createBodyContentVersion({
         input: {
@@ -2455,6 +2498,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async adoptChapterContent(input: ChapterContentAdoptionInput): Promise<AdoptedChapterContentRecord> {
+      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task.id);
       for (const version of chapterContentVersions) {
         if (version.tenantId === input.context.tenantId && version.chapterId === input.chapter.id && version.status === VersionStatus.Current) {
           version.status = VersionStatus.Historical;
@@ -2608,6 +2652,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async resolveImpactCase(input: ImpactCaseResolveInput): Promise<ResolvedImpactCaseRecord> {
+      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id);
       input.impactCase.status = input.resolution;
       input.impactCase.resolvedAt = input.now;
       input.impactCase.metadata = {
@@ -2670,6 +2715,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async updateChapterWordTargets(input: ChapterWordTargetUpdateInput) {
+      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id);
       const currentPlanId = input.novel.currentChapterPlanVersionId;
       const currentAsset = creativeVersions.find(
         (version) =>
@@ -4266,6 +4312,22 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     const novel = novels.find((item) => item.id === novelId);
     if (!novel) return;
     Object.assign(novel, patch);
+  }
+
+  function assertNoActiveAuthorityClaim(tenantId: string, novelId: string, allowedTaskId?: string) {
+    // Every in-memory authority writer calls this before its synchronous mutation block.
+    const activeTask = generationTasks.find((task) =>
+      task.tenantId === tenantId
+      && task.novelId === novelId
+      && task.id !== allowedTaskId
+      && task.status === TaskStatus.Processing
+      && task.activeClaimKey !== null
+    );
+    if (!activeTask) return;
+    throw new BusinessError(ErrorCode.ConflictTaskExists, '小说权威来源正在被生成任务使用，请等待任务结束或先取消任务。', {
+      taskId: activeTask.id,
+      taskType: activeTask.taskType
+    });
   }
 
   function requireClaimedTask(task: GenerationTaskRecord, tenantId: string) {

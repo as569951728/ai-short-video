@@ -283,6 +283,16 @@ export async function executeClaimedGeneration<TProviderResult, TFinalResult>(
   }
 
   const finalProviderInput = authoritativeProviderInput;
+  const dispatchFence = await input.repository.fenceGenerationAuthority({
+    tenantId: input.context.tenantId,
+    taskId: claim.task.id,
+    phase: 'provider_dispatch',
+    authorityInput,
+    expectedAuthoritySnapshotHash: authoritySnapshotHash,
+    context: input.context,
+    now: input.now()
+  });
+  assertAuthorityFence(dispatchFence, claim.task);
 
   let providerResult: TProviderResult;
   try {
@@ -300,6 +310,16 @@ export async function executeClaimedGeneration<TProviderResult, TFinalResult>(
       status: latestTask.status
     });
   }
+  const finalizeFence = await input.repository.fenceGenerationAuthority({
+    tenantId: input.context.tenantId,
+    taskId: claim.task.id,
+    phase: 'result_finalize',
+    authorityInput,
+    expectedAuthoritySnapshotHash: authoritySnapshotHash,
+    context: input.context,
+    now: input.now()
+  });
+  assertAuthorityFence(finalizeFence, claim.task);
 
   try {
     const value = await input.finalize(claim.task, providerResult);
@@ -308,6 +328,19 @@ export async function executeClaimedGeneration<TProviderResult, TFinalResult>(
     await failClaimedTask(input, claim.task, error, 'save_failed');
     throw error;
   }
+}
+
+function assertAuthorityFence(
+  fence: Awaited<ReturnType<NovelRepository['fenceGenerationAuthority']>>,
+  claimedTask: GenerationTaskRecord
+) {
+  if (fence.outcome === 'authorized') return;
+  if (fence.outcome === 'source_stale') throw sourceStale();
+  throw new BusinessError(ErrorCode.GateBlocked, '生成任务已不在可调用或写入状态，模型结果已安全丢弃。', {
+    taskId: claimedTask.id,
+    taskType: claimedTask.taskType,
+    status: fence.task?.status ?? 'not_found'
+  });
 }
 
 export function resolveRequestIdempotencyKey(headerValue: unknown, bodyValue: unknown): string | undefined {

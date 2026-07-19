@@ -136,6 +136,120 @@ describe('RP-02B2a2 authoritative claim', () => {
       assert.deepEqual(sideEffects(fixture.repository, calls.value, fixture.counters.intent), ZERO_SIDE_EFFECTS);
     });
   }
+  describe('post-claim authority fences', () => {
+    let fixture: Awaited<ReturnType<typeof createRouteAuthorityFixture>>;
+
+    before(async () => { fixture = await createRouteAuthorityFixture('outline_generate'); });
+    after(async () => { await fixture.app.close(); });
+
+    it('rechecks authority before provider dispatch with provider=0 and candidate=0', async () => {
+      const entered = deferred();
+      const release = deferred();
+      const originalFence = fixture.repository.fenceGenerationAuthority.bind(fixture.repository);
+      fixture.repository.fenceGenerationAuthority = async (input) => {
+        if (input.phase === 'provider_dispatch') {
+          entered.resolve();
+          await release.promise;
+        }
+        return originalFence(input);
+      };
+      const beforeCandidates = fixture.repository.getCreativeVersions().length;
+      const novel = await fixture.repository.findById('tenant_test', fixture.novelId);
+      assert.ok(novel);
+      const previousTitle = novel.title;
+      try {
+        const responsePromise = fixture.runSuccess('dispatch-fence-stale');
+        await entered.promise;
+        novel.title = `${previousTitle} changed before dispatch`;
+        release.resolve();
+        const response = await responsePromise;
+
+        assertSourceStaleResponse(response.statusCode, response.json());
+        assert.equal(fixture.providerInvocations().length, 0);
+        assert.equal(fixture.repository.getCreativeVersions().length, beforeCandidates);
+        assertSourceStaleTerminalTask(fixture.repository.getGenerationTasks());
+      } finally {
+        novel.title = previousTitle;
+        release.resolve();
+        fixture.repository.fenceGenerationAuthority = originalFence;
+      }
+    });
+
+    it('rechecks authority after provider return with provider=1 and candidate=0', async () => {
+      const entered = deferred();
+      const release = deferred();
+      const originalFence = fixture.repository.fenceGenerationAuthority.bind(fixture.repository);
+      fixture.repository.fenceGenerationAuthority = async (input) => {
+        if (input.phase === 'result_finalize') {
+          entered.resolve();
+          await release.promise;
+        }
+        return originalFence(input);
+      };
+      const beforeCandidates = fixture.repository.getCreativeVersions().length;
+      const novel = await fixture.repository.findById('tenant_test', fixture.novelId);
+      assert.ok(novel);
+      const previousTitle = novel.title;
+      try {
+        const responsePromise = fixture.runSuccess('finalize-fence-stale');
+        await entered.promise;
+        assert.equal(fixture.providerInvocations().length, 1);
+        novel.title = `${previousTitle} changed after provider`;
+        release.resolve();
+        const response = await responsePromise;
+
+        assertSourceStaleResponse(response.statusCode, response.json());
+        assert.equal(fixture.providerInvocations().length, 1);
+        assert.equal(fixture.repository.getCreativeVersions().length, beforeCandidates);
+        assertSourceStaleTerminalTask(fixture.repository.getGenerationTasks());
+      } finally {
+        novel.title = previousTitle;
+        release.resolve();
+        fixture.repository.fenceGenerationAuthority = originalFence;
+      }
+    });
+  });
+
+  it('blocks authority adoption after the finalize fence passes but before candidate persistence', async () => {
+    const fixture = await createRouteAuthorityFixture('direction_generate');
+    try {
+      const initial = await fixture.runSuccess('adoption-guard-seed');
+      assert.equal(initial.statusCode, 200, initial.body);
+      const candidate = fixture.repository.getCreativeVersions().find((version) =>
+        version.novelId === fixture.novelId && version.objectType === 'direction' && version.status === 'candidate'
+      );
+      assert.ok(candidate);
+
+      const entered = deferred();
+      const release = deferred();
+      const originalFinalize = fixture.repository.createDirectionCandidates.bind(fixture.repository);
+      fixture.repository.createDirectionCandidates = async (input) => {
+        entered.resolve();
+        await release.promise;
+        return originalFinalize(input);
+      };
+      try {
+        const generationPromise = fixture.runSuccess('adoption-guard-active');
+        await entered.promise;
+        const adoption = await fixture.app.inject({
+          method: 'POST',
+          url: `/novels/${fixture.novelId}/directions/${candidate.id}/adopt`,
+          payload: { reason: '验证 active claim 与采用操作互斥。' }
+        });
+        assert.equal(adoption.statusCode, 409, adoption.body);
+        assert.equal(adoption.json().error.code, ErrorCode.ConflictTaskExists);
+        const novel = await fixture.repository.findById('tenant_test', fixture.novelId);
+        assert.equal(novel?.currentDirectionVersionId, null);
+        release.resolve();
+        assert.equal((await generationPromise).statusCode, 200);
+      } finally {
+        release.resolve();
+        fixture.repository.createDirectionCandidates = originalFinalize;
+      }
+    } finally {
+      await fixture.app.close();
+    }
+  });
   it('new_task_missing_required_source_refs_fails_closed_with_absolute_zero_provider_task_and_intent', async () => {
     const fixture = await createAuthorityFixture('outline_generate');
     const calls = { value: 0 };
@@ -345,6 +459,26 @@ function assertZeroDelta(beforeEffects: Record<string, number>, afterEffects: Re
   for (const key of Object.keys(afterEffects)) {
     assert.equal(afterEffects[key] - beforeEffects[key], 0, `${label}:${key}:absolute zero delta`);
   }
+}
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+function assertSourceStaleResponse(statusCode: number, body: { error?: { code?: unknown; details?: { code?: unknown } } }) {
+  assert.equal(statusCode, 409);
+  assert.equal(body.error?.code, ErrorCode.VersionConflict);
+  assert.equal(body.error?.details?.code, 'SOURCE_STALE');
+}
+
+function assertSourceStaleTerminalTask(tasks: Array<{ status: unknown; failureCategory: unknown; errorCode: unknown; activeClaimKey: unknown }>) {
+  const task = tasks.findLast((item) => item.failureCategory === 'source_stale');
+  assert.ok(task);
+  assert.equal(task.status, TaskStatus.Failed);
+  assert.equal(task.errorCode, 'SOURCE_STALE');
+  assert.equal(task.activeClaimKey, null);
 }
 async function snapshotNovelBusinessState(fixture: Awaited<ReturnType<typeof createRouteAuthorityFixture>>) {
   const novel = await fixture.repository.findById('tenant_test', fixture.novelId);

@@ -604,6 +604,23 @@ export type ClaimGenerationTaskResult =
   | { outcome: 'active_conflict'; task: GenerationTaskRecord }
   | { outcome: 'source_stale'; task: null };
 
+export type GenerationAuthorityFencePhase = 'provider_dispatch' | 'result_finalize';
+
+export interface GenerationAuthorityFenceInput {
+  tenantId: string;
+  taskId: string;
+  phase: GenerationAuthorityFencePhase;
+  authorityInput: LoadGenerationAuthorityInput;
+  expectedAuthoritySnapshotHash: string;
+  context: RequestContext;
+  now: Date;
+}
+
+export type GenerationAuthorityFenceResult =
+  | { outcome: 'authorized'; task: GenerationTaskRecord }
+  | { outcome: 'source_stale'; task: GenerationTaskRecord }
+  | { outcome: 'task_not_writable'; task: GenerationTaskRecord | null };
+
 export interface ObservedTaskLease {
   tenantId: string;
   taskId: string;
@@ -1259,6 +1276,7 @@ export interface NovelRepository {
   assertProviderActionSupported(taskType: string): Promise<void>;
   loadGenerationAuthority(input: LoadGenerationAuthorityInput): Promise<GenerationAuthoritySnapshot | null>;
   claimGenerationTask(input: ClaimGenerationTaskInput): Promise<ClaimGenerationTaskResult>;
+  fenceGenerationAuthority(input: GenerationAuthorityFenceInput): Promise<GenerationAuthorityFenceResult>;
   leaseNextQueuedTask(workerId: string, leaseToken: string, now: Date, leaseUntil: Date): Promise<GenerationTaskRecord | null>;
   heartbeatTask(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, now: Date, leaseUntil: Date): Promise<boolean>;
   finalizeLeasedTask(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, authoritativeNow: Date, result: HashedSafeResultReceipt): Promise<LeasedTaskMutationResult>;
