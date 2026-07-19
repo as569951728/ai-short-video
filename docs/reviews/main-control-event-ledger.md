@@ -1373,23 +1373,23 @@ next_action: 文档冻结后在同一 16-file / 1,999-net 差异上重跑 47-cas
 
 ```text
 event_id: MCE-RP02B2A2-G0-E1-REMOTE-ACCEPTED
-occurred_at: 2026-07-19 09:16:00 CST
+occurred_at: 2026-07-19 16:20:50 CST
 event_type: governance_bootstrap_remote_accepted
 source_thread: main-control
 package_id: RP-02B2a2-G0-E1
-accepted_code_head: f27442d159d7f9d6ef273128797be6085bbd8f9d
+accepted_code_head: 81f567d4fb61765c9a5d407dae04011d08d5aa19
 issue_ids: RMD-TASK-002, RMD-TASK-003
-summary: RP-02B2a2-G0-C1 最终 14-file package、独立 TEST/QUALITY、本地工程矩阵和四路同头 main push 远程 CI 已完成。
-evidence: package gate 52/52; independent TEST/QUALITY LOCAL_ACCEPTED; remote push runs rp01a=29668083767,rp01b=29668083766,rp01c=29668083777,governance=29668083784 completed/success; PR #35 squash merged from fixed base 59cedaf to f27442d with the authorized tree unchanged
-g0_evidence_parent_sha: f27442d159d7f9d6ef273128797be6085bbd8f9d
-g0_evidence_rp01a_run: 29668083767
-g0_evidence_rp01b_run: 29668083766
-g0_evidence_rp01c_run: 29668083777
-g0_evidence_governance_run: 29668083784
+summary: RP-02B2a2-G0-C3 最终 5-file evidence-trigger correction、本地完整门禁和四路同头 main push 远程 CI 已完成。
+evidence: package gate 56/56; governance 15/15; typecheck passed; remote push runs rp01a=29679243165,rp01b=29679243180,rp01c=29679243168,governance=29679243184 completed/success; PR #41 squash merged from fixed base e15b59b to 81f567d with the authorized tree unchanged
+g0_evidence_parent_sha: 81f567d4fb61765c9a5d407dae04011d08d5aa19
+g0_evidence_rp01a_run: 29679243165
+g0_evidence_rp01b_run: 29679243180
+g0_evidence_rp01c_run: 29679243168
+g0_evidence_governance_run: 29679243184
 g0_evidence_a2_authorization: not_authorized
 g0_evidence_issue_closed_count: 9/42
 g0_evidence_rmd_task_002: partial
 g0_evidence_rmd_task_003: open
-mc_decision: RP-02B2a2-G0 关闭；replacement accepted code head 为 f27442d，B2a2 继续 not_authorized，总账与真实环境边界不变。
+mc_decision: RP-02B2a2-G0 关闭；replacement accepted code head 为 81f567d，B2a2 继续 not_authorized，总账保持 9/42；真实数据库和真实模型仅在隔离、回滚、费用与密钥门禁满足后执行。
 next_action: 仅在 MC 独立授权后，才可从 accepted G0 code head 创建与 E1 互为 sibling 的 A2 实现分支。
 ```
