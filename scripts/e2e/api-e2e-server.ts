@@ -45,11 +45,27 @@ async function main() {
   ]);
 
   const port = Number(process.env.PORT ?? 0);
+  const testOnlyRequestContextOptions = process.env.E2E_PROFILE === 'rp01a-local-inmemory'
+    ? {
+        requestContextResolver: async (request: {
+          id: string;
+          ip: string;
+          headers: Record<string, string | string[] | undefined>;
+        }) => ({
+          tenantId: 'tenant_rp01a_e2e',
+          userId: 'user_rp01a_e2e',
+          requestId: request.id,
+          ip: request.ip,
+          userAgent: request.headers['user-agent']
+        })
+      }
+    : {};
   const app: FastifyInstance = await buildApp({
     logger: false,
     novelRepository: createInMemoryNovelRepository(),
     videoRepository: createInMemoryVideoRepository(),
-    aiProviderEnv: { AI_PROVIDER_MODE: 'mock' }
+    aiProviderEnv: { AI_PROVIDER_MODE: 'mock' },
+    ...testOnlyRequestContextOptions
   });
 
   await app.listen({ host: '127.0.0.1', port });
