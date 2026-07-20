@@ -7,6 +7,9 @@ on:
       - '.github/workflows/rp01b-dom.yml'
       - '.github/workflows/rp02b2a-admission.yml'
       - 'scripts/rp02b2a-package-gate.*'
+      - 'docs/reviews/main-control-event-ledger.md'
+      - 'docs/reviews/main-control-status.md'
+      - 'docs/reviews/remediation-rmd-task-002-003-rp-02b2a1-verification-2026-07-15.md'
       - 'apps/admin-web/src/**'
       - 'apps/admin-web/package.json'
       - 'apps/admin-web/tsconfig*.json'
@@ -20,6 +23,9 @@ on:
   pull_request:
     paths:
       - '.github/workflows/rp01b-dom.yml'
+      - 'docs/reviews/main-control-event-ledger.md'
+      - 'docs/reviews/main-control-status.md'
+      - 'docs/reviews/remediation-rmd-task-002-003-rp-02b2a1-verification-2026-07-15.md'
       - 'apps/admin-web/src/**'
       - 'apps/admin-web/package.json'
       - 'apps/admin-web/tsconfig*.json'
