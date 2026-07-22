@@ -3,7 +3,7 @@
 status: ready
 package_id: RP-02B2a2
 manifest_id: RP-02B2a2-v5
-baseline_sha: e020fb07d6279de5544ed15962b2a82d820a8247
+baseline_sha: 056a8d28910c765c9887a245e2dc4269859e5ec2
 hard_max_files: 22
 hard_max_net_additions: 3900
 exceeded_budget: changed_files,net_additions
@@ -13,7 +13,7 @@ split_reason: Trusted actor, per-asset source identities, canonical envelope, re
 owner: MC
 valid_until: 2026-08-31
 
-硬预算为 `22 files / 3,900 net additions`。本次实现绑定已验证 C4 基线 `e020fb07d6279de5544ed15962b2a82d820a8247`，并记录真实累计差异。相对默认治理预算的扩展由本 ADR 显式批准：新增的 RP-01C 夹具变更仅用于让历史回归按 A2 的可信身份合同运行。任何 authority 缺失、跨租户或变化都必须在 provider 前零副作用失败；旧版、默认或合成 actor 也不得被 worker 领取或恢复。
+硬预算为 `22 files / 3,900 net additions`。本次实现绑定已验证 C5 基线 `056a8d28910c765c9887a245e2dc4269859e5ec2`，并记录真实累计差异。相对默认治理预算的扩展由本 ADR 显式批准：新增的 RP-01C 夹具变更仅用于让历史回归按 A2 的可信身份合同运行。任何 authority 缺失、跨租户或变化都必须在 provider 前零副作用失败；旧版、默认或合成 actor 也不得被 worker 领取或恢复。
 
 本 ADR 不允许正常 leased provider、finalize、HTTP 202、Admin transport、真实 DB/provider/media 或 E6。
 
