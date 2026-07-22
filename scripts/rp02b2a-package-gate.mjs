@@ -6,6 +6,8 @@ const G0_CORRECTION_ID = 'RP-02B2a2-G0-C1', G0_CORRECTION_BASELINE_SHA = '59ceda
 const G0_TEST_LAYER_ID = 'RP-02B2a2-G0-C2', G0_TEST_LAYER_BASELINE_SHA = '9e0f5fcf30ef78b605f13465458ec19e84a9d8fa', G0_TEST_LAYER_ADR = 'docs/adr/rp-02b2a2-g0-self-reference-correction-budget.md';
 const G0_EVIDENCE_TRIGGER_ID = 'RP-02B2a2-G0-C3', G0_EVIDENCE_TRIGGER_BASELINE_SHA = 'e15b59b1eef9165501d534a183577617512df5d3', G0_EVIDENCE_TRIGGER_ADR = 'docs/adr/rp-02b2a2-g0-evidence-trigger-correction-budget.md';
 const G0_A2_SCOPE_ID = 'RP-02B2a2-G0-C4', G0_A2_SCOPE_BASELINE_SHA = 'f243595d32f555f1f98162f2f9ddebce0a1f8528', G0_A2_SCOPE_ADR = 'docs/adr/rp-02b2a2-g0-a2-scope-correction-budget.md';
+const G0_A2_SCOPE_V5_ID = 'RP-02B2a2-G0-C5', G0_A2_SCOPE_V5_BASELINE_SHA = 'b22db8e15eb648220e6c8cfab1829ed184ab59da', G0_A2_SCOPE_V5_ADR = 'docs/adr/rp-02b2a2-g0-a2-scope-v5-correction-budget.md';
+const ACCEPTED_G0_C4_SHA = 'e020fb07d6279de5544ed15962b2a82d820a8247';
 const ACCEPTED_G0_C3_SHA = '81f567d4fb61765c9a5d407dae04011d08d5aa19';
 const ACCEPTED_G0_C1_SHA = 'f27442d159d7f9d6ef273128797be6085bbd8f9d';
 const G0_CORRECTION_ADRS = new Set([G0_CORRECTION_ADR, B2A2_GATE_PREP_ADR, 'docs/adr/rp-02b2a2-authority-claim-budget.md']);
@@ -15,6 +17,19 @@ const GATE_PREP_EVIDENCE_FIELDS = Object.freeze(['g0_evidence_parent_sha', 'g0_e
 const GATE_PREP_TEST_PATH = 'scripts/rp02b2a-package-gate.test.mjs';
 const ADR_ALLOWED_FIELDS = new Set(['status', 'package_id', 'manifest_id', 'baseline_sha', 'hard_max_files', 'hard_max_net_additions', 'exceeded_budget', 'actual_files', 'actual_net_additions', 'split_reason', 'owner', 'valid_until']);
 const GIT_MAX_BUFFER = 16 * 1024 * 1024;
+let ACTIVE_RUN_CACHE;
+function withRunCache(callback) {
+  const previous = ACTIVE_RUN_CACHE;
+  ACTIVE_RUN_CACHE = {
+    gitText: new Map(),
+    gitBuffer: new Map(),
+    gitStatus: new Map(),
+    workflows: new Map(),
+    gatePrepBases: new Map(),
+  };
+  try { return callback(); }
+  finally { ACTIVE_RUN_CACHE = previous; }
+}
 const MAX_RENDERED_HTML_COMMENTS = 1024, MAX_RENDERED_HTML_COMMENT_LENGTH = 4096;
 const GATE_ENV_COMMAND = 'env -u DATABASE_URL -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL -u DEEPSEEK_MODEL -u DEEPSEEK_STRUCTURE_MODEL -u DEEPSEEK_REASONER_MODEL -u DEEPSEEK_TIMEOUT_MS -u DEEPSEEK_MAX_RETRIES -u DEPLOYMENT_ACTOR_TENANT_ID -u DEPLOYMENT_ACTOR_USER_ID NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=/dev/null';
 const TRUSTED_ADMISSION_WORKFLOW = '.github/workflows/rp02b2a-admission.yml';
@@ -22,10 +37,10 @@ const TRUSTED_ADMISSION_WORKFLOW_CANONICAL_SHA256 = '0e070572c4ef1357380e1297539
 const B2A2_PACKAGE_SCRIPTS = Object.freeze({
   'test:rp02b2a2:env-probe': `node -e "const keys=['DATABASE_URL','DEEPSEEK_API_KEY','DEEPSEEK_BASE_URL','DEEPSEEK_MODEL','DEEPSEEK_STRUCTURE_MODEL','DEEPSEEK_REASONER_MODEL','DEEPSEEK_TIMEOUT_MS','DEEPSEEK_MAX_RETRIES','DEPLOYMENT_ACTOR_TENANT_ID','DEPLOYMENT_ACTOR_USER_ID']; if(keys.some((key)=>process.env[key]!==undefined)||process.env.NODE_ENV!=='production'||process.env.AI_PROVIDER_MODE!=='mock'||process.env.DOTENV_CONFIG_PATH!=='/dev/null') process.exit(1); console.log('RP02B2A2_ENV_CLEAN')"`,
   'test:rp02b2a2:core': `${GATE_ENV_COMMAND} sh -c 'npm run test:rp02b2a2:env-probe && npm run build -w @ai-shortvideo/shared && npm run prisma:generate -w @ai-shortvideo/api && npm exec -w @ai-shortvideo/api -- tsx --test test/rp02b2a/authority-claim.test.ts test/rp02b2a/repository-authority-hardening.test.ts src/modules/novels/novelRoutes.test.ts'`,
-  'test:rp02b2a2': `${GATE_ENV_COMMAND} sh -c 'npm run test:rp02b2a2:env-probe && npm run test:rp02b2a1 && npm run test:rp02b2a2:core'`
+  'test:rp02b2a2': `${GATE_ENV_COMMAND} sh -c 'npm run test:rp02b2a2:env-probe && npm run test:rp01c && npm run test:rp02b2a1 && npm run test:rp02b2a2:core'`
 });
 const BUSINESS_PACKAGE_SEQUENCE = Object.freeze(['RP-02B2a2', 'RP-02B2a3', 'RP-02B2a4', 'RP-02B2a5']);
-const BUSINESS_PACKAGE_PREDECESSOR = Object.freeze({ 'RP-02B2a2': G0_A2_SCOPE_ID, 'RP-02B2a3': 'RP-02B2a2', 'RP-02B2a4': 'RP-02B2a3', 'RP-02B2a5': 'RP-02B2a4' });
+const BUSINESS_PACKAGE_PREDECESSOR = Object.freeze({ 'RP-02B2a2': G0_A2_SCOPE_V5_ID, 'RP-02B2a3': 'RP-02B2a2', 'RP-02B2a4': 'RP-02B2a3', 'RP-02B2a5': 'RP-02B2a4' });
 const BUSINESS_PACKAGE_SCRIPT_ADDITIONS = Object.freeze({
   'RP-02B2a2': B2A2_PACKAGE_SCRIPTS,
   'RP-02B2a3': Object.freeze({
@@ -61,7 +76,7 @@ const YAML_AST_TO_JSON = String.raw`def convert(node, anchors = {}, resolving = 
 end
 stream = Psych.parse_stream(STDIN.read); raise 'workflow YAML must contain exactly one document' unless stream.children.length == 1; puts JSON.generate(convert(stream.children.first))`;
 const COMMON_GATE_FILES = 'scripts/rp02b2a-package-gate.mjs|scripts/rp02b2a-package-gate.test.mjs|.github/workflows/rp01c-fixtures.yml|package.json'.split('|');
-const FIXED_BASELINES = Object.freeze({ 'RP-02B2a1': B2A1_BASELINE_SHA, [B2A2_GATE_PREP_ID]: B2A2_GATE_PREP_BASELINE_SHA, [G0_CORRECTION_ID]: G0_CORRECTION_BASELINE_SHA, [G0_TEST_LAYER_ID]: G0_TEST_LAYER_BASELINE_SHA, [G0_EVIDENCE_TRIGGER_ID]: G0_EVIDENCE_TRIGGER_BASELINE_SHA, [G0_A2_SCOPE_ID]: G0_A2_SCOPE_BASELINE_SHA, 'RP-02B2a2': GATE_PREP_BASELINE });
+const FIXED_BASELINES = Object.freeze({ 'RP-02B2a1': B2A1_BASELINE_SHA, [B2A2_GATE_PREP_ID]: B2A2_GATE_PREP_BASELINE_SHA, [G0_CORRECTION_ID]: G0_CORRECTION_BASELINE_SHA, [G0_TEST_LAYER_ID]: G0_TEST_LAYER_BASELINE_SHA, [G0_EVIDENCE_TRIGGER_ID]: G0_EVIDENCE_TRIGGER_BASELINE_SHA, [G0_A2_SCOPE_ID]: G0_A2_SCOPE_BASELINE_SHA, [G0_A2_SCOPE_V5_ID]: G0_A2_SCOPE_V5_BASELINE_SHA, 'RP-02B2a2': GATE_PREP_BASELINE });
 const definition = (packageId, manifestId, adrPath, testCommand, hardMaxFiles, hardMaxNetAdditions, manifest, requiredCategories = ['production', 'test', 'adr']) => ({ packageId, manifestId, adrPath, testCommand, hardMaxFiles, hardMaxNetAdditions, baselinePolicy: FIXED_BASELINES[packageId] ?? RANGE_BASELINE, manifest: new Set(manifest), requiredCategories });
 export const PACKAGE_DEFINITIONS = {
   'RP-02B2a1': definition('RP-02B2a1', 'RP-02B2a1-v1', 'docs/adr/rp-02b2a1-registry-abi-budget.md', 'test:rp02b2a1', 18, 1900, [...'packages/shared/src/api.ts|packages/shared/src/novels.ts|apps/api/src/modules/novels/services/actionExecutionPlan.ts|apps/api/src/modules/novels/services/novelService.ts|apps/api/src/modules/tasks/services/taskService.ts|apps/api/src/modules/novels/providers/mockDirectionProvider.ts|apps/api/src/modules/novels/providers/mockStructureProvider.ts|apps/api/src/modules/novels/providers/mockTrialProvider.ts|apps/api/src/modules/novels/providers/mockBodyProvider.ts|apps/api/src/modules/novels/providers/mockFullReviewProvider.ts|apps/api/src/modules/novels/providers/deepseekNovelProvider.ts|apps/api/test/rp01c/fixtureFactory.test.ts|apps/api/test/rp02a/rp02a.test.ts|apps/api/src/modules/novels/novelRoutes.test.ts|docs/adr/rp-02b2a1-registry-abi-budget.md'.split('|'), ...COMMON_GATE_FILES]),
@@ -70,7 +85,8 @@ export const PACKAGE_DEFINITIONS = {
   [G0_TEST_LAYER_ID]: definition(G0_TEST_LAYER_ID, 'RP-02B2a2-G0-C2-v1', G0_TEST_LAYER_ADR, 'test:rp02b2a1:gate', 5, 600, '.github/workflows/rp01c-fixtures.yml|.github/workflows/rp02b2a-admission.yml|scripts/rp02b2a-package-gate.mjs|scripts/rp02b2a-package-gate.test.mjs|docs/adr/rp-02b2a2-g0-self-reference-correction-budget.md'.split('|'), ['governance', 'test', 'adr']),
   [G0_EVIDENCE_TRIGGER_ID]: definition(G0_EVIDENCE_TRIGGER_ID, 'RP-02B2a2-G0-C3-v1', G0_EVIDENCE_TRIGGER_ADR, 'test:rp02b2a1:gate', 5, 500, '.github/workflows/rp01a-e2e.yml|.github/workflows/rp01c-fixtures.yml|scripts/rp02b2a-package-gate.mjs|scripts/rp02b2a-package-gate.test.mjs|docs/adr/rp-02b2a2-g0-evidence-trigger-correction-budget.md'.split('|'), ['governance', 'test', 'adr']),
   [G0_A2_SCOPE_ID]: definition(G0_A2_SCOPE_ID, 'RP-02B2a2-G0-C4-v1', G0_A2_SCOPE_ADR, 'test:rp02b2a1:gate', 4, 500, '.github/workflows/rp01c-fixtures.yml|scripts/rp02b2a-package-gate.mjs|scripts/rp02b2a-package-gate.test.mjs|docs/adr/rp-02b2a2-g0-a2-scope-correction-budget.md'.split('|'), ['governance', 'test', 'adr']),
-  'RP-02B2a2': definition('RP-02B2a2', 'RP-02B2a2-v4', 'docs/adr/rp-02b2a2-authority-claim-budget.md', 'test:rp02b2a2', 21, 3900, 'packages/shared/src/api.ts|packages/shared/src/novels.ts|apps/api/src/config/env.ts|apps/api/src/modules/novels/domain/executionContract.ts|apps/api/src/modules/novels/domain/novelDomain.ts|apps/api/test/rp02b/rp02b.test.ts|apps/api/src/modules/novels/services/taskClaim.ts|apps/api/src/modules/novels/services/novelService.ts|apps/api/src/modules/novels/routes/novelRoutes.ts|apps/api/src/modules/tasks/routes/taskRoutes.ts|apps/api/src/modules/novels/repositories/inMemoryNovelRepository.ts|apps/api/src/modules/novels/repositories/prismaNovelRepository.ts|apps/api/src/app.ts|apps/api/src/main.ts|apps/api/test/rp02a/rp02a.test.ts|apps/api/test/rp02b2a/fixtures.ts|apps/api/test/rp02b2a/authority-claim.test.ts|apps/api/test/rp02b2a/repository-authority-hardening.test.ts|apps/api/src/modules/novels/novelRoutes.test.ts|docs/adr/rp-02b2a2-authority-claim-budget.md|package.json'.split('|')),
+  [G0_A2_SCOPE_V5_ID]: definition(G0_A2_SCOPE_V5_ID, 'RP-02B2a2-G0-C5-v1', G0_A2_SCOPE_V5_ADR, 'test:rp02b2a1:gate', 6, 900, '.github/workflows/rp01a-e2e.yml|.github/workflows/rp01b-dom.yml|.github/workflows/rp01c-fixtures.yml|scripts/rp02b2a-package-gate.mjs|scripts/rp02b2a-package-gate.test.mjs|docs/adr/rp-02b2a2-g0-a2-scope-v5-correction-budget.md'.split('|'), ['governance', 'test', 'adr']),
+  'RP-02B2a2': definition('RP-02B2a2', 'RP-02B2a2-v5', 'docs/adr/rp-02b2a2-authority-claim-budget.md', 'test:rp02b2a2', 22, 3900, 'packages/shared/src/api.ts|packages/shared/src/novels.ts|apps/api/src/config/env.ts|apps/api/src/modules/novels/domain/executionContract.ts|apps/api/src/modules/novels/domain/novelDomain.ts|apps/api/test/rp01c/fixtureFactory.test.ts|apps/api/test/rp02b/rp02b.test.ts|apps/api/src/modules/novels/services/taskClaim.ts|apps/api/src/modules/novels/services/novelService.ts|apps/api/src/modules/novels/routes/novelRoutes.ts|apps/api/src/modules/tasks/routes/taskRoutes.ts|apps/api/src/modules/novels/repositories/inMemoryNovelRepository.ts|apps/api/src/modules/novels/repositories/prismaNovelRepository.ts|apps/api/src/app.ts|apps/api/src/main.ts|apps/api/test/rp02a/rp02a.test.ts|apps/api/test/rp02b2a/fixtures.ts|apps/api/test/rp02b2a/authority-claim.test.ts|apps/api/test/rp02b2a/repository-authority-hardening.test.ts|apps/api/src/modules/novels/novelRoutes.test.ts|docs/adr/rp-02b2a2-authority-claim-budget.md|package.json'.split('|')),
   'RP-02B2a3': definition('RP-02B2a3', 'RP-02B2a3-v1', 'docs/adr/rp-02b2a3-lease-retry-budget.md', 'test:rp02b2a3', 14, 1800, 'packages/shared/src/api.ts|packages/shared/src/novels.ts|apps/api/src/modules/novels/domain/executionContract.ts|apps/api/src/modules/novels/domain/novelDomain.ts|apps/api/src/modules/novels/services/actionExecutionPlan.ts|apps/api/src/modules/novels/services/taskClaim.ts|apps/api/src/modules/tasks/services/taskService.ts|apps/api/src/modules/novels/repositories/inMemoryNovelRepository.ts|apps/api/src/modules/novels/repositories/prismaNovelRepository.ts|apps/api/src/modules/novels/novelRoutes.test.ts|apps/api/test/rp02b2a/fixtures.ts|apps/api/test/rp02b2a/lease-dispatch-retry.test.ts|docs/adr/rp-02b2a3-lease-retry-budget.md|package.json'.split('|')),
   'RP-02B2a4': definition('RP-02B2a4', 'RP-02B2a4-v1', 'docs/adr/rp-02b2a4-inmemory-finalize-budget.md', 'test:rp02b2a4', 12, 1900, 'packages/shared/src/novels.ts|apps/api/src/modules/novels/domain/executionContract.ts|apps/api/src/modules/novels/domain/novelDomain.ts|apps/api/src/modules/novels/services/actionExecutionPlan.ts|apps/api/src/modules/novels/services/taskClaim.ts|apps/api/src/modules/novels/services/novelService.ts|apps/api/src/modules/novels/repositories/inMemoryNovelRepository.ts|apps/api/test/rp02b2a/fixtures.ts|apps/api/test/rp02b2a/inmemory-fenced-finalize.test.ts|apps/api/src/modules/novels/novelRoutes.test.ts|docs/adr/rp-02b2a4-inmemory-finalize-budget.md|package.json'.split('|')),
   'RP-02B2a5': definition('RP-02B2a5', 'RP-02B2a5-v1', 'docs/adr/rp-02b2a5-prisma-nine-six-budget.md', 'test:rp02b2a5', 10, 1900, 'apps/api/src/modules/novels/domain/executionContract.ts|apps/api/src/modules/novels/domain/novelDomain.ts|apps/api/src/modules/novels/services/actionExecutionPlan.ts|apps/api/src/modules/novels/services/taskClaim.ts|apps/api/src/modules/novels/repositories/prismaNovelRepository.ts|apps/api/src/modules/novels/novelRoutes.test.ts|apps/api/test/rp02b2a/fixtures.ts|apps/api/test/rp02b2a/prisma-fenced-finalize.test.ts|docs/adr/rp-02b2a5-prisma-nine-six-budget.md|package.json'.split('|'))
@@ -99,7 +115,7 @@ export function analyzePackageGate({ files, netAdditions, addedLines = netAdditi
   assertUsableSha('BASE', base); assertUsableSha('HEAD', head);
   if (!worktree && base === head) throw new Error('RP-02B2a package gate rejects identical BASE/HEAD');
   const changedFiles = [...new Set(files)].sort(), changedAdrs = changedFiles.filter((file) => file.startsWith('docs/adr/rp-02b2a') && file.endsWith('.md')), touchesManifest = changedFiles.some((file) => Object.values(PACKAGE_DEFINITIONS).some((item) => item.manifest.has(file))), touchesEvidence = changedFiles.some((file) => GATE_PREP_EVIDENCE_FILES.has(file));
-  const changedGovernanceCorrection = changedAdrs.includes(G0_A2_SCOPE_ADR) ? G0_A2_SCOPE_ID : changedAdrs.includes(G0_EVIDENCE_TRIGGER_ADR) ? G0_EVIDENCE_TRIGGER_ID : changedAdrs.includes(G0_TEST_LAYER_ADR) ? G0_TEST_LAYER_ID : changedAdrs.includes(G0_CORRECTION_ADR) ? G0_CORRECTION_ID : undefined;
+  const changedGovernanceCorrection = changedAdrs.includes(G0_A2_SCOPE_V5_ADR) ? G0_A2_SCOPE_V5_ID : changedAdrs.includes(G0_A2_SCOPE_ADR) ? G0_A2_SCOPE_ID : changedAdrs.includes(G0_EVIDENCE_TRIGGER_ADR) ? G0_EVIDENCE_TRIGGER_ID : changedAdrs.includes(G0_TEST_LAYER_ADR) ? G0_TEST_LAYER_ID : changedAdrs.includes(G0_CORRECTION_ADR) ? G0_CORRECTION_ID : undefined;
   if (changedGovernanceCorrection && [...GATE_PREP_EVIDENCE_FILES].every((file) => changedFiles.includes(file))) {
     throw new Error(`${changedGovernanceCorrection} cannot batch ${GATE_PREP_EVIDENCE_ID} publication evidence`);
   }
@@ -122,7 +138,7 @@ export function analyzePackageGate({ files, netAdditions, addedLines = netAdditi
   if (![RANGE_BASELINE, GATE_PREP_BASELINE].includes(definition.baselinePolicy) && base !== definition.baselinePolicy) throw new Error(`${definition.packageId} requires fixed baseline ${definition.baselinePolicy}, got ${base}`);
   const outsideManifest = changedFiles.filter((file) => !definition.manifest.has(file));
   if (outsideManifest.length > 0) throw new Error(`${definition.packageId} manifest violation: ${outsideManifest.join(', ')}`);
-  if ([G0_CORRECTION_ID, G0_TEST_LAYER_ID, G0_EVIDENCE_TRIGGER_ID, G0_A2_SCOPE_ID].includes(definition.packageId) && !sameFileSet(changedFiles, definition.manifest)) {
+  if ([G0_CORRECTION_ID, G0_TEST_LAYER_ID, G0_EVIDENCE_TRIGGER_ID, G0_A2_SCOPE_ID, G0_A2_SCOPE_V5_ID].includes(definition.packageId) && !sameFileSet(changedFiles, definition.manifest)) {
     const missing = [...definition.manifest].filter((file) => !changedFiles.includes(file));
     throw new Error(`${definition.packageId} requires exactly the ${definition.hardMaxFiles} frozen manifest files${missing.length > 0 ? `; missing: ${missing.join(', ')}` : ''}`);
   }
@@ -145,20 +161,44 @@ function validateAdr({ adr, definition, base, changedFiles, netAdditions }) {
 function categorizeFile(file) { if (file.startsWith('docs/adr/')) return 'adr'; if (file.includes('.test.') || file.includes('/test/') || file.endsWith('novelRoutes.test.ts')) return 'test'; if (file.startsWith('scripts/') || file.startsWith('.github/')) return 'governance'; if (file === 'package.json') return 'package-metadata'; return 'production'; }
 function sameFileSet(files, expected) { return files.length === expected.size && files.every((file) => expected.has(file)); }
 function assertUsableSha(label, sha) { if (!sha) throw new Error(`RP-02B2a package gate requires explicit ${label}`); if (!/^[0-9a-f]{40}$/i.test(sha)) throw new Error(`RP-02B2a package gate rejects unparseable ${label}: ${sha}`); if (/^0{40}$/.test(sha)) throw new Error(`RP-02B2a package gate rejects zero ${label}`); }
-function gitText(args) { return execFileSync('git', args, { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER }); }
-function gitBuffer(args) { return execFileSync('git', args, { maxBuffer: GIT_MAX_BUFFER }); }
+function gitText(args) {
+  const key = JSON.stringify(args), cache = ACTIVE_RUN_CACHE?.gitText;
+  if (cache?.has(key)) return cache.get(key);
+  const value = execFileSync('git', args, { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
+  cache?.set(key, value);
+  return value;
+}
+function gitBuffer(args) {
+  const key = JSON.stringify(args), cache = ACTIVE_RUN_CACHE?.gitBuffer;
+  if (cache?.has(key)) return Buffer.from(cache.get(key));
+  const value = execFileSync('git', args, { maxBuffer: GIT_MAX_BUFFER });
+  cache?.set(key, Buffer.from(value));
+  return value;
+}
+function gitStatus(args) {
+  const key = JSON.stringify(args), cache = ACTIVE_RUN_CACHE?.gitStatus;
+  if (cache?.has(key)) return cache.get(key);
+  const status = spawnSync('git', args, { stdio: 'ignore' }).status;
+  cache?.set(key, status);
+  return status;
+}
 function assertGitCommit(label, sha) { if (!gitCommitExists(sha)) throw new Error(`RP-02B2a package gate rejects unreachable ${label}: ${sha}`); }
-function gitCommitExists(sha) { return spawnSync('git', ['cat-file', '-e', `${sha}^{commit}`], { stdio: 'ignore' }).status === 0; }
-function isAncestor(base, head) { return spawnSync('git', ['merge-base', '--is-ancestor', base, head], { stdio: 'ignore' }).status === 0; }
+function gitCommitExists(sha) { return gitStatus(['cat-file', '-e', `${sha}^{commit}`]) === 0; }
+function isAncestor(base, head) { return gitStatus(['merge-base', '--is-ancestor', base, head]) === 0; }
 function changedFiles(base, head) { return splitNulBuffer(gitBuffer(['diff', '--name-only', '-z', base, head])).map(decodeGitPath); }
-function adrExistsAt(ref, definition) { return spawnSync('git', ['cat-file', '-e', `${ref}:${definition.adrPath}`], { stdio: 'ignore' }).status === 0; }
+function adrExistsAt(ref, definition) { return gitStatus(['cat-file', '-e', `${ref}:${definition.adrPath}`]) === 0; }
 function adrReadyAt(ref, definition) { try { return parseAdr(gitText(['show', `${ref}:${definition.adrPath}`])).status === 'ready'; } catch { return false; } }
-function gatePrepCommitForHead(head) {
-  const candidates = [G0_A2_SCOPE_ADR, G0_EVIDENCE_TRIGGER_ADR, G0_TEST_LAYER_ADR, G0_CORRECTION_ADR].flatMap((adrPath) =>
+function gatePrepCandidateForHead(head) {
+  const candidates = [G0_A2_SCOPE_V5_ADR, G0_A2_SCOPE_ADR, G0_EVIDENCE_TRIGGER_ADR, G0_TEST_LAYER_ADR, G0_CORRECTION_ADR].flatMap((adrPath) =>
     gitText(['log', '--format=%H', '--diff-filter=A', head, '--', adrPath]).trim().split(/\r?\n/).filter(Boolean)
   );
-  for (const candidate of candidates) { try { validateGatePrepBase(candidate); if (isAncestor(candidate, head)) return candidate; } catch {} }
-  throw new Error(`RP-02B2a2 candidate HEAD requires a verified ${G0_A2_SCOPE_ID} ancestor; ${G0_EVIDENCE_TRIGGER_ID} and earlier corrections are historical only`);
+  for (const candidate of candidates) if (isAncestor(candidate, head)) return candidate;
+  throw new Error(`RP-02B2a2 candidate HEAD requires a verified ${G0_A2_SCOPE_V5_ID} ancestor; ${G0_A2_SCOPE_ID} and earlier corrections are historical only`);
+}
+function gatePrepCommitForHead(head) {
+  const candidate = gatePrepCandidateForHead(head);
+  validateGatePrepBase(candidate);
+  return candidate;
 }
 function fixedPackageBase(base, head) {
   const directFiles = changedFiles(base, head);
@@ -203,7 +243,7 @@ function externallyAuthorizedRange(input, head) {
 }
 function correctionBootstrapRange(head) {
   const commitAndParents = gitText(['rev-list', '--parents', '-n', '1', head]).trim().split(/\s+/);
-  for (const packageId of [G0_A2_SCOPE_ID, G0_EVIDENCE_TRIGGER_ID, G0_TEST_LAYER_ID, G0_CORRECTION_ID]) {
+  for (const packageId of [G0_A2_SCOPE_V5_ID, G0_A2_SCOPE_ID, G0_EVIDENCE_TRIGGER_ID, G0_TEST_LAYER_ID, G0_CORRECTION_ID]) {
     const definition = PACKAGE_DEFINITIONS[packageId], fixedBase = FIXED_BASELINES[packageId];
     if (commitAndParents.length !== 2 || commitAndParents[1] !== fixedBase || !adrExistsAt(head, definition)) continue;
     validateGatePrepBase(head);
@@ -324,10 +364,26 @@ function validateOriginalGatePrepBase(base) {
   return result;
 }
 export function validateGatePrepBase(base) {
+  const cache = ACTIVE_RUN_CACHE?.gatePrepBases;
+  if (cache?.has(base)) return cache.get(base);
+  const result = validateGatePrepBaseUncached(base);
+  cache?.set(base, result);
+  return result;
+}
+function validateGatePrepBaseUncached(base) {
   assertUsableSha('GATE_PREP_BASE', base); assertGitCommit('GATE_PREP_BASE', base);
   const commitAndParents = gitText(['rev-list', '--parents', '-n', '1', base]).trim().split(/\s+/);
   if (commitAndParents.length === 2 && commitAndParents[1] === B2A2_GATE_PREP_BASELINE_SHA) {
     return validateOriginalGatePrepBase(base);
+  }
+  if (commitAndParents.length === 2 && commitAndParents[1] === G0_A2_SCOPE_V5_BASELINE_SHA) {
+    validateAcceptedGatePrepEvidence({ gateSource: ACCEPTED_G0_C4_SHA, evidenceHead: G0_A2_SCOPE_V5_BASELINE_SHA, expectedGatePackage: G0_A2_SCOPE_ID });
+    const { files, netAdditions } = readGitDiff({ base: G0_A2_SCOPE_V5_BASELINE_SHA, head: base, worktree: false });
+    const adrTextByPath = { [G0_A2_SCOPE_V5_ADR]: readAdrText(G0_A2_SCOPE_V5_ADR, base, false) };
+    const result = analyzePackageGate({ files, netAdditions, adrTextByPath, base: G0_A2_SCOPE_V5_BASELINE_SHA, head: base, worktree: false });
+    if (result.packageId !== G0_A2_SCOPE_V5_ID) throw new Error(`RP-02B2a2 baseline is not a verified ${G0_A2_SCOPE_V5_ID} package`);
+    verifyA2ScopeV5CorrectionContracts({ head: base, worktree: false });
+    return result;
   }
   if (commitAndParents.length === 2 && commitAndParents[1] === G0_A2_SCOPE_BASELINE_SHA) {
     const acceptedC3 = validateGatePrepBase(ACCEPTED_G0_C3_SHA);
@@ -482,11 +538,9 @@ function assertGatePrepEvidenceCurrentState({ path, text, base, gatePrep, runs, 
   const expected = [`accepted_code_head | \`${base}\``, `${gatePrep.files} files / ${gatePrep.netAdditions} net additions`, `package gate ${gateCount}`, `run \`${runByLabel.rp01a}\``, `run \`${runByLabel.rp01b}\``, `run \`${runByLabel.rp01c}\``, `run \`${runByLabel.governance}\``, 'B2a2 继续 `not_authorized`'];
   if (expected.some((item) => !section.includes(item))) fail('final G0 evidence section is missing accepted counts, runs, or authorization boundary');
 }
-function validateGatePrepEvidencePublication({ base, head, worktree, expectedGatePackage = G0_A2_SCOPE_ID }) {
-  const gatePrep = gatePrepCommitForHead(head);
+function validateGatePrepEvidencePublication({ base, head, worktree, expectedGatePackage = G0_A2_SCOPE_V5_ID }) {
+  const gatePrep = gatePrepCandidateForHead(head);
   if (gatePrep !== base) throw new Error(`${GATE_PREP_EVIDENCE_ID} requires its verified G0 commit as the direct base`);
-  const gatePrepResult = validateGatePrepBase(base), gateCount = gatePrepTestCountAt(base);
-  if (gatePrepResult.packageId !== expectedGatePackage) throw new Error(`${GATE_PREP_EVIDENCE_ID} requires accepted G0 package ${expectedGatePackage}, got ${gatePrepResult.packageId}`);
   if (worktree) {
     if (head !== base) throw new Error(`${GATE_PREP_EVIDENCE_ID} worktree HEAD must equal its verified G0 base`);
   } else {
@@ -510,6 +564,11 @@ function validateGatePrepEvidencePublication({ base, head, worktree, expectedGat
   if (evidence.g0_evidence_issue_closed_count !== '9/42' || evidence.g0_evidence_rmd_task_002 !== 'partial' || evidence.g0_evidence_rmd_task_003 !== 'open') throw new Error(`${GATE_PREP_EVIDENCE_ID} must preserve ledger 9/42 with RMD-TASK-002 partial and RMD-TASK-003 open`);
   const runs = ['rp01a', 'rp01b', 'rp01c', 'governance'].map((label) => [label, evidence[`g0_evidence_${label}_run`]]);
   if (runs.some(([, id]) => !/^[1-9][0-9]{7,}$/.test(id)) || new Set(runs.map(([, id]) => id)).size !== runs.length) throw new Error(`${GATE_PREP_EVIDENCE_ID} requires four unique numeric parent run ids`);
+  // Reject malformed candidate-owned evidence before repeatedly validating the
+  // immutable G0 ancestry. The trusted baseline is still verified before any
+  // evidence can be accepted or emitted.
+  const gatePrepResult = validateGatePrepBase(base), gateCount = gatePrepTestCountAt(base);
+  if (expectedGatePackage && gatePrepResult.packageId !== expectedGatePackage) throw new Error(`${GATE_PREP_EVIDENCE_ID} requires accepted G0 package ${expectedGatePackage}, got ${gatePrepResult.packageId}`);
   for (const record of records) assertGatePrepEvidenceCurrentState({ path: record.path, text: record.text, base, gatePrep: gatePrepResult, runs, gateCount });
   return { parent: base, runs: runs.map(([label, id]) => `${label}:${id}`).join(',') };
 }
@@ -542,7 +601,7 @@ function packageManifestDigest(definition, { base, head }) {
     manifest: [...definition.manifest].sort().map((path) => commitPathDescriptor(head, path))
   })).digest('hex');
 }
-function validateAcceptedGatePrepEvidence({ gateSource, evidenceHead, expectedGatePackage = G0_A2_SCOPE_ID }) {
+function validateAcceptedGatePrepEvidence({ gateSource, evidenceHead, expectedGatePackage = G0_A2_SCOPE_V5_ID }) {
   assertUsableSha('G0_EVIDENCE', evidenceHead); assertGitCommit('G0_EVIDENCE', evidenceHead);
   const commitAndParents = gitText(['rev-list', '--parents', '-n', '1', evidenceHead]).trim().split(/\s+/);
   if (commitAndParents.length !== 2 || commitAndParents[1] !== gateSource) throw new Error(`${GATE_PREP_EVIDENCE_ID} must be one direct child commit of the repository-controlled G0 gate source`);
@@ -568,7 +627,7 @@ function validateAcceptedBusinessPackage(packageId, head, gateSource, seen = new
   assertUsableSha(`${packageId}_BASELINE`, base); assertGitCommit(`${packageId}_BASELINE`, base);
   if (!isAncestor(base, head)) throw new Error(`${packageId} accepted predecessor baseline is not an ancestor of its head`);
   const expectedPredecessor = BUSINESS_PACKAGE_PREDECESSOR[packageId];
-  if ([G0_CORRECTION_ID, G0_TEST_LAYER_ID, G0_EVIDENCE_TRIGGER_ID, G0_A2_SCOPE_ID].includes(expectedPredecessor)) {
+  if ([G0_CORRECTION_ID, G0_TEST_LAYER_ID, G0_EVIDENCE_TRIGGER_ID, G0_A2_SCOPE_ID, G0_A2_SCOPE_V5_ID].includes(expectedPredecessor)) {
     if (base !== gateSource) throw new Error(`${packageId} accepted predecessor must be rooted at the repository-controlled G0 gate source`);
     const gatePrep = validateGatePrepBase(base);
     if (gatePrep.packageId !== expectedPredecessor) throw new Error(`${packageId} requires accepted G0 package ${expectedPredecessor}, got ${gatePrep.packageId}`);
@@ -588,14 +647,14 @@ function validateBusinessAuthorization({ packageId, base, head, gateSource, g0Ev
   let acceptedGatePrep;
   try { acceptedGatePrep = validateGatePrepBase(gateSource); } catch (error) { throw new Error(`RP-02B2a2 must branch directly from the accepted G0 code head: ${error.message}`); }
   const predecessorPackage = BUSINESS_PACKAGE_PREDECESSOR[packageId];
-  if ([G0_CORRECTION_ID, G0_TEST_LAYER_ID, G0_EVIDENCE_TRIGGER_ID, G0_A2_SCOPE_ID].includes(predecessorPackage) && acceptedGatePrep.packageId !== predecessorPackage) {
+  if ([G0_CORRECTION_ID, G0_TEST_LAYER_ID, G0_EVIDENCE_TRIGGER_ID, G0_A2_SCOPE_ID, G0_A2_SCOPE_V5_ID].includes(predecessorPackage) && acceptedGatePrep.packageId !== predecessorPackage) {
     throw new Error(`${packageId} requires accepted G0 package ${predecessorPackage}, got ${acceptedGatePrep.packageId}`);
   }
   const acceptedEvidence = validateAcceptedGatePrepEvidence({ gateSource, evidenceHead: g0EvidenceSha });
   assertUsableSha('AUTHORIZED_PREDECESSOR', authorizedPredecessorSha); assertGitCommit('AUTHORIZED_PREDECESSOR', authorizedPredecessorSha);
   if (base !== authorizedPredecessorSha) throw new Error(`RP-02B2a trusted admission must analyze the cumulative authorized-predecessor range: ${base ?? '<missing>'} != ${authorizedPredecessorSha}`);
   if (!isAncestor(gateSource, base) || !isAncestor(base, head)) throw new Error('RP-02B2a trusted admission rejects stale, unrelated, or non-ancestor authorization topology');
-  if ([G0_CORRECTION_ID, G0_TEST_LAYER_ID, G0_EVIDENCE_TRIGGER_ID, G0_A2_SCOPE_ID].includes(predecessorPackage)) {
+  if ([G0_CORRECTION_ID, G0_TEST_LAYER_ID, G0_EVIDENCE_TRIGGER_ID, G0_A2_SCOPE_ID, G0_A2_SCOPE_V5_ID].includes(predecessorPackage)) {
     if (authorizedPredecessorSha !== gateSource) throw new Error('RP-02B2a2 authorized predecessor must equal the accepted G0 gate source and must not be E1');
   } else validateAcceptedBusinessPackage(predecessorPackage, authorizedPredecessorSha, gateSource);
   assertA2HistoryDoesNotInheritEvidencePublication(gateSource, head);
@@ -782,15 +841,69 @@ function verifyEvidenceTriggerCorrectionContracts({ head, worktree }) {
 function verifyA2ScopeCorrectionContracts({ head, worktree }) {
   verifyTrustedAdmissionWorkflowContract({ workflowPath: TRUSTED_ADMISSION_WORKFLOW, head: worktree ? undefined : head });
   verifyEvidenceTriggerCorrectionContracts({ head: G0_A2_SCOPE_BASELINE_SHA, worktree: false });
-  verifyWorkflowContract({ workflowPath: '.github/workflows/rp01c-fixtures.yml', head: worktree ? undefined : head });
-  const definition = PACKAGE_DEFINITIONS['RP-02B2a2'];
-  if (definition.manifestId !== 'RP-02B2a2-v4' || definition.hardMaxFiles !== 21 || definition.hardMaxNetAdditions !== 3900 ||
-      !definition.manifest.has('apps/api/test/rp02a/rp02a.test.ts') || definition.manifest.size !== 21) {
+  const rp01cPath = '.github/workflows/rp01c-fixtures.yml';
+  const rp01c = parseWorkflowYaml(rp01cPath, worktree ? undefined : head);
+  const baselineRp01c = parseWorkflowYaml(rp01cPath, G0_A2_SCOPE_BASELINE_SHA);
+  const rp01cPaths = requireSequence(requireMapping(rp01c.on.push, `${rp01cPath} push`).paths, `${rp01cPath} push paths`);
+  if (rp01cPaths.filter((path) => path === G0_A2_SCOPE_ADR).length !== 1) throw new Error(`${G0_A2_SCOPE_ID} ${rp01cPath} must include the C4 ADR trigger exactly once`);
+  requireMapping(rp01c.on.push, `${rp01cPath} push`).paths = rp01cPaths.filter((path) => path !== G0_A2_SCOPE_ADR);
+  if (JSON.stringify(canonicalJson(rp01c)) !== JSON.stringify(canonicalJson(baselineRp01c))) {
+    throw new Error(`${G0_A2_SCOPE_ID} ${rp01cPath} may add only the C4 ADR trigger`);
+  }
+  const historicalGate = readAdrText('scripts/rp02b2a-package-gate.mjs', head, worktree);
+  const historicalDefinition = historicalGate.split(/\r?\n/).find((line) => line.includes("'RP-02B2a2': definition('RP-02B2a2', 'RP-02B2a2-v4'"));
+  const historicalManifest = historicalDefinition?.match(/, 21, 3900, '([^']+)'\.split\('\|'\)\),?$/)?.[1]?.split('|');
+  if (!historicalManifest || historicalManifest.length !== 21 ||
+      !historicalManifest.includes('apps/api/test/rp02a/rp02a.test.ts') ||
+      historicalManifest.includes('apps/api/test/rp01c/fixtureFactory.test.ts')) {
     throw new Error(`${G0_A2_SCOPE_ID} must freeze the A2 v4 21/3900 manifest with rp02a coverage`);
   }
   const historicalAuthority = readAdrText('docs/adr/rp-02b2a2-authority-claim-budget.md', ACCEPTED_G0_C3_SHA, false);
   const currentAuthority = readAdrText('docs/adr/rp-02b2a2-authority-claim-budget.md', head, worktree);
   if (currentAuthority !== historicalAuthority) throw new Error(`${G0_A2_SCOPE_ID} must not rewrite the historical A2 v3 template; A2 must instantiate the v4 contract in its own child range`);
+}
+function verifyA2ScopeV5CorrectionContracts({ head, worktree }) {
+  validateAcceptedGatePrepEvidence({ gateSource: ACCEPTED_G0_C4_SHA, evidenceHead: G0_A2_SCOPE_V5_BASELINE_SHA, expectedGatePackage: G0_A2_SCOPE_ID });
+  verifyTrustedAdmissionWorkflowContract({ workflowPath: TRUSTED_ADMISSION_WORKFLOW, head: worktree ? undefined : head });
+  for (const workflowPath of ['.github/workflows/rp01a-e2e.yml', '.github/workflows/rp01b-dom.yml']) {
+    const current = parseWorkflowYaml(workflowPath, worktree ? undefined : head);
+    const baseline = parseWorkflowYaml(workflowPath, G0_A2_SCOPE_V5_BASELINE_SHA);
+    for (const event of ['push', 'pull_request']) {
+      const paths = requireSequence(requireMapping(current.on[event], `${workflowPath} ${event}`).paths, `${workflowPath} ${event} paths`);
+      for (const evidencePath of GATE_PREP_EVIDENCE_FILES) {
+        if (paths.filter((path) => path === evidencePath).length !== 1) throw new Error(`${G0_A2_SCOPE_V5_ID} ${workflowPath} ${event} must include exact evidence trigger ${evidencePath}`);
+      }
+      requireMapping(current.on[event], `${workflowPath} ${event}`).paths = paths.filter((path) => !GATE_PREP_EVIDENCE_FILES.has(path));
+    }
+    if (JSON.stringify(canonicalJson(current)) !== JSON.stringify(canonicalJson(baseline))) {
+      throw new Error(`${G0_A2_SCOPE_V5_ID} ${workflowPath} may add only the three exact evidence receipt triggers`);
+    }
+  }
+  const rp01cPath = '.github/workflows/rp01c-fixtures.yml';
+  const rp01c = parseWorkflowYaml(rp01cPath, worktree ? undefined : head);
+  const baselineRp01c = parseWorkflowYaml(rp01cPath, G0_A2_SCOPE_V5_BASELINE_SHA);
+  const rp01cPaths = requireSequence(requireMapping(rp01c.on.push, `${rp01cPath} push`).paths, `${rp01cPath} push paths`);
+  if (rp01cPaths.filter((path) => path === G0_A2_SCOPE_V5_ADR).length !== 1) throw new Error(`${G0_A2_SCOPE_V5_ID} ${rp01cPath} must include the C5 ADR trigger exactly once`);
+  requireMapping(rp01c.on.push, `${rp01cPath} push`).paths = rp01cPaths.filter((path) => path !== G0_A2_SCOPE_V5_ADR);
+  const rp01cJob = requireMapping(requireMapping(rp01c.jobs, `${rp01cPath} jobs`)['rp01c-fixtures'], `${rp01cPath} rp01c-fixtures job`);
+  const baselineRp01cJob = requireMapping(requireMapping(baselineRp01c.jobs, `${rp01cPath} baseline jobs`)['rp01c-fixtures'], `${rp01cPath} baseline rp01c-fixtures job`);
+  if (rp01cJob['timeout-minutes'] !== '45' || baselineRp01cJob['timeout-minutes'] !== '20') {
+    throw new Error(`${G0_A2_SCOPE_V5_ID} ${rp01cPath} must raise the RP-01C timeout exactly from 20 to 45 minutes`);
+  }
+  rp01cJob['timeout-minutes'] = baselineRp01cJob['timeout-minutes'];
+  if (JSON.stringify(canonicalJson(rp01c)) !== JSON.stringify(canonicalJson(baselineRp01c))) {
+    throw new Error(`${G0_A2_SCOPE_V5_ID} ${rp01cPath} may add only the C5 ADR trigger and the exact 20-to-45-minute timeout correction`);
+  }
+  const definition = PACKAGE_DEFINITIONS['RP-02B2a2'];
+  if (definition.manifestId !== 'RP-02B2a2-v5' || definition.hardMaxFiles !== 22 || definition.hardMaxNetAdditions !== 3900 ||
+      !definition.manifest.has('apps/api/test/rp02a/rp02a.test.ts') ||
+      !definition.manifest.has('apps/api/test/rp01c/fixtureFactory.test.ts') || definition.manifest.size !== 22 ||
+      !B2A2_PACKAGE_SCRIPTS['test:rp02b2a2'].includes('npm run test:rp01c')) {
+    throw new Error(`${G0_A2_SCOPE_V5_ID} must freeze the A2 v5 22/3900 manifest and execute rp01c in the canonical package test`);
+  }
+  const historicalAuthority = readAdrText('docs/adr/rp-02b2a2-authority-claim-budget.md', G0_A2_SCOPE_V5_BASELINE_SHA, false);
+  const currentAuthority = readAdrText('docs/adr/rp-02b2a2-authority-claim-budget.md', head, worktree);
+  if (currentAuthority !== historicalAuthority) throw new Error(`${G0_A2_SCOPE_V5_ID} must not rewrite the historical A2 template; A2 must instantiate v5 in its own child range`);
 }
 export function verifyWorkflowContract({ workflowPath, packageId, testCommand, triggerFile, head }) {
   const workflow = parseWorkflowYaml(workflowPath, head); assertNoDefaultShell(workflow, 'workflow');
@@ -820,7 +933,7 @@ export function verifyWorkflowContract({ workflowPath, packageId, testCommand, t
   assertExactKeys(jobs, ['rp01c-fixtures'], 'workflow jobs');
   const job = requireMapping(jobs['rp01c-fixtures'], 'rp01c-fixtures job'); assertNoDefaultShell(job, 'job');
   assertExactKeys(job, ['runs-on', 'timeout-minutes', 'env', 'steps'], 'rp01c-fixtures job');
-  if (job['runs-on'] !== 'ubuntu-latest' || job['timeout-minutes'] !== '20') throw new Error('RP-02B2a workflow job runner or timeout mismatch');
+  if (job['runs-on'] !== 'ubuntu-latest' || job['timeout-minutes'] !== '45') throw new Error('RP-02B2a workflow job runner or timeout mismatch');
   const jobEnv = requireMapping(job.env, 'rp01c-fixtures job env');
   if (JSON.stringify(jobEnv) !== JSON.stringify({ AI_PROVIDER_MODE: 'mock', E2E_PROFILE: 'rp01a-local-inmemory' })) throw new Error('RP-02B2a workflow job env mismatch');
   const steps = requireSequence(job.steps, 'rp01c-fixtures steps').map((step, index) => requireMapping(step, `rp01c-fixtures step ${index + 1}`));
@@ -897,6 +1010,9 @@ function evidenceRunCommands() { return ['set -euo pipefail', 'test "$B2A_BASE_S
 function assertStepEnv(step, expected, label) { const actual = requireMapping(step.env, `${label} env`); const actualKeys = Object.keys(actual).sort(), expectedKeys = Object.keys(expected).sort(); if (JSON.stringify(actualKeys) !== JSON.stringify(expectedKeys) || expectedKeys.some((key) => actual[key] !== expected[key])) throw new Error(`RP-02B2a workflow ${label} env binding mismatch`); }
 function assertShellBlock(step, expected, label) { const actual = requireRun(step).split(/\r?\n/).map((line) => line.trim()).filter(Boolean); if (actual.length !== expected.length || actual.some((line, index) => line !== expected[index])) throw new Error(`RP-02B2a workflow ${label} shell semantics mismatch`); }
 export function parseWorkflowYaml(workflowPath, head) {
+  const key = head ? `${head}\0${workflowPath}` : undefined;
+  const cache = ACTIVE_RUN_CACHE?.workflows;
+  if (key && cache?.has(key)) return JSON.parse(cache.get(key));
   const workflowText = readWorkflowText(workflowPath, head);
   let json;
   try {
@@ -904,7 +1020,11 @@ export function parseWorkflowYaml(workflowPath, head) {
   } catch (error) {
     const detail = error?.stderr?.toString().trim() || error?.message || String(error); throw new Error(`RP-02B2a workflow YAML structure parse failed: ${detail}`);
   }
-  try { return requireMapping(JSON.parse(json), 'workflow root'); }
+  try {
+    const workflow = requireMapping(JSON.parse(json), 'workflow root');
+    if (key) cache?.set(key, JSON.stringify(workflow));
+    return workflow;
+  }
   catch (error) { if (error instanceof SyntaxError) throw new Error(`RP-02B2a workflow YAML parser returned invalid JSON: ${error.message}`); throw error; }
 }
 function readWorkflowText(workflowPath, head) {
@@ -919,7 +1039,7 @@ function findSingleStep(steps, predicate, label) { const matches = steps.filter(
 function requireRun(step) { if (typeof step.run !== 'string' || step.run.length === 0) throw new Error(`RP-02B2a workflow step ${step.name ?? '<unnamed>'} requires structured run command`); return step.run; }
 function assertNoDefaultShell(owner, label) { const defaults = owner.defaults; if (defaults === undefined) return; const run = requireMapping(defaults, `${label} defaults`).run; if (run !== undefined && Object.hasOwn(requireMapping(run, `${label} defaults.run`), 'shell')) throw new Error(`RP-02B2a workflow rejects ${label} defaults.run.shell`); }
 function assertRequiredStepEnabled(step, index) { if (Object.hasOwn(step, 'shell')) throw new Error(`RP-02B2a workflow required step ${index} rejects custom shell`); if (Object.hasOwn(step, 'if') || Object.hasOwn(step, 'continue-on-error')) throw new Error(`RP-02B2a workflow required step ${index} is disabled`); }
-export function runCli(argv = process.argv.slice(2)) {
+function runCliUncached(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   if (args.has('verify-admission-workflow')) {
     const result = verifyTrustedAdmissionWorkflowContract({ workflowPath: args.get('verify-admission-workflow'), head: args.get('head') });
@@ -989,6 +1109,14 @@ export function runCli(argv = process.argv.slice(2)) {
       verifyA2ScopeCorrectionContracts({ head: effectiveHead, worktree: true });
     } else validateGatePrepBase(effectiveHead);
   }
+  if (result.packageId === G0_A2_SCOPE_V5_ID) {
+    if (worktree) {
+      const parents = gitText(['rev-list', '--parents', '-n', '1', effectiveHead]).trim().split(/\s+/);
+      if (parents.length !== 2 || parents[1] !== G0_A2_SCOPE_V5_BASELINE_SHA) throw new Error(`${G0_A2_SCOPE_V5_ID} worktree must remain the fixed E2 baseline direct child`);
+      validateAcceptedGatePrepEvidence({ gateSource: ACCEPTED_G0_C4_SHA, evidenceHead: G0_A2_SCOPE_V5_BASELINE_SHA, expectedGatePackage: G0_A2_SCOPE_ID });
+      verifyA2ScopeV5CorrectionContracts({ head: effectiveHead, worktree: true });
+    } else validateGatePrepBase(effectiveHead);
+  }
   if (args.has('authorized-g0')) throw new Error('RP-02B2a trusted admission rejects retired --authorized-g0; use the repository-controlled package/predecessor tuple');
   const businessAuthorization = validateBusinessAuthorization({ packageId: result.packageId, base, head: effectiveHead, gateSource: args.get('gate-source'), g0EvidenceSha: args.get('g0-evidence-sha'), authorizedPackageId: args.get('authorized-package-id'), authorizedPredecessorSha: args.get('authorized-predecessor-sha') });
   const evidence = result.packageId === GATE_PREP_EVIDENCE_ID ? validateGatePrepEvidencePublication({ base, head: effectiveHead, worktree }) : undefined;
@@ -998,5 +1126,8 @@ export function runCli(argv = process.argv.slice(2)) {
     console.log(`package_id=${result.packageId}`); console.log(`test_command=${result.testCommand}`); console.log(`files=${result.files}`); console.log(`net_additions=${result.netAdditions}`); if (businessAuthorization) { if (authoritativeEventBase) console.log(`event_base_sha=${authoritativeEventBase}`); console.log(`gate_source_sha=${businessAuthorization.gateSource}`); console.log(`g0_evidence_sha=${businessAuthorization.g0EvidenceSha}`); console.log(`g0_evidence_digest=${businessAuthorization.g0EvidenceDigest}`); console.log(`authorized_predecessor_sha=${businessAuthorization.authorizedPredecessor}`); console.log(`candidate_sha=${effectiveHead}`); console.log(`manifest_digest=${businessAuthorization.manifestDigest}`); } if (evidence) { console.log(`evidence_parent=${evidence.parent}`); console.log(`evidence_runs=${evidence.runs}`); } return;
   }
   console.log(`${result.packageId} package gate passed: files=${result.files}, netAdditions=${result.netAdditions}, adr=${result.adr}, categories=${result.categories.join(',')}`);
+}
+export function runCli(argv = process.argv.slice(2)) {
+  return withRunCache(() => runCliUncached(argv));
 }
 if (import.meta.url === `file://${process.argv[1]}`) try { runCli(); } catch (error) { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 1; }

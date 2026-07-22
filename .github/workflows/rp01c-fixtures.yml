@@ -42,6 +42,7 @@ on:
       - 'docs/adr/rp-02b2a2-g0-self-reference-correction-budget.md'
       - 'docs/adr/rp-02b2a2-g0-evidence-trigger-correction-budget.md'
       - 'docs/adr/rp-02b2a2-g0-a2-scope-correction-budget.md'
+      - 'docs/adr/rp-02b2a2-g0-a2-scope-v5-correction-budget.md'
       - 'docs/adr/rp-02b2a2-authority-claim-budget.md'
       - 'docs/adr/rp-02b2a3-lease-retry-budget.md'
       - 'docs/adr/rp-02b2a4-inmemory-finalize-budget.md'
@@ -56,7 +57,7 @@ permissions:
 jobs:
   rp01c-fixtures:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     env:
       AI_PROVIDER_MODE: mock
       E2E_PROFILE: rp01a-local-inmemory
