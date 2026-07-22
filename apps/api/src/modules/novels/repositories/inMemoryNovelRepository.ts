@@ -101,6 +101,7 @@ import {
   type VideoReadinessCheckRecord,
   type VideoReadinessConfirmationInput,
   type VideoReadinessSnapshotRecord,
+  generationClaimsOverlap,
   normalizeDraftRequest
 } from '../domain/novelDomain.js';
 import {
@@ -123,12 +124,16 @@ export function createInMemoryNovelRepository(): NovelRepository & {
   getImpactCases(): ImpactCaseRecord[];
   getLongTermMemories(): LongTermMemoryRecord[];
   getBodyBatches(): BodyBatchRecord[];
+  getPreferences(): NovelPreferencesRecord[];
+  getChapterFeatureCards(): ChapterFeatureCardRecord[];
+  getReviewReports(): ReviewReportRecord[];
 } {
   const novels: NovelRecord[] = [];
   const preferences: NovelPreferencesRecord[] = [];
   const operationLogs: OperationLogRecord[] = [];
   const generationTasks: GenerationTaskRecord[] = [];
   const generationTaskEvents: GenerationTaskEventRecord[] = [];
+  const pendingClaimLocks = new Map<string, Promise<void>>();
   const creativeVersions: CreativeVersionRecord[] = [];
   const assetDecisionRecords: AssetDecisionRecord[] = [];
   const chapters: NovelChapterRecord[] = [];
@@ -296,7 +301,6 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       }
     };
   }
-
   return {
     async createDraft(input: DraftCreationInput): Promise<CreatedDraftRecord> {
       const normalized = normalizeDraftRequest(input.request);
@@ -458,8 +462,20 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     async loadGenerationAuthority(input: LoadGenerationAuthorityInput): Promise<GenerationAuthoritySnapshot | null> {
       return loadAuthority(input);
     },
-
     async claimGenerationTask(input: ClaimGenerationTaskInput): Promise<ClaimGenerationTaskResult> {
+      const pendingKeys = [
+        `idempotency:${input.tenantId}:${input.taskType}:${input.idempotencyToken}`,
+        `novel:${input.tenantId}:${input.novelId}`
+      ];
+      while (true) {
+        const blockers = pendingKeys.map((key) => pendingClaimLocks.get(key)).filter((item): item is Promise<void> => Boolean(item));
+        if (blockers.length === 0) break;
+        await Promise.all(blockers);
+      }
+      let releasePendingClaim!: () => void;
+      const pendingClaim = new Promise<void>((resolve) => { releasePendingClaim = resolve; });
+      for (const key of pendingKeys) pendingClaimLocks.set(key, pendingClaim);
+      try {
       const authority = loadAuthority(input.authorityInput);
       if (!matchGenerationAuthority(input.authorityInput, input.expectedAuthoritySnapshotHash, authority).ok) {
         return { outcome: 'source_stale', task: null };
@@ -478,16 +494,15 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       }
 
       const activeTask = generationTasks.find(
-        (task) => task.tenantId === input.tenantId && task.activeClaimKey === input.activeClaimKey
+        (task) => task.tenantId === input.tenantId
+          && task.novelId === input.novelId
+          && task.status === TaskStatus.Processing
+          && task.activeClaimKey !== null
+          && generationClaimsOverlap(input, task)
       );
       if (activeTask) return { outcome: 'active_conflict', task: activeTask };
 
-      await input.afterClaimBarrier?.();
-      const commitAuthority = loadAuthority(input.authorityInput);
-      if (!matchGenerationAuthority(input.authorityInput, input.expectedAuthoritySnapshotHash, commitAuthority).ok) {
-        return { outcome: 'source_stale', task: null };
-      }
-
+      const sequenceBeforeClaim = sequence;
       const taskId = nextId('task');
       const task: GenerationTaskRecord = {
         id: taskId,
@@ -556,12 +571,32 @@ export function createInMemoryNovelRepository(): NovelRepository & {
         payload: { requestId: input.context.requestId },
         createdAt: input.now
       };
-
       generationTasks.unshift(task);
       generationTaskEvents.push(event);
-      return { outcome: 'created', task };
+      const rollbackProvisionalClaim = () => {
+        generationTasks.splice(generationTasks.indexOf(task), 1);
+        generationTaskEvents.splice(generationTaskEvents.indexOf(event), 1);
+        if (sequence === sequenceBeforeClaim + 2) sequence = sequenceBeforeClaim;
+      };
+      try {
+        await input.afterClaimBarrier?.();
+        const commitAuthority = loadAuthority(input.authorityInput);
+        if (!matchGenerationAuthority(input.authorityInput, input.expectedAuthoritySnapshotHash, commitAuthority).ok) {
+          rollbackProvisionalClaim();
+          return { outcome: 'source_stale', task: null };
+        }
+        return { outcome: 'created', task };
+      } catch (error) {
+        rollbackProvisionalClaim();
+        throw error;
+      }
+      } finally {
+        for (const key of pendingKeys) {
+          if (pendingClaimLocks.get(key) === pendingClaim) pendingClaimLocks.delete(key);
+        }
+        releasePendingClaim();
+      }
     },
-
     async fenceGenerationAuthority(input: GenerationAuthorityFenceInput): Promise<GenerationAuthorityFenceResult> {
       const task = generationTasks.find((item) => item.id === input.taskId && item.tenantId === input.tenantId) ?? null;
       if (!task || task.status !== TaskStatus.Processing) {
@@ -587,6 +622,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
         });
         return { outcome: 'source_stale', task };
       }
+      if (input.phase === 'prepare') return { outcome: 'authorized', task };
       task.providerAttemptPhase = input.phase === 'provider_dispatch' ? 'provider_call_started' : 'finalizing';
       if (input.phase === 'provider_dispatch') task.providerDispatchedAt = input.now;
       task.updatedAt = input.now;
@@ -722,7 +758,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async createDirectionCandidates(input: DirectionCreationInput): Promise<CreatedDirectionCandidatesRecord> {
-      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task?.id);
+      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task);
       const task = input.task
         ? requireClaimedTask(input.task, input.context.tenantId)
         : createTask({ input, taskId: nextId('task'), status: TaskStatus.WaitingConfirmation, progress: 100, currentStep: getDirectionRevisionTaskStep(input.taskType) });
@@ -761,7 +797,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async createDirectionRevision(input: DirectionRevisionInput): Promise<CreatedDirectionRevisionRecord> {
-      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task?.id);
+      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task);
       const task = input.task
         ? requireClaimedTask(input.task, input.context.tenantId)
         : createTask({ input, taskId: nextId('task'), status: TaskStatus.WaitingConfirmation, progress: 100, currentStep: getDirectionRevisionTaskStep(input.taskType) });
@@ -934,7 +970,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async createStructureCandidate(input: StructureCreationInput): Promise<CreatedStructureAssetRecord> {
-      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task?.id);
+      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task);
       const effectiveTask = input.task
         ? requireClaimedTask(input.task, input.context.tenantId)
         : createTask({ input, objectType: input.asset.objectType, taskId: nextId('task'), status: TaskStatus.WaitingConfirmation, progress: 100, currentStep: getStructureGenerateStep(input.asset.objectType) });
@@ -1257,7 +1293,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async createTrialChapterOneCandidates(input: TrialCandidateCreationInput): Promise<CreatedTrialCandidatesRecord> {
-      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task.id);
+      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task);
       const trialRunId = nextId('trial');
       const task = requireClaimedTask(input.task, input.context.tenantId);
       const versions = input.candidates.map((candidate) => {
@@ -1439,7 +1475,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async selectTrialChapterOneAndGenerateFollowup(input: TrialFollowupGenerationInput): Promise<GeneratedTrialFollowupRecord> {
-      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task.id);
+      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task);
       const selectedMetadata = toMutableMetadata(input.selectedCandidate.metadata);
       selectedMetadata.trialStatus = 'selected_for_trial';
       selectedMetadata.isSelected = true;
@@ -2265,7 +2301,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async generateBodyBatch(input: BodyBatchGenerationInput): Promise<GeneratedBodyBatchRecord> {
-      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task.id);
+      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task);
       const task = generationTasks.find((item) => item.id === input.task.id && item.tenantId === input.context.tenantId) ?? input.task;
       task.status = TaskStatus.Processing;
       task.statusNote = '模型已返回，正在保存正文版本和批次总结。';
@@ -2446,7 +2482,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async rewriteChapter(input: ChapterRewriteInput): Promise<RewrittenChapterRecord> {
-      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task.id);
+      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task);
       const task = requireClaimedTask(input.task, input.context.tenantId);
       const candidate = createBodyContentVersion({
         input: {
@@ -2498,7 +2534,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async adoptChapterContent(input: ChapterContentAdoptionInput): Promise<AdoptedChapterContentRecord> {
-      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task.id);
+      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task);
       for (const version of chapterContentVersions) {
         if (version.tenantId === input.context.tenantId && version.chapterId === input.chapter.id && version.status === VersionStatus.Current) {
           version.status = VersionStatus.Historical;
@@ -2935,7 +2971,10 @@ export function createInMemoryNovelRepository(): NovelRepository & {
 
     getBodyBatches() {
       return bodyBatches;
-    }
+    },
+    getPreferences() { return preferences; },
+    getChapterFeatureCards() { return chapterFeatureCards; },
+    getReviewReports() { return reviewReports; }
   };
 
   function createTask(options: {
@@ -4314,14 +4353,19 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     Object.assign(novel, patch);
   }
 
-  function assertNoActiveAuthorityClaim(tenantId: string, novelId: string, allowedTaskId?: string) {
+  function assertNoActiveAuthorityClaim(
+    tenantId: string,
+    novelId: string,
+    allowedTask?: Pick<GenerationTaskRecord, 'id' | 'conflictScope' | 'conflictKey'>
+  ) {
     // Every in-memory authority writer calls this before its synchronous mutation block.
     const activeTask = generationTasks.find((task) =>
       task.tenantId === tenantId
       && task.novelId === novelId
-      && task.id !== allowedTaskId
+      && task.id !== allowedTask?.id
       && task.status === TaskStatus.Processing
       && task.activeClaimKey !== null
+      && generationClaimsOverlap(allowedTask, task)
     );
     if (!activeTask) return;
     throw new BusinessError(ErrorCode.ConflictTaskExists, '小说权威来源正在被生成任务使用，请等待任务结束或先取消任务。', {
@@ -4329,7 +4373,6 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       taskType: activeTask.taskType
     });
   }
-
   function requireClaimedTask(task: GenerationTaskRecord, tenantId: string) {
     const stored = generationTasks.find((item) => item.id === task.id && item.tenantId === tenantId);
     if (!stored) throw new Error('Claimed generation task is missing');
@@ -4418,7 +4461,6 @@ export function createInMemoryNovelRepository(): NovelRepository & {
   function asRecord(value: unknown): Record<string, unknown> {
     return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
   }
-
   function getMetadataString(value: unknown, key: string) {
     if (!value || typeof value !== 'object') return null;
     const metadata = value as Record<string, unknown>;

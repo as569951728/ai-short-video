@@ -50,7 +50,6 @@ export interface TrialExecutionSourceRefsV1 {
   currentChapterPlanVersionId: string;
   objectType: 'trial_run';
 }
-
 export interface TrialFollowupExecutionSourceRefsV1 extends TrialExecutionSourceRefsV1 {
   trialRunId: string;
   selectedChapterOneCandidateId: string;
@@ -92,43 +91,35 @@ export interface ExecutionAuditContextV1_1 {
   requestedByUserId: string;
   requestedAt: string;
 }
-
 export interface AuthorityChapterSourceRefV1 {
   chapterId: string;
   chapterNo: number;
   planVersionId: string;
   currentContentVersionId: string | null;
 }
-
 export interface AuthorityTargetChapterSourceRefV1 extends AuthorityChapterSourceRefV1 {
   providerInputSnapshotHash: string;
 }
-
 export interface LongTermMemoryAuthorityIdentityV1 {
   id: string;
   sourceContentVersionId: string;
   snapshotHash: string;
 }
-
 export interface PreviousBatchAuthorityIdentityV1 {
   id: string;
   summaryHash: string;
 }
-
 export const AUTHORITY_SOURCE_TYPES = [
   'novel', 'preferences', 'direction', 'setting', 'outline', 'stage_outline', 'chapter_plan',
   'trial_run', 'chapter', 'chapter_content', 'body_strategy_snapshot', 'long_term_memory', 'body_batch'
 ] as const;
-
 export type AuthoritySourceType = (typeof AUTHORITY_SOURCE_TYPES)[number];
-
 export interface AuthoritySourceIdentityV1 {
   sourceType: AuthoritySourceType;
   sourceId: string;
   revision: string | number;
   snapshotHash: string;
 }
-
 export interface AuthoritySourceVersionRefsV1 {
   sourceIdentitySchemaVersion: 1;
   sourceIdentities: AuthoritySourceIdentityV1[];
@@ -143,7 +134,6 @@ export interface AuthoritySourceVersionRefsV1 {
   previousBatchIdentity?: PreviousBatchAuthorityIdentityV1 | null;
   strategyProviderInputSnapshotHash?: string;
 }
-
 export type ExecutionEnvelopeV1_1 = ExecutionEnvelopeV1 extends infer TEnvelope
   ? TEnvelope extends ExecutionEnvelopeV1
     ? Omit<TEnvelope, 'schemaVersion' | 'effectiveRequest'> & {
@@ -159,9 +149,7 @@ export type ExecutionEnvelopeV1_1 = ExecutionEnvelopeV1 extends infer TEnvelope
       }
     : never
   : never;
-
 export type ExecutionEnvelope = ExecutionEnvelopeV1 | ExecutionEnvelopeV1_1;
-
 const MAX_EXECUTION_ENVELOPE_BYTES = 32 * 1024;
 const MAX_EXECUTION_ENVELOPE_V1_1_BYTES = 48 * 1024;
 const EXECUTION_SENSITIVE_KEY = /(?:api.?key|authorization|cookie|database.?url|access.?token|provider.*(?:body|header|response)|raw.?response|reasoning|messages?|system.?prompt|user.?prompt|user.?agent|ip.?address)/i;
@@ -177,7 +165,6 @@ const EXECUTION_REQUIRED_AUTHORITY_REF_KEYS = [
   'authoritySnapshotHash', 'providerInputSnapshotHash', 'sourceIdentitySchemaVersion',
   'sourceIdentities', 'novelProviderInputSnapshotHash'
 ] as const;
-
 const AUTHORITY_PLACEHOLDER_TOKENS = new Set([
   'legacy', 'objectid', 'placeholder', 'synthetic', 'default', 'null', 'empty', 'undefined',
   'unknown', 'none', 'nil', 'dummy', 'fake', 'mock', 'temporary', 'temp', 'sample', 'example',
@@ -198,7 +185,6 @@ export function createExecutionEnvelopeV1_1(input: unknown): ExecutionEnvelopeV1
   ], 'envelope');
   return normalizeExecutionEnvelopeV1_1({ ...source, schemaVersion: '1.1' });
 }
-
 export function normalizeExecutionEnvelopeV1_1(input: unknown): ExecutionEnvelopeV1_1 {
   assertNoSensitiveExecutionPayload(input);
   const value = executionRecord(input, [
@@ -250,7 +236,6 @@ export function normalizeExecutionEnvelopeV1_1(input: unknown): ExecutionEnvelop
   }
   return envelope as ExecutionEnvelopeV1_1;
 }
-
 export function normalizeExecutionEnvelope(input: unknown): ExecutionEnvelopeV1 {
   assertNoSensitiveExecutionPayload(input);
   const value = executionRecord(input, ['schemaVersion', 'action', 'objectType', 'objectId', 'effectiveRequest', 'sourceVersionRefs', 'policyProfileVersionId', 'modelRoutingVersion'], 'envelope');
@@ -454,7 +439,7 @@ function executionPreviousBatchIdentity(value: unknown): PreviousBatchAuthorityI
 function executionId(value: unknown, path: string) { return executionText(value, path, 128); }
 function executionAuthorityId(value: unknown, path: string) { const id = executionId(value, path); if (isPlaceholderAuthorityIdentifier(id)) executionUnsupported(`${path} must identify a real authoritative source`); return id; }
 function executionAuthorityRevision(value: unknown, path: string): string | number { if (Number.isInteger(value) && (value as number) > 0) return value as number; return executionAuthorityId(value, path); }
-function executionTrustedActorId(value: unknown, path: string, forbidden: string) { const id = executionId(value, path); if (id === forbidden || isPlaceholderAuthorityIdentifier(id)) executionUnsupported(`${path} must identify a trusted actor`); return id; }
+function executionTrustedActorId(value: unknown, path: string, forbidden: string) { const id = executionId(value, path); if (id === forbidden || isPlaceholderActorIdentifier(id)) executionUnsupported(`${path} must identify a trusted actor`); return id; }
 function executionNullableId(value: unknown, path: string) { return value === null || value === undefined ? null : executionId(value, path); }
 function executionNullableAuthorityId(value: unknown, path: string) { return value === null || value === undefined ? null : executionAuthorityId(value, path); }
 function executionOptionalPageVersionSnapshot(value: unknown): Record<string, unknown> | undefined { if (value === undefined || value === null) return undefined; if (!value || typeof value !== 'object' || Array.isArray(value)) executionUnsupported('effectiveRequest.pageVersionSnapshot must be an object'); return structuredClone(value) as Record<string, unknown>; }
@@ -468,16 +453,21 @@ function executionAuthorityIdArray(value: unknown, path: string, min: number, ma
 function executionUnsupported(message: string): never { throw new WorkerPayloadUnsupportedError(message); }
 
 export function isPlaceholderAuthorityIdentifier(value: unknown): boolean {
+  return isPlaceholderIdentifier(value, true);
+}
+export function isPlaceholderActorIdentifier(value: unknown): boolean {
+  return isPlaceholderIdentifier(value, false);
+}
+function isPlaceholderIdentifier(value: unknown, allowPolicyDefault: boolean): boolean {
   if (typeof value !== 'string') return true;
   const normalized = value.trim();
   if (!normalized || /^0+$/.test(normalized)) return true;
-  if (/^policy_default_v[1-9]\d*$/i.test(normalized)) return false;
+  if (allowPolicyDefault && /^policy_default_v[1-9]\d*$/i.test(normalized)) return false;
   const camelSeparated = normalized.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase();
   const tokens = camelSeparated.split(/[^a-z0-9]+/).filter(Boolean);
   return tokens.some((token) => AUTHORITY_PLACEHOLDER_TOKENS.has(token))
     || tokens.some((token, index) => token === 'object' && tokens[index + 1] === 'id');
 }
-
 function assertAuthoritySourceIdentityCoverage(envelope: ExecutionEnvelopeV1_1): void {
   const identities = envelope.sourceVersionRefs.sourceIdentities;
   const byKey = new Map(identities.map((identity) => [`${identity.sourceType}\u0000${identity.sourceId}`, identity]));
@@ -532,7 +522,6 @@ function assertAuthoritySourceIdentityCoverage(envelope: ExecutionEnvelopeV1_1):
     executionUnsupported(`sourceVersionRefs.sourceIdentities contains an identity not used by ${envelope.action}`);
   }
 }
-
 export interface RecommendedActionDTO {
   type: string;
   label: string;

@@ -69,11 +69,9 @@ export function validateExecutionEnvelopeV1_1ForTask(task: GenerationTaskRecord)
     unsupported('execution envelope cannot be deserialized');
   }
 }
-
 export type GenerationAuthorityMatchResult =
   | { ok: true; sources: GenerationAuthoritySnapshot }
   | { ok: false; code: 'SOURCE_STALE'; safeReason: string };
-
 export function matchGenerationAuthority(
   expected: LoadGenerationAuthorityInput,
   expectedSnapshotHash: string,
@@ -91,7 +89,6 @@ export function matchGenerationAuthority(
   }
   return { ok: true, sources: actual };
 }
-
 export function createSafeResultReceipt(task: GenerationTaskRecord, input: unknown): HashedSafeResultReceipt {
   assertNoSensitiveExecutionPayload(input, 'result');
   const value = strictRecord(input, ['status', 'outcome', 'resultObjectType', 'resultObjectId', 'resultVersionIds', 'resultCount'], 'result');

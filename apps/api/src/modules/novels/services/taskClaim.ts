@@ -3,6 +3,7 @@ import {
   NOVEL_PROVIDER_ACTIONS,
   createExecutionEnvelope,
   createExecutionEnvelopeV1_1,
+  isPlaceholderActorIdentifier,
   isPlaceholderAuthorityIdentifier,
   type AuthoritySourceIdentityV1,
   type AuthoritySourceVersionRefsV1,
@@ -177,10 +178,7 @@ export async function executeClaimedGeneration<TProviderResult, TFinalResult>(
   } catch (error) {
     if (error instanceof BusinessError) throw error;
     if (!(error instanceof WorkerPayloadUnsupportedError)) throw error;
-    throw new BusinessError(ErrorCode.GateBlocked, '生成上下文缺少必需的权威版本引用，请刷新后重试。', {
-      action: input.action,
-      contractError: error.message
-    });
+    throw new BusinessError(ErrorCode.GateBlocked, '生成上下文缺少必需的权威版本引用，请刷新后重试。');
   }
   const authorityInput = {
     action: input.action,
@@ -273,6 +271,17 @@ export async function executeClaimedGeneration<TProviderResult, TFinalResult>(
     return { reused: true, task: claim.task, value: null };
   }
 
+  const finalProviderInput = authoritativeProviderInput;
+  const prepareFence = await input.repository.fenceGenerationAuthority({
+    tenantId: input.context.tenantId,
+    taskId: claim.task.id,
+    phase: 'prepare',
+    authorityInput,
+    expectedAuthoritySnapshotHash: authoritySnapshotHash,
+    context: input.context,
+    now: input.now()
+  });
+  assertAuthorityFence(prepareFence, claim.task);
   if (input.prepare) {
     try {
       await input.prepare(claim.task);
@@ -282,7 +291,6 @@ export async function executeClaimedGeneration<TProviderResult, TFinalResult>(
     }
   }
 
-  const finalProviderInput = authoritativeProviderInput;
   const dispatchFence = await input.repository.fenceGenerationAuthority({
     tenantId: input.context.tenantId,
     taskId: claim.task.id,
@@ -293,7 +301,6 @@ export async function executeClaimedGeneration<TProviderResult, TFinalResult>(
     now: input.now()
   });
   assertAuthorityFence(dispatchFence, claim.task);
-
   let providerResult: TProviderResult;
   try {
     providerResult = await input.provider(finalProviderInput);
@@ -342,7 +349,6 @@ function assertAuthorityFence(
     status: fence.task?.status ?? 'not_found'
   });
 }
-
 export function resolveRequestIdempotencyKey(headerValue: unknown, bodyValue: unknown): string | undefined {
   const header = normalizeOptionalKey(headerValue);
   const body = normalizeOptionalKey(bodyValue);
@@ -369,7 +375,6 @@ export function createActorScopedIdempotencyToken(input: {
     idempotencyKey: input.rawIdempotencyKey
   });
 }
-
 function resolveIdempotencyToken(value: string | null | undefined, requestId: string): string {
   const normalized = normalizeOptionalKey(value);
   return normalized ?? `request:${requestId}`.slice(0, 120);
@@ -496,7 +501,6 @@ function assertRequiredClaimSourceRefs(action: NovelProviderAction, value: unkno
   if (expectedObjectType && refs.objectType !== expectedObjectType) throw sourceStale();
   if ((action === 'body_batch_generate' || action === 'chapter_body_generate') && refs.creationStage !== 'body') throw sourceStale();
 }
-
 function toRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
@@ -509,7 +513,6 @@ function canonicalIdArray(value: unknown): unknown {
   if (!Array.isArray(value)) return value;
   return [...new Set(value.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean))].sort();
 }
-
 function buildAuthoritativeProviderInput(
   action: NovelProviderAction,
   authority: GenerationAuthoritySnapshot,
@@ -587,7 +590,6 @@ function buildAuthoritativeProviderInput(
     sourceVersionRefs: projectFullReviewSourceVersionRefsProviderInput(refs)
   };
 }
-
 function buildActionAuthoritySourceRefs(
   action: NovelProviderAction,
   authority: GenerationAuthoritySnapshot,
@@ -660,7 +662,6 @@ function buildActionAuthoritySourceRefs(
   );
   return result;
 }
-
 function buildAuthoritySourceIdentities(
   action: NovelProviderAction,
   facts: Record<string, unknown>,
@@ -748,11 +749,9 @@ function buildAuthoritySourceIdentities(
     return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
   });
 }
-
 function isCreativeAuthoritySourceType(value: string): value is 'direction' | 'setting' | 'outline' | 'stage_outline' | 'chapter_plan' {
   return ['direction', 'setting', 'outline', 'stage_outline', 'chapter_plan'].includes(value);
 }
-
 function creativeAuthoritySnapshot(version: CreativeVersionRecord) {
   return {
     id: version.id,
@@ -766,15 +765,12 @@ function creativeAuthoritySnapshot(version: CreativeVersionRecord) {
     riskLevel: version.riskLevel
   };
 }
-
 function actionNeedsPreferences(action: NovelProviderAction) {
   return ['direction_generate', 'direction_fuse', 'direction_optimize', 'setting_generate', 'outline_generate', 'stage_outline_generate', 'chapter_plan_generate', 'trial_chapter_one_generate', 'trial_followup_generate'].includes(action);
 }
-
 function actionNeedsChapterProjection(action: NovelProviderAction) {
   return ['trial_chapter_one_generate', 'trial_followup_generate', 'body_batch_generate', 'chapter_body_generate', 'chapter_rewrite', 'chapter_impact_assess', 'chapter_adopt_impact_assess', 'novel_full_review'].includes(action);
 }
-
 function authorityChapterRef(chapter: NovelChapterRecord, planVersionId: string) {
   if (!isRealId(chapter.id)) throw sourceStale();
   return {
@@ -784,7 +780,6 @@ function authorityChapterRef(chapter: NovelChapterRecord, planVersionId: string)
     currentContentVersionId: chapter.currentContentVersionId
   };
 }
-
 function pickActionAuthoritySourceRefs(value: unknown): AuthoritySourceVersionRefsV1 {
   const refs = toRecord(value);
   return Object.fromEntries([
@@ -793,16 +788,13 @@ function pickActionAuthoritySourceRefs(value: unknown): AuthoritySourceVersionRe
     'previousContentVersionId', 'longTermMemoryIdentity', 'previousBatchIdentity', 'strategyProviderInputSnapshotHash'
   ].filter((key) => key in refs).map((key) => [key, refs[key]])) as unknown as AuthoritySourceVersionRefsV1;
 }
-
 function isRealId(value: unknown): value is string {
   return typeof value === 'string' && !isPlaceholderAuthorityIdentifier(value);
 }
-
 function requireRealId(value: unknown): string {
   if (!isRealId(value)) throw sourceStale();
   return value.trim();
 }
-
 function projectAuthorityDirection(version: CreativeVersionRecord | undefined) {
   const content = toRecord(version?.content);
   const metadata = toRecord(version?.metadata);
@@ -817,7 +809,6 @@ function projectAuthorityDirection(version: CreativeVersionRecord | undefined) {
     riskTags: stringArray(metadata.riskTags), recommendedReason: String(metadata.recommendedReason ?? content.recommendation ?? '')
   };
 }
-
 function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
 }
@@ -839,8 +830,8 @@ function assertTrustedContext(context: RequestContext) {
   if (
     !context.tenantId.trim()
     || !context.userId.trim()
-    || isPlaceholderAuthorityIdentifier(context.tenantId)
-    || isPlaceholderAuthorityIdentifier(context.userId)
+    || isPlaceholderActorIdentifier(context.tenantId)
+    || isPlaceholderActorIdentifier(context.userId)
   ) {
     throw new BusinessError(ErrorCode.Unauthorized, '当前请求缺少可信身份。');
   }

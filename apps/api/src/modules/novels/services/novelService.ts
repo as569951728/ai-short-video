@@ -161,7 +161,6 @@ export interface NovelServiceOptions {
 }
 
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,119}$/;
-
 async function executeClaimedGeneration<TProviderResult, TFinalResult>(
   input: ExecuteClaimedGenerationInput<TProviderResult, TFinalResult>
 ): Promise<ExecuteClaimedGenerationResult<TFinalResult>> {
@@ -187,24 +186,19 @@ async function executeClaimedGeneration<TProviderResult, TFinalResult>(
       }
     }
   }
-
   return executeTaskClaimedGeneration(input);
 }
-
 function resolveLegacyRawIdempotencyKey(idempotencyKey: string | null | undefined, requestId: string): string | null {
   const normalized = idempotencyKey?.trim();
   if (normalized) return IDEMPOTENCY_KEY_PATTERN.test(normalized) ? normalized : null;
   return `request:${requestId}`.slice(0, 120);
 }
-
 function isTrustedRequestActor(context: RequestContext): boolean {
   return Boolean(context.userId?.trim()) && context.userId !== DEFAULT_USER_ID;
 }
-
 function isTrustedLegacyTaskActor(createdBy: string | null | undefined, requestUserId: string): boolean {
   return Boolean(createdBy?.trim()) && createdBy !== DEFAULT_USER_ID && createdBy === requestUserId;
 }
-
 export class NovelService {
   private readonly statusService: NovelStatusService;
   private readonly directionProvider: DirectionProvider;

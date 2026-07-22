@@ -126,7 +126,18 @@ class ClaimSourceStaleRollbackError extends Error {
     this.name = 'ClaimSourceStaleRollbackError';
   }
 }
-
+function activeGenerationClaimWhere(input: ClaimGenerationTaskInput) {
+  return {
+    tenantId: input.tenantId, novelId: input.novelId, status: PrismaTaskStatus.PROCESSING,
+    activeClaimKey: { not: null },
+    ...(input.conflictScope === 'chapter' ? {
+      OR: [
+        { conflictScope: null }, { conflictScope: { not: 'chapter' } },
+        { conflictScope: 'chapter', conflictKey: input.conflictKey }
+      ]
+    } : {})
+  };
+}
 export class PrismaNovelRepository implements NovelRepository {
   private readonly prisma = getPrismaClient();
 
@@ -486,7 +497,6 @@ export class PrismaNovelRepository implements NovelRepository {
       }
     };
   }
-
   async claimGenerationTask(input: ClaimGenerationTaskInput): Promise<ClaimGenerationTaskResult> {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
@@ -511,7 +521,7 @@ export class PrismaNovelRepository implements NovelRepository {
           }
 
           const activeTask = await tx.generationTask.findFirst({
-            where: { tenantId: input.tenantId, activeClaimKey: input.activeClaimKey }
+            where: activeGenerationClaimWhere(input)
           });
           if (activeTask) return { outcome: 'active_conflict', task: mapGenerationTask(activeTask) };
 
@@ -572,7 +582,6 @@ export class PrismaNovelRepository implements NovelRepository {
         if (!matchGenerationAuthority(input.authorityInput, input.expectedAuthoritySnapshotHash, authority).ok) {
           return { outcome: 'source_stale', task: null };
         }
-
         const idempotentTask = await this.prisma.generationTask.findFirst({
           where: {
             tenantId: input.tenantId,
@@ -588,7 +597,7 @@ export class PrismaNovelRepository implements NovelRepository {
         }
 
         const activeTask = await this.prisma.generationTask.findFirst({
-          where: { tenantId: input.tenantId, activeClaimKey: input.activeClaimKey }
+          where: activeGenerationClaimWhere(input)
         });
         if (activeTask) return { outcome: 'active_conflict', task: mapGenerationTask(activeTask) };
         if (attempt === 1) {
@@ -640,6 +649,7 @@ export class PrismaNovelRepository implements NovelRepository {
         });
         return { outcome: 'source_stale' as const, task: mapGenerationTask(failed) };
       }
+      if (input.phase === 'prepare') return { outcome: 'authorized' as const, task: mapGenerationTask(current) };
       const authorized = await tx.generationTask.update({
         where: { id: current.id, tenantId: input.tenantId },
         data: input.phase === 'provider_dispatch'
@@ -656,7 +666,6 @@ export class PrismaNovelRepository implements NovelRepository {
       return { outcome: 'authorized' as const, task: mapGenerationTask(authorized) };
     });
   }
-
   async leaseNextQueuedTask(workerId: string, leaseToken: string, now: Date, leaseUntil: Date) {
     if (leaseUntil.getTime() <= now.getTime()) return null;
     for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -883,7 +892,7 @@ export class PrismaNovelRepository implements NovelRepository {
 
   async createDirectionCandidates(input: DirectionCreationInput): Promise<CreatedDirectionCandidatesRecord> {
     return this.prisma.$transaction(async (tx) => {
-      await assertNoActiveAuthorityClaim(tx, input.context.tenantId, input.novel.id, input.task.id);
+      await assertNoActiveAuthorityClaim(tx, input.context.tenantId, input.novel.id, input.task);
       const task = await transitionClaimedTask(tx, {
         taskId: input.task.id,
         tenantId: input.context.tenantId,
@@ -969,7 +978,7 @@ export class PrismaNovelRepository implements NovelRepository {
 
   async createDirectionRevision(input: DirectionRevisionInput): Promise<CreatedDirectionRevisionRecord> {
     return this.prisma.$transaction(async (tx) => {
-      await assertNoActiveAuthorityClaim(tx, input.context.tenantId, input.novel.id, input.task?.id);
+      await assertNoActiveAuthorityClaim(tx, input.context.tenantId, input.novel.id, input.task);
       const task = input.task
         ? await transitionClaimedTask(tx, {
             taskId: input.task.id,
@@ -1226,7 +1235,7 @@ export class PrismaNovelRepository implements NovelRepository {
 
   async createStructureCandidate(input: StructureCreationInput): Promise<CreatedStructureAssetRecord> {
     return this.prisma.$transaction(async (tx) => {
-      await assertNoActiveAuthorityClaim(tx, input.context.tenantId, input.novel.id, input.task?.id);
+      await assertNoActiveAuthorityClaim(tx, input.context.tenantId, input.novel.id, input.task);
       const task = input.task
         ? await transitionClaimedTask(tx, {
             taskId: input.task.id,
@@ -1871,7 +1880,7 @@ export class PrismaNovelRepository implements NovelRepository {
 
   async createTrialChapterOneCandidates(input: TrialCandidateCreationInput): Promise<CreatedTrialCandidatesRecord> {
     return this.prisma.$transaction(async (tx) => {
-      await assertNoActiveAuthorityClaim(tx, input.context.tenantId, input.novel.id, input.task.id);
+      await assertNoActiveAuthorityClaim(tx, input.context.tenantId, input.novel.id, input.task);
       const trialRunId = createId('trial');
       const task = await transitionClaimedTask(tx, {
         taskId: input.task.id,
@@ -2099,7 +2108,7 @@ export class PrismaNovelRepository implements NovelRepository {
 
   async selectTrialChapterOneAndGenerateFollowup(input: TrialFollowupGenerationInput): Promise<GeneratedTrialFollowupRecord> {
     return this.prisma.$transaction(async (tx) => {
-      await assertNoActiveAuthorityClaim(tx, input.context.tenantId, input.novel.id, input.task.id);
+      await assertNoActiveAuthorityClaim(tx, input.context.tenantId, input.novel.id, input.task);
       const selectedMetadata = { ...toRecord(input.selectedCandidate.metadata), trialStatus: 'selected_for_trial', isSelected: true, followupStatus: 'completed' };
       const selected = await tx.chapterContentVersion.update({
         where: { id: input.selectedCandidate.id },
@@ -2764,13 +2773,13 @@ async function lockGenerationAuthority(tx: Prisma.TransactionClient, input: Load
   await lock('chapter_content_version');
   await lock('trial_run');
   await lock('long_term_memory');
+  await lock('generation_task');
 }
-
 async function assertNoActiveAuthorityClaim(
   tx: Prisma.TransactionClient,
   tenantId: string,
   novelId: string,
-  allowedTaskId?: string
+  allowedTask?: Pick<GenerationTaskRecord, 'id' | 'conflictScope' | 'conflictKey'>
 ) {
   // The novel row is the shared lock root for claim, fences, finalizers, and authority-changing user writes.
   await tx.$queryRaw(
@@ -2782,7 +2791,14 @@ async function assertNoActiveAuthorityClaim(
       novelId,
       status: PrismaTaskStatus.PROCESSING,
       activeClaimKey: { not: null },
-      ...(allowedTaskId ? { id: { not: allowedTaskId } } : {})
+      ...(allowedTask ? { id: { not: allowedTask.id } } : {}),
+      ...(allowedTask?.conflictScope === 'chapter' ? {
+        OR: [
+          { conflictScope: { not: 'chapter' } },
+          { conflictScope: null },
+          { conflictScope: 'chapter', conflictKey: allowedTask.conflictKey }
+        ]
+      } : {})
     }
   });
   if (!activeTask) return;
@@ -2791,7 +2807,6 @@ async function assertNoActiveAuthorityClaim(
     taskType: activeTask.taskType
   });
 }
-
 function createId(prefix: string) {
   return `${prefix}_${randomUUID().replace(/-/g, '').slice(0, 20)}`;
 }
@@ -4227,7 +4242,6 @@ function bodyBatchFromTaskMetadata(metadata: unknown, tenantId: string, novelId:
     return null;
   }
 }
-
 function requiredRecord(value: unknown, path: string): Record<string, unknown> { if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError(`${path} must be an object`); return value as Record<string, unknown>; }
 function requiredArray(value: unknown, path: string): unknown[] { if (!Array.isArray(value)) throw new TypeError(`${path} must be an array`); return value; }
 function requiredString(value: unknown, path: string): string { if (typeof value !== 'string' || !value) throw new TypeError(`${path} must be a string`); return value; }
@@ -4239,7 +4253,6 @@ function requiredBoolean(value: unknown, path: string): boolean { if (typeof val
 function requiredStringArray(value: unknown, path: string): string[] { return requiredArray(value, path).map((item, index) => requiredString(item, `${path}[${index}]`)); }
 function requiredDate(value: unknown, path: string): Date { const date = value instanceof Date ? new Date(value) : new Date(requiredString(value, path)); if (Number.isNaN(date.getTime())) throw new TypeError(`${path} must be a date`); return date; }
 function requiredOneOf<T extends string>(value: unknown, values: readonly T[], path: string): T { if (typeof value !== 'string' || !values.includes(value as T)) throw new TypeError(`${path} is unsupported`); return value as T; }
-
 function toJsonObject(value: unknown): Prisma.InputJsonObject {
   return JSON.parse(JSON.stringify(value ?? {})) as Prisma.InputJsonObject;
 }
@@ -4259,7 +4272,6 @@ function toRecord(value: unknown): Record<string, unknown> {
 function authorityRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
-
 function countWords(content: string) {
   return content.replace(/\s/g, '').length;
 }

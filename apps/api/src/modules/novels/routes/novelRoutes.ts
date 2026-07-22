@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { ErrorCode } from '@ai-shortvideo/shared';
+import { ErrorCode, isPlaceholderActorIdentifier } from '@ai-shortvideo/shared';
 import { BusinessError } from '../../../shared/errors.js';
 import { sendOk } from '../../../shared/reply.js';
 import { NovelService, type NovelServiceOptions } from '../services/novelService.js';
@@ -123,7 +123,6 @@ const fullReviewParamsSchema = {
 const idempotencyKeySchema = { type: 'string', minLength: 8, maxLength: 120, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{7,119}$' } as const;
 
 type NovelRouteOptions = NovelServiceOptions & { requestContextResolver?: RequestContextResolver };
-
 export async function registerNovelRoutes(app: FastifyInstance, options: NovelRouteOptions) {
   const novelService = new NovelService(options);
   const devSeedNovelService = new NovelService({
@@ -1551,7 +1550,7 @@ async function resolveProviderContext(
   }
   const tenantId = actor?.tenantId?.trim() ?? '';
   const userId = actor?.userId?.trim() ?? '';
-  if (!tenantId || !userId || tenantId === 'tenant_default' || userId === 'user_default') {
+  if (isPlaceholderActorIdentifier(tenantId) || isPlaceholderActorIdentifier(userId)) {
     throw new BusinessError(ErrorCode.Unauthorized, '当前请求缺少可信身份。');
   }
   return Object.freeze({
@@ -1562,7 +1561,6 @@ async function resolveProviderContext(
     userAgent: getHeader(request.headers['user-agent'])
   });
 }
-
 function getHeader(header: string | string[] | undefined) {
   return Array.isArray(header) ? header[0] : header;
 }

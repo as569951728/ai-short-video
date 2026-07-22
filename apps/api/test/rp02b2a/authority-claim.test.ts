@@ -1,9 +1,14 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { after, before, describe, it } from 'node:test';
 import {
   ErrorCode,
+  NovelCreationStage,
+  NovelLifecycleStatus,
+  StageStatus,
   TaskStatus,
   canonicalExecutionJson,
+  isPlaceholderActorIdentifier,
   isPlaceholderAuthorityIdentifier,
   type AuthoritySourceIdentityV1,
   type ExecutionEnvelopeV1_1,
@@ -13,9 +18,10 @@ import { buildApp } from '../../src/app.js';
 import { BusinessError } from '../../src/shared/errors.js';
 import { validateExecutionEnvelopeV1_1ForTask } from '../../src/modules/novels/domain/executionContract.js';
 import { PrismaNovelRepository } from '../../src/modules/novels/repositories/prismaNovelRepository.js';
+import { createInMemoryNovelRepository } from '../../src/modules/novels/repositories/inMemoryNovelRepository.js';
 import { createActorScopedIdempotencyToken, executeClaimedGeneration, hashCanonicalJson } from '../../src/modules/novels/services/taskClaim.js';
 import { createDefaultRequestContext } from '../../src/modules/novels/services/novelService.js';
-import { ACTIONS, ManualClock, ZERO_SIDE_EFFECTS, createAuthorityFixture, createRouteAuthorityFixture, sideEffects, snapshotRouteSideEffects } from './fixtures.js';
+import { ACTIONS, ManualClock, ZERO_SIDE_EFFECTS, actionSpec, createAuthorityFixture, createRouteAuthorityFixture, sideEffects, snapshotAuthorityFixtureState, snapshotRouteSideEffects } from './fixtures.js';
 async function executeFixture(
   fixture: Awaited<ReturnType<typeof createAuthorityFixture>>,
   input: {
@@ -25,6 +31,7 @@ async function executeFixture(
     effectiveRequest?: unknown;
     sourceVersionRefs?: unknown;
     providerCalls: { value: number };
+    prepare?: (task: Parameters<NonNullable<Parameters<typeof executeClaimedGeneration>[0]['prepare']>>[0]) => Promise<void>;
   }
 ) {
   return executeClaimedGeneration({
@@ -38,11 +45,21 @@ async function executeFixture(
     context: input.context ?? fixture.context,
     now: fixture.clock?.now ?? (() => new Date('2026-07-15T00:00:00.000Z')),
     authorityBarrier: input.barrier,
+    prepare: input.prepare,
     provider: async () => { input.providerCalls.value += 1; return { ok: true }; },
     finalize: async () => ({ ok: true })
   });
 }
 describe('RP-02B2a2 authoritative claim', () => {
+  it('fails startup before listen for placeholder deployment actors', () => {
+    const entrypoint = new URL('../../src/main.ts', import.meta.url).href;
+    for (const userId of ['policy_default_v1', 'user_default', 'legacy_worker', 'synthetic_actor', 'mock_actor', 'placeholder_actor', '']) {
+      const result = spawnSync(process.execPath, ['--import', 'tsx', '--eval', `import(${JSON.stringify(entrypoint)})`], {
+        env: { ...process.env, DEPLOYMENT_ACTOR_TENANT_ID: 'tenant_real', DEPLOYMENT_ACTOR_USER_ID: userId }, encoding: 'utf8'
+      });
+      assert.notEqual(result.status, 0, userId); assert.match(result.stderr, userId ? /DEPLOYMENT_ACTOR_TENANT_ID and DEPLOYMENT_ACTOR_USER_ID are required/ : /DEPLOYMENT_ACTOR_USER_ID/, userId);
+    }
+  });
   for (const [actionIndex, action] of ACTIONS.entries()) {
     describe(`authority matrix: ${action}`, () => {
       let fixture: Awaited<ReturnType<typeof createRouteAuthorityFixture>>;
@@ -128,29 +145,36 @@ describe('RP-02B2a2 authoritative claim', () => {
       const fixture = await createAuthorityFixture(action);
       const calls = { value: 0 };
       fixture.authority.remove();
-      assert.deepEqual(sideEffects(fixture.repository, calls.value, fixture.counters.intent), ZERO_SIDE_EFFECTS);
+      const before = await snapshotAuthorityFixtureState(fixture, calls.value);
       await assert.rejects(
         executeFixture(fixture, { providerCalls: calls, key: `missing-authority-${action}` }),
         (error: unknown) => error instanceof BusinessError && error.code === ErrorCode.VersionConflict
       );
-      assert.deepEqual(sideEffects(fixture.repository, calls.value, fixture.counters.intent), ZERO_SIDE_EFFECTS);
+      assert.deepEqual(await snapshotAuthorityFixtureState(fixture, calls.value), before);
     });
   }
+  it('does not record provider dispatch when prepare fails', async () => {
+    const fixture = await createAuthorityFixture('direction_generate');
+    const calls = { value: 0 };
+    await assert.rejects(executeFixture(fixture, {
+      providerCalls: calls,
+      key: 'prepare-failure',
+      prepare: async () => { throw new Error('prepare failed'); }
+    }), /prepare failed/);
+    const task = fixture.repository.getGenerationTasks().at(-1);
+    assert.ok(task);
+    assert.deepEqual([calls.value, task.status, task.failureCategory], [0, TaskStatus.Failed, 'save_failed']);
+    assert.deepEqual([task.providerAttemptPhase, task.providerDispatchedAt], [null, null]);
+  });
   describe('post-claim authority fences', () => {
     let fixture: Awaited<ReturnType<typeof createRouteAuthorityFixture>>;
-
     before(async () => { fixture = await createRouteAuthorityFixture('outline_generate'); });
     after(async () => { await fixture.app.close(); });
-
     it('rechecks authority before provider dispatch with provider=0 and candidate=0', async () => {
-      const entered = deferred();
-      const release = deferred();
+      const entered = deferred(), release = deferred();
       const originalFence = fixture.repository.fenceGenerationAuthority.bind(fixture.repository);
       fixture.repository.fenceGenerationAuthority = async (input) => {
-        if (input.phase === 'provider_dispatch') {
-          entered.resolve();
-          await release.promise;
-        }
+        if (input.phase === 'prepare') { entered.resolve(); await release.promise; }
         return originalFence(input);
       };
       const beforeCandidates = fixture.repository.getCreativeVersions().length;
@@ -163,7 +187,6 @@ describe('RP-02B2a2 authoritative claim', () => {
         novel.title = `${previousTitle} changed before dispatch`;
         release.resolve();
         const response = await responsePromise;
-
         assertSourceStaleResponse(response.statusCode, response.json());
         assert.equal(fixture.providerInvocations().length, 0);
         assert.equal(fixture.repository.getCreativeVersions().length, beforeCandidates);
@@ -174,7 +197,42 @@ describe('RP-02B2a2 authoritative claim', () => {
         fixture.repository.fenceGenerationAuthority = originalFence;
       }
     });
-
+    it('fences body-batch authority before prepare can mutate task, novel, or batch state', async () => {
+      const bodyFixture = await createRouteAuthorityFixture('body_batch_generate');
+      const entered = deferred();
+      const release = deferred();
+      const originalFence = bodyFixture.repository.fenceGenerationAuthority.bind(bodyFixture.repository);
+      bodyFixture.repository.fenceGenerationAuthority = async (input) => {
+        if (input.phase === 'prepare') {
+          entered.resolve();
+          await release.promise;
+        }
+        return originalFence(input);
+      };
+      const novel = await bodyFixture.repository.findById('tenant_test', bodyFixture.novelId);
+      assert.ok(novel);
+      const previousTitle = novel.title;
+      const beforeNovel = await snapshotNovelBusinessState(bodyFixture);
+      const beforeBatches = structuredClone(bodyFixture.repository.getBodyBatches());
+      try {
+        const responsePromise = bodyFixture.runSuccess('body-batch-dispatch-fence-stale');
+        await entered.promise;
+        novel.title = `${previousTitle} changed before body prepare`;
+        release.resolve();
+        const response = await responsePromise;
+        assertSourceStaleResponse(response.statusCode, response.json());
+        assert.equal(bodyFixture.providerInvocations().length, 0);
+        const staleTask = bodyFixture.repository.getGenerationTasks().findLast((task) => task.failureCategory === 'source_stale');
+        assert.ok(staleTask);
+        assert.deepEqual({ progress: staleTask.progress, resultObjectType: staleTask.resultObjectType }, { progress: 0, resultObjectType: null });
+        assert.deepEqual(bodyFixture.repository.getBodyBatches(), beforeBatches);
+      } finally {
+        novel.title = previousTitle; release.resolve();
+        bodyFixture.repository.fenceGenerationAuthority = originalFence;
+        assert.deepEqual(await snapshotNovelBusinessState(bodyFixture), beforeNovel);
+        await bodyFixture.app.close();
+      }
+    });
     it('rechecks authority after provider return with provider=1 and candidate=0', async () => {
       const entered = deferred();
       const release = deferred();
@@ -197,7 +255,6 @@ describe('RP-02B2a2 authoritative claim', () => {
         novel.title = `${previousTitle} changed after provider`;
         release.resolve();
         const response = await responsePromise;
-
         assertSourceStaleResponse(response.statusCode, response.json());
         assert.equal(fixture.providerInvocations().length, 1);
         assert.equal(fixture.repository.getCreativeVersions().length, beforeCandidates);
@@ -209,7 +266,6 @@ describe('RP-02B2a2 authoritative claim', () => {
       }
     });
   });
-
   it('blocks authority adoption after the finalize fence passes but before candidate persistence', async () => {
     const fixture = await createRouteAuthorityFixture('direction_generate');
     try {
@@ -219,7 +275,6 @@ describe('RP-02B2a2 authoritative claim', () => {
         version.novelId === fixture.novelId && version.objectType === 'direction' && version.status === 'candidate'
       );
       assert.ok(candidate);
-
       const entered = deferred();
       const release = deferred();
       const originalFinalize = fixture.repository.createDirectionCandidates.bind(fixture.repository);
@@ -250,18 +305,25 @@ describe('RP-02B2a2 authoritative claim', () => {
       await fixture.app.close();
     }
   });
-  it('new_task_missing_required_source_refs_fails_closed_with_absolute_zero_provider_task_and_intent', async () => {
-    const fixture = await createAuthorityFixture('outline_generate');
-    const calls = { value: 0 };
-    await assert.rejects(
-      executeFixture(fixture, { providerCalls: calls, key: 'missing-source-refs', sourceVersionRefs: {} }),
-      (error: unknown) => error instanceof BusinessError
-        && error.code === ErrorCode.VersionConflict
-        && (error.details as { code?: unknown }).code === 'SOURCE_STALE'
-    );
-    assert.equal(fixture.authority.loadCount, 0);
-    assert.deepEqual(sideEffects(fixture.repository, calls.value, fixture.counters.intent), ZERO_SIDE_EFFECTS);
-  });
+  for (const action of ACTIONS) {
+    for (const missingKey of Object.keys(actionSpec(action, 'novel').sourceVersionRefs)) {
+      it(`${action}:missing_${missingKey}_fails_before_authority_provider_claim_or_any_repository_write`, async () => {
+        const fixture = await createAuthorityFixture(action);
+        const calls = { value: 0 };
+        const refs = structuredClone(fixture.sourceVersionRefs) as Record<string, unknown>;
+        delete refs[missingKey];
+        const before = await snapshotAuthorityFixtureState(fixture, calls.value);
+        await assert.rejects(
+          executeFixture(fixture, { providerCalls: calls, key: `missing-${missingKey}-${action}`, sourceVersionRefs: refs }),
+          (error: unknown) => error instanceof BusinessError
+            && error.code === ErrorCode.VersionConflict
+            && (error.details as { code?: unknown }).code === 'SOURCE_STALE'
+        );
+        assert.equal(fixture.authority.loadCount, 0);
+        assert.deepEqual(await snapshotAuthorityFixtureState(fixture, calls.value), before);
+      });
+    }
+  }
   it('stale_replay_revalidates_persisted_T0_authority_and_fails_without_provider_task_or_intent_delta', async () => {
     const fixture = await createAuthorityFixture('direction_generate');
     const clock = new ManualClock(new Date('2026-07-15T00:00:00.000Z'));
@@ -338,13 +400,29 @@ describe('RP-02B2a2 authoritative claim', () => {
     const second = await executeFixture({ ...fixture, action: 'direction_generate' }, { providerCalls: calls, key, context: userB });
     assert.notEqual(second.task.id, first.task.id);
     assert.notEqual(second.task.idempotencyToken, first.task.idempotencyToken);
-    const tenantA = await createAuthorityFixture('direction_generate', { tenantId: 'tenant_alpha', userId: 'user_shared' });
-    const tenantB = await createAuthorityFixture('direction_generate', { tenantId: 'tenant_beta', userId: 'user_shared' });
-    const callsA = { value: 0 }, callsB = { value: 0 };
-    const claimA = await executeFixture(tenantA, { providerCalls: callsA, key });
-    const claimB = await executeFixture(tenantB, { providerCalls: callsB, key });
+    const sharedRepository = createInMemoryNovelRepository();
+    const contexts = ['alpha', 'beta'].map((tenant) => ({
+      tenantId: `tenant_${tenant}`, userId: 'user_shared', requestId: `request_tenant_${tenant}`
+    }));
+    const drafts = await Promise.all(contexts.map((context, index) => sharedRepository.createDraft({
+      request: { title: `shared tenant ${index + 1}` }, context, now: new Date('2026-07-15T00:00:00.000Z')
+    })));
+    drafts.forEach(({ novel }) => Object.assign(novel, {
+      lifecycleStatus: NovelLifecycleStatus.Active, creationStage: NovelCreationStage.Body, stageStatus: StageStatus.Processing
+    }));
+    const claimForTenant = (index: number) => executeClaimedGeneration({
+      action: 'direction_generate', repository: sharedRepository, novel: drafts[index]!.novel,
+      objectId: drafts[index]!.novel.id, idempotencyKey: key, effectiveRequest: {},
+      sourceVersionRefs: { currentDirectionVersionId: null },
+      context: contexts[index]!, now: () => new Date('2026-07-15T00:00:00.000Z'),
+      provider: async () => ({ ok: true }), finalize: async () => ({ ok: true })
+    });
+    const claimA = await claimForTenant(0);
+    const claimB = await claimForTenant(1);
     assert.deepEqual([claimA.task.tenantId, claimB.task.tenantId], ['tenant_alpha', 'tenant_beta']);
     assert.notEqual(claimA.task.idempotencyToken, claimB.task.idempotencyToken);
+    assert.deepEqual(sharedRepository.getGenerationTasks()
+      .filter((task) => [claimA.task.id, claimB.task.id].includes(task.id)).map((task) => task.tenantId).sort(), ['tenant_alpha', 'tenant_beta']);
     assert.deepEqual(
       [validateExecutionEnvelopeV1_1ForTask(claimA.task).tenantId, validateExecutionEnvelopeV1_1ForTask(claimB.task).tenantId],
       ['tenant_alpha', 'tenant_beta']
@@ -393,11 +471,13 @@ describe('RP-02B2a2 authoritative claim', () => {
     for (const value of ['novel_000001', 'direction_v20260718', 'tenant_defaulting_v2', 'policy_default_v1']) {
       assert.equal(isPlaceholderAuthorityIdentifier(value), false, value);
     }
+    assert.equal(isPlaceholderActorIdentifier('policy_default_v1'), true);
     for (const actor of [
       { tenantId: 'tenant_legacy', userId: 'user_real' },
       { tenantId: 'tenant_real', userId: 'user_placeholder' },
       { tenantId: 'synthetic', userId: 'user_real' },
-      { tenantId: 'tenant_real', userId: 'empty' }
+      { tenantId: 'tenant_real', userId: 'empty' },
+      { tenantId: 'tenant_real', userId: 'policy_default_v1' }
     ]) {
       const app = await buildApp({ logger: false, requestContextResolver: async () => actor });
       const response = await app.inject({ method: 'GET', url: '/tasks/task_missing' });
@@ -454,25 +534,26 @@ describe('RP-02B2a2 authoritative claim', () => {
     }
   });
 });
-function assertZeroDelta(beforeEffects: Record<string, number>, afterEffects: Record<string, number>, label: string) {
+function assertZeroDelta(
+  beforeEffects: Record<string, number | string>,
+  afterEffects: Record<string, number | string>,
+  label: string
+) {
   assert.deepEqual(Object.keys(afterEffects), Object.keys(beforeEffects), `${label}:effect keys`);
   for (const key of Object.keys(afterEffects)) {
-    assert.equal(afterEffects[key] - beforeEffects[key], 0, `${label}:${key}:absolute zero delta`);
+    assert.equal(afterEffects[key], beforeEffects[key], `${label}:${key}:absolute zero mutation`);
   }
 }
-
 function deferred() {
   let resolve!: () => void;
   const promise = new Promise<void>((done) => { resolve = done; });
   return { promise, resolve };
 }
-
 function assertSourceStaleResponse(statusCode: number, body: { error?: { code?: unknown; details?: { code?: unknown } } }) {
   assert.equal(statusCode, 409);
   assert.equal(body.error?.code, ErrorCode.VersionConflict);
   assert.equal(body.error?.details?.code, 'SOURCE_STALE');
 }
-
 function assertSourceStaleTerminalTask(tasks: Array<{ status: unknown; failureCategory: unknown; errorCode: unknown; activeClaimKey: unknown }>) {
   const task = tasks.findLast((item) => item.failureCategory === 'source_stale');
   assert.ok(task);
@@ -511,7 +592,6 @@ function providerProjection(action: NovelProviderAction, invocations: Array<{ ac
     enhancedReview: first.enhancedReview
   };
 }
-
 function assertActionAuthorityRefs(
   action: NovelProviderAction,
   envelope: ExecutionEnvelopeV1_1,
@@ -605,14 +685,12 @@ function assertActionAuthorityRefs(
   const serialized = canonicalExecutionJson(refs);
   assert.equal(/(?:legacy-|objectId-|placeholder|synthetic|"0{64}")/i.test(serialized), false, `${action}:no synthetic authority identity`);
 }
-
 const AUTHORITY_EXTENSION_KEYS = new Set([
   'authoritySnapshotHash', 'providerInputSnapshotHash', 'sourceIdentitySchemaVersion', 'sourceIdentities',
   'novelProviderInputSnapshotHash', 'preferencesSnapshotHash', 'chapterProviderInputSnapshotHash',
   'chapterRefs', 'chapterInputSnapshotHash', 'targetChapterRefs', 'previousContentVersionId',
   'longTermMemoryIdentity', 'previousBatchIdentity', 'strategyProviderInputSnapshotHash'
 ]);
-
 async function assertMalformedLegacyReplayMatrix(
   fixture: Awaited<ReturnType<typeof createRouteAuthorityFixture>>,
   task: ReturnType<typeof fixture.repository.getGenerationTasks>[number],
@@ -621,6 +699,7 @@ async function assertMalformedLegacyReplayMatrix(
 ) {
   const originalTask = {
     idempotencyToken: task.idempotencyToken,
+    requestHash: task.requestHash,
     sourceVersionRefs: task.sourceVersionRefs,
     executionEnvelopeJson: task.executionEnvelopeJson
   };
@@ -645,6 +724,7 @@ async function assertMalformedLegacyReplayMatrix(
       const malformed = mutate(structuredClone(originalEnvelope)) as ExecutionEnvelopeV1_1;
       task.executionEnvelopeJson = malformed;
       task.sourceVersionRefs = malformed.sourceVersionRefs;
+      task.requestHash = hashCanonicalJson(malformed);
       const beforeEffects = await snapshotRouteSideEffects(fixture);
       const providerCalls = { value: 0 };
       await assert.rejects(
@@ -659,7 +739,6 @@ async function assertMalformedLegacyReplayMatrix(
     Object.assign(task, originalTask);
   }
 }
-
 async function assertStaleLegacyReplay(
   fixture: Awaited<ReturnType<typeof createRouteAuthorityFixture>>,
   task: ReturnType<typeof fixture.repository.getGenerationTasks>[number],
@@ -689,7 +768,6 @@ async function assertStaleLegacyReplay(
     novel.title = originalTitle;
   }
 }
-
 async function replayPersistedTask(
   fixture: Awaited<ReturnType<typeof createRouteAuthorityFixture>>,
   task: ReturnType<typeof fixture.repository.getGenerationTasks>[number],
@@ -720,7 +798,6 @@ async function replayPersistedTask(
     finalize: async () => ({ ok: true })
   });
 }
-
 function replaceFirstIdentity(envelope: ExecutionEnvelopeV1_1, patch: Partial<AuthoritySourceIdentityV1>): ExecutionEnvelopeV1_1 {
   const identities = envelope.sourceVersionRefs.sourceIdentities;
   return {
@@ -731,7 +808,6 @@ function replaceFirstIdentity(envelope: ExecutionEnvelopeV1_1, patch: Partial<Au
     }
   };
 }
-
 function replaceActionSourceRef(envelope: ExecutionEnvelopeV1_1, value: string): ExecutionEnvelopeV1_1 {
   const refs = structuredClone(envelope.sourceVersionRefs) as unknown as Record<string, unknown>;
   if (envelope.action === 'direction_generate') refs.currentDirectionVersionId = value;
@@ -751,7 +827,6 @@ function replaceActionSourceRef(envelope: ExecutionEnvelopeV1_1, value: string):
   }
   return { ...envelope, sourceVersionRefs: refs } as ExecutionEnvelopeV1_1;
 }
-
 function addExtraIdentity(envelope: ExecutionEnvelopeV1_1): ExecutionEnvelopeV1_1 {
   const extra: AuthoritySourceIdentityV1 = {
     sourceType: 'novel',
@@ -766,17 +841,14 @@ function addExtraIdentity(envelope: ExecutionEnvelopeV1_1): ExecutionEnvelopeV1_
   });
   return { ...envelope, sourceVersionRefs: { ...envelope.sourceVersionRefs, sourceIdentities } };
 }
-
 function omitKey(value: object, key: string) {
   return Object.fromEntries(Object.entries(value).filter(([field]) => field !== key));
 }
-
 function hasNestedKey(value: unknown, key: string): boolean {
   if (Array.isArray(value)) return value.some((item) => hasNestedKey(item, key));
   if (!value || typeof value !== 'object') return false;
   return Object.entries(value as Record<string, unknown>).some(([field, child]) => field === key || hasNestedKey(child, key));
 }
-
 async function assertRepositoryAuthorityParity(
   fixture: Awaited<ReturnType<typeof createRouteAuthorityFixture>>,
   envelope: ExecutionEnvelopeV1_1
@@ -819,7 +891,6 @@ async function assertRepositoryAuthorityParity(
     novel.title = title;
   }
 }
-
 async function loadPrismaAuthorityThroughInMemoryData(
   repository: Awaited<ReturnType<typeof createRouteAuthorityFixture>>['repository'],
   input: Parameters<typeof repository.loadGenerationAuthority>[0]

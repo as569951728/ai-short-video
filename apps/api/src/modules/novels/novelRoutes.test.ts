@@ -35,12 +35,17 @@ const buildApp = (options: Parameters<typeof buildBaseApp>[0] = {}) => buildBase
   requestContextResolver: async () => ({ tenantId: 'tenant_test', userId: 'user_test' }),
   ...options
 });
-it('rejects default actor identities before task creation', async () => {
-  for (const actor of [{ tenantId: 'tenant_default', userId: 'user_test' }, { tenantId: 'tenant_test', userId: 'user_default' }]) {
+it('rejects default, legacy, synthetic, and placeholder actor identities before any write', async () => {
+  for (const actor of [['tenant_default', 'user_test'], ['tenant_test', 'user_default'], ['legacy_actor', 'user_test'],
+    ['tenant_test', 'placeholder_actor'], ['synthetic_actor', 'user_test'], ['tenant_test', 'mock_actor'], ['tenant_test', 'policy_default_v1']]
+    .map(([tenantId, userId]) => ({ tenantId: tenantId!, userId: userId! }))) {
     const repository = createInMemoryNovelRepository();
     const app = await buildBaseApp({ logger: false, novelRepository: repository, requestContextResolver: async () => actor });
     const response = await app.inject({ method: 'POST', url: '/novels/drafts', payload: { title: 'default actor rejected', genres: ['test'], preferences: { appealPoints: ['test'], targetAudience: 'test' }, chapterLimit: 8, chapterWordRange: { min: 1200, max: 1600 } } });
-    assert.equal(response.statusCode, 401, response.body); assert.equal(repository.getGenerationTasks().length, 0); await app.close();
+    assert.equal(response.statusCode, 401, response.body);
+    assert.deepEqual([repository.getGenerationTasks().length,
+      (await repository.list({ tenantId: actor.tenantId, page: 1, pageSize: 10 })).total], [0, 0]);
+    await app.close();
   }
 });
 describe('novel package 1 routes', () => {
@@ -3018,13 +3023,11 @@ async function postTrialGenerate(app: Awaited<ReturnType<typeof buildApp>>, nove
   assert.equal(response.statusCode, 200, response.body); assert.equal(response.json().success, true);
   return response.json().data;
 }
-
 function requestFallbackIdempotencyKey(task: { metadata: unknown }) {
   const requestId = (task.metadata as { requestId?: unknown } | null)?.requestId;
   assert.equal(typeof requestId, 'string');
   return `request:${requestId}`.slice(0, 120);
 }
-
 function testActorScopedIdempotencyToken(action: NovelProviderAction, objectId: string, rawIdempotencyKey: string) {
   return createActorScopedIdempotencyToken({
     tenantId: 'tenant_test',
@@ -3601,7 +3604,6 @@ describe('RP-02B2a1 registry and strict provider ABI', () => {
         if (actorCase === 'null') legacyTask.createdBy = null;
         if (actorCase === 'default') legacyTask.createdBy = 'user_default';
         if (actorCase === 'mismatched') legacyTask.createdBy = 'user_other';
-
         const before = { taskCount: repository.getGenerationTasks().length, providerCount: providerCalls.length };
         const replayResponse = await app.inject({
           method: 'POST',

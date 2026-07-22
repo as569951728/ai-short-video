@@ -42,9 +42,7 @@ export interface TrustedRequestActor {
   tenantId: string;
   userId: string;
 }
-
 export type RequestContextResolver = (request: FastifyRequest) => Promise<TrustedRequestActor | null | undefined>;
-
 export interface NovelRecord {
   id: string;
   tenantId: string;
@@ -588,7 +586,6 @@ export interface LoadGenerationAuthorityInput {
   sourceVersionRefs: unknown;
   normalizedRequest: unknown;
 }
-
 export interface GenerationAuthoritySnapshot {
   action: NovelProviderAction;
   tenantId: string;
@@ -596,16 +593,13 @@ export interface GenerationAuthoritySnapshot {
   objectId: string;
   facts: unknown;
 }
-
 export type ClaimGenerationTaskResult =
   | { outcome: 'created'; task: GenerationTaskRecord }
   | { outcome: 'reused'; task: GenerationTaskRecord }
   | { outcome: 'idempotency_conflict'; task: GenerationTaskRecord }
   | { outcome: 'active_conflict'; task: GenerationTaskRecord }
   | { outcome: 'source_stale'; task: null };
-
-export type GenerationAuthorityFencePhase = 'provider_dispatch' | 'result_finalize';
-
+export type GenerationAuthorityFencePhase = 'prepare' | 'provider_dispatch' | 'result_finalize';
 export interface GenerationAuthorityFenceInput {
   tenantId: string;
   taskId: string;
@@ -615,7 +609,6 @@ export interface GenerationAuthorityFenceInput {
   context: RequestContext;
   now: Date;
 }
-
 export type GenerationAuthorityFenceResult =
   | { outcome: 'authorized'; task: GenerationTaskRecord }
   | { outcome: 'source_stale'; task: GenerationTaskRecord }
@@ -1373,4 +1366,11 @@ export function normalizeDraftRequest(request: CreateNovelDraftRequest) {
     style: preferences.style ?? null,
     videoAdaptationPreference: preferences.videoAdaptationPreference ?? null
   };
+}
+export function generationClaimsOverlap(
+  allowedTask: Pick<GenerationTaskRecord, 'conflictScope' | 'conflictKey'> | undefined,
+  activeTask: Pick<GenerationTaskRecord, 'conflictScope' | 'conflictKey'>
+) {
+  if (!allowedTask || allowedTask.conflictScope !== 'chapter') return true;
+  return activeTask.conflictScope !== 'chapter' || activeTask.conflictKey === allowedTask.conflictKey;
 }

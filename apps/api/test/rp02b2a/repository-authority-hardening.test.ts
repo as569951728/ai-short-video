@@ -7,10 +7,9 @@ import {
   type ExecutionEnvelopeV1_1
 } from '@ai-shortvideo/shared';
 import { hashCanonicalJson } from '../../src/modules/novels/domain/executionContract.js';
-import type { BodyBatchRecord, ClaimGenerationTaskInput, GenerationTaskRecord } from '../../src/modules/novels/domain/novelDomain.js';
+import { type BodyBatchRecord, type ClaimGenerationTaskInput, type GenerationTaskRecord } from '../../src/modules/novels/domain/novelDomain.js';
 import { createInMemoryNovelRepository } from '../../src/modules/novels/repositories/inMemoryNovelRepository.js';
 import { PrismaNovelRepository } from '../../src/modules/novels/repositories/prismaNovelRepository.js';
-
 describe('RP-02B2a2 A2 repository authority hardening', () => {
   it('keeps after_claim stale at absolute zero side effects and preserves the next internal ID', async () => {
     const repository = createInMemoryNovelRepository();
@@ -18,17 +17,117 @@ describe('RP-02B2a2 A2 repository authority hardening', () => {
     const created = await repository.createDraft({ request: { title: 'authority sequence' }, context, now: at(0) });
     const staleInput = await claimInput(repository, created.novel.id, context, 'stale');
     staleInput.afterClaimBarrier = () => { created.novel.title = 'authority sequence changed'; };
-
     assert.deepEqual(await repository.claimGenerationTask(staleInput), { outcome: 'source_stale', task: null });
     assert.equal(repository.getGenerationTasks().length, 0);
     assert.equal(repository.getGenerationTaskEvents().length, 0);
-
     const next = await repository.claimGenerationTask(await claimInput(repository, created.novel.id, context, 'next'));
     assert.equal(next.outcome, 'created');
     assert.equal(next.task.id, 'task_000004');
     assert.equal(repository.getGenerationTaskEvents()[0]?.id, 'event_000005');
   });
-
+  it('serializes conflicting in-memory claims and keeps exactly one task and event', async () => {
+    const repository = createInMemoryNovelRepository();
+    const context = { tenantId: 'tenant_concurrent', userId: 'user_concurrent', requestId: 'request-concurrent' };
+    const created = await repository.createDraft({ request: { title: 'concurrent authority' }, context, now: at(0) });
+    const input = await claimInput(repository, created.novel.id, context, 'concurrent');
+    let enterBarrier!: () => void, releaseBarrier!: () => void;
+    const entered = new Promise<void>((resolve) => { enterBarrier = resolve; });
+    const release = new Promise<void>((resolve) => { releaseBarrier = resolve; });
+    input.afterClaimBarrier = async () => { enterBarrier(); await release; };
+    const firstPromise = repository.claimGenerationTask(input);
+    await entered;
+    const secondPromise = repository.claimGenerationTask({ ...input, afterClaimBarrier: undefined });
+    let secondSettled = false;
+    void secondPromise.finally(() => { secondSettled = true; });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(secondSettled, false);
+    releaseBarrier();
+    const [first, second] = await Promise.all([firstPromise, secondPromise]);
+    assert.equal(first.outcome, 'created');
+    assert.equal(second.outcome, 'reused');
+    assert.equal(first.task.id, second.task.id);
+    assert.equal(repository.getGenerationTasks().length, 1);
+    assert.equal(repository.getGenerationTaskEvents().length, 1);
+  });
+  it('enforces novel and same-chapter exclusion through real in-memory claims while allowing another chapter', async () => {
+    const repository = createInMemoryNovelRepository();
+    const context = { tenantId: 'tenant_scope', userId: 'user_scope', requestId: 'request-scope' };
+    const created = await repository.createDraft({ request: { title: 'claim scope' }, context, now: at(0) });
+    const base = await claimInput(repository, created.novel.id, context, 'scope');
+    const claim = (suffix: string, conflictScope: string, conflictKey: string) => repository.claimGenerationTask(
+      { ...base, conflictScope, conflictKey, activeClaimKey: `active-${suffix}`, idempotencyToken: `token-${suffix}` });
+    const outcomes = [];
+    for (const args of [['chapter-one', 'chapter', 'chapter_1'], ['same-chapter', 'chapter', 'chapter_1'],
+      ['whole-novel', 'novel_body', created.novel.id], ['chapter-two', 'chapter', 'chapter_2']] as const) outcomes.push((await claim(...args)).outcome);
+    assert.deepEqual(outcomes, ['created', 'active_conflict', 'active_conflict', 'created']);
+    assert.equal(repository.getGenerationTasks().length, 2);
+  });
+  it('queries Prisma active claims by tenant, novel, processing state, and overlapping scope', async () => {
+    const source = createInMemoryNovelRepository();
+    const context = { tenantId: 'tenant_prisma_scope', userId: 'user_prisma_scope', requestId: 'request-prisma-scope' };
+    const created = await source.createDraft({ request: { title: 'prisma claim scope' }, context, now: at(0) });
+    const active = await source.claimGenerationTask(Object.assign(await claimInput(source, created.novel.id, context, 'prisma-novel'),
+      { conflictScope: 'novel_body', conflictKey: created.novel.id, activeClaimKey: 'active-novel' }));
+    assert.equal(active.outcome, 'created');
+    const chapterInput = Object.assign(await claimInput(source, created.novel.id, context, 'prisma-chapter'),
+      { conflictScope: 'chapter', conflictKey: 'chapter_2', activeClaimKey: 'active-chapter-2' });
+    const queries: unknown[] = [];
+    let findCount = 0;
+    const repository = Object.create(PrismaNovelRepository.prototype) as PrismaNovelRepository & { prisma: unknown };
+    Object.defineProperty(repository, 'prisma', { value: {
+      $transaction: async (callback: (client: any) => Promise<unknown>) => callback({ $queryRaw: async () => [],
+        generationTask: { findFirst: async ({ where }: { where: unknown }) => { queries.push(where); return ++findCount === 2 ? toPrismaTask(active.task) : null; } } })
+    } });
+    repository.loadGenerationAuthority = source.loadGenerationAuthority.bind(source);
+    assert.equal((await repository.claimGenerationTask(chapterInput)).outcome, 'active_conflict');
+    assert.deepEqual(queries[1], {
+      tenantId: context.tenantId, novelId: created.novel.id, status: 'PROCESSING', activeClaimKey: { not: null },
+      OR: [{ conflictScope: null }, { conflictScope: { not: 'chapter' } }, { conflictScope: 'chapter', conflictKey: 'chapter_2' }]
+    });
+  });
+  it('rolls back Prisma provisional task and event after a post-claim authority change and locks task-backed authority', async () => {
+    const source = createInMemoryNovelRepository();
+    const context = { tenantId: 'tenant_prisma_rollback', userId: 'user_prisma_rollback', requestId: 'request-prisma-rollback' };
+    const created = await source.createDraft({ request: { title: 'prisma rollback authority' }, context, now: at(0) });
+    const input = await claimInput(source, created.novel.id, context, 'prisma-rollback');
+    let currentAuthority = await source.loadGenerationAuthority(input.authorityInput);
+    assert.ok(currentAuthority);
+    const attempts = { task: 0, event: 0 };
+    const committed = { tasks: [] as unknown[], events: [] as unknown[] };
+    const lockQueries: unknown[] = [];
+    const repository = Object.create(PrismaNovelRepository.prototype) as PrismaNovelRepository & { prisma: unknown };
+    Object.defineProperty(repository, 'prisma', {
+      value: {
+        $transaction: async (callback: (client: any) => Promise<unknown>) => {
+          const pending = { tasks: [] as unknown[], events: [] as unknown[] };
+          const record = (kind: 'task' | 'event', rows: unknown[]) => async ({ data }: { data: unknown }) => {
+            attempts[kind] += 1;
+            rows.push(data);
+            return data;
+          };
+          const tx = {
+            $queryRaw: async (query: unknown) => { lockQueries.push(query); return []; },
+            generationTask: {
+              findFirst: async () => null,
+              create: record('task', pending.tasks)
+            },
+            generationTaskEvent: { create: record('event', pending.events) }
+          };
+          const result = await callback(tx);
+          committed.tasks.push(...pending.tasks);
+          committed.events.push(...pending.events);
+          return result;
+        }
+      }
+    });
+    repository.loadGenerationAuthority = async () => currentAuthority;
+    input.afterClaimBarrier = () => { currentAuthority = null; };
+    assert.deepEqual(await repository.claimGenerationTask(input), { outcome: 'source_stale', task: null });
+    assert.deepEqual(attempts, { task: 1, event: 1 });
+    assert.deepEqual(committed, { tasks: [], events: [] });
+    assert.equal(lockQueries.length, 8);
+    assert.ok(lockQueries.some((query) => JSON.stringify(query).includes('generation_task')));
+  });
   it('leases a valid V1.1 task and recovers only the same authoritative envelope and actor', async () => {
     const repository = createInMemoryNovelRepository();
     const queued = await seedQueuedTask(repository, 'normal');
@@ -38,7 +137,6 @@ describe('RP-02B2a2 A2 repository authority hardening', () => {
     assert.equal(leased?.id, queued.id);
     assert.ok(leased?.providerAttemptId);
     assert.equal(repository.getGenerationTaskEvents().length, beforeLeaseEvents + 1);
-
     const recovered = await repository.recoverExpiredTask({
       tenantId: leased!.tenantId,
       taskId: leased!.id,
@@ -50,7 +148,6 @@ describe('RP-02B2a2 A2 repository authority hardening', () => {
     assert.equal(recovered.task.errorCode, 'WORKER_LEASE_EXPIRED');
     assert.equal(repository.getGenerationTaskEvents().at(-1)?.eventType, 'task_recovered');
   });
-
   it('rejects legacy, malformed, wrong-tenant, and placeholder actors before attempt, event, or lease claim', async () => {
     const mutations: Array<[string, (task: GenerationTaskRecord) => void]> = [
       ['legacy-v1', (task) => {
@@ -64,6 +161,7 @@ describe('RP-02B2a2 A2 repository authority hardening', () => {
       ['malformed', (task) => { task.executionEnvelopeJson = { schemaVersion: '1.1' } as never; task.requestHash = hashCanonicalJson(task.executionEnvelopeJson); }],
       ['wrong-tenant', (task) => mutateEnvelope(task, { tenantId: 'tenant_other' })],
       ['default-actor', (task) => mutateActor(task, 'user_default')],
+      ['policy-default-actor', (task) => mutateActor(task, 'policy_default_v1')],
       ['legacy-actor', (task) => mutateActor(task, 'legacy_worker')],
       ['placeholder-actor', (task) => mutateActor(task, 'placeholder_actor')]
     ];
@@ -81,7 +179,6 @@ describe('RP-02B2a2 A2 repository authority hardening', () => {
       assert.equal(queued.status, TaskStatus.Failed, `${label}:safe terminal state`);
     }
   });
-
   it('gives malformed recovery zero mutation and zero recovery event', async () => {
     const repository = createInMemoryNovelRepository();
     const queued = await seedQueuedTask(repository, 'recovery-invalid');
@@ -100,7 +197,6 @@ describe('RP-02B2a2 A2 repository authority hardening', () => {
     assert.deepEqual(leased, before);
     assert.equal(repository.getGenerationTaskEvents().length, beforeEvents);
   });
-
   it('keeps Prisma legacy lease and recovery fail-closed before attempt or event creation', async () => {
     const source = createInMemoryNovelRepository();
     const legacy = await seedQueuedTask(source, 'prisma-legacy');
@@ -125,7 +221,6 @@ describe('RP-02B2a2 A2 repository authority hardening', () => {
     assert.equal(events, 0);
     assert.equal(legacyRow.providerAttemptId, null);
     assert.equal(legacyRow.leaseOwnerId, null);
-
     const recoverable = await seedQueuedTask(source, 'prisma-recovery');
     const validEnvelope = recoverable.executionEnvelopeJson as ExecutionEnvelopeV1_1;
     Object.assign(recoverable, {
@@ -160,7 +255,6 @@ describe('RP-02B2a2 A2 repository authority hardening', () => {
     assert.equal(recoveryRow.providerAttemptId, 'attempt-existing');
     assert.equal(recoveryRow.status, 'PROCESSING');
   });
-
   it('keeps InMemory and Prisma authority-fence contracts aligned across dispatch and stale finalize', async () => {
     const context = { tenantId: 'tenant_fence', userId: 'user_fence', requestId: 'request-fence' };
     const inMemory = createInMemoryNovelRepository();
@@ -168,16 +262,11 @@ describe('RP-02B2a2 A2 repository authority hardening', () => {
     const inMemoryClaimInput = await claimInput(inMemory, created.novel.id, context, 'fence-contract');
     const inMemoryClaim = await inMemory.claimGenerationTask(inMemoryClaimInput);
     assert.equal(inMemoryClaim.outcome, 'created');
-
-    const inMemoryDispatch = await inMemory.fenceGenerationAuthority({
-      tenantId: context.tenantId,
-      taskId: inMemoryClaim.task.id,
-      phase: 'provider_dispatch',
-      authorityInput: inMemoryClaimInput.authorityInput,
-      expectedAuthoritySnapshotHash: inMemoryClaimInput.expectedAuthoritySnapshotHash,
-      context,
-      now: at(1)
-    });
+    const inMemoryFence = { tenantId: context.tenantId, taskId: inMemoryClaim.task.id, authorityInput: inMemoryClaimInput.authorityInput, expectedAuthoritySnapshotHash: inMemoryClaimInput.expectedAuthoritySnapshotHash, context, now: at(1) };
+    const inMemoryPrepare = await inMemory.fenceGenerationAuthority({ ...inMemoryFence, phase: 'prepare' });
+    assert.deepEqual([inMemoryPrepare.outcome, inMemoryPrepare.task?.providerAttemptPhase, inMemoryPrepare.task?.providerDispatchedAt], ['authorized', null, null]);
+    const inMemoryPrepareContract = fenceContract(inMemoryPrepare);
+    const inMemoryDispatch = await inMemory.fenceGenerationAuthority({ ...inMemoryFence, phase: 'provider_dispatch' });
     const inMemoryDispatchContract = fenceContract(inMemoryDispatch);
     assert.equal(inMemoryDispatch.outcome, 'authorized');
     created.novel.title = 'in-memory fence changed';
@@ -190,7 +279,6 @@ describe('RP-02B2a2 A2 repository authority hardening', () => {
       context,
       now: at(2)
     });
-
     const prismaSource = createInMemoryNovelRepository();
     const prismaCreated = await prismaSource.createDraft({ request: { title: 'prisma fence' }, context, now: at(0) });
     const prismaClaimInput = await claimInput(prismaSource, prismaCreated.novel.id, context, 'fence-contract');
@@ -213,15 +301,10 @@ describe('RP-02B2a2 A2 repository authority hardening', () => {
       }
     });
     prisma.loadGenerationAuthority = async () => currentAuthority;
-    const prismaDispatch = await prisma.fenceGenerationAuthority({
-      tenantId: context.tenantId,
-      taskId: prismaClaim.task.id,
-      phase: 'provider_dispatch',
-      authorityInput: prismaClaimInput.authorityInput,
-      expectedAuthoritySnapshotHash: prismaClaimInput.expectedAuthoritySnapshotHash,
-      context,
-      now: at(1)
-    });
+    const prismaFence = { tenantId: context.tenantId, taskId: prismaClaim.task.id, authorityInput: prismaClaimInput.authorityInput, expectedAuthoritySnapshotHash: prismaClaimInput.expectedAuthoritySnapshotHash, context, now: at(1) };
+    const prismaPrepare = await prisma.fenceGenerationAuthority({ ...prismaFence, phase: 'prepare' });
+    assert.deepEqual([fenceContract(prismaPrepare), prismaPrepare.task?.providerDispatchedAt, prismaEvents], [inMemoryPrepareContract, null, 0]);
+    const prismaDispatch = await prisma.fenceGenerationAuthority({ ...prismaFence, phase: 'provider_dispatch' });
     const prismaDispatchContract = fenceContract(prismaDispatch);
     currentAuthority = null;
     const prismaFinalize = await prisma.fenceGenerationAuthority({
@@ -233,7 +316,6 @@ describe('RP-02B2a2 A2 repository authority hardening', () => {
       context,
       now: at(2)
     });
-
     assert.deepEqual(inMemoryDispatchContract, prismaDispatchContract);
     assert.deepEqual(fenceContract(inMemoryFinalize), fenceContract(prismaFinalize));
     assert.deepEqual(fenceContract(inMemoryFinalize), {
@@ -247,7 +329,6 @@ describe('RP-02B2a2 A2 repository authority hardening', () => {
     assert.equal(inMemory.getGenerationTaskEvents().at(-1)?.eventType, 'failed');
     assert.equal(prismaEvents, 1);
   });
-
   it('keeps authority-changing writes blocked by an active claim in both repositories', async () => {
     const context = { tenantId: 'tenant_writer', userId: 'user_writer', requestId: 'request-writer' };
     const inMemory = createInMemoryNovelRepository();
@@ -256,7 +337,6 @@ describe('RP-02B2a2 A2 repository authority hardening', () => {
     const input = await claimInput(inMemory, created.novel.id, context, 'writer-guard');
     const claim = await inMemory.claimGenerationTask(input);
     assert.equal(claim.outcome, 'created');
-
     await assert.rejects(
       inMemory.updateChapterWordTargets({
         novel: created.novel,
@@ -267,7 +347,6 @@ describe('RP-02B2a2 A2 repository authority hardening', () => {
       }),
       isActiveClaimConflict
     );
-
     const prismaRow = toPrismaTask(claim.task);
     const prisma = prismaRepositoryWithTransaction({
       $queryRaw: async () => [],
@@ -284,7 +363,6 @@ describe('RP-02B2a2 A2 repository authority hardening', () => {
       isActiveClaimConflict
     );
   });
-
   it('queries Prisma generation-task metadata directly and returns the latest authoritative body batch', async () => {
     const older = storedBodyBatch('batch-old', '2026-07-18T00:00:01.000Z');
     const latest = storedBodyBatch('batch-latest', '2026-07-18T00:00:02.000Z');
@@ -295,7 +373,6 @@ describe('RP-02B2a2 A2 repository authority hardening', () => {
         findMany: async (query: unknown) => { queries.push(query); return [{ metadata: { batch: older } }, { metadata: { batch: latest } }]; }
       }
     } });
-
     const result = await repository.findLatestBodyBatch('tenant_batch', 'novel_batch');
     const inMemory = createInMemoryNovelRepository();
     inMemory.getBodyBatches().push(toInMemoryBatch(older), toInMemoryBatch(latest));
@@ -311,7 +388,6 @@ describe('RP-02B2a2 A2 repository authority hardening', () => {
     }]);
   });
 });
-
 async function seedQueuedTask(repository: ReturnType<typeof createInMemoryNovelRepository>, suffix: string) {
   const context = { tenantId: 'tenant_worker', userId: 'user_worker', requestId: `request-${suffix}` };
   const created = await repository.createDraft({ request: { title: `worker ${suffix}` }, context, now: at(0) });
@@ -321,7 +397,6 @@ async function seedQueuedTask(repository: ReturnType<typeof createInMemoryNovelR
   claim.task.startedAt = null;
   return claim.task;
 }
-
 async function claimInput(
   repository: ReturnType<typeof createInMemoryNovelRepository>,
   novelId: string,
@@ -391,17 +466,14 @@ async function claimInput(
     now: at(0)
   };
 }
-
 function mutateActor(task: GenerationTaskRecord, actor: string) {
   task.createdBy = actor;
   mutateEnvelope(task, { auditContext: { ...(task.executionEnvelopeJson as ExecutionEnvelopeV1_1).auditContext, requestedByUserId: actor } });
 }
-
 function mutateEnvelope(task: GenerationTaskRecord, patch: Partial<ExecutionEnvelopeV1_1>) {
   task.executionEnvelopeJson = { ...(task.executionEnvelopeJson as ExecutionEnvelopeV1_1), ...patch };
   task.requestHash = hashCanonicalJson(task.executionEnvelopeJson);
 }
-
 function storedBodyBatch(id: string, createdAt: string) {
   const chapterResults = [{
     chapterId: 'chapter-1', chapterNo: 1, title: 'Chapter 1', status: 'completed', statusText: 'Completed',
@@ -422,13 +494,11 @@ function storedBodyBatch(id: string, createdAt: string) {
     metadata: { source: 'generation_task' }
   };
 }
-
 function prismaRepositoryWithTransaction(tx: unknown) {
   const repository = Object.create(PrismaNovelRepository.prototype) as PrismaNovelRepository & { prisma: unknown };
   Object.defineProperty(repository, 'prisma', { value: { $transaction: async (callback: (client: unknown) => unknown) => callback(tx) } });
   return repository;
 }
-
 function fenceContract(result: Awaited<ReturnType<ReturnType<typeof createInMemoryNovelRepository>['fenceGenerationAuthority']>>) {
   return {
     outcome: result.outcome,
@@ -439,13 +509,11 @@ function fenceContract(result: Awaited<ReturnType<ReturnType<typeof createInMemo
     activeClaimKey: result.task?.activeClaimKey ?? null
   };
 }
-
 function isActiveClaimConflict(error: unknown) {
   return error instanceof Error
     && 'code' in error
     && error.code === 'CONFLICT_TASK_EXISTS';
 }
-
 function toInMemoryBatch(batch: ReturnType<typeof storedBodyBatch>): BodyBatchRecord {
   return {
     ...structuredClone(batch),
@@ -459,7 +527,6 @@ function toInMemoryBatch(batch: ReturnType<typeof storedBodyBatch>): BodyBatchRe
     createdAt: new Date(batch.createdAt)
   };
 }
-
 function toPrismaTask(task: GenerationTaskRecord) {
   return {
     ...structuredClone(task),
@@ -477,7 +544,6 @@ function toPrismaTask(task: GenerationTaskRecord) {
     costBudgetMicrosUsed: BigInt(task.costBudgetMicrosUsed ?? 0)
   };
 }
-
 function at(seconds: number) {
   return new Date(Date.UTC(2026, 6, 18, 0, 0, seconds));
 }

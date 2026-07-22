@@ -8,6 +8,7 @@ import { MockDirectionProvider } from '../../src/modules/novels/providers/mockDi
 import { MockFullReviewProvider } from '../../src/modules/novels/providers/mockFullReviewProvider.js';
 import { MockStructureProvider } from '../../src/modules/novels/providers/mockStructureProvider.js';
 import { MockTrialProvider } from '../../src/modules/novels/providers/mockTrialProvider.js';
+import { hashCanonicalJson } from '../../src/modules/novels/domain/executionContract.js';
 import type { NovelProviderSet } from '../../src/modules/novels/services/actionExecutionPlan.js';
 import type { GenerationAuthoritySnapshot, NovelRecord, NovelRepository, RequestContext } from '../../src/modules/novels/domain/novelDomain.js';
 export const ACTIONS: NovelProviderAction[] = [
@@ -90,6 +91,21 @@ export function sideEffects(repository: ReturnType<typeof createInMemoryNovelRep
     current: repository.getCreativeVersions().filter((version) => version.status === 'current').length,
     'operation-log': repository.getOperationLogs().filter((log) => log.sourceTaskId).length,
     child: repository.getGenerationTasks().filter((task) => task.retryOfTaskId).length
+  };
+}
+export async function snapshotAuthorityFixtureState(fixture: Awaited<ReturnType<typeof createAuthorityFixture>>, providerCalls: number) {
+  const { repository } = fixture;
+  const trialResults = (await Promise.all(repository.getTrialRuns().map((item) => repository.listTrialChapterResults(item.tenantId, item.id)))).flat();
+  const fullReview = await repository.findLatestFullReview(fixture.novel.tenantId, fixture.novel.id);
+  return {
+    ...sideEffects(repository, providerCalls, fixture.counters.intent),
+    repositoryState: hashCanonicalJson({
+      novel: fixture.novel, preferences: repository.getPreferences(), tasks: repository.getGenerationTasks(), events: repository.getGenerationTaskEvents(),
+      versions: repository.getCreativeVersions(), decisions: repository.getAssetDecisionRecords(), chapters: repository.getNovelChapters(),
+      contents: repository.getChapterContentVersions(), cards: repository.getChapterFeatureCards(), reports: repository.getReviewReports(),
+      trials: repository.getTrialRuns(), trialResults, fullReview, impacts: repository.getImpactCases(),
+      memories: repository.getLongTermMemories(), batches: repository.getBodyBatches(), logs: repository.getOperationLogs()
+    })
   };
 }
 export function actionSpec(action: NovelProviderAction, novelId: string) {
@@ -242,6 +258,7 @@ export async function snapshotRouteSideEffects(fixture: Awaited<ReturnType<typeo
   const trials = repository.getTrialRuns();
   const trialResults = (await Promise.all(trials.map((item) => repository.listTrialChapterResults(item.tenantId, item.id)))).flat();
   const novelIds = [...new Set([
+    fixture.novelId,
     ...tasks.map((item) => item.novelId),
     ...chapters.map((item) => item.novelId),
     ...repository.getCreativeVersions().map((item) => item.novelId)
@@ -256,14 +273,23 @@ export async function snapshotRouteSideEffects(fixture: Awaited<ReturnType<typeo
     asset: repository.getCreativeVersions().length + repository.getAssetDecisionRecords().length
       + chapters.length + repository.getChapterContentVersions().length + trials.length + trialResults.length
       + repository.getImpactCases().length + repository.getLongTermMemories().length
-      + repository.getBodyBatches().length + fullReviews.length,
+      + repository.getBodyBatches().length + repository.getChapterFeatureCards().length
+      + repository.getReviewReports().length + fullReviews.length,
     receipt: tasks.filter((item) => item.resultReceiptHash).length,
     current: novels.reduce((sum, item) => sum + [item?.currentDirectionVersionId, item?.currentSettingVersionId,
       item?.currentOutlineVersionId, item?.currentStageOutlineVersionId, item?.currentChapterPlanVersionId].filter(Boolean).length, 0)
       + chapters.reduce((sum, item) => sum + [item.currentContentVersionId, item.currentFeatureCardVersionId, item.currentReviewReportId].filter(Boolean).length, 0)
       + trials.filter((item) => item.reviewReportId).length,
     log: repository.getOperationLogs().length,
-    child: tasks.filter((item) => item.retryOfTaskId).length
+    child: tasks.filter((item) => item.retryOfTaskId).length,
+    repositoryState: hashCanonicalJson({
+      tasks, events: repository.getGenerationTaskEvents(), versions: repository.getCreativeVersions(),
+      decisions: repository.getAssetDecisionRecords(), chapters, contents: repository.getChapterContentVersions(),
+      cards: repository.getChapterFeatureCards(), reports: repository.getReviewReports(),
+      trials, trialResults, impacts: repository.getImpactCases(), memories: repository.getLongTermMemories(),
+      batches: repository.getBodyBatches(), fullReviews, novels, preferences: repository.getPreferences(),
+      logs: repository.getOperationLogs()
+    })
   };
 }
 type PreparedTarget = {
