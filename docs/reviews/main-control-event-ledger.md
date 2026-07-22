@@ -1373,23 +1373,23 @@ next_action: 文档冻结后在同一 16-file / 1,999-net 差异上重跑 47-cas
 
 ```text
 event_id: MCE-RP02B2A2-G0-E1-REMOTE-ACCEPTED
-occurred_at: 2026-07-20 00:49:52 CST
+occurred_at: 2026-07-23 04:41:01 CST
 event_type: governance_bootstrap_remote_accepted
 source_thread: main-control
 package_id: RP-02B2a2-G0-E1
-accepted_code_head: e020fb07d6279de5544ed15962b2a82d820a8247
+accepted_code_head: 056a8d28910c765c9887a245e2dc4269859e5ec2
 issue_ids: RMD-TASK-002, RMD-TASK-003
-summary: RP-02B2a2-G0-C4 最终 4-file A2 scope correction、本地完整门禁和四路同头 main push 远程 CI 已完成。
-evidence: package gate 60/60; governance 15/15; typecheck passed; remote push runs rp01a=29695060916,rp01b=29695060917,rp01c=29695060934,governance=29695060943 completed/success; PR #46 squash merged from fixed E1 f243595 to e020fb0 with the authorized tree unchanged
-g0_evidence_parent_sha: e020fb07d6279de5544ed15962b2a82d820a8247
-g0_evidence_rp01a_run: 29695060916
-g0_evidence_rp01b_run: 29695060917
-g0_evidence_rp01c_run: 29695060934
-g0_evidence_governance_run: 29695060943
+summary: RP-02B2a2-G0-C5 最终 package-gate 优化、本地完整门禁和四路同头 main push 远程 CI 已完成。
+evidence: package gate 63/63; governance 15/15; typecheck passed; remote push runs rp01a=29955581285,rp01b=29955581242,rp01c=29955581254,governance=29955581239 completed/success; PR #49 squash merged from fixed candidate 9d0f8df to 056a8d2 with the candidate tree unchanged
+g0_evidence_parent_sha: 056a8d28910c765c9887a245e2dc4269859e5ec2
+g0_evidence_rp01a_run: 29955581285
+g0_evidence_rp01b_run: 29955581242
+g0_evidence_rp01c_run: 29955581254
+g0_evidence_governance_run: 29955581239
 g0_evidence_a2_authorization: not_authorized
 g0_evidence_issue_closed_count: 9/42
 g0_evidence_rmd_task_002: partial
 g0_evidence_rmd_task_003: open
-mc_decision: RP-02B2a2-G0 关闭；replacement accepted code head 为 e020fb0，B2a2 继续 not_authorized，总账保持 9/42；真实数据库和真实模型仅在隔离、回滚、费用与密钥门禁满足后执行。
+mc_decision: RP-02B2a2-G0 关闭；replacement accepted code head 为 056a8d2，B2a2 继续 not_authorized，总账保持 9/42；真实数据库和真实模型仅在隔离、回滚、费用与密钥门禁满足后执行。
 next_action: 仅在 MC 独立授权后，才可从 accepted G0 code head 创建与 E1 互为 sibling 的 A2 实现分支。
 ```
