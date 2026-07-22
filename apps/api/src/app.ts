@@ -8,7 +8,7 @@ import { registerVideoRoutes } from './modules/videos/routes/videoRoutes.js';
 import { toErrorResponse } from './shared/errors.js';
 import type { LlmClient } from './modules/ai/llmClient.js';
 import type { AiProviderEnv } from './modules/ai/modelRouting.js';
-import type { NovelRepository } from './modules/novels/domain/novelDomain.js';
+import type { NovelRepository, RequestContextResolver } from './modules/novels/domain/novelDomain.js';
 import type { VideoRepository } from './modules/videos/domain/videoDomain.js';
 import { createNovelProvidersFromEnv } from './modules/novels/providers/providerFactory.js';
 import type { HotspotReferenceGateway } from './modules/novels/integrations/hotspotReferenceGateway.js';
@@ -26,6 +26,7 @@ interface BuildAppOptions {
   llmClient?: LlmClient;
   hotspotReferenceGateway?: HotspotReferenceGateway;
   now?: () => Date;
+  requestContextResolver?: RequestContextResolver | null;
 }
 
 export async function buildApp(options: BuildAppOptions = {}) {
@@ -74,11 +75,13 @@ export async function buildApp(options: BuildAppOptions = {}) {
     repository: novelRepository,
     ...novelProviders,
     hotspotReferenceGateway: options.hotspotReferenceGateway,
-    now: options.now
+    now: options.now,
+    requestContextResolver: options.requestContextResolver ?? undefined
   });
   await registerTaskRoutes(app, {
     repository: novelRepository,
-    now: options.now
+    now: options.now,
+    requestContextResolver: options.requestContextResolver ?? undefined
   });
   await registerVideoRoutes(app, {
     repository: videoRepository,

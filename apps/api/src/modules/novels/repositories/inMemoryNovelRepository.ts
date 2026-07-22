@@ -47,6 +47,8 @@ import {
   type FullReviewIssueResolutionInput,
   type GenerationTaskRecord,
   type GenerationTaskEventRecord,
+  type GenerationAuthorityFenceInput,
+  type GenerationAuthorityFenceResult,
   type GeneratedBodyBatchRecord,
   type ListedNovelRecords,
   type ListNovelRecordsQuery,
@@ -62,6 +64,8 @@ import {
   type CancelledTaskRecord,
   type ClaimGenerationTaskInput,
   type ClaimGenerationTaskResult,
+  type LoadGenerationAuthorityInput,
+  type GenerationAuthoritySnapshot,
   type HashedSafeResultReceipt,
   type LeasedTaskFailure,
   type ObservedTaskLease,
@@ -99,7 +103,12 @@ import {
   type VideoReadinessSnapshotRecord,
   normalizeDraftRequest
 } from '../domain/novelDomain.js';
-import { verifyHashedSafeResultReceipt } from '../domain/executionContract.js';
+import {
+  hashCanonicalJson,
+  matchGenerationAuthority,
+  validateExecutionEnvelopeV1_1ForTask,
+  verifyHashedSafeResultReceipt
+} from '../domain/executionContract.js';
 import { BusinessError } from '../../../shared/errors.js';
 
 export function createInMemoryNovelRepository(): NovelRepository & {
@@ -139,6 +148,153 @@ export function createInMemoryNovelRepository(): NovelRepository & {
 
   function nextId(prefix: string) {
     return `${prefix}_${String(sequence++).padStart(6, '0')}`;
+  }
+
+  function loadAuthority(input: LoadGenerationAuthorityInput): GenerationAuthoritySnapshot | null {
+    const novel = novels.find((item) => item.tenantId === input.tenantId && item.id === input.novelId && !item.deletedAt);
+    if (!novel || novel.lifecycleStatus !== NovelLifecycleStatus.Active) return null;
+    const refs = asRecord(input.sourceVersionRefs);
+    const currentRefs = {
+      currentDirectionVersionId: novel.currentDirectionVersionId,
+      currentSettingVersionId: novel.currentSettingVersionId,
+      currentOutlineVersionId: novel.currentOutlineVersionId,
+      currentStageOutlineVersionId: novel.currentStageOutlineVersionId,
+      currentChapterPlanVersionId: novel.currentChapterPlanVersionId
+    };
+    for (const [key, value] of Object.entries(currentRefs)) {
+      if (key in refs && refs[key] !== value) return null;
+    }
+    const novelFacts = {
+      id: novel.id,
+      title: novel.title,
+      genres: [...novel.genres].sort(),
+      chapterLimit: novel.chapterLimit,
+      chapterWordMin: novel.chapterWordMin,
+      chapterWordMax: novel.chapterWordMax,
+      policyProfileVersionId: novel.policyProfileVersionId
+    };
+    const preference = preferences.find((item) => item.tenantId === input.tenantId && item.novelId === novel.id);
+    const preferenceFacts = preference ? {
+      appealPoints: preference.appealPoints.map((item) => item.trim()).filter(Boolean).sort(),
+      targetAudience: preference.targetAudience,
+      stageCount: preference.stageCount
+    } : null;
+    const versionById = (id: unknown) => typeof id === 'string'
+      ? creativeVersions.find((item) => item.tenantId === input.tenantId && item.novelId === novel.id && item.id === id)
+      : null;
+    const contentById = (id: unknown) => typeof id === 'string'
+      ? chapterContentVersions.find((item) => item.tenantId === input.tenantId && item.novelId === novel.id && item.id === id)
+      : null;
+    const selectedIds = input.action === 'direction_fuse' || input.action === 'direction_optimize'
+      ? (Array.isArray(refs.sourceVersionIds) ? refs.sourceVersionIds : [])
+      : [refs.currentDirectionVersionId, refs.currentSettingVersionId, refs.currentOutlineVersionId, refs.currentStageOutlineVersionId, refs.currentChapterPlanVersionId];
+    const selectedVersions = selectedIds.map(versionById);
+    if (selectedVersions.some((item, index) => selectedIds[index] !== null && selectedIds[index] !== undefined && !item)) return null;
+    if ((input.action === 'direction_fuse' || input.action === 'direction_optimize') && selectedVersions.some((item) =>
+      !item || item.objectType !== 'direction' || item.status === VersionStatus.Discarded
+    )) return null;
+    if (input.action !== 'direction_fuse' && input.action !== 'direction_optimize'
+      && selectedVersions.some((item) => item && item.status !== VersionStatus.Current)) return null;
+    const chapter = chapters.find((item) => item.tenantId === input.tenantId && item.novelId === novel.id && item.id === input.objectId);
+    if (['chapter_body_generate', 'chapter_rewrite', 'chapter_impact_assess', 'chapter_adopt_impact_assess'].includes(input.action) && !chapter) return null;
+    if (chapter && 'currentContentVersionId' in refs && chapter.currentContentVersionId !== refs.currentContentVersionId) return null;
+    const currentContent = contentById(refs.currentContentVersionId);
+    if (refs.currentContentVersionId && (!currentContent || currentContent.chapterId !== chapter?.id)) return null;
+    const candidateRefId = refs.candidateVersionId ?? refs.selectedChapterOneCandidateId;
+    const candidate = contentById(candidateRefId);
+    if (refs.candidateVersionId && (!candidate || candidate.chapterId !== chapter?.id || candidate.status === VersionStatus.Discarded)) return null;
+    const trialRunId = typeof refs.trialRunId === 'string'
+      ? refs.trialRunId
+      : input.action === 'trial_followup_generate' ? input.objectId : null;
+    const trialRun = typeof trialRunId === 'string'
+      ? trialRuns.find((item) => item.tenantId === input.tenantId && item.novelId === novel.id && item.id === trialRunId)
+      : null;
+    if (trialRunId && !trialRun) return null;
+    const selectedCandidateId = refs.selectedChapterOneCandidateId;
+    if (input.action === 'trial_followup_generate') {
+      if (!trialRun || trialRun.status !== 'waiting_chapter1_selection' || typeof selectedCandidateId !== 'string') return null;
+      const selected = contentById(selectedCandidateId);
+      if (
+        !selected
+        || asRecord(selected.metadata).trialRunId !== trialRun.id
+        || selected.status === VersionStatus.Discarded
+      ) return null;
+    }
+    const orderedChapters = chapters
+      .filter((item) => item.tenantId === input.tenantId && item.novelId === novel.id)
+      .sort((left, right) => left.chapterNo - right.chapterNo || left.id.localeCompare(right.id))
+      .map((item) => ({
+        id: item.id,
+        chapterNo: item.chapterNo,
+        title: item.title,
+        wordTarget: item.wordTarget,
+        statusNote: item.statusNote,
+        currentContentVersionId: item.currentContentVersionId,
+        currentFeatureCardVersionId: item.currentFeatureCardVersionId,
+        currentReviewReportId: item.currentReviewReportId
+      }));
+    if (input.action === 'novel_full_review') {
+      const expected = Array.isArray(refs.chapterContentVersionIds) ? refs.chapterContentVersionIds : [];
+      if (JSON.stringify(expected) !== JSON.stringify(orderedChapters.map((item) => ({
+        chapterId: item.id,
+        chapterNo: item.chapterNo,
+        currentContentVersionId: item.currentContentVersionId,
+        currentFeatureCardVersionId: item.currentFeatureCardVersionId,
+        currentReviewReportId: item.currentReviewReportId
+      })))) return null;
+    }
+    const loadedFullReviewContents = input.action === 'novel_full_review'
+      ? orderedChapters.map((item) => contentById(item.currentContentVersionId))
+      : [];
+    if (loadedFullReviewContents.some((item) => !item)) return null;
+    const fullReviewContents = loadedFullReviewContents.filter((item): item is ChapterContentVersionRecord => Boolean(item));
+    const strategy = versionById(refs.strategySnapshotId);
+    if (typeof refs.strategySnapshotId === 'string' && (
+      !strategy
+      || strategy.versionNo !== refs.strategySnapshotVersion
+      || strategy.status === VersionStatus.Discarded
+    )) return null;
+    const bodyAuthority = input.action === 'body_batch_generate' || input.action === 'chapter_body_generate';
+    const normalizedRequest = asRecord(input.normalizedRequest);
+    const authorityChapters = input.action === 'trial_followup_generate'
+      ? orderedChapters.slice(0, trialRun?.trialChapterCount ?? 0)
+      : orderedChapters;
+    const bodyStartChapterNo = input.action === 'body_batch_generate'
+      ? Number(normalizedRequest.startChapter)
+      : chapter?.chapterNo;
+    const previousChapter = bodyAuthority && Number.isInteger(bodyStartChapterNo)
+      ? orderedChapters.filter((item) => item.chapterNo < Number(bodyStartChapterNo)).at(-1)
+      : null;
+    const bodyPreviousContent = previousChapter ? contentById(previousChapter.currentContentVersionId) : null;
+    const bodyPreviousMemory = bodyAuthority ? longTermMemories
+      .filter((item) => item.tenantId === input.tenantId && item.novelId === novel.id)
+      .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())[0] ?? null : null;
+    const bodyPreviousBatch = bodyAuthority ? bodyBatches
+      .filter((item) => item.tenantId === input.tenantId && item.novelId === novel.id)
+      .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())[0] ?? null : null;
+    return {
+      action: input.action,
+      tenantId: input.tenantId,
+      novelId: novel.id,
+      objectId: input.objectId,
+      facts: {
+        novel: novelFacts,
+        preferences: preferenceFacts,
+        currentRefs,
+        versions: selectedVersions.filter(Boolean),
+        chapter: chapter ? orderedChapters.find((item) => item.id === chapter.id) : null,
+        chapters: ['trial_chapter_one_generate', 'trial_followup_generate', 'body_batch_generate', 'novel_full_review'].includes(input.action) ? authorityChapters : [],
+        currentContent,
+        candidate,
+        trialRun,
+        strategy,
+        bodyPreviousContent,
+        bodyPreviousMemory,
+        bodyPreviousBatch,
+        fullReviewContents,
+        bodyPreviousBatchNotes: bodyPreviousBatch?.summary.nextBatchNotes ?? []
+      }
+    };
   }
 
   return {
@@ -299,7 +455,15 @@ export function createInMemoryNovelRepository(): NovelRepository & {
 
     async assertProviderActionSupported(_taskType: string) {},
 
+    async loadGenerationAuthority(input: LoadGenerationAuthorityInput): Promise<GenerationAuthoritySnapshot | null> {
+      return loadAuthority(input);
+    },
+
     async claimGenerationTask(input: ClaimGenerationTaskInput): Promise<ClaimGenerationTaskResult> {
+      const authority = loadAuthority(input.authorityInput);
+      if (!matchGenerationAuthority(input.authorityInput, input.expectedAuthoritySnapshotHash, authority).ok) {
+        return { outcome: 'source_stale', task: null };
+      }
       const idempotentTask = generationTasks.find(
         (task) =>
           task.tenantId === input.tenantId &&
@@ -317,6 +481,12 @@ export function createInMemoryNovelRepository(): NovelRepository & {
         (task) => task.tenantId === input.tenantId && task.activeClaimKey === input.activeClaimKey
       );
       if (activeTask) return { outcome: 'active_conflict', task: activeTask };
+
+      await input.afterClaimBarrier?.();
+      const commitAuthority = loadAuthority(input.authorityInput);
+      if (!matchGenerationAuthority(input.authorityInput, input.expectedAuthoritySnapshotHash, commitAuthority).ok) {
+        return { outcome: 'source_stale', task: null };
+      }
 
       const taskId = nextId('task');
       const task: GenerationTaskRecord = {
@@ -386,18 +556,52 @@ export function createInMemoryNovelRepository(): NovelRepository & {
         payload: { requestId: input.context.requestId },
         createdAt: input.now
       };
+
       generationTasks.unshift(task);
       generationTaskEvents.push(event);
       return { outcome: 'created', task };
     },
 
+    async fenceGenerationAuthority(input: GenerationAuthorityFenceInput): Promise<GenerationAuthorityFenceResult> {
+      const task = generationTasks.find((item) => item.id === input.taskId && item.tenantId === input.tenantId) ?? null;
+      if (!task || task.status !== TaskStatus.Processing) {
+        return { outcome: 'task_not_writable', task };
+      }
+      const authority = loadAuthority(input.authorityInput);
+      if (!matchGenerationAuthority(input.authorityInput, input.expectedAuthoritySnapshotHash, authority).ok) {
+        task.status = TaskStatus.Failed;
+        task.statusNote = '生成来源已变化，模型结果已安全丢弃。';
+        task.currentStep = '生成来源已变化';
+        task.failureCategory = 'source_stale';
+        task.errorCode = 'SOURCE_STALE';
+        task.errorMessage = '生成来源已变化，请刷新后重试。';
+        task.activeClaimKey = null;
+        task.finishedAt = input.now;
+        task.updatedAt = input.now;
+        appendTaskEvent(task, {
+          eventType: 'failed',
+          message: task.errorMessage,
+          progress: task.progress,
+          requestId: input.context.requestId,
+          createdAt: input.now
+        });
+        return { outcome: 'source_stale', task };
+      }
+      task.providerAttemptPhase = input.phase === 'provider_dispatch' ? 'provider_call_started' : 'finalizing';
+      if (input.phase === 'provider_dispatch') task.providerDispatchedAt = input.now;
+      task.updatedAt = input.now;
+      return { outcome: 'authorized', task };
+    },
+
     async leaseNextQueuedTask(workerId: string, leaseToken: string, now: Date, leaseUntil: Date) {
+      if (leaseUntil.getTime() <= now.getTime()) return null;
       for (const task of generationTasks.filter((item) => item.status === TaskStatus.Queued).sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())) {
-        if (!task.executionEnvelopeJson) {
-          failLegacyQueuedTask(task, now);
+        try {
+          validateExecutionEnvelopeV1_1ForTask(task);
+        } catch {
+          failUnsupportedQueuedTask(task, now);
           continue;
         }
-        if (leaseUntil.getTime() <= now.getTime()) return null;
         task.status = TaskStatus.Processing;
         task.statusNote = 'Worker 已领取任务。';
         task.currentStep = 'worker_leased';
@@ -463,6 +667,11 @@ export function createInMemoryNovelRepository(): NovelRepository & {
         || task.leaseExpiresAt?.getTime() !== observed.leaseExpiresAt.getTime() || task.leaseExpiresAt.getTime() > authoritativeNow.getTime()) {
         return { outcome: 'not_recovered' as const, task: null };
       }
+      try {
+        validateExecutionEnvelopeV1_1ForTask(task);
+      } catch {
+        return { outcome: 'not_recovered' as const, task: null };
+      }
       const dispatched = task.providerDispatchedAt !== null;
       applyLeaseFailure(task, {
         failureCategory: dispatched ? 'provider_outcome_unknown' : 'worker_lease_expired',
@@ -513,6 +722,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async createDirectionCandidates(input: DirectionCreationInput): Promise<CreatedDirectionCandidatesRecord> {
+      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task?.id);
       const task = input.task
         ? requireClaimedTask(input.task, input.context.tenantId)
         : createTask({ input, taskId: nextId('task'), status: TaskStatus.WaitingConfirmation, progress: 100, currentStep: getDirectionRevisionTaskStep(input.taskType) });
@@ -551,6 +761,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async createDirectionRevision(input: DirectionRevisionInput): Promise<CreatedDirectionRevisionRecord> {
+      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task?.id);
       const task = input.task
         ? requireClaimedTask(input.task, input.context.tenantId)
         : createTask({ input, taskId: nextId('task'), status: TaskStatus.WaitingConfirmation, progress: 100, currentStep: getDirectionRevisionTaskStep(input.taskType) });
@@ -596,6 +807,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async adoptDirection(input: DirectionAdoptionInput): Promise<AdoptedDirectionRecord> {
+      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id);
       const currentVersionIdBefore = input.novel.currentDirectionVersionId;
       const decisionRecord: AssetDecisionRecord = {
         id: nextId('decision'),
@@ -722,6 +934,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async createStructureCandidate(input: StructureCreationInput): Promise<CreatedStructureAssetRecord> {
+      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task?.id);
       const effectiveTask = input.task
         ? requireClaimedTask(input.task, input.context.tenantId)
         : createTask({ input, objectType: input.asset.objectType, taskId: nextId('task'), status: TaskStatus.WaitingConfirmation, progress: 100, currentStep: getStructureGenerateStep(input.asset.objectType) });
@@ -816,6 +1029,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async adoptStructureAsset(input: StructureAdoptionInput): Promise<AdoptedStructureAssetRecord> {
+      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id);
       const currentVersionIdBefore = getCurrentVersionId(input.novel, input.objectType);
       const downstream = getDownstreamObjectTypes(input.objectType);
       const decisionRecord: AssetDecisionRecord = {
@@ -1043,6 +1257,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async createTrialChapterOneCandidates(input: TrialCandidateCreationInput): Promise<CreatedTrialCandidatesRecord> {
+      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task.id);
       const trialRunId = nextId('trial');
       const task = requireClaimedTask(input.task, input.context.tenantId);
       const versions = input.candidates.map((candidate) => {
@@ -1224,6 +1439,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async selectTrialChapterOneAndGenerateFollowup(input: TrialFollowupGenerationInput): Promise<GeneratedTrialFollowupRecord> {
+      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task.id);
       const selectedMetadata = toMutableMetadata(input.selectedCandidate.metadata);
       selectedMetadata.trialStatus = 'selected_for_trial';
       selectedMetadata.isSelected = true;
@@ -1267,11 +1483,11 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       }
 
       const task = generationTasks.find((item) => item.id === input.task.id) ?? input.task;
+      const sourceVersionRefs = createTrialFollowupSourceVersionRefs(input.novel, input.selectedCandidate.id);
       task.status = TaskStatus.WaitingConfirmation;
       task.statusNote = '模型服务已生成试写结果，等待用户确认。';
       task.progress = 100;
       task.currentStep = input.review.trialResult === 'blocked' ? '第2章硬门槛未通过，试写暂停' : '前三章试写总评已生成，等待确认';
-      task.sourceVersionRefs = createTrialFollowupSourceVersionRefs(input.novel, input.selectedCandidate.id);
       task.updatedAt = input.now;
       task.activeClaimKey = null;
       const createdContentVersions: ChapterContentVersionRecord[] = [];
@@ -1287,7 +1503,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
                 input,
                 taskId: task.id,
                 chapterDraft,
-                sourceVersionRefs: task.sourceVersionRefs
+                sourceVersionRefs
               });
         if (chapterDraft.chapter.chapterNo !== 1) {
           createdContentVersions.push(contentVersion);
@@ -1413,6 +1629,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async confirmTrial(input: TrialConfirmationInput): Promise<ConfirmedTrialRecord> {
+      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id);
       const isReturnUpstream = input.decision === 'return_upstream';
       let snapshot: CreativeVersionRecord | null = null;
       const snapshotVersionId = isReturnUpstream ? null : nextId('cv');
@@ -1616,7 +1833,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     async findLatestBodyBatch(tenantId: string, novelId: string) {
       return bodyBatches
         .filter((batch) => batch.tenantId === tenantId && batch.novelId === novelId)
-        .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())[0] ?? null;
+        .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime() || right.id.localeCompare(left.id))[0] ?? null;
     },
 
     async findBodyBatchByIdempotencyKey(tenantId: string, novelId: string, idempotencyKey: string) {
@@ -2048,6 +2265,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async generateBodyBatch(input: BodyBatchGenerationInput): Promise<GeneratedBodyBatchRecord> {
+      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task.id);
       const task = generationTasks.find((item) => item.id === input.task.id && item.tenantId === input.context.tenantId) ?? input.task;
       task.status = TaskStatus.Processing;
       task.statusNote = '模型已返回，正在保存正文版本和批次总结。';
@@ -2228,6 +2446,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async rewriteChapter(input: ChapterRewriteInput): Promise<RewrittenChapterRecord> {
+      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task.id);
       const task = requireClaimedTask(input.task, input.context.tenantId);
       const candidate = createBodyContentVersion({
         input: {
@@ -2279,6 +2498,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async adoptChapterContent(input: ChapterContentAdoptionInput): Promise<AdoptedChapterContentRecord> {
+      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task.id);
       for (const version of chapterContentVersions) {
         if (version.tenantId === input.context.tenantId && version.chapterId === input.chapter.id && version.status === VersionStatus.Current) {
           version.status = VersionStatus.Historical;
@@ -2432,6 +2652,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async resolveImpactCase(input: ImpactCaseResolveInput): Promise<ResolvedImpactCaseRecord> {
+      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id);
       input.impactCase.status = input.resolution;
       input.impactCase.resolvedAt = input.now;
       input.impactCase.metadata = {
@@ -2494,6 +2715,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async updateChapterWordTargets(input: ChapterWordTargetUpdateInput) {
+      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id);
       const currentPlanId = input.novel.currentChapterPlanVersionId;
       const currentAsset = creativeVersions.find(
         (version) =>
@@ -4092,6 +4314,22 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     Object.assign(novel, patch);
   }
 
+  function assertNoActiveAuthorityClaim(tenantId: string, novelId: string, allowedTaskId?: string) {
+    // Every in-memory authority writer calls this before its synchronous mutation block.
+    const activeTask = generationTasks.find((task) =>
+      task.tenantId === tenantId
+      && task.novelId === novelId
+      && task.id !== allowedTaskId
+      && task.status === TaskStatus.Processing
+      && task.activeClaimKey !== null
+    );
+    if (!activeTask) return;
+    throw new BusinessError(ErrorCode.ConflictTaskExists, '小说权威来源正在被生成任务使用，请等待任务结束或先取消任务。', {
+      taskId: activeTask.id,
+      taskType: activeTask.taskType
+    });
+  }
+
   function requireClaimedTask(task: GenerationTaskRecord, tenantId: string) {
     const stored = generationTasks.find((item) => item.id === task.id && item.tenantId === tenantId);
     if (!stored) throw new Error('Claimed generation task is missing');
@@ -4124,13 +4362,16 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     appendLeaseEvent(task, eventType, failure.statusNote, now);
   }
 
-  function failLegacyQueuedTask(task: GenerationTaskRecord, now: Date) {
-    applyLeaseFailure(task, {
-      failureCategory: 'worker_payload_unsupported',
-      errorCode: 'WORKER_PAYLOAD_UNSUPPORTED',
-      errorMessage: 'Execution envelope is missing.',
-      statusNote: '旧任务缺少可恢复执行合同，已安全失败。'
-    }, now);
+  function failUnsupportedQueuedTask(task: GenerationTaskRecord, now: Date) {
+    task.status = TaskStatus.Failed;
+    task.statusNote = '任务执行合同或可信身份无效，已安全失败。';
+    task.currentStep = 'failed';
+    task.failureCategory = 'worker_payload_unsupported';
+    task.errorCode = 'WORKER_PAYLOAD_UNSUPPORTED';
+    task.errorMessage = 'Execution envelope V1.1 or trusted audit actor is invalid.';
+    task.activeClaimKey = null;
+    task.finishedAt = now;
+    task.updatedAt = now;
   }
 
   function appendLeaseEvent(task: GenerationTaskRecord, eventType: string, message: string, now: Date) {
@@ -4172,6 +4413,10 @@ export function createInMemoryNovelRepository(): NovelRepository & {
 
   function toMutableMetadata(value: unknown): Record<string, unknown> {
     return value && typeof value === 'object' ? { ...(value as Record<string, unknown>) } : {};
+  }
+
+  function asRecord(value: unknown): Record<string, unknown> {
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
   }
 
   function getMetadataString(value: unknown, key: string) {

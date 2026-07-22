@@ -20,8 +20,11 @@ import {
   type StructureAssetType,
   type CreateNovelDraftRequest,
   type NovelCreationSourceType,
-  type ExecutionEnvelopeV1
+  type ExecutionEnvelope,
+  type ExecutionEnvelopeV1_1,
+  type NovelProviderAction
 } from '@ai-shortvideo/shared';
+import type { FastifyRequest } from 'fastify';
 
 export const DEFAULT_TENANT_ID = 'tenant_default';
 export const DEFAULT_USER_ID = 'user_default';
@@ -34,6 +37,13 @@ export interface RequestContext {
   ip?: string;
   userAgent?: string;
 }
+
+export interface TrustedRequestActor {
+  tenantId: string;
+  userId: string;
+}
+
+export type RequestContextResolver = (request: FastifyRequest) => Promise<TrustedRequestActor | null | undefined>;
 
 export interface NovelRecord {
   id: string;
@@ -532,7 +542,7 @@ export interface GenerationTaskRecord {
   lastHeartbeatAt?: Date | null;
   retryCount?: number;
   maxRetries?: number;
-  executionEnvelopeJson?: ExecutionEnvelopeV1 | null;
+  executionEnvelopeJson?: ExecutionEnvelope | null;
   providerAttemptId?: string | null;
   providerAttemptPhase?: ProviderAttemptPhase | null;
   providerDispatchedAt?: Date | null;
@@ -559,19 +569,57 @@ export interface ClaimGenerationTaskInput {
   idempotencyToken: string;
   requestHash: string;
   sourceVersionRefs: unknown;
-  executionEnvelopeJson: ExecutionEnvelopeV1;
+  executionEnvelopeJson: ExecutionEnvelopeV1_1;
   policyProfileVersionId: string | null;
   modelRoutingVersion: string;
   inputSummary: string;
+  authorityInput: LoadGenerationAuthorityInput;
+  expectedAuthoritySnapshotHash: string;
+  afterClaimBarrier?: () => void | Promise<void>;
   context: RequestContext;
   now: Date;
+}
+
+export interface LoadGenerationAuthorityInput {
+  action: NovelProviderAction;
+  tenantId: string;
+  novelId: string;
+  objectId: string;
+  sourceVersionRefs: unknown;
+  normalizedRequest: unknown;
+}
+
+export interface GenerationAuthoritySnapshot {
+  action: NovelProviderAction;
+  tenantId: string;
+  novelId: string;
+  objectId: string;
+  facts: unknown;
 }
 
 export type ClaimGenerationTaskResult =
   | { outcome: 'created'; task: GenerationTaskRecord }
   | { outcome: 'reused'; task: GenerationTaskRecord }
   | { outcome: 'idempotency_conflict'; task: GenerationTaskRecord }
-  | { outcome: 'active_conflict'; task: GenerationTaskRecord };
+  | { outcome: 'active_conflict'; task: GenerationTaskRecord }
+  | { outcome: 'source_stale'; task: null };
+
+export type GenerationAuthorityFencePhase = 'provider_dispatch' | 'result_finalize';
+
+export interface GenerationAuthorityFenceInput {
+  tenantId: string;
+  taskId: string;
+  phase: GenerationAuthorityFencePhase;
+  authorityInput: LoadGenerationAuthorityInput;
+  expectedAuthoritySnapshotHash: string;
+  context: RequestContext;
+  now: Date;
+}
+
+export type GenerationAuthorityFenceResult =
+  | { outcome: 'authorized'; task: GenerationTaskRecord }
+  | { outcome: 'source_stale'; task: GenerationTaskRecord }
+  | { outcome: 'task_not_writable'; task: GenerationTaskRecord | null };
 
 export interface ObservedTaskLease {
   tenantId: string;
@@ -1226,7 +1274,9 @@ export interface NovelRepository {
   listTaskEvents(tenantId: string, taskId: string): Promise<GenerationTaskEventRecord[]>;
   listRecentTasksForNovel(tenantId: string, novelId: string, limit: number): Promise<GenerationTaskRecord[]>;
   assertProviderActionSupported(taskType: string): Promise<void>;
+  loadGenerationAuthority(input: LoadGenerationAuthorityInput): Promise<GenerationAuthoritySnapshot | null>;
   claimGenerationTask(input: ClaimGenerationTaskInput): Promise<ClaimGenerationTaskResult>;
+  fenceGenerationAuthority(input: GenerationAuthorityFenceInput): Promise<GenerationAuthorityFenceResult>;
   leaseNextQueuedTask(workerId: string, leaseToken: string, now: Date, leaseUntil: Date): Promise<GenerationTaskRecord | null>;
   heartbeatTask(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, now: Date, leaseUntil: Date): Promise<boolean>;
   finalizeLeasedTask(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, authoritativeNow: Date, result: HashedSafeResultReceipt): Promise<LeasedTaskMutationResult>;
