@@ -234,12 +234,13 @@ describe('RP-01C fixture factory contract', () => {
 describe('RP-01C Fastify task projection', () => {
   it('serves processing, failed, stale, and conflict snapshots through existing task routes', async () => {
     for (const scenarioId of ['processing', 'failed_timeout', 'stale_source', 'active_conflict'] as const) {
-      const snapshot = createRp01cFixture(scenarioId);
+      const snapshot = createRp01cFixture(scenarioId, 'tenant_rp01c');
       const app = await buildApp({
         logger: false,
         novelRepository: createRp01cRepository(snapshot),
         aiProviderEnv: { AI_PROVIDER_MODE: 'mock' },
-        now: () => new Date(RP01C_BASE_TIME_ISO)
+        now: () => new Date(RP01C_BASE_TIME_ISO),
+        requestContextResolver: resolveRp01cRequestContext(snapshot.tasks[0].tenantId)
       });
       assert.equal(app.hasRoute({ method: 'POST', url: '/dev/novels/acceptance-seeds/outline' }), false);
 
@@ -280,11 +281,11 @@ describe('RP-01C Fastify task projection', () => {
   });
 
   it('rebuilds restart_boundary from the same scenario id after app close with equivalent task projection', async () => {
-    const firstSnapshot = createRp01cFixture('restart_boundary');
+    const firstSnapshot = createRp01cFixture('restart_boundary', 'tenant_rp01c');
     const firstProjection = await projectTask(firstSnapshot);
     assert.doesNotThrow(() => JSON.stringify(firstSnapshot));
 
-    const rebuiltSnapshot = createRp01cFixture('restart_boundary');
+    const rebuiltSnapshot = createRp01cFixture('restart_boundary', 'tenant_rp01c');
     const rebuiltProjection = await projectTask(rebuiltSnapshot);
     assert.deepEqual(firstProjection, rebuiltProjection);
   });
@@ -304,7 +305,8 @@ async function projectTask(snapshot: ReturnType<typeof createRp01cFixture>) {
     logger: false,
     novelRepository: createRp01cRepository(snapshot),
     aiProviderEnv: { AI_PROVIDER_MODE: 'mock' },
-    now: () => new Date(RP01C_BASE_TIME_ISO)
+    now: () => new Date(RP01C_BASE_TIME_ISO),
+    requestContextResolver: resolveRp01cRequestContext(snapshot.tasks[0].tenantId)
   });
   const response = await app.inject({
     method: 'GET',
@@ -321,4 +323,8 @@ async function projectTask(snapshot: ReturnType<typeof createRp01cFixture>) {
     traceRequestId: body.trace.requestId,
     nextActionType: body.nextAction.type
   };
+}
+
+function resolveRp01cRequestContext(tenantId: string) {
+  return async () => ({ tenantId, userId: 'user_rp01c' });
 }

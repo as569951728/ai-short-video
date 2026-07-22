@@ -1,13 +1,14 @@
-import type { FastifyInstance } from 'fastify';
-import type { CancelTaskRequest, RetryTaskRequest } from '@ai-shortvideo/shared';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { ErrorCode, isPlaceholderActorIdentifier, type CancelTaskRequest, type RetryTaskRequest } from '@ai-shortvideo/shared';
 import { sendOk } from '../../../shared/reply.js';
-import type { NovelRepository } from '../../novels/domain/novelDomain.js';
-import { createDefaultRequestContext } from '../../novels/services/novelService.js';
+import { BusinessError } from '../../../shared/errors.js';
+import type { NovelRepository, RequestContext, RequestContextResolver } from '../../novels/domain/novelDomain.js';
 import { TaskService } from '../services/taskService.js';
 
 interface RegisterTaskRoutesOptions {
   repository: NovelRepository;
   now?: () => Date;
+  requestContextResolver?: RequestContextResolver;
 }
 
 const responseEnvelopeSchema = {
@@ -53,7 +54,7 @@ export async function registerTaskRoutes(app: FastifyInstance, options: Register
     },
     async (request, reply) => {
       const { taskId } = request.params as { taskId: string };
-      const data = await taskService.getTask(taskId, createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent'])));
+      const data = await taskService.getTask(taskId, await resolveTaskContext(options.requestContextResolver, request));
 
       return sendOk(request, reply, data);
     }
@@ -71,7 +72,7 @@ export async function registerTaskRoutes(app: FastifyInstance, options: Register
     },
     async (request, reply) => {
       const { taskId } = request.params as { taskId: string };
-      const data = await taskService.getTaskEvents(taskId, createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent'])));
+      const data = await taskService.getTaskEvents(taskId, await resolveTaskContext(options.requestContextResolver, request));
 
       return sendOk(request, reply, data);
     }
@@ -93,7 +94,7 @@ export async function registerTaskRoutes(app: FastifyInstance, options: Register
       const data = await taskService.retryTask(
         taskId,
         (request.body ?? {}) as RetryTaskRequest,
-        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        await resolveTaskContext(options.requestContextResolver, request)
       );
 
       return sendOk(request, reply, data);
@@ -116,12 +117,37 @@ export async function registerTaskRoutes(app: FastifyInstance, options: Register
       const data = await taskService.cancelTask(
         taskId,
         (request.body ?? {}) as CancelTaskRequest,
-        createDefaultRequestContext(request.id, request.ip, getHeader(request.headers['user-agent']))
+        await resolveTaskContext(options.requestContextResolver, request)
       );
 
       return sendOk(request, reply, data);
     }
   );
+}
+
+async function resolveTaskContext(
+  resolver: RequestContextResolver | undefined,
+  request: FastifyRequest
+): Promise<RequestContext> {
+  if (!resolver) throw new BusinessError(ErrorCode.Unauthorized, '当前请求缺少可信身份。');
+  let actor;
+  try {
+    actor = await resolver(request);
+  } catch {
+    throw new BusinessError(ErrorCode.DependencyUnavailable, '身份服务暂时不可用。');
+  }
+  const tenantId = actor?.tenantId?.trim() ?? '';
+  const userId = actor?.userId?.trim() ?? '';
+  if (isPlaceholderActorIdentifier(tenantId) || isPlaceholderActorIdentifier(userId)) {
+    throw new BusinessError(ErrorCode.Unauthorized, '当前请求缺少可信身份。');
+  }
+  return Object.freeze({
+    tenantId,
+    userId,
+    requestId: request.id,
+    ip: request.ip,
+    userAgent: getHeader(request.headers['user-agent'])
+  });
 }
 
 function getHeader(header: string | string[] | undefined) {

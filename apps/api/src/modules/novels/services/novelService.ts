@@ -125,8 +125,15 @@ import { MockFullReviewProvider, type FullReviewProvider } from '../providers/mo
 import { UnavailableHotspotReferenceGateway, type HotspotReferenceGateway } from '../integrations/hotspotReferenceGateway.js';
 import { NovelStatusService } from './novelStatusService.js';
 import { toRecentTaskSummaryDTO } from '../../tasks/services/taskService.js';
-import { executeClaimedGeneration, type NovelProviderAction } from './taskClaim.js';
 import {
+  createActorScopedIdempotencyToken,
+  executeClaimedGeneration as executeTaskClaimedGeneration,
+  type ExecuteClaimedGenerationInput,
+  type ExecuteClaimedGenerationResult,
+  type NovelProviderAction
+} from './taskClaim.js';
+import {
+  getActionExecutionPlan,
   executeNovelProviderAction,
   projectBodyStrategyProviderInput,
   projectChapterContentProviderInput,
@@ -153,6 +160,45 @@ export interface NovelServiceOptions {
   now?: () => Date;
 }
 
+const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,119}$/;
+async function executeClaimedGeneration<TProviderResult, TFinalResult>(
+  input: ExecuteClaimedGenerationInput<TProviderResult, TFinalResult>
+): Promise<ExecuteClaimedGenerationResult<TFinalResult>> {
+  const rawIdempotencyKey = resolveLegacyRawIdempotencyKey(input.idempotencyKey, input.context.requestId);
+  if (rawIdempotencyKey && isTrustedRequestActor(input.context)) {
+    const objectId = input.objectId ?? input.novel.id;
+    const scopedToken = createActorScopedIdempotencyToken({
+      tenantId: input.context.tenantId,
+      userId: input.context.userId,
+      action: input.action,
+      objectId,
+      rawIdempotencyKey
+    });
+    const taskType = getActionExecutionPlan(input.action).taskType;
+    const scopedTask = await input.repository.findTaskByIdempotencyToken(input.context.tenantId, taskType, scopedToken);
+    if (!scopedTask) {
+      const legacyTask = await input.repository.findTaskByIdempotencyToken(input.context.tenantId, taskType, rawIdempotencyKey);
+      if (legacyTask && !isTrustedLegacyTaskActor(legacyTask.createdBy, input.context.userId)) {
+        throw new BusinessError(ErrorCode.IdempotencyConflict, '同一个幂等键已绑定到无法验证归属的历史任务。', {
+          taskType,
+          existingTaskId: legacyTask.id
+        });
+      }
+    }
+  }
+  return executeTaskClaimedGeneration(input);
+}
+function resolveLegacyRawIdempotencyKey(idempotencyKey: string | null | undefined, requestId: string): string | null {
+  const normalized = idempotencyKey?.trim();
+  if (normalized) return IDEMPOTENCY_KEY_PATTERN.test(normalized) ? normalized : null;
+  return `request:${requestId}`.slice(0, 120);
+}
+function isTrustedRequestActor(context: RequestContext): boolean {
+  return Boolean(context.userId?.trim()) && context.userId !== DEFAULT_USER_ID;
+}
+function isTrustedLegacyTaskActor(createdBy: string | null | undefined, requestUserId: string): boolean {
+  return Boolean(createdBy?.trim()) && createdBy !== DEFAULT_USER_ID && createdBy === requestUserId;
+}
 export class NovelService {
   private readonly statusService: NovelStatusService;
   private readonly directionProvider: DirectionProvider;
@@ -260,11 +306,11 @@ export class NovelService {
     throw createCreationSourceValidationError('creationSourceType', '创作来源类型不合法。');
   }
 
-  async list(query: NovelListQuery): Promise<NovelListResultDTO> {
+  async list(query: NovelListQuery, tenantId = DEFAULT_TENANT_ID): Promise<NovelListResultDTO> {
     const page = query.page ?? 1;
     const pageSize = query.pageSize ?? 20;
     const { items, total } = await this.options.repository.list({
-      tenantId: DEFAULT_TENANT_ID,
+      tenantId,
       page,
       pageSize,
       keyword: query.keyword,
@@ -281,19 +327,19 @@ export class NovelService {
     };
   }
 
-  async getDetail(novelId: string): Promise<NovelDetailDTO> {
-    const novel = await this.findNovelOrThrow(novelId);
-    const preferences = await this.options.repository.findPreferencesByNovelId(DEFAULT_TENANT_ID, novelId);
+  async getDetail(novelId: string, tenantId = DEFAULT_TENANT_ID): Promise<NovelDetailDTO> {
+    const novel = await this.findNovelOrThrow(tenantId, novelId);
+    const preferences = await this.options.repository.findPreferencesByNovelId(tenantId, novelId);
     const detail = this.toDetailDTO(novel, preferences ?? createEmptyPreferences(novel));
 
-    return enrichDetailWithCreativeAssets(detail, novel, this.options.repository);
+    return enrichDetailWithCreativeAssets(detail, novel, this.options.repository, tenantId);
   }
 
-  async getSummary(novelId: string): Promise<NovelRowSummaryDTO> {
-    const novel = await this.findNovelOrThrow(novelId);
-    const latestTrialRun = await this.options.repository.findLatestTrialRun(DEFAULT_TENANT_ID, novelId);
+  async getSummary(novelId: string, tenantId = DEFAULT_TENANT_ID): Promise<NovelRowSummaryDTO> {
+    const novel = await this.findNovelOrThrow(tenantId, novelId);
+    const latestTrialRun = await this.options.repository.findLatestTrialRun(tenantId, novelId);
     const statusSummary = applyTrialReviewStatusSummary(this.statusService.calculate(novel), latestTrialRun);
-    const recentTasks = await this.options.repository.listRecentTasksForNovel(DEFAULT_TENANT_ID, novelId, 1);
+    const recentTasks = await this.options.repository.listRecentTasksForNovel(tenantId, novelId, 1);
 
     return {
       novelId,
@@ -307,7 +353,14 @@ export class NovelService {
 
   async generateDirections(novelId: string, request: GenerateDirectionsRequest, context: RequestContext): Promise<DirectionActionResultDTO> {
     const novel = await this.findNovelOrThrow(context.tenantId, novelId);
-    const idempotencyToken = request.idempotencyKey?.trim() || `request:${context.requestId}`.slice(0, 120);
+    const rawIdempotencyKey = request.idempotencyKey?.trim() || `request:${context.requestId}`.slice(0, 120);
+    const idempotencyToken = createActorScopedIdempotencyToken({
+      tenantId: context.tenantId,
+      userId: context.userId,
+      action: 'direction_generate',
+      objectId: novel.id,
+      rawIdempotencyKey
+    });
     const existingTask = await this.options.repository.findTaskByIdempotencyToken(
       context.tenantId,
       'novel_direction_generate',
@@ -319,6 +372,11 @@ export class NovelService {
     }
     const preferences = await this.options.repository.findPreferencesByNovelId(context.tenantId, novelId);
     const sourceVersionRefs = existingTask?.sourceVersionRefs ?? { currentDirectionVersionId: novel.currentDirectionVersionId };
+    const providerInput = {
+      action: 'direction_generate' as const,
+      novel: projectNovelProviderInput(novel),
+      preferences: projectPreferencesProviderInput(preferences ?? createEmptyPreferences(novel))
+    };
     const execution = await executeClaimedGeneration({
       action: 'direction_generate',
       repository: this.options.repository,
@@ -329,11 +387,7 @@ export class NovelService {
       context,
       now: this.now,
       providerCapability: this.directionProvider,
-      provider: () => executeNovelProviderAction(this.getProviderSet(), {
-        action: 'direction_generate',
-        novel: projectNovelProviderInput(novel),
-        preferences: projectPreferencesProviderInput(preferences ?? createEmptyPreferences(novel))
-      }),
+      provider: (authoritativeInput) => executeNovelProviderAction(this.getProviderSet(), authoritativeInput as typeof providerInput),
       finalize: (task, candidates) => this.options.repository.createDirectionCandidates({
         novel,
         task,
@@ -363,6 +417,11 @@ export class NovelService {
     }
 
     const sources = await this.findDirectionVersionsOrThrow(context.tenantId, novelId, request.versionIds);
+    const providerInput = {
+      action: 'direction_fuse' as const,
+      sources: sources.map((source) => projectDirectionDraftProviderInput(toDirectionDraft(source))),
+      reason: request.reason
+    };
     const execution = await executeClaimedGeneration({
       action: 'direction_fuse',
       repository: this.options.repository,
@@ -373,11 +432,7 @@ export class NovelService {
       context,
       now: this.now,
       providerCapability: this.directionProvider,
-      provider: () => executeNovelProviderAction(this.getProviderSet(), {
-        action: 'direction_fuse',
-        sources: sources.map((source) => projectDirectionDraftProviderInput(toDirectionDraft(source))),
-        reason: request.reason
-      }),
+      provider: (authoritativeInput) => executeNovelProviderAction(this.getProviderSet(), authoritativeInput as typeof providerInput),
       finalize: (task, candidate) => this.options.repository.createDirectionRevision({
         novel,
         task,
@@ -401,6 +456,11 @@ export class NovelService {
     this.ensureLifecycleActive(novel);
     this.ensureDirectionWorkStage(novel);
     const source = await this.findDirectionVersionOrThrow(context.tenantId, novelId, versionId);
+    const providerInput = {
+      action: 'direction_optimize' as const,
+      source: projectDirectionDraftProviderInput(toDirectionDraft(source)),
+      instruction: request.instruction
+    };
     const execution = await executeClaimedGeneration({
       action: 'direction_optimize',
       repository: this.options.repository,
@@ -412,11 +472,7 @@ export class NovelService {
       context,
       now: this.now,
       providerCapability: this.directionProvider,
-      provider: () => executeNovelProviderAction(this.getProviderSet(), {
-        action: 'direction_optimize',
-        source: projectDirectionDraftProviderInput(toDirectionDraft(source)),
-        instruction: request.instruction
-      }),
+      provider: (authoritativeInput) => executeNovelProviderAction(this.getProviderSet(), authoritativeInput as typeof providerInput),
       finalize: (task, candidate) => this.options.repository.createDirectionRevision({
         novel,
         task,
@@ -436,7 +492,7 @@ export class NovelService {
   }
 
   async editDirectionCandidate(novelId: string, versionId: string, request: EditDirectionCandidateRequest, context: RequestContext): Promise<DirectionActionResultDTO> {
-    const novel = await this.findNovelOrThrow(novelId);
+    const novel = await this.findNovelOrThrow(context.tenantId, novelId);
     this.ensureLifecycleActive(novel);
     this.ensureDirectionWorkStage(novel);
     const source = await this.findDirectionVersionOrThrow(context.tenantId, novelId, versionId);
@@ -475,7 +531,7 @@ export class NovelService {
   }
 
   async adoptDirection(novelId: string, versionId: string, request: AdoptDirectionRequest, context: RequestContext): Promise<DirectionActionResultDTO> {
-    const novel = await this.findNovelOrThrow(novelId);
+    const novel = await this.findNovelOrThrow(context.tenantId, novelId);
     this.ensureLifecycleActive(novel);
     this.ensureDirectionWorkStage(novel);
 
@@ -551,7 +607,7 @@ export class NovelService {
     request: EditStructureAssetRequest,
     context: RequestContext
   ): Promise<StructureActionResultDTO> {
-    const novel = await this.findNovelOrThrow(novelId);
+    const novel = await this.findNovelOrThrow(context.tenantId, novelId);
     this.ensureLifecycleActive(novel);
     await this.ensureStructureGenerationGate(novel, objectType);
 
@@ -624,7 +680,7 @@ export class NovelService {
     request: UpdateChapterWordTargetsRequest,
     context: RequestContext
   ): Promise<StructureActionResultDTO> {
-    const novel = await this.findNovelOrThrow(novelId);
+    const novel = await this.findNovelOrThrow(context.tenantId, novelId);
     this.ensureLifecycleActive(novel);
     if (!novel.currentChapterPlanVersionId) {
       throw new BusinessError(ErrorCode.GateBlocked, '需要先采用章节目录后才能调整目标字数');
@@ -662,6 +718,13 @@ export class NovelService {
       const chapterCount = normalizeTrialChapterCount(request.chapterCount);
       const preferences = await this.options.repository.findPreferencesByNovelId(context.tenantId, novelId);
       const sourceVersionRefs = createTrialSourceRefs(novel);
+      const providerInput = {
+        action: 'trial_chapter_one_generate' as const,
+        novel: projectNovelProviderInput(novel),
+        preferences: projectPreferencesProviderInput(preferences ?? createEmptyPreferences(novel)),
+        chapters: chapters.map(projectChapterProviderInput),
+        chapterCount
+      };
       const execution = await executeClaimedGeneration({
         action: 'trial_chapter_one_generate',
         repository: this.options.repository,
@@ -672,13 +735,8 @@ export class NovelService {
         context,
         now: this.now,
         providerCapability: this.trialProvider,
-        provider: () => executeNovelProviderAction(this.getProviderSet(), {
-          action: 'trial_chapter_one_generate',
-          novel: projectNovelProviderInput(novel),
-          preferences: projectPreferencesProviderInput(preferences ?? createEmptyPreferences(novel)),
-          chapters: chapters.map(projectChapterProviderInput),
-          chapterCount
-        }).then((candidates) => bindTrialChapterOneCandidates(chapters, candidates)),
+        provider: (authoritativeInput) => executeNovelProviderAction(this.getProviderSet(), authoritativeInput as typeof providerInput)
+          .then((candidates) => bindTrialChapterOneCandidates(chapters, candidates)),
         finalize: (task, candidates) => this.options.repository.createTrialChapterOneCandidates({
           novel,
           task,
@@ -708,7 +766,14 @@ export class NovelService {
     if (!trialRun) {
       throw new BusinessError(ErrorCode.NotFound, '试写记录不存在');
     }
-    const followupToken = request.idempotencyKey?.trim() || `request:${context.requestId}`.slice(0, 120);
+    const followupRawKey = request.idempotencyKey?.trim() || `request:${context.requestId}`.slice(0, 120);
+    const followupToken = createActorScopedIdempotencyToken({
+      tenantId: context.tenantId,
+      userId: context.userId,
+      action: 'trial_followup_generate',
+      objectId: trialRun.id,
+      rawIdempotencyKey: followupRawKey
+    });
     const existingFollowupTask = await this.options.repository.findTaskByIdempotencyToken(
       context.tenantId,
       'trial_followup_generate',
@@ -739,6 +804,12 @@ export class NovelService {
 
     const sourceVersionRefs = createTrialSourceRefs(novel);
     const trialScopeChapters = chapters.slice(0, trialRun.trialChapterCount);
+    const providerInput = {
+      action: 'trial_followup_generate' as const,
+      novel: projectNovelProviderInput(novel),
+      selectedCandidate: projectChapterContentProviderInput(selectedCandidate),
+      chapters: trialScopeChapters.map(projectChapterProviderInput)
+    };
     const execution = await executeClaimedGeneration({
       action: 'trial_followup_generate',
       repository: this.options.repository,
@@ -751,12 +822,7 @@ export class NovelService {
       now: this.now,
       providerCapability: this.trialProvider,
       prepare: () => Promise.resolve(),
-      provider: () => executeNovelProviderAction(this.getProviderSet(), {
-        action: 'trial_followup_generate',
-        novel: projectNovelProviderInput(novel),
-        selectedCandidate: projectChapterContentProviderInput(selectedCandidate),
-        chapters: trialScopeChapters.map(projectChapterProviderInput)
-      }).then((followup) => ({
+      provider: (authoritativeInput) => executeNovelProviderAction(this.getProviderSet(), authoritativeInput as typeof providerInput).then((followup) => ({
         ...followup,
         chapters: bindTrialFollowupChapters(trialScopeChapters, followup.chapters, followup.review)
       })),
@@ -769,7 +835,7 @@ export class NovelService {
   }
 
   async confirmTrial(novelId: string, request: ConfirmTrialRequest, context: RequestContext): Promise<TrialActionResultDTO> {
-    const novel = await this.findNovelOrThrow(novelId);
+    const novel = await this.findNovelOrThrow(context.tenantId, novelId);
     this.ensureLifecycleActive(novel);
 
     const trialRun = await this.options.repository.findTrialRunById(context.tenantId, novelId, request.trialRunId);
@@ -824,9 +890,9 @@ export class NovelService {
     return this.toTrialActionResult(result.novel, task ?? createVirtualTrialTask(result.trialRun, result.novel), result.trialRun, result.bodyStrategySnapshot);
   }
 
-  async getChapterWorkbench(novelId: string, chapterId: string): Promise<ChapterWorkbenchDTO> {
-    const novel = await this.findNovelOrThrow(novelId);
-    const record = await this.options.repository.getChapterWorkbench(DEFAULT_TENANT_ID, novelId, chapterId);
+  async getChapterWorkbench(novelId: string, chapterId: string, tenantId = DEFAULT_TENANT_ID): Promise<ChapterWorkbenchDTO> {
+    const novel = await this.findNovelOrThrow(tenantId, novelId);
+    const record = await this.options.repository.getChapterWorkbench(tenantId, novelId, chapterId);
     if (!record) {
       throw new BusinessError(ErrorCode.NotFound, '章节不存在');
     }
@@ -865,6 +931,23 @@ export class NovelService {
     const previousBatchNotes = latestBatch?.summary.nextBatchNotes ?? [];
     const enhancedReview = isEnhancedReviewEnabled(strategySnapshot) && range.startChapterNo <= 10;
     const objectId = action === 'chapter_body_generate' ? targetChapters[0]?.id ?? novelId : novelId;
+    const initialPreviousContent = await findPreviousContentVersion(
+      this.options.repository,
+      context.tenantId,
+      novelId,
+      chapters,
+      range.startChapterNo
+    );
+    const providerInput = {
+      action,
+      novel: projectNovelProviderInput(novel),
+      targetChapters: targetChapters.map(projectChapterProviderInput),
+      strategySnapshot: projectBodyStrategyProviderInput(strategySnapshot),
+      previousContent: initialPreviousContent ? projectChapterContentProviderInput(initialPreviousContent) : null,
+      previousMemory: projectLongTermMemoryProviderInput(previousMemory),
+      previousBatchNotes,
+      enhancedReview
+    };
     const execution = await executeClaimedGeneration({
       action,
       repository: this.options.repository,
@@ -888,24 +971,27 @@ export class NovelService {
         context,
         now: this.now()
       }).then(() => undefined),
-      provider: async () => {
+      provider: async (authoritativeInput) => {
+        const authoritative = authoritativeInput as typeof providerInput;
         const drafts: BodyChapterDraft[] = [];
-        let previousContent = await findPreviousContentVersion(this.options.repository, context.tenantId, novelId, chapters, range.startChapterNo!);
-        for (const chapter of targetChapters) {
+        let previousContent = authoritative.previousContent;
+        for (const providerChapter of authoritative.targetChapters) {
+          const chapter = targetChapters.find((item) => item.id === providerChapter.id);
+          if (!chapter) throw new BusinessError(ErrorCode.VersionConflict, '章节权威投影已变化，请刷新后重试。');
           const providerDraft = await executeNovelProviderAction(this.getProviderSet(), {
             action,
-            novel: projectNovelProviderInput(novel),
-            chapter: projectChapterProviderInput(chapter),
-            strategySnapshot: projectBodyStrategyProviderInput(strategySnapshot),
-            previousContent: previousContent ? projectChapterContentProviderInput(previousContent) : null,
-            previousMemory: projectLongTermMemoryProviderInput(previousMemory),
-            previousBatchNotes,
-            enhancedReview: enhancedReview && chapter.chapterNo <= 10
+            novel: authoritative.novel,
+            chapter: providerChapter,
+            strategySnapshot: authoritative.strategySnapshot,
+            previousContent,
+            previousMemory: authoritative.previousMemory,
+            previousBatchNotes: authoritative.previousBatchNotes,
+            enhancedReview: authoritative.enhancedReview && chapter.chapterNo <= 10
           });
           const draft = bindGeneratedBodyChapter(chapter, providerDraft);
           drafts.push(draft);
           if (draft.hardFailed) break;
-          previousContent = createDraftLikeContentVersion(chapter, draft);
+          previousContent = projectChapterContentProviderInput(createDraftLikeContentVersion(chapter, draft));
         }
         return drafts;
       },
@@ -1051,7 +1137,14 @@ export class NovelService {
       throw new BusinessError(ErrorCode.GateBlocked, '当前章节没有正式正文，不能生成重写候选');
     }
     const existingTask = request.idempotencyKey?.trim()
-      ? await this.options.repository.findTaskByIdempotencyToken(context.tenantId, 'chapter_body_rewrite', request.idempotencyKey.trim())
+      ? await this.options.repository.findTaskByIdempotencyToken(
+          context.tenantId,
+          'chapter_body_rewrite',
+          createActorScopedIdempotencyToken({
+            tenantId: context.tenantId, userId: context.userId, action: 'chapter_rewrite',
+            objectId: chapter.id, rawIdempotencyKey: request.idempotencyKey.trim()
+          })
+        )
       : null;
     if (!existingTask && request.currentContentVersionId !== undefined && request.currentContentVersionId !== chapter.currentContentVersionId) {
       throw new BusinessError(ErrorCode.VersionConflict, '当前章节正文版本已变化，请刷新后重试');
@@ -1071,6 +1164,13 @@ export class NovelService {
       throw new BusinessError(ErrorCode.NotFound, '当前章节正文不存在');
     }
     const sourceVersionRefs = { currentContentVersionId: fingerprintContentVersionId };
+    const providerInput = {
+      action: 'chapter_rewrite' as const,
+      novel: projectNovelProviderInput(novel),
+      chapter: projectChapterProviderInput(chapter),
+      currentContent: projectChapterContentProviderInput(currentContent),
+      instruction: request.instruction?.trim() || '基于审稿建议优化本章'
+    };
     const execution = await executeClaimedGeneration({
       action: 'chapter_rewrite',
       repository: this.options.repository,
@@ -1086,13 +1186,8 @@ export class NovelService {
       context,
       now: this.now,
       providerCapability: this.bodyProvider,
-      provider: () => executeNovelProviderAction(this.getProviderSet(), {
-        action: 'chapter_rewrite',
-        novel: projectNovelProviderInput(novel),
-        chapter: projectChapterProviderInput(chapter),
-        currentContent: projectChapterContentProviderInput(currentContent),
-        instruction: request.instruction?.trim() || '基于审稿建议优化本章'
-      }).then((rewrite) => ({ ...rewrite, candidate: bindGeneratedBodyChapter(chapter, rewrite.candidate) })),
+      provider: (authoritativeInput) => executeNovelProviderAction(this.getProviderSet(), authoritativeInput as typeof providerInput)
+        .then((rewrite) => ({ ...rewrite, candidate: bindGeneratedBodyChapter(chapter, rewrite.candidate) })),
       finalize: (task, rewrite) => this.options.repository.rewriteChapter({
         novel,
         task,
@@ -1166,7 +1261,14 @@ export class NovelService {
       throw new BusinessError(ErrorCode.NotFound, '章节不存在');
     }
     const existingTask = request.idempotencyKey?.trim()
-      ? await this.options.repository.findTaskByIdempotencyToken(context.tenantId, 'chapter_impact_assess', request.idempotencyKey.trim())
+      ? await this.options.repository.findTaskByIdempotencyToken(
+          context.tenantId,
+          'chapter_impact_assess',
+          createActorScopedIdempotencyToken({
+            tenantId: context.tenantId, userId: context.userId, action: 'chapter_adopt_impact_assess',
+            objectId: chapter.id, rawIdempotencyKey: request.idempotencyKey.trim()
+          })
+        )
       : null;
     if (!existingTask && request.currentContentVersionId !== undefined && request.currentContentVersionId !== chapter.currentContentVersionId) {
       throw new BusinessError(ErrorCode.VersionConflict, '当前章节正文版本已变化，请刷新后重试');
@@ -1194,6 +1296,14 @@ export class NovelService {
     const candidateMetadata = toRecord(candidate.metadata);
     const summaryCompare = toSummaryCompare(candidateMetadata.summaryCompare, currentContent, candidate);
     const reason = request.reason?.trim() ?? '';
+    const providerInput = {
+      action: 'chapter_adopt_impact_assess' as const,
+      novel: projectNovelProviderInput(novel),
+      chapter: projectChapterProviderInput(chapter),
+      oldContent: currentContent ? projectChapterContentProviderInput(currentContent) : null,
+      newContent: projectChapterContentProviderInput(candidate),
+      instruction: candidate.rewriteReason
+    };
     const execution = await executeClaimedGeneration({
       action: 'chapter_adopt_impact_assess',
       repository: this.options.repository,
@@ -1205,14 +1315,7 @@ export class NovelService {
       context,
       now: this.now,
       providerCapability: this.bodyProvider,
-      provider: () => executeNovelProviderAction(this.getProviderSet(), {
-        action: 'chapter_adopt_impact_assess',
-        novel: projectNovelProviderInput(novel),
-        chapter: projectChapterProviderInput(chapter),
-        oldContent: currentContent ? projectChapterContentProviderInput(currentContent) : null,
-        newContent: projectChapterContentProviderInput(candidate),
-        instruction: candidate.rewriteReason
-      }),
+      provider: (authoritativeInput) => executeNovelProviderAction(this.getProviderSet(), authoritativeInput as typeof providerInput),
       finalize: (task, impact) => {
         if ((impact.impactLevel === 'medium' || impact.impactLevel === 'severe') && !reason) {
           throw new BusinessError(ErrorCode.GateBlocked, '采用可能影响后续章节的候选必须填写原因');
@@ -1293,7 +1396,14 @@ export class NovelService {
       throw new BusinessError(ErrorCode.GateBlocked, '当前章节没有正式正文，不能发起影响评估');
     }
     const existingTask = request.idempotencyKey?.trim()
-      ? await this.options.repository.findTaskByIdempotencyToken(context.tenantId, 'chapter_impact_assess', request.idempotencyKey.trim())
+      ? await this.options.repository.findTaskByIdempotencyToken(
+          context.tenantId,
+          'chapter_impact_assess',
+          createActorScopedIdempotencyToken({
+            tenantId: context.tenantId, userId: context.userId, action: 'chapter_impact_assess',
+            objectId: chapter.id, rawIdempotencyKey: request.idempotencyKey.trim()
+          })
+        )
       : null;
     if (!existingTask && request.currentContentVersionId !== undefined && request.currentContentVersionId !== chapter.currentContentVersionId) {
       throw new BusinessError(ErrorCode.VersionConflict, '当前章节正文版本已变化，请刷新后重试');
@@ -1312,6 +1422,14 @@ export class NovelService {
     if (!currentContent) {
       throw new BusinessError(ErrorCode.NotFound, '当前章节正文不存在');
     }
+    const providerInput = {
+      action: 'chapter_impact_assess' as const,
+      novel: projectNovelProviderInput(novel),
+      chapter: projectChapterProviderInput(chapter),
+      oldContent: projectChapterContentProviderInput(currentContent),
+      newContent: projectChapterContentProviderInput(currentContent),
+      instruction: request.reason
+    };
     const execution = await executeClaimedGeneration({
       action: 'chapter_impact_assess',
       repository: this.options.repository,
@@ -1323,14 +1441,7 @@ export class NovelService {
       context,
       now: this.now,
       providerCapability: this.bodyProvider,
-      provider: () => executeNovelProviderAction(this.getProviderSet(), {
-        action: 'chapter_impact_assess',
-        novel: projectNovelProviderInput(novel),
-        chapter: projectChapterProviderInput(chapter),
-        oldContent: projectChapterContentProviderInput(currentContent),
-        newContent: projectChapterContentProviderInput(currentContent),
-        instruction: request.reason
-      }),
+      provider: (authoritativeInput) => executeNovelProviderAction(this.getProviderSet(), authoritativeInput as typeof providerInput),
       finalize: (task, impact) => this.options.repository.createImpactAssessment({
         novel,
         task,
@@ -1368,8 +1479,8 @@ export class NovelService {
     };
   }
 
-  async getImpactCase(novelId: string, impactCaseId: string): Promise<ImpactCaseDTO> {
-    const impactCase = await this.options.repository.findImpactCaseById(DEFAULT_TENANT_ID, novelId, impactCaseId);
+  async getImpactCase(novelId: string, impactCaseId: string, tenantId = DEFAULT_TENANT_ID): Promise<ImpactCaseDTO> {
+    const impactCase = await this.options.repository.findImpactCaseById(tenantId, novelId, impactCaseId);
     if (!impactCase) {
       throw new BusinessError(ErrorCode.NotFound, '影响案例不存在');
     }
@@ -1378,7 +1489,7 @@ export class NovelService {
   }
 
   async resolveImpactCase(novelId: string, impactCaseId: string, request: ResolveImpactCaseRequest, context: RequestContext): Promise<ImpactCaseResolveResultDTO> {
-    const novel = await this.findNovelOrThrow(novelId);
+    const novel = await this.findNovelOrThrow(context.tenantId, novelId);
     const impactCase = await this.options.repository.findImpactCaseById(context.tenantId, novelId, impactCaseId);
     if (!impactCase) {
       throw new BusinessError(ErrorCode.NotFound, '影响案例不存在');
@@ -1409,6 +1520,13 @@ export class NovelService {
     const novel = await this.findNovelOrThrow(context.tenantId, novelId);
     this.ensureLifecycleActive(novel);
     const idempotencyKey = request.idempotencyKey?.trim() || createInternalBodyIdempotencyKey('full-review', novelId, context.requestId);
+    const idempotencyToken = createActorScopedIdempotencyToken({
+      tenantId: context.tenantId,
+      userId: context.userId,
+      action: 'novel_full_review',
+      objectId: novel.id,
+      rawIdempotencyKey: idempotencyKey
+    });
     const currentChapters = await this.options.repository.listNovelChapters(context.tenantId, novel.id);
     const currentSourceVersionRefs = createFullReviewSourceRefs(novel, currentChapters);
     const requestFingerprint = {
@@ -1417,7 +1535,7 @@ export class NovelService {
       expectedNovelVersion: request.expectedNovelVersion ?? null,
       sourceVersionRefs: currentSourceVersionRefs
     };
-    const existing = await this.options.repository.findFullReviewByIdempotencyKey(context.tenantId, novelId, idempotencyKey);
+    const existing = await this.options.repository.findFullReviewByIdempotencyKey(context.tenantId, novelId, idempotencyToken);
     if (existing) {
       const existingFingerprint = toRecord(existing.reviewReport.metadata).requestFingerprint;
       if (existingFingerprint && !isSameFingerprint(existingFingerprint, requestFingerprint)) {
@@ -1443,6 +1561,12 @@ export class NovelService {
 
     const chapters = await this.ensureFullReviewGate(novel, context);
     const sourceVersionRefs = createFullReviewSourceRefs(novel, chapters);
+    const providerInput = {
+      action: 'novel_full_review' as const,
+      novel: projectNovelProviderInput(novel),
+      chapters: chapters.map(projectChapterProviderInput),
+      sourceVersionRefs: projectFullReviewSourceVersionRefsProviderInput(sourceVersionRefs)
+    };
     const execution = await executeClaimedGeneration({
       action: 'novel_full_review',
       repository: this.options.repository,
@@ -1453,12 +1577,7 @@ export class NovelService {
       context,
       now: this.now,
       providerCapability: this.fullReviewProvider,
-      provider: () => executeNovelProviderAction(this.getProviderSet(), {
-        action: 'novel_full_review',
-        novel: projectNovelProviderInput(novel),
-        chapters: chapters.map(projectChapterProviderInput),
-        sourceVersionRefs: projectFullReviewSourceVersionRefsProviderInput(sourceVersionRefs)
-      }),
+      provider: (authoritativeInput) => executeNovelProviderAction(this.getProviderSet(), authoritativeInput as typeof providerInput),
       finalize: (task, draft) => this.options.repository.createFullReview({
         novel,
         task,
@@ -1475,7 +1594,7 @@ export class NovelService {
       })
     });
     if (execution.reused) {
-      const existing = await this.options.repository.findFullReviewByIdempotencyKey(context.tenantId, novelId, idempotencyKey);
+      const existing = await this.options.repository.findFullReviewByIdempotencyKey(context.tenantId, novelId, idempotencyToken);
       if (!existing) throw reusedTaskInProgress(execution.task);
       const statusSummary = this.statusService.calculate(novel);
       return {
@@ -1500,9 +1619,9 @@ export class NovelService {
     };
   }
 
-  async getLatestFullReview(novelId: string): Promise<FullReviewLatestResultDTO> {
-    const novel = await this.findNovelOrThrow(novelId);
-    const latest = await this.options.repository.findLatestFullReview(DEFAULT_TENANT_ID, novelId);
+  async getLatestFullReview(novelId: string, tenantId = DEFAULT_TENANT_ID): Promise<FullReviewLatestResultDTO> {
+    const novel = await this.findNovelOrThrow(tenantId, novelId);
+    const latest = await this.options.repository.findLatestFullReview(tenantId, novelId);
     const statusSummary = this.statusService.calculate(novel);
 
     return {
@@ -1519,7 +1638,7 @@ export class NovelService {
     request: ResolveFullReviewIssueRequest,
     context: RequestContext
   ): Promise<FullReviewIssueActionResultDTO> {
-    const novel = await this.findNovelOrThrow(novelId);
+    const novel = await this.findNovelOrThrow(context.tenantId, novelId);
     const latest = await this.findFullReviewOrThrow(context.tenantId, novelId, reviewId);
     const reason = request.reason?.trim() ?? '';
     if (request.action === 'accept_risk' && !reason) {
@@ -1557,7 +1676,7 @@ export class NovelService {
     request: ForcePassFullReviewRequest,
     context: RequestContext
   ): Promise<FullReviewActionResultDTO> {
-    const novel = await this.findNovelOrThrow(novelId);
+    const novel = await this.findNovelOrThrow(context.tenantId, novelId);
     const idempotencyKey = normalizeActionIdempotencyKey(request.idempotencyKey, '全书审稿强制通过');
     const reason = request.reason?.trim() ?? '';
     if (!request.confirmRisk || !reason) {
@@ -1596,7 +1715,7 @@ export class NovelService {
   }
 
   async confirmCompletion(novelId: string, request: ConfirmCompletionRequest, context: RequestContext): Promise<CompletionActionResultDTO> {
-    const novel = await this.findNovelOrThrow(novelId);
+    const novel = await this.findNovelOrThrow(context.tenantId, novelId);
     this.ensureLifecycleActive(novel);
     const idempotencyKey = normalizeActionIdempotencyKey(request.idempotencyKey, '完成确认');
     if (request.expectedNovelVersion && request.expectedNovelVersion !== novel.updatedAt.toISOString()) {
@@ -1659,18 +1778,18 @@ export class NovelService {
     };
   }
 
-  async getVideoReadiness(novelId: string): Promise<VideoReadinessDTO> {
-    const novel = await this.findNovelOrThrow(novelId);
-    const completionDecision = await this.options.repository.findLatestCompletionDecision(DEFAULT_TENANT_ID, novelId);
-    const check = await this.options.repository.findLatestVideoReadinessCheck(DEFAULT_TENANT_ID, novelId);
-    const snapshot = await this.options.repository.findLatestVideoReadinessSnapshot(DEFAULT_TENANT_ID, novelId);
+  async getVideoReadiness(novelId: string, tenantId = DEFAULT_TENANT_ID): Promise<VideoReadinessDTO> {
+    const novel = await this.findNovelOrThrow(tenantId, novelId);
+    const completionDecision = await this.options.repository.findLatestCompletionDecision(tenantId, novelId);
+    const check = await this.options.repository.findLatestVideoReadinessCheck(tenantId, novelId);
+    const snapshot = await this.options.repository.findLatestVideoReadinessSnapshot(tenantId, novelId);
     const statusSummary = this.statusService.calculate(novel);
 
     return toVideoReadinessDTO(novelId, completionDecision, check, snapshot, statusSummary.recommendedAction);
   }
 
   async recheckVideoReadiness(novelId: string, _request: RecheckVideoReadinessRequest, context: RequestContext): Promise<VideoReadinessActionResultDTO> {
-    const novel = await this.findNovelOrThrow(novelId);
+    const novel = await this.findNovelOrThrow(context.tenantId, novelId);
     const completionDecision = await this.options.repository.findLatestCompletionDecision(context.tenantId, novelId);
     if (!completionDecision) {
       throw new BusinessError(ErrorCode.GateBlocked, '尚未确认小说完成，不能重新检查待视频化');
@@ -1702,7 +1821,7 @@ export class NovelService {
   }
 
   async confirmVideoReadiness(novelId: string, request: ConfirmVideoReadinessRequest, context: RequestContext): Promise<VideoReadinessActionResultDTO> {
-    const novel = await this.findNovelOrThrow(novelId);
+    const novel = await this.findNovelOrThrow(context.tenantId, novelId);
     this.ensureLifecycleActive(novel);
     const idempotencyKey = normalizeActionIdempotencyKey(request.idempotencyKey, '待视频化确认');
     const completionDecision = await this.options.repository.findCompletionDecisionById(context.tenantId, novelId, request.completionDecisionId);
@@ -1948,6 +2067,16 @@ export class NovelService {
     const changeReason = request.regenerateReason ?? `模型服务生成 ${objectType} 候选`;
     const sourceVersionRefs = createStructureSourceRefs(novel, objectType);
     const action = getStructureGenerateAction(objectType);
+    const providerBaseInput = {
+      novel: projectNovelProviderInput(novel),
+      preferences: projectPreferencesProviderInput(preferences ?? createEmptyPreferences(novel)),
+      currentAssets: {
+        direction: projectCreativeAssetProviderInput(currentAssets.direction),
+        setting: action === 'setting_generate' ? null : projectCreativeAssetProviderInput(currentAssets.setting),
+        outline: action === 'setting_generate' || action === 'outline_generate' ? null : projectCreativeAssetProviderInput(currentAssets.outline),
+        stageOutline: action === 'chapter_plan_generate' ? projectCreativeAssetProviderInput(currentAssets.stageOutline) : null
+      }
+    };
     const execution = await executeClaimedGeneration({
       action,
       repository: this.options.repository,
@@ -1958,22 +2087,7 @@ export class NovelService {
       context,
       now: this.now,
       providerCapability: this.structureProvider,
-      provider: () => {
-        const input = {
-          novel: projectNovelProviderInput(novel),
-          preferences: projectPreferencesProviderInput(preferences ?? createEmptyPreferences(novel)),
-          currentAssets: {
-            direction: projectCreativeAssetProviderInput(currentAssets.direction),
-            setting: action === 'setting_generate' ? null : projectCreativeAssetProviderInput(currentAssets.setting),
-            outline: action === 'setting_generate' || action === 'outline_generate' ? null : projectCreativeAssetProviderInput(currentAssets.outline),
-            stageOutline: action === 'chapter_plan_generate' ? projectCreativeAssetProviderInput(currentAssets.stageOutline) : null
-          }
-        };
-        if (objectType === 'setting') return executeNovelProviderAction(this.getProviderSet(), { ...input, action: 'setting_generate', objectType });
-        if (objectType === 'outline') return executeNovelProviderAction(this.getProviderSet(), { ...input, action: 'outline_generate', objectType });
-        if (objectType === 'stage_outline') return executeNovelProviderAction(this.getProviderSet(), { ...input, action: 'stage_outline_generate', objectType });
-        return executeNovelProviderAction(this.getProviderSet(), { ...input, action: 'chapter_plan_generate', objectType });
-      },
+      provider: (authoritativeInput) => executeNovelProviderAction(this.getProviderSet(), authoritativeInput as typeof providerBaseInput & { action: typeof action; objectType: typeof objectType }),
       finalize: (task, asset) => this.options.repository.createStructureCandidate({
         novel,
         task,
@@ -2003,7 +2117,7 @@ export class NovelService {
     request: AdoptStructureAssetRequest,
     context: RequestContext
   ): Promise<StructureActionResultDTO> {
-    const novel = await this.findNovelOrThrow(novelId);
+    const novel = await this.findNovelOrThrow(context.tenantId, novelId);
     this.ensureLifecycleActive(novel);
     await this.ensureStructureGenerationGate(novel, objectType);
 

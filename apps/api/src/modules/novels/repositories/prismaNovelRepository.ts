@@ -9,7 +9,7 @@ import {
   TaskStatus,
   VersionStatus,
   type StructureAssetContentDTO,
-  type ExecutionEnvelopeV1
+  type ExecutionEnvelope
 } from '@ai-shortvideo/shared';
 import { getPrismaClient } from '../../../infrastructure/database/prisma.js';
 import { Prisma } from '../../../generated/prisma/client.js';
@@ -38,6 +38,8 @@ import {
   type ChapterWorkbenchRecord,
   type ClaimGenerationTaskInput,
   type ClaimGenerationTaskResult,
+  type LoadGenerationAuthorityInput,
+  type GenerationAuthoritySnapshot,
   type HashedSafeResultReceipt,
   type LeasedTaskFailure,
   type ObservedTaskLease,
@@ -58,6 +60,8 @@ import {
   type CancelledTaskRecord,
   type GenerationTaskEventRecord,
   type GenerationTaskRecord,
+  type GenerationAuthorityFenceInput,
+  type GenerationAuthorityFenceResult,
   type ListedNovelRecords,
   type ListNovelRecordsQuery,
   type LongTermMemoryRecord,
@@ -97,7 +101,11 @@ import {
   type VideoReadinessSnapshotRecord,
   normalizeDraftRequest
 } from '../domain/novelDomain.js';
-import { verifyHashedSafeResultReceipt } from '../domain/executionContract.js';
+import {
+  matchGenerationAuthority,
+  validateExecutionEnvelopeV1_1ForTask,
+  verifyHashedSafeResultReceipt
+} from '../domain/executionContract.js';
 import {
   ImpactLevel as PrismaImpactLevel,
   NovelCreationStage as PrismaNovelCreationStage,
@@ -112,6 +120,24 @@ import {
 } from '../../../generated/prisma/enums.js';
 import { BusinessError } from '../../../shared/errors.js';
 
+class ClaimSourceStaleRollbackError extends Error {
+  constructor() {
+    super('claim authority changed before commit');
+    this.name = 'ClaimSourceStaleRollbackError';
+  }
+}
+function activeGenerationClaimWhere(input: ClaimGenerationTaskInput) {
+  return {
+    tenantId: input.tenantId, novelId: input.novelId, status: PrismaTaskStatus.PROCESSING,
+    activeClaimKey: { not: null },
+    ...(input.conflictScope === 'chapter' ? {
+      OR: [
+        { conflictScope: null }, { conflictScope: { not: 'chapter' } },
+        { conflictScope: 'chapter', conflictKey: input.conflictKey }
+      ]
+    } : {})
+  };
+}
 export class PrismaNovelRepository implements NovelRepository {
   private readonly prisma = getPrismaClient();
 
@@ -229,8 +255,8 @@ export class PrismaNovelRepository implements NovelRepository {
     };
   }
 
-  async findById(tenantId: string, novelId: string) {
-    const novel = await this.prisma.novel.findFirst({
+  async findById(tenantId: string, novelId: string, prisma: Prisma.TransactionClient = this.prisma) {
+    const novel = await prisma.novel.findFirst({
       where: {
         tenantId,
         id: novelId,
@@ -241,8 +267,8 @@ export class PrismaNovelRepository implements NovelRepository {
     return novel ? mapNovel(novel) : null;
   }
 
-  async findPreferencesByNovelId(tenantId: string, novelId: string) {
-    const preferences = await this.prisma.createNovelPreferences.findFirst({
+  async findPreferencesByNovelId(tenantId: string, novelId: string, prisma: Prisma.TransactionClient = this.prisma) {
+    const preferences = await prisma.createNovelPreferences.findFirst({
       where: {
         tenantId,
         novelId
@@ -337,10 +363,149 @@ export class PrismaNovelRepository implements NovelRepository {
     }
   }
 
+  async loadGenerationAuthority(
+    input: LoadGenerationAuthorityInput,
+    prisma: Prisma.TransactionClient = this.prisma
+  ): Promise<GenerationAuthoritySnapshot | null> {
+    const novel = await this.findById(input.tenantId, input.novelId, prisma);
+    if (!novel || novel.lifecycleStatus !== NovelLifecycleStatus.Active) return null;
+    const refs = authorityRecord(input.sourceVersionRefs);
+    const currentRefs = {
+      currentDirectionVersionId: novel.currentDirectionVersionId,
+      currentSettingVersionId: novel.currentSettingVersionId,
+      currentOutlineVersionId: novel.currentOutlineVersionId,
+      currentStageOutlineVersionId: novel.currentStageOutlineVersionId,
+      currentChapterPlanVersionId: novel.currentChapterPlanVersionId
+    };
+    for (const [key, value] of Object.entries(currentRefs)) if (key in refs && refs[key] !== value) return null;
+    const [preference, directions, structures, chapters] = await Promise.all([
+      this.findPreferencesByNovelId(input.tenantId, novel.id, prisma),
+      this.listDirectionVersions(input.tenantId, novel.id, prisma),
+      this.listStructureVersions(input.tenantId, novel.id, prisma),
+      this.listNovelChapters(input.tenantId, novel.id, prisma)
+    ]);
+    const versions = [...directions, ...structures];
+    const versionById = (id: unknown) => typeof id === 'string' ? versions.find((item) => item.id === id) ?? null : null;
+    const selectedIds = input.action === 'direction_fuse' || input.action === 'direction_optimize'
+      ? (Array.isArray(refs.sourceVersionIds) ? refs.sourceVersionIds : [])
+      : [refs.currentDirectionVersionId, refs.currentSettingVersionId, refs.currentOutlineVersionId, refs.currentStageOutlineVersionId, refs.currentChapterPlanVersionId];
+    const selectedVersions = selectedIds.map(versionById);
+    if (selectedVersions.some((item, index) => selectedIds[index] !== null && selectedIds[index] !== undefined && !item)) return null;
+    if ((input.action === 'direction_fuse' || input.action === 'direction_optimize') && selectedVersions.some((item) =>
+      !item || item.objectType !== 'direction' || item.status === VersionStatus.Discarded
+    )) return null;
+    if (input.action !== 'direction_fuse' && input.action !== 'direction_optimize'
+      && selectedVersions.some((item) => item && item.status !== VersionStatus.Current)) return null;
+    const chapter = chapters.find((item) => item.id === input.objectId) ?? null;
+    if (['chapter_body_generate', 'chapter_rewrite', 'chapter_impact_assess', 'chapter_adopt_impact_assess'].includes(input.action) && !chapter) return null;
+    if (chapter && 'currentContentVersionId' in refs && chapter.currentContentVersionId !== refs.currentContentVersionId) return null;
+    const candidateRefId = refs.candidateVersionId ?? refs.selectedChapterOneCandidateId;
+    const trialRunId = refs.trialRunId ?? (input.action === 'trial_followup_generate' ? input.objectId : null);
+    const [currentContent, candidate, trialRun] = await Promise.all([
+      typeof refs.currentContentVersionId === 'string' ? this.findChapterContentVersionById(input.tenantId, novel.id, refs.currentContentVersionId, prisma) : null,
+      typeof candidateRefId === 'string' ? this.findChapterContentVersionById(input.tenantId, novel.id, candidateRefId, prisma) : null,
+      typeof trialRunId === 'string' ? this.findTrialRunById(input.tenantId, novel.id, trialRunId, prisma) : null
+    ]);
+    if (refs.currentContentVersionId && (!currentContent || currentContent.chapterId !== chapter?.id)) return null;
+    if (refs.candidateVersionId && (!candidate || candidate.chapterId !== chapter?.id || candidate.status === VersionStatus.Discarded)) return null;
+    if (trialRunId && !trialRun) return null;
+    if (input.action === 'trial_followup_generate') {
+      if (
+        !trialRun
+        || trialRun.status !== 'waiting_chapter1_selection'
+        || typeof refs.selectedChapterOneCandidateId !== 'string'
+        || !candidate
+        || candidate.status === VersionStatus.Discarded
+        || authorityRecord(candidate.metadata).trialRunId !== trialRun.id
+      ) return null;
+    }
+    const orderedChapters = chapters
+      .sort((left, right) => left.chapterNo - right.chapterNo || left.id.localeCompare(right.id))
+      .map((item) => ({
+        id: item.id, chapterNo: item.chapterNo, title: item.title, wordTarget: item.wordTarget,
+        statusNote: item.statusNote, currentContentVersionId: item.currentContentVersionId,
+        currentFeatureCardVersionId: item.currentFeatureCardVersionId, currentReviewReportId: item.currentReviewReportId
+      }));
+    if (input.action === 'novel_full_review') {
+      const expected = Array.isArray(refs.chapterContentVersionIds) ? refs.chapterContentVersionIds : [];
+      const actual = orderedChapters.map((item) => ({
+        chapterId: item.id, chapterNo: item.chapterNo, currentContentVersionId: item.currentContentVersionId,
+        currentFeatureCardVersionId: item.currentFeatureCardVersionId, currentReviewReportId: item.currentReviewReportId
+      }));
+      if (JSON.stringify(expected) !== JSON.stringify(actual)) return null;
+    }
+    const loadedFullReviewContents = input.action === 'novel_full_review'
+      ? await Promise.all(orderedChapters.map((item) => this.findChapterContentVersionById(
+          input.tenantId, novel.id, item.currentContentVersionId!, prisma
+        )))
+      : [];
+    if (loadedFullReviewContents.some((item) => !item)) return null;
+    const fullReviewContents = loadedFullReviewContents.filter((item): item is ChapterContentVersionRecord => Boolean(item));
+    const strategy = typeof refs.strategySnapshotId === 'string'
+      ? await this.findStructureVersionById(input.tenantId, novel.id, 'body_strategy_snapshot', refs.strategySnapshotId, prisma)
+      : null;
+    if (typeof refs.strategySnapshotId === 'string' && (
+      !strategy
+      || strategy.versionNo !== refs.strategySnapshotVersion
+      || strategy.status === VersionStatus.Discarded
+    )) return null;
+    const normalizedRequest = authorityRecord(input.normalizedRequest);
+    const authorityChapters = input.action === 'trial_followup_generate'
+      ? orderedChapters.slice(0, trialRun?.trialChapterCount ?? 0)
+      : orderedChapters;
+    const bodyAuthority = input.action === 'body_batch_generate' || input.action === 'chapter_body_generate';
+    const bodyStartChapterNo = input.action === 'body_batch_generate'
+      ? Number(normalizedRequest.startChapter)
+      : chapter?.chapterNo;
+    const previousChapter = bodyAuthority && Number.isInteger(bodyStartChapterNo)
+      ? orderedChapters.filter((item) => item.chapterNo < Number(bodyStartChapterNo)).at(-1)
+      : null;
+    const [bodyPreviousContent, bodyPreviousMemory, bodyPreviousBatch] = await Promise.all([
+      previousChapter?.currentContentVersionId
+        ? this.findChapterContentVersionById(input.tenantId, novel.id, previousChapter.currentContentVersionId, prisma)
+        : null,
+      bodyAuthority ? this.findLatestLongTermMemory(input.tenantId, novel.id, null, prisma) : null,
+      bodyAuthority ? this.findLatestBodyBatch(input.tenantId, novel.id, prisma) : null
+    ]);
+    return {
+      action: input.action,
+      tenantId: input.tenantId,
+      novelId: novel.id,
+      objectId: input.objectId,
+      facts: {
+        novel: {
+          id: novel.id, title: novel.title, genres: [...novel.genres].sort(), chapterLimit: novel.chapterLimit,
+          chapterWordMin: novel.chapterWordMin, chapterWordMax: novel.chapterWordMax,
+          policyProfileVersionId: novel.policyProfileVersionId
+        },
+        preferences: preference ? {
+          appealPoints: preference.appealPoints.map((item) => item.trim()).filter(Boolean).sort(), targetAudience: preference.targetAudience, stageCount: preference.stageCount
+        } : null,
+        currentRefs,
+        versions: selectedVersions.filter(Boolean),
+        chapter: chapter ? orderedChapters.find((item) => item.id === chapter.id) : null,
+        chapters: ['trial_chapter_one_generate', 'trial_followup_generate', 'body_batch_generate', 'novel_full_review'].includes(input.action) ? authorityChapters : [],
+        currentContent,
+        candidate,
+        trialRun,
+        strategy,
+        bodyPreviousContent,
+        bodyPreviousMemory,
+        bodyPreviousBatch,
+        fullReviewContents,
+        bodyPreviousBatchNotes: bodyPreviousBatch?.summary.nextBatchNotes ?? []
+      }
+    };
+  }
   async claimGenerationTask(input: ClaimGenerationTaskInput): Promise<ClaimGenerationTaskResult> {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
         return await this.prisma.$transaction(async (tx) => {
+          await lockGenerationAuthority(tx, input.authorityInput);
+          const authority = await this.loadGenerationAuthority(input.authorityInput, tx);
+          if (!matchGenerationAuthority(input.authorityInput, input.expectedAuthoritySnapshotHash, authority).ok) {
+            return { outcome: 'source_stale' as const, task: null };
+          }
           const idempotentTask = await tx.generationTask.findFirst({
             where: {
               tenantId: input.tenantId,
@@ -356,7 +521,7 @@ export class PrismaNovelRepository implements NovelRepository {
           }
 
           const activeTask = await tx.generationTask.findFirst({
-            where: { tenantId: input.tenantId, activeClaimKey: input.activeClaimKey }
+            where: activeGenerationClaimWhere(input)
           });
           if (activeTask) return { outcome: 'active_conflict', task: mapGenerationTask(activeTask) };
 
@@ -400,11 +565,23 @@ export class PrismaNovelRepository implements NovelRepository {
             requestId: input.context.requestId,
             createdAt: input.now
           });
+          await input.afterClaimBarrier?.();
+          const commitAuthority = await this.loadGenerationAuthority(input.authorityInput, tx);
+          if (!matchGenerationAuthority(input.authorityInput, input.expectedAuthoritySnapshotHash, commitAuthority).ok) {
+            throw new ClaimSourceStaleRollbackError();
+          }
           return { outcome: 'created', task: mapGenerationTask(task) };
         });
       } catch (error) {
+        if (error instanceof ClaimSourceStaleRollbackError) {
+          return { outcome: 'source_stale', task: null };
+        }
         if (!isPrismaUniqueConstraintError(error)) throw error;
 
+        const authority = await this.loadGenerationAuthority(input.authorityInput);
+        if (!matchGenerationAuthority(input.authorityInput, input.expectedAuthoritySnapshotHash, authority).ok) {
+          return { outcome: 'source_stale', task: null };
+        }
         const idempotentTask = await this.prisma.generationTask.findFirst({
           where: {
             tenantId: input.tenantId,
@@ -420,7 +597,7 @@ export class PrismaNovelRepository implements NovelRepository {
         }
 
         const activeTask = await this.prisma.generationTask.findFirst({
-          where: { tenantId: input.tenantId, activeClaimKey: input.activeClaimKey }
+          where: activeGenerationClaimWhere(input)
         });
         if (activeTask) return { outcome: 'active_conflict', task: mapGenerationTask(activeTask) };
         if (attempt === 1) {
@@ -434,6 +611,61 @@ export class PrismaNovelRepository implements NovelRepository {
     throw new BusinessError(ErrorCode.InternalError, '生成任务 claim 未返回结果。');
   }
 
+  async fenceGenerationAuthority(input: GenerationAuthorityFenceInput): Promise<GenerationAuthorityFenceResult> {
+    return this.prisma.$transaction(async (tx) => {
+      await lockGenerationAuthority(tx, input.authorityInput);
+      await tx.$queryRaw(
+        Prisma.sql`SELECT id FROM generation_task WHERE tenant_id = ${input.tenantId} AND id = ${input.taskId} FOR UPDATE`
+      );
+      const current = await tx.generationTask.findFirst({
+        where: { id: input.taskId, tenantId: input.tenantId }
+      });
+      if (!current || current.status !== PrismaTaskStatus.PROCESSING) {
+        return { outcome: 'task_not_writable' as const, task: current ? mapGenerationTask(current) : null };
+      }
+      const authority = await this.loadGenerationAuthority(input.authorityInput, tx);
+      if (!matchGenerationAuthority(input.authorityInput, input.expectedAuthoritySnapshotHash, authority).ok) {
+        const failed = await tx.generationTask.update({
+          where: { id: current.id, tenantId: input.tenantId },
+          data: {
+            status: PrismaTaskStatus.FAILED,
+            statusNote: '生成来源已变化，模型结果已安全丢弃。',
+            currentStep: '生成来源已变化',
+            failureCategory: 'source_stale',
+            errorCode: 'SOURCE_STALE',
+            errorMessage: '生成来源已变化，请刷新后重试。',
+            activeClaimKey: null,
+            finishedAt: input.now,
+            updatedAt: input.now
+          }
+        });
+        await createTaskEvent(tx, {
+          task: failed,
+          eventType: 'failed',
+          message: '生成来源已变化，请刷新后重试。',
+          progress: failed.progress,
+          requestId: input.context.requestId,
+          createdAt: input.now
+        });
+        return { outcome: 'source_stale' as const, task: mapGenerationTask(failed) };
+      }
+      if (input.phase === 'prepare') return { outcome: 'authorized' as const, task: mapGenerationTask(current) };
+      const authorized = await tx.generationTask.update({
+        where: { id: current.id, tenantId: input.tenantId },
+        data: input.phase === 'provider_dispatch'
+          ? {
+              providerAttemptPhase: PrismaProviderAttemptPhase.PROVIDER_CALL_STARTED,
+              providerDispatchedAt: input.now,
+              updatedAt: input.now
+            }
+          : {
+              providerAttemptPhase: PrismaProviderAttemptPhase.FINALIZING,
+              updatedAt: input.now
+            }
+      });
+      return { outcome: 'authorized' as const, task: mapGenerationTask(authorized) };
+    });
+  }
   async leaseNextQueuedTask(workerId: string, leaseToken: string, now: Date, leaseUntil: Date) {
     if (leaseUntil.getTime() <= now.getTime()) return null;
     for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -443,25 +675,23 @@ export class PrismaNovelRepository implements NovelRepository {
           orderBy: [{ createdAt: 'asc' }, { id: 'asc' }]
         });
         if (!candidate) return { kind: 'empty' as const };
-        if (!candidate.executionEnvelopeJson) {
-          const failed = await tx.generationTask.updateMany({
-            where: { id: candidate.id, tenantId: candidate.tenantId, status: PrismaTaskStatus.QUEUED, executionEnvelopeJson: { equals: Prisma.DbNull } },
+        try {
+          validateExecutionEnvelopeV1_1ForTask(mapGenerationTask(candidate));
+        } catch {
+          await tx.generationTask.updateMany({
+            where: { id: candidate.id, tenantId: candidate.tenantId, status: PrismaTaskStatus.QUEUED, leaseOwnerId: null, leaseToken: null },
             data: {
               status: PrismaTaskStatus.FAILED,
-              statusNote: '旧任务缺少可恢复执行合同，已安全失败。',
+              statusNote: '任务执行合同或可信身份无效，已安全失败。',
               currentStep: 'failed',
               failureCategory: 'worker_payload_unsupported',
               errorCode: 'WORKER_PAYLOAD_UNSUPPORTED',
-              errorMessage: 'Execution envelope is missing.',
+              errorMessage: 'Execution envelope V1.1 or trusted audit actor is invalid.',
               activeClaimKey: null,
               finishedAt: now,
               updatedAt: now
             }
           });
-          if (failed.count === 1) {
-            const task = await tx.generationTask.findFirstOrThrow({ where: { id: candidate.id, tenantId: candidate.tenantId } });
-            await createTaskEvent(tx, { task, eventType: 'task_failed', message: task.statusNote ?? 'Legacy task failed.', progress: task.progress, requestId: 'worker-legacy-envelope', createdAt: now });
-          }
           return { kind: 'retry' as const };
         }
         const providerAttemptId = randomUUID();
@@ -555,6 +785,11 @@ export class PrismaNovelRepository implements NovelRepository {
         leaseOwnerId: observed.leaseOwnerId, leaseToken: observed.leaseToken, leaseExpiresAt: observed.leaseExpiresAt
       } });
       if (!current || current.leaseExpiresAt === null || current.leaseExpiresAt.getTime() > authoritativeNow.getTime()) return { outcome: 'not_recovered' as const, task: null };
+      try {
+        validateExecutionEnvelopeV1_1ForTask(mapGenerationTask(current));
+      } catch {
+        return { outcome: 'not_recovered' as const, task: null };
+      }
       const dispatched = current.providerDispatchedAt !== null;
       const failure = {
         failureCategory: dispatched ? 'provider_outcome_unknown' : 'worker_lease_expired',
@@ -595,8 +830,8 @@ export class PrismaNovelRepository implements NovelRepository {
     return task ? mapGenerationTask(task) : null;
   }
 
-  async listDirectionVersions(tenantId: string, novelId: string) {
-    const versions = await this.prisma.creativeVersion.findMany({
+  async listDirectionVersions(tenantId: string, novelId: string, prisma: Prisma.TransactionClient = this.prisma) {
+    const versions = await prisma.creativeVersion.findMany({
       where: {
         tenantId,
         novelId,
@@ -610,8 +845,8 @@ export class PrismaNovelRepository implements NovelRepository {
     return versions.map(mapCreativeVersion);
   }
 
-  async listStructureVersions(tenantId: string, novelId: string) {
-    const versions = await this.prisma.creativeVersion.findMany({
+  async listStructureVersions(tenantId: string, novelId: string, prisma: Prisma.TransactionClient = this.prisma) {
+    const versions = await prisma.creativeVersion.findMany({
       where: {
         tenantId,
         novelId,
@@ -640,8 +875,8 @@ export class PrismaNovelRepository implements NovelRepository {
     return versions.map(mapCreativeVersion);
   }
 
-  async listNovelChapters(tenantId: string, novelId: string) {
-    const chapters = await this.prisma.novelChapter.findMany({
+  async listNovelChapters(tenantId: string, novelId: string, prisma: Prisma.TransactionClient = this.prisma) {
+    const chapters = await prisma.novelChapter.findMany({
       where: {
         tenantId,
         novelId,
@@ -657,6 +892,7 @@ export class PrismaNovelRepository implements NovelRepository {
 
   async createDirectionCandidates(input: DirectionCreationInput): Promise<CreatedDirectionCandidatesRecord> {
     return this.prisma.$transaction(async (tx) => {
+      await assertNoActiveAuthorityClaim(tx, input.context.tenantId, input.novel.id, input.task);
       const task = await transitionClaimedTask(tx, {
         taskId: input.task.id,
         tenantId: input.context.tenantId,
@@ -742,6 +978,7 @@ export class PrismaNovelRepository implements NovelRepository {
 
   async createDirectionRevision(input: DirectionRevisionInput): Promise<CreatedDirectionRevisionRecord> {
     return this.prisma.$transaction(async (tx) => {
+      await assertNoActiveAuthorityClaim(tx, input.context.tenantId, input.novel.id, input.task);
       const task = input.task
         ? await transitionClaimedTask(tx, {
             taskId: input.task.id,
@@ -834,6 +1071,7 @@ export class PrismaNovelRepository implements NovelRepository {
 
   async adoptDirection(input: DirectionAdoptionInput): Promise<AdoptedDirectionRecord> {
     return this.prisma.$transaction(async (tx) => {
+      await assertNoActiveAuthorityClaim(tx, input.context.tenantId, input.novel.id);
       const currentVersionIdBefore = input.novel.currentDirectionVersionId;
       const decisionRecord = await tx.assetDecisionRecord.create({
         data: {
@@ -997,6 +1235,7 @@ export class PrismaNovelRepository implements NovelRepository {
 
   async createStructureCandidate(input: StructureCreationInput): Promise<CreatedStructureAssetRecord> {
     return this.prisma.$transaction(async (tx) => {
+      await assertNoActiveAuthorityClaim(tx, input.context.tenantId, input.novel.id, input.task);
       const task = input.task
         ? await transitionClaimedTask(tx, {
             taskId: input.task.id,
@@ -1155,8 +1394,8 @@ export class PrismaNovelRepository implements NovelRepository {
     });
   }
 
-  async findStructureVersionById(tenantId: string, novelId: string, objectType: string, versionId: string) {
-    const version = await this.prisma.creativeVersion.findFirst({
+  async findStructureVersionById(tenantId: string, novelId: string, objectType: string, versionId: string, prisma: Prisma.TransactionClient = this.prisma) {
+    const version = await prisma.creativeVersion.findFirst({
       where: {
         id: versionId,
         tenantId,
@@ -1170,6 +1409,7 @@ export class PrismaNovelRepository implements NovelRepository {
 
   async adoptStructureAsset(input: StructureAdoptionInput): Promise<AdoptedStructureAssetRecord> {
     return this.prisma.$transaction(async (tx) => {
+      await assertNoActiveAuthorityClaim(tx, input.context.tenantId, input.novel.id);
       const currentVersionIdBefore = getCurrentVersionId(input.novel, input.objectType);
       const downstream = getDownstreamObjectTypes(input.objectType);
       const decisionRecord = await tx.assetDecisionRecord.create({
@@ -1350,6 +1590,7 @@ export class PrismaNovelRepository implements NovelRepository {
     }
 
     await this.prisma.$transaction(async (tx) => {
+      await assertNoActiveAuthorityClaim(tx, input.context.tenantId, input.novel.id);
       const currentAsset = await tx.creativeVersion.findFirst({
         where: {
           id: currentPlanId,
@@ -1565,8 +1806,8 @@ export class PrismaNovelRepository implements NovelRepository {
     return run ? mapTrialRun(run) : null;
   }
 
-  async findTrialRunById(tenantId: string, novelId: string, trialRunId: string) {
-    const run = await this.prisma.trialRun.findFirst({
+  async findTrialRunById(tenantId: string, novelId: string, trialRunId: string, prisma: Prisma.TransactionClient = this.prisma) {
+    const run = await prisma.trialRun.findFirst({
       where: { tenantId, novelId, id: trialRunId }
     });
 
@@ -1591,8 +1832,8 @@ export class PrismaNovelRepository implements NovelRepository {
     return versions.map(mapChapterContentVersion);
   }
 
-  async findChapterContentVersionById(tenantId: string, novelId: string, versionId: string) {
-    const version = await this.prisma.chapterContentVersion.findFirst({
+  async findChapterContentVersionById(tenantId: string, novelId: string, versionId: string, prisma: Prisma.TransactionClient = this.prisma) {
+    const version = await prisma.chapterContentVersion.findFirst({
       where: { tenantId, novelId, id: versionId }
     });
 
@@ -1639,6 +1880,7 @@ export class PrismaNovelRepository implements NovelRepository {
 
   async createTrialChapterOneCandidates(input: TrialCandidateCreationInput): Promise<CreatedTrialCandidatesRecord> {
     return this.prisma.$transaction(async (tx) => {
+      await assertNoActiveAuthorityClaim(tx, input.context.tenantId, input.novel.id, input.task);
       const trialRunId = createId('trial');
       const task = await transitionClaimedTask(tx, {
         taskId: input.task.id,
@@ -1815,7 +2057,6 @@ export class PrismaNovelRepository implements NovelRepository {
           status: PrismaTaskStatus.PROCESSING,
           statusNote: '正在调用模型继续试写第2-3章并生成试写总评，可能需要 1-3 分钟，可以稍后回来查看。',
           progress: 18,
-          sourceVersionRefs: toJsonObject(sourceVersionRefs),
           resultVersionId: input.selectedCandidate.id,
           resultObjectType: 'trial_run',
           resultObjectId: input.trialRun.id,
@@ -1867,6 +2108,7 @@ export class PrismaNovelRepository implements NovelRepository {
 
   async selectTrialChapterOneAndGenerateFollowup(input: TrialFollowupGenerationInput): Promise<GeneratedTrialFollowupRecord> {
     return this.prisma.$transaction(async (tx) => {
+      await assertNoActiveAuthorityClaim(tx, input.context.tenantId, input.novel.id, input.task);
       const selectedMetadata = { ...toRecord(input.selectedCandidate.metadata), trialStatus: 'selected_for_trial', isSelected: true, followupStatus: 'completed' };
       const selected = await tx.chapterContentVersion.update({
         where: { id: input.selectedCandidate.id },
@@ -1920,7 +2162,6 @@ export class PrismaNovelRepository implements NovelRepository {
           statusNote: '模型服务已生成试写结果，等待用户确认。',
           progress: 100,
           currentStep: input.review.trialResult === 'blocked' ? '第2章硬门槛未通过，试写暂停' : '前三章试写总评已生成，等待确认',
-          sourceVersionRefs: toJsonObject(sourceVersionRefs),
           activeClaimKey: null,
           updatedAt: input.now
         }
@@ -2128,6 +2369,7 @@ export class PrismaNovelRepository implements NovelRepository {
 
   async confirmTrial(input: TrialConfirmationInput): Promise<ConfirmedTrialRecord> {
     return this.prisma.$transaction(async (tx) => {
+      await assertNoActiveAuthorityClaim(tx, input.context.tenantId, input.novel.id);
       const isReturnUpstream = input.decision === 'return_upstream';
       let snapshot: any = null;
       if (!isReturnUpstream) {
@@ -2346,8 +2588,25 @@ export class PrismaNovelRepository implements NovelRepository {
     };
   }
 
-  async findLatestBodyBatch(_tenantId: string, _novelId: string): Promise<BodyBatchRecord | null> {
-    return null;
+  async findLatestBodyBatch(
+    tenantId: string,
+    novelId: string,
+    prisma: Prisma.TransactionClient = this.prisma
+  ): Promise<BodyBatchRecord | null> {
+    const tasks = await prisma.generationTask.findMany({
+      where: {
+        tenantId,
+        novelId,
+        taskType: 'body_batch_generate',
+        resultObjectType: 'body_batch'
+      },
+      orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
+      select: { metadata: true }
+    });
+    return tasks
+      .map((task) => bodyBatchFromTaskMetadata(task.metadata, tenantId, novelId))
+      .filter((batch): batch is BodyBatchRecord => batch !== null)
+      .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime() || right.id.localeCompare(left.id))[0] ?? null;
   }
 
   async findBodyBatchByIdempotencyKey(_tenantId: string, _novelId: string, _idempotencyKey: string): Promise<BodyBatchRecord | null> {
@@ -2385,8 +2644,13 @@ export class PrismaNovelRepository implements NovelRepository {
     return impactCase ? mapImpactCase(impactCase) : null;
   }
 
-  async findLatestLongTermMemory(tenantId: string, novelId: string, chapterId?: string | null): Promise<LongTermMemoryRecord | null> {
-    const memory = await this.prisma.longTermMemory.findFirst({
+  async findLatestLongTermMemory(
+    tenantId: string,
+    novelId: string,
+    chapterId?: string | null,
+    prisma: Prisma.TransactionClient = this.prisma
+  ): Promise<LongTermMemoryRecord | null> {
+    const memory = await prisma.longTermMemory.findFirst({
       where: {
         tenantId,
         novelId,
@@ -2494,6 +2758,55 @@ export class PrismaNovelRepository implements NovelRepository {
   }
 }
 
+async function lockGenerationAuthority(tx: Prisma.TransactionClient, input: LoadGenerationAuthorityInput) {
+  const lock = (table: string) => tx.$queryRaw(
+    Prisma.sql`SELECT id FROM ${Prisma.raw(table)} WHERE tenant_id = ${input.tenantId} AND novel_id = ${input.novelId} FOR UPDATE`
+  );
+  await tx.$queryRaw(
+    Prisma.sql`SELECT id FROM novel WHERE tenant_id = ${input.tenantId} AND id = ${input.novelId} FOR UPDATE`
+  );
+  await tx.$queryRaw(
+    Prisma.sql`SELECT id FROM create_novel_preferences WHERE tenant_id = ${input.tenantId} AND novel_id = ${input.novelId} FOR UPDATE`
+  );
+  await lock('creative_version');
+  await lock('novel_chapter');
+  await lock('chapter_content_version');
+  await lock('trial_run');
+  await lock('long_term_memory');
+  await lock('generation_task');
+}
+async function assertNoActiveAuthorityClaim(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  novelId: string,
+  allowedTask?: Pick<GenerationTaskRecord, 'id' | 'conflictScope' | 'conflictKey'>
+) {
+  // The novel row is the shared lock root for claim, fences, finalizers, and authority-changing user writes.
+  await tx.$queryRaw(
+    Prisma.sql`SELECT id FROM novel WHERE tenant_id = ${tenantId} AND id = ${novelId} FOR UPDATE`
+  );
+  const activeTask = await tx.generationTask.findFirst({
+    where: {
+      tenantId,
+      novelId,
+      status: PrismaTaskStatus.PROCESSING,
+      activeClaimKey: { not: null },
+      ...(allowedTask ? { id: { not: allowedTask.id } } : {}),
+      ...(allowedTask?.conflictScope === 'chapter' ? {
+        OR: [
+          { conflictScope: { not: 'chapter' } },
+          { conflictScope: null },
+          { conflictScope: 'chapter', conflictKey: allowedTask.conflictKey }
+        ]
+      } : {})
+    }
+  });
+  if (!activeTask) return;
+  throw new BusinessError(ErrorCode.ConflictTaskExists, '小说权威来源正在被生成任务使用，请等待任务结束或先取消任务。', {
+    taskId: activeTask.id,
+    taskType: activeTask.taskType
+  });
+}
 function createId(prefix: string) {
   return `${prefix}_${randomUUID().replace(/-/g, '').slice(0, 20)}`;
 }
@@ -2881,7 +3194,7 @@ function mapGenerationTask(task: {
     lastHeartbeatAt: task.lastHeartbeatAt,
     retryCount: task.retryCount,
     maxRetries: task.maxRetries,
-    executionEnvelopeJson: task.executionEnvelopeJson as ExecutionEnvelopeV1 | null,
+    executionEnvelopeJson: task.executionEnvelopeJson as ExecutionEnvelope | null,
     providerAttemptId: task.providerAttemptId,
     providerAttemptPhase: task.providerAttemptPhase ? fromPrismaEnum(task.providerAttemptPhase) : null,
     providerDispatchedAt: task.providerDispatchedAt,
@@ -3868,6 +4181,78 @@ function toDirectionContent(value: unknown) {
   };
 }
 
+function bodyBatchFromTaskMetadata(metadata: unknown, tenantId: string, novelId: string): BodyBatchRecord | null {
+  try {
+    const batch = requiredRecord(requiredRecord(metadata, 'metadata').batch, 'metadata.batch');
+    if (requiredString(batch.tenantId, 'batch.tenantId') !== tenantId || requiredString(batch.novelId, 'batch.novelId') !== novelId) return null;
+    const chapterResults = requiredArray(batch.chapterResults, 'batch.chapterResults').map((value, index) => {
+      const row = requiredRecord(value, `batch.chapterResults[${index}]`);
+      return {
+        chapterId: requiredString(row.chapterId, 'chapterId'),
+        chapterNo: requiredInteger(row.chapterNo, 'chapterNo'),
+        title: requiredString(row.title, 'title'),
+        status: requiredOneOf(row.status, ['completed', 'failed', 'pending'] as const, 'status'),
+        statusText: requiredString(row.statusText, 'statusText'),
+        contentVersionId: nullableString(row.contentVersionId, 'contentVersionId'),
+        featureCardId: nullableString(row.featureCardId, 'featureCardId'),
+        reviewReportId: nullableString(row.reviewReportId, 'reviewReportId'),
+        longTermMemoryId: nullableString(row.longTermMemoryId, 'longTermMemoryId'),
+        score: nullableNumber(row.score, 'score'),
+        riskLevel: requiredOneOf(row.riskLevel, Object.values(RiskLevel), 'riskLevel'),
+        hardFailed: requiredBoolean(row.hardFailed, 'hardFailed'),
+        statusNote: nullableString(row.statusNote, 'statusNote'),
+        recommendedAction: requiredString(row.recommendedAction, 'recommendedAction')
+      };
+    });
+    const summary = requiredRecord(batch.summary, 'batch.summary');
+    if (JSON.stringify(requiredArray(summary.chapterResults, 'batch.summary.chapterResults')) !== JSON.stringify(batch.chapterResults)) return null;
+    return {
+      id: requiredString(batch.id, 'batch.id'),
+      tenantId,
+      novelId,
+      taskId: requiredString(batch.taskId, 'batch.taskId'),
+      idempotencyKey: requiredString(batch.idempotencyKey, 'batch.idempotencyKey'),
+      requestFingerprint: structuredClone(batch.requestFingerprint),
+      strategySnapshotId: requiredString(batch.strategySnapshotId, 'batch.strategySnapshotId'),
+      strategySnapshotVersion: requiredInteger(batch.strategySnapshotVersion, 'batch.strategySnapshotVersion'),
+      sourceVersionRefs: structuredClone(batch.sourceVersionRefs),
+      startChapterNo: requiredInteger(batch.startChapterNo, 'batch.startChapterNo'),
+      endChapterNo: requiredInteger(batch.endChapterNo, 'batch.endChapterNo'),
+      status: requiredOneOf(batch.status, ['completed', 'paused', 'cancelled'] as const, 'batch.status'),
+      statusNote: nullableString(batch.statusNote, 'batch.statusNote'),
+      completedCount: requiredInteger(batch.completedCount, 'batch.completedCount'),
+      failedCount: requiredInteger(batch.failedCount, 'batch.failedCount'),
+      pendingCount: requiredInteger(batch.pendingCount, 'batch.pendingCount'),
+      failedChapterNo: nullableInteger(batch.failedChapterNo, 'batch.failedChapterNo'),
+      chapterResults,
+      summary: {
+        id: requiredString(summary.id, 'batch.summary.id'),
+        batchId: requiredString(summary.batchId, 'batch.summary.batchId'),
+        conclusion: requiredString(summary.conclusion, 'batch.summary.conclusion'),
+        chapterResults,
+        riskTrend: requiredString(summary.riskTrend, 'batch.summary.riskTrend'),
+        nextBatchNotes: requiredStringArray(summary.nextBatchNotes, 'batch.summary.nextBatchNotes'),
+        riskChapterIds: requiredStringArray(summary.riskChapterIds, 'batch.summary.riskChapterIds'),
+        createdAt: requiredDate(summary.createdAt, 'batch.summary.createdAt')
+      },
+      createdAt: requiredDate(batch.createdAt, 'batch.createdAt'),
+      metadata: structuredClone(batch.metadata)
+    };
+  } catch {
+    return null;
+  }
+}
+function requiredRecord(value: unknown, path: string): Record<string, unknown> { if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError(`${path} must be an object`); return value as Record<string, unknown>; }
+function requiredArray(value: unknown, path: string): unknown[] { if (!Array.isArray(value)) throw new TypeError(`${path} must be an array`); return value; }
+function requiredString(value: unknown, path: string): string { if (typeof value !== 'string' || !value) throw new TypeError(`${path} must be a string`); return value; }
+function nullableString(value: unknown, path: string): string | null { return value === null ? null : requiredString(value, path); }
+function requiredInteger(value: unknown, path: string): number { if (!Number.isInteger(value) || (value as number) < 0) throw new TypeError(`${path} must be a non-negative integer`); return value as number; }
+function nullableInteger(value: unknown, path: string): number | null { return value === null ? null : requiredInteger(value, path); }
+function nullableNumber(value: unknown, path: string): number | null { if (value === null) return null; if (typeof value !== 'number' || !Number.isFinite(value)) throw new TypeError(`${path} must be a number`); return value; }
+function requiredBoolean(value: unknown, path: string): boolean { if (typeof value !== 'boolean') throw new TypeError(`${path} must be a boolean`); return value; }
+function requiredStringArray(value: unknown, path: string): string[] { return requiredArray(value, path).map((item, index) => requiredString(item, `${path}[${index}]`)); }
+function requiredDate(value: unknown, path: string): Date { const date = value instanceof Date ? new Date(value) : new Date(requiredString(value, path)); if (Number.isNaN(date.getTime())) throw new TypeError(`${path} must be a date`); return date; }
+function requiredOneOf<T extends string>(value: unknown, values: readonly T[], path: string): T { if (typeof value !== 'string' || !values.includes(value as T)) throw new TypeError(`${path} is unsupported`); return value as T; }
 function toJsonObject(value: unknown): Prisma.InputJsonObject {
   return JSON.parse(JSON.stringify(value ?? {})) as Prisma.InputJsonObject;
 }
@@ -3884,6 +4269,9 @@ function toRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' ? value as Record<string, unknown> : {};
 }
 
+function authorityRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
 function countWords(content: string) {
   return content.replace(/\s/g, '').length;
 }
