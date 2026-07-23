@@ -33,6 +33,7 @@ jobs:
       pr_base_ref: ${{ steps.evidence.outputs.pr_base_ref }}
       pr_base_sha: ${{ steps.evidence.outputs.pr_base_sha }}
       pr_head_sha: ${{ steps.evidence.outputs.pr_head_sha }}
+      policy_source_sha: ${{ steps.evidence.outputs.policy_source_sha }}
       gate_source_sha: ${{ steps.evidence.outputs.gate_source_sha }}
       g0_evidence_sha: ${{ steps.evidence.outputs.g0_evidence_sha }}
       g0_evidence_digest: ${{ steps.evidence.outputs.g0_evidence_digest }}
@@ -42,13 +43,14 @@ jobs:
       package_id: ${{ steps.evidence.outputs.package_id }}
       manifest_digest: ${{ steps.evidence.outputs.manifest_digest }}
       test_command: ${{ steps.evidence.outputs.test_command }}
+      admission_kind: ${{ steps.evidence.outputs.admission_kind }}
     steps:
       # Only repository-controlled trusted code is materialized before admission succeeds.
-      - name: Checkout trusted gate source
+      - name: Checkout trusted policy source
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           repository: ${{ github.repository }}
-          ref: ${{ vars.RP02B2A_GATE_SOURCE_SHA }}
+          ref: ${{ vars.RP02B2A_POLICY_SOURCE_SHA }}
           path: trusted
           fetch-depth: 0
           persist-credentials: false
@@ -72,6 +74,7 @@ jobs:
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          POLICY_SOURCE_SHA: ${{ vars.RP02B2A_POLICY_SOURCE_SHA }}
           GATE_SOURCE_SHA: ${{ vars.RP02B2A_GATE_SOURCE_SHA }}
           G0_EVIDENCE_SHA: ${{ vars.RP02B2A_G0_EVIDENCE_SHA }}
           AUTHORIZED_PACKAGE_ID: ${{ vars.RP02B2A_AUTHORIZED_PACKAGE_ID }}
@@ -105,17 +108,18 @@ jobs:
             exit 1
           }
           require_sha "workflow SHA" "$WORKFLOW_SHA"
-          require_sha "gate source SHA" "$GATE_SOURCE_SHA"
-          require_sha "G0 evidence SHA" "$G0_EVIDENCE_SHA"
+          require_sha "policy source SHA" "$POLICY_SOURCE_SHA"
           require_sha "pull request base SHA" "$PR_BASE_SHA"
           require_sha "pull request head SHA" "$PR_HEAD_SHA"
-          require_sha "authorized predecessor SHA" "$AUTHORIZED_PREDECESSOR_SHA"
-          [[ "$AUTHORIZED_PACKAGE_ID" =~ ^RP-02B2a[2-5]$ ]] || {
+          [[ -z "$GATE_SOURCE_SHA" ]] || require_sha "gate source SHA" "$GATE_SOURCE_SHA"
+          [[ -z "$G0_EVIDENCE_SHA" ]] || require_sha "G0 evidence SHA" "$G0_EVIDENCE_SHA"
+          [[ -z "$AUTHORIZED_PREDECESSOR_SHA" ]] || require_sha "authorized predecessor SHA" "$AUTHORIZED_PREDECESSOR_SHA"
+          [[ -z "$AUTHORIZED_PACKAGE_ID" || "$AUTHORIZED_PACKAGE_ID" =~ ^RP-02B2a[2-5]$ ]] || {
             echo "authorized package ID must select RP-02B2a2 through RP-02B2a5" >&2
             exit 1
           }
-          [[ "$GATE_SOURCE_SHA" != "0cfcbd19bb998bd84faa72cf4549eca17e5ab190" && "$G0_EVIDENCE_SHA" != "3ad4c16be3053aeacc84144cbfe954da328b453a" && "$(git -C trusted rev-parse HEAD)" == "$GATE_SOURCE_SHA" ]] || {
-            echo "trusted checkout does not match RP02B2A_GATE_SOURCE_SHA or references a revoked G0 lineage" >&2
+          [[ "$GATE_SOURCE_SHA" != "0cfcbd19bb998bd84faa72cf4549eca17e5ab190" && "$G0_EVIDENCE_SHA" != "3ad4c16be3053aeacc84144cbfe954da328b453a" && "$(git -C trusted rev-parse HEAD)" == "$POLICY_SOURCE_SHA" ]] || {
+            echo "trusted checkout does not match RP02B2A_POLICY_SOURCE_SHA or references a revoked G0 lineage" >&2
             exit 1
           }
 
@@ -159,6 +163,7 @@ jobs:
             echo "pr_base_ref=$PR_BASE_REF"
             echo "pr_base_sha=$PR_BASE_SHA"
             echo "candidate_sha=$PR_HEAD_SHA"
+            echo "policy_source_sha=$POLICY_SOURCE_SHA"
             echo "gate_source_sha=$GATE_SOURCE_SHA"
             echo "g0_evidence_sha=$G0_EVIDENCE_SHA"
             echo "authorized_package_id=$AUTHORIZED_PACKAGE_ID"
@@ -173,6 +178,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           WORKFLOW_PATH: ${{ steps.context.outputs.workflow_path }}
           WORKFLOW_SHA: ${{ steps.context.outputs.workflow_sha }}
+          POLICY_SOURCE_SHA: ${{ steps.context.outputs.policy_source_sha }}
           GATE_SOURCE_SHA: ${{ steps.context.outputs.gate_source_sha }}
           G0_EVIDENCE_SHA: ${{ steps.context.outputs.g0_evidence_sha }}
           PR_NUMBER: ${{ steps.context.outputs.pr_number }}
@@ -193,8 +199,11 @@ jobs:
           export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth_header"
           git fetch --no-tags --no-recurse-submodules origin \
             "+refs/pull/${PR_NUMBER}/head:refs/remotes/origin/rp02b2a-candidate"
-          git fetch --no-tags --no-recurse-submodules origin \
-            "$WORKFLOW_SHA" "$PR_BASE_SHA" "$G0_EVIDENCE_SHA" "$AUTHORIZED_PREDECESSOR_SHA"
+          trusted_refs=("$WORKFLOW_SHA" "$PR_BASE_SHA")
+          for trusted_ref in "$GATE_SOURCE_SHA" "$G0_EVIDENCE_SHA" "$AUTHORIZED_PREDECESSOR_SHA"; do
+            [[ -z "$trusted_ref" ]] || trusted_refs+=("$trusted_ref")
+          done
+          git fetch --no-tags --no-recurse-submodules origin "${trusted_refs[@]}"
           scrub_fetch_auth
           trap - EXIT
           if git config --local --get-regexp '^http\..*\.extraheader$' >/dev/null 2>&1; then
@@ -208,17 +217,24 @@ jobs:
           }
           git cat-file -e "${PR_BASE_SHA}^{commit}"
           git cat-file -e "${PR_HEAD_SHA}^{commit}"
-          git cat-file -e "${G0_EVIDENCE_SHA}^{commit}"
-          git cat-file -e "${AUTHORIZED_PREDECESSOR_SHA}^{commit}"
-          cmp \
-            <(git show "${GATE_SOURCE_SHA}:${WORKFLOW_PATH}") \
-            <(git show "${WORKFLOW_SHA}:${WORKFLOW_PATH}")
+          for trusted_ref in "$GATE_SOURCE_SHA" "$G0_EVIDENCE_SHA" "$AUTHORIZED_PREDECESSOR_SHA"; do
+            [[ -z "$trusted_ref" ]] || git cat-file -e "${trusted_ref}^{commit}"
+          done
+          for trusted_path in \
+            "$WORKFLOW_PATH" \
+            scripts/rp02b2a-package-gate.mjs \
+            scripts/rp02b2a-package-gate.test.mjs; do
+            cmp \
+              <(git show "${POLICY_SOURCE_SHA}:${trusted_path}") \
+              <(git show "${WORKFLOW_SHA}:${trusted_path}")
+          done
 
       - name: Run trusted package gate
         id: gate
         shell: bash
         working-directory: trusted
         env:
+          POLICY_SOURCE_SHA: ${{ steps.context.outputs.policy_source_sha }}
           GATE_SOURCE_SHA: ${{ steps.context.outputs.gate_source_sha }}
           G0_EVIDENCE_SHA: ${{ steps.context.outputs.g0_evidence_sha }}
           PR_BASE_SHA: ${{ steps.context.outputs.pr_base_sha }}
@@ -241,9 +257,10 @@ jobs:
             NODE_ENV=production \
             AI_PROVIDER_MODE=mock \
             DOTENV_CONFIG_PATH=/dev/null \
-            node scripts/rp02b2a-package-gate.mjs \
+              node scripts/rp02b2a-package-gate.mjs \
               --github-output \
               --event pull_request_target \
+              --policy-source "$POLICY_SOURCE_SHA" \
               --gate-source "$GATE_SOURCE_SHA" \
               --g0-evidence-sha "$G0_EVIDENCE_SHA" \
               --event-base "$PR_BASE_SHA" \
@@ -268,12 +285,14 @@ jobs:
           PR_BASE_REF: ${{ steps.context.outputs.pr_base_ref }}
           PR_BASE_SHA: ${{ steps.context.outputs.pr_base_sha }}
           PR_HEAD_SHA: ${{ steps.context.outputs.candidate_sha }}
+          POLICY_SOURCE_SHA: ${{ steps.context.outputs.policy_source_sha }}
           GATE_SOURCE_SHA: ${{ steps.context.outputs.gate_source_sha }}
           G0_EVIDENCE_SHA: ${{ steps.context.outputs.g0_evidence_sha }}
           AUTHORIZED_PACKAGE_ID: ${{ steps.context.outputs.authorized_package_id }}
           AUTHORIZED_PREDECESSOR_SHA: ${{ steps.context.outputs.authorized_predecessor_sha }}
           CANDIDATE_SHA: ${{ steps.context.outputs.candidate_sha }}
           PACKAGE_ID: ${{ steps.gate.outputs.package_id }}
+          ADMISSION_KIND: ${{ steps.gate.outputs.admission_kind }}
           GATE_G0_EVIDENCE_SHA: ${{ steps.gate.outputs.g0_evidence_sha }}
           G0_EVIDENCE_DIGEST: ${{ steps.gate.outputs.g0_evidence_digest }}
           MANIFEST_DIGEST: ${{ steps.gate.outputs.manifest_digest }}
@@ -296,11 +315,12 @@ jobs:
             exit 1
           }
 
-          case "${AUTHORIZED_PACKAGE_ID}:${PACKAGE_ID}:${TEST_COMMAND}" in
-            RP-02B2a2:RP-02B2a2:test:rp02b2a2) ;;
-            RP-02B2a3:RP-02B2a3:test:rp02b2a3) ;;
-            RP-02B2a4:RP-02B2a4:test:rp02b2a4) ;;
-            RP-02B2a5:RP-02B2a5:test:rp02b2a5) ;;
+          case "${ADMISSION_KIND}:${AUTHORIZED_PACKAGE_ID}:${PACKAGE_ID}:${TEST_COMMAND}" in
+            business:RP-02B2a2:RP-02B2a2:test:rp02b2a2) ;;
+            business:RP-02B2a3:RP-02B2a3:test:rp02b2a3) ;;
+            business:RP-02B2a4:RP-02B2a4:test:rp02b2a4) ;;
+            business:RP-02B2a5:RP-02B2a5:test:rp02b2a5) ;;
+            closeout:*:RP-02B2a2-E3:test:governance) ;;
             *)
               echo "trusted gate returned a package or command outside the fixed admission map" >&2
               exit 1
@@ -310,14 +330,21 @@ jobs:
             echo "trusted gate did not bind the pull request base SHA" >&2
             exit 1
           }
-          [[ "$GATE_G0_EVIDENCE_SHA" == "$G0_EVIDENCE_SHA" ]] || {
-            echo "trusted gate did not bind the repository-controlled G0 evidence SHA" >&2
-            exit 1
-          }
-          [[ "$G0_EVIDENCE_DIGEST" =~ ^[0-9a-f]{64}$ ]] || {
-            echo "trusted gate did not return a valid G0 evidence digest" >&2
-            exit 1
-          }
+          if [[ "$ADMISSION_KIND" == "business" ]]; then
+            [[ "$GATE_G0_EVIDENCE_SHA" == "$G0_EVIDENCE_SHA" ]] || {
+              echo "trusted gate did not bind the repository-controlled G0 evidence SHA" >&2
+              exit 1
+            }
+            [[ "$G0_EVIDENCE_DIGEST" =~ ^[0-9a-f]{64}$ ]] || {
+              echo "trusted gate did not return a valid G0 evidence digest" >&2
+              exit 1
+            }
+          else
+            [[ -z "$GATE_G0_EVIDENCE_SHA" && -z "$G0_EVIDENCE_DIGEST" ]] || {
+              echo "closeout admission must not mint business G0 evidence" >&2
+              exit 1
+            }
+          fi
           [[ "$MANIFEST_DIGEST" =~ ^[0-9a-f]{64}$ ]] || {
             echo "trusted gate did not return a valid manifest digest" >&2
             exit 1
@@ -325,7 +352,7 @@ jobs:
 
           install -d -m 0700 "$RUNNER_TEMP/rp02b2a-admission"
           jq --null-input --compact-output --sort-keys \
-            --arg schema "rp02b2a-admission/v1" \
+            --arg schema "rp02b2a-admission/v2" \
             --argjson run_id "$RUN_ID" \
             --argjson run_attempt "$RUN_ATTEMPT" \
             --arg event_name "$EVENT_NAME" \
@@ -336,6 +363,7 @@ jobs:
             --arg pr_base_ref "$PR_BASE_REF" \
             --arg pr_base_sha "$PR_BASE_SHA" \
             --arg pr_head_sha "$PR_HEAD_SHA" \
+            --arg policy_source_sha "$POLICY_SOURCE_SHA" \
             --arg gate_source_sha "$GATE_SOURCE_SHA" \
             --arg g0_evidence_sha "$G0_EVIDENCE_SHA" \
             --arg g0_evidence_digest "$G0_EVIDENCE_DIGEST" \
@@ -344,6 +372,7 @@ jobs:
             --arg package_id "$PACKAGE_ID" \
             --arg manifest_digest "$MANIFEST_DIGEST" \
             --arg test_command "$TEST_COMMAND" \
+            --arg admission_kind "$ADMISSION_KIND" \
             '{
               schema: $schema,
               run_id: $run_id,
@@ -357,14 +386,22 @@ jobs:
               pr_base_sha: $pr_base_sha,
               pr_head_sha: $pr_head_sha,
               candidate_sha: $pr_head_sha,
-              gate_source_sha: $gate_source_sha,
-              g0_evidence_sha: $g0_evidence_sha,
-              g0_evidence_digest: $g0_evidence_digest,
-              authorized_package_id: $authorized_package_id,
-              authorized_predecessor_sha: $authorized_predecessor_sha,
+              policy_source_sha: $policy_source_sha,
+              gate_source_sha: (if $admission_kind == "business" then $gate_source_sha else null end),
+              g0_evidence_sha: (if $admission_kind == "business" then $g0_evidence_sha else null end),
+              g0_evidence_digest: (if $admission_kind == "business" then $g0_evidence_digest else null end),
+              authorized_package_id: (if $admission_kind == "business" then $authorized_package_id else null end),
+              authorized_predecessor_sha: (if $admission_kind == "business" then $authorized_predecessor_sha else null end),
+              repository_context: {
+                gate_source_sha: (if $gate_source_sha == "" then null else $gate_source_sha end),
+                g0_evidence_sha: (if $g0_evidence_sha == "" then null else $g0_evidence_sha end),
+                authorized_package_id: (if $authorized_package_id == "" then null else $authorized_package_id end),
+                authorized_predecessor_sha: (if $authorized_predecessor_sha == "" then null else $authorized_predecessor_sha end)
+              },
               package_id: $package_id,
               manifest_digest: $manifest_digest,
-              test_command: $test_command
+              test_command: $test_command,
+              admission_kind: $admission_kind
             }' > "$RUNNER_TEMP/rp02b2a-admission/admission.json"
 
           {
@@ -378,15 +415,24 @@ jobs:
             echo "pr_base_ref=$PR_BASE_REF"
             echo "pr_base_sha=$PR_BASE_SHA"
             echo "pr_head_sha=$PR_HEAD_SHA"
-            echo "gate_source_sha=$GATE_SOURCE_SHA"
-            echo "g0_evidence_sha=$G0_EVIDENCE_SHA"
+            echo "policy_source_sha=$POLICY_SOURCE_SHA"
+            if [[ "$ADMISSION_KIND" == "business" ]]; then
+              echo "gate_source_sha=$GATE_SOURCE_SHA"
+              echo "g0_evidence_sha=$G0_EVIDENCE_SHA"
+              echo "authorized_package_id=$AUTHORIZED_PACKAGE_ID"
+              echo "authorized_predecessor_sha=$AUTHORIZED_PREDECESSOR_SHA"
+            else
+              echo "gate_source_sha="
+              echo "g0_evidence_sha="
+              echo "authorized_package_id="
+              echo "authorized_predecessor_sha="
+            fi
             echo "g0_evidence_digest=$G0_EVIDENCE_DIGEST"
-            echo "authorized_package_id=$AUTHORIZED_PACKAGE_ID"
-            echo "authorized_predecessor_sha=$AUTHORIZED_PREDECESSOR_SHA"
             echo "candidate_sha=$CANDIDATE_SHA"
             echo "package_id=$PACKAGE_ID"
             echo "manifest_digest=$MANIFEST_DIGEST"
             echo "test_command=$TEST_COMMAND"
+            echo "admission_kind=$ADMISSION_KIND"
           } >> "$GITHUB_OUTPUT"
 
       - name: Upload canonical admission evidence
@@ -402,6 +448,7 @@ jobs:
   candidate:
     name: Admitted candidate
     needs: admission
+    if: needs.admission.outputs.admission_kind == 'business'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
