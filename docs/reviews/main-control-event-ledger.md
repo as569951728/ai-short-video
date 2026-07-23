@@ -1393,3 +1393,27 @@ g0_evidence_rmd_task_003: open
 mc_decision: RP-02B2a2-G0 关闭；replacement accepted code head 为 056a8d2，B2a2 继续 not_authorized，总账保持 9/42；真实数据库和真实模型仅在隔离、回滚、费用与密钥门禁满足后执行。
 next_action: 仅在 MC 独立授权后，才可从 accepted G0 code head 创建与 E1 互为 sibling 的 A2 实现分支。
 ```
+
+### MCE-20260723-RP02B2A2-FINAL-ACCEPTED
+
+```text
+event_id: MCE-20260723-RP02B2A2-FINAL-ACCEPTED
+occurred_at: 2026-07-23 12:44:08 CST
+event_type: implementation_stage_final_accepted
+source_thread: main-control with independent ARCH/SECURITY and TEST/QUALITY reviewers
+package_id: RP-02B2a2
+issue_ids: RMD-TASK-002, RMD-TASK-003
+authorized_base: 056a8d28910c765c9887a245e2dc4269859e5ec2
+accepted_candidate: e8e37cd892570e3abee961374ec3512a373f6400
+accepted_candidate_tree: 749fe41f42285dc9115351ddcbc675e77d428cb7
+squash_delivery_base: 50d5839fd4d965b2c6fc40213be32beaf6f6cfb2
+squash_delivery_head: dc193dbbd3ac1970f571fd618f12902a4033994c
+post_merge_gate_head: 9f04986469a3e409b3ce887390e8830cbdfe9493
+summary: RP-02B2a2 在限定 E3 范围完成 authenticated resolver actor、15-action authoritative source refs、T0/T1 replay、三阶段 authority stale gate、active-claim fence 与 legacy fail closed；不包含正常 leased provider、worker lifecycle、retry child 消费或真实环境。
+evidence: PR #51 candidate delivery and PR #53 post-merge range correction；trusted admission run 29965011647；candidate RP-01C run 29972477016；post-merge main runs 29977676415/29977676443/29977676404/29977676439；trusted replay `29977969717` completed/success；22 files / 3,891 net additions；package gate 65/65；A2 core 272/272；本地 clean-install 复跑 272/272
+independent_arch_security: APPROVED P0=0/P1=0/P2=1；非阻断 P2 为 resolver 每请求恰好一次缺动态 invocation counter
+independent_test_quality: APPROVED P0=0/P1=0/P2=0；独立候选复跑 212/212，worktree clean
+mc_decision: RP-02B2a2 package completed；研发交付进度更新为 2/5。RMD-TASK-002 保持 partial、RMD-TASK-003 保持 open、总账保持 9/42；B2a3-B2a5/B2b/B2c/B3 不自动授权。
+environment_boundary: 未证明真实 MySQL 多进程事务、真实付费 provider、TTS/media、渲染、发布或 E6。真实数据库和真实模型已获用户后续执行授权，但必须等对应阶段门禁满足后，以隔离测试库、可回滚写集、严格单次费用上限、密钥脱敏和禁用自动付费重试执行。
+next_action: 发布本阶段证据并取得远程治理绿灯；随后单独形成 RP-02B2a3 授权，不得跳过测试或把 A2 通过外推为后续能力。
+```
