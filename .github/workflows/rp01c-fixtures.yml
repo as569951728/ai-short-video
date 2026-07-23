@@ -1,14 +1,9 @@
 name: RP-01C deterministic fixtures
 
 on:
-  workflow_dispatch:
-    inputs:
-      base_sha:
-        description: Explicit base SHA for package gate
-        required: true
-      head_sha:
-        description: Explicit head SHA for package gate
-        required: true
+  repository_dispatch:
+    types:
+      - rp02b2a_replay
   push:
     paths: &rp02b2a_paths
       - '.github/workflows/rp01a-e2e.yml'
@@ -43,6 +38,7 @@ on:
       - 'docs/adr/rp-02b2a2-g0-evidence-trigger-correction-budget.md'
       - 'docs/adr/rp-02b2a2-g0-a2-scope-correction-budget.md'
       - 'docs/adr/rp-02b2a2-g0-a2-scope-v5-correction-budget.md'
+      - 'docs/adr/rp-02b2a2-postmerge-range-correction-budget.md'
       - 'docs/adr/rp-02b2a2-authority-claim-budget.md'
       - 'docs/adr/rp-02b2a3-lease-retry-budget.md'
       - 'docs/adr/rp-02b2a4-inmemory-finalize-budget.md'
@@ -65,7 +61,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           fetch-depth: 0
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.head_sha || github.event.after }}
+          ref: ${{ github.event_name == 'repository_dispatch' && github.sha || github.event.after }}
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
@@ -75,39 +71,60 @@ jobs:
         id: b2a-range
         env:
           EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+          WORKFLOW_SHA: ${{ github.sha }}
+          PUSH_REF: ${{ github.ref }}
           PUSH_CREATED: ${{ github.event.created }}
           PUSH_BEFORE_SHA: ${{ github.event.before }}
           PUSH_AFTER_SHA: ${{ github.event.after }}
-          MANUAL_BASE_SHA: ${{ inputs.base_sha }}
-          MANUAL_HEAD_SHA: ${{ inputs.head_sha }}
+          MANUAL_BASE_SHA: ${{ github.event.client_payload.base_sha }}
+          MANUAL_HEAD_SHA: ${{ github.event.client_payload.head_sha }}
+          B2A_GATE_SOURCE_SHA: ${{ vars.RP02B2A_GATE_SOURCE_SHA }}
+          B2A_G0_EVIDENCE_SHA: ${{ vars.RP02B2A_G0_EVIDENCE_SHA }}
           B2A_AUTHORIZED_PACKAGE_ID: ${{ vars.RP02B2A_AUTHORIZED_PACKAGE_ID }}
           B2A_AUTHORIZED_PREDECESSOR_SHA: ${{ vars.RP02B2A_AUTHORIZED_PREDECESSOR_SHA }}
+          B2A_AUTHORIZED_CANDIDATE_SHA: ${{ vars.RP02B2A_AUTHORIZED_CANDIDATE_SHA }}
+          B2A_AUTHORIZED_CANDIDATE_REF: ${{ vars.RP02B2A_AUTHORIZED_CANDIDATE_REF }}
+          B2A_AUTHORIZED_CANDIDATE_TREE: ${{ vars.RP02B2A_AUTHORIZED_CANDIDATE_TREE }}
+          B2A_AUTHORIZED_MANIFEST_DIGEST: ${{ vars.RP02B2A_AUTHORIZED_MANIFEST_DIGEST }}
         run: |
           set -euo pipefail
+          if [[ "$EVENT_NAME" == "repository_dispatch" ]]; then
+            [[ "$B2A_AUTHORIZED_CANDIDATE_REF" =~ ^refs/tags/rp02b2a-admitted-[a-f0-9]{12,40}$ ]] || { echo "authorized candidate ref must use the durable rp02b2a admission tag namespace" >&2; exit 1; }
+            git fetch --no-tags --force origin "$B2A_AUTHORIZED_CANDIDATE_REF:refs/remotes/origin/rp02b2a-admitted-candidate"
+            test "$(git rev-parse refs/remotes/origin/rp02b2a-admitted-candidate^{commit})" = "$B2A_AUTHORIZED_CANDIDATE_SHA"
+          fi
           if [[ "$EVENT_NAME" == "push" ]]; then
-            env -u DATABASE_URL -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL -u DEEPSEEK_MODEL -u DEEPSEEK_STRUCTURE_MODEL -u DEEPSEEK_REASONER_MODEL -u DEEPSEEK_TIMEOUT_MS -u DEEPSEEK_MAX_RETRIES -u DEPLOYMENT_ACTOR_TENANT_ID -u DEPLOYMENT_ACTOR_USER_ID NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=/dev/null node scripts/rp02b2a-package-gate.mjs --print-range --event push --push-created "$PUSH_CREATED" --push-before "$PUSH_BEFORE_SHA" --push-head "$PUSH_AFTER_SHA" --authorized-package-id "$B2A_AUTHORIZED_PACKAGE_ID" --authorized-predecessor-sha "$B2A_AUTHORIZED_PREDECESSOR_SHA" >> "$GITHUB_OUTPUT"
-          elif [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
-            env -u DATABASE_URL -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL -u DEEPSEEK_MODEL -u DEEPSEEK_STRUCTURE_MODEL -u DEEPSEEK_REASONER_MODEL -u DEEPSEEK_TIMEOUT_MS -u DEEPSEEK_MAX_RETRIES -u DEPLOYMENT_ACTOR_TENANT_ID -u DEPLOYMENT_ACTOR_USER_ID NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=/dev/null node scripts/rp02b2a-package-gate.mjs --print-range --event workflow_dispatch --manual-base "$MANUAL_BASE_SHA" --manual-head "$MANUAL_HEAD_SHA" --authorized-package-id "$B2A_AUTHORIZED_PACKAGE_ID" --authorized-predecessor-sha "$B2A_AUTHORIZED_PREDECESSOR_SHA" >> "$GITHUB_OUTPUT"
+            env -u DATABASE_URL -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL -u DEEPSEEK_MODEL -u DEEPSEEK_STRUCTURE_MODEL -u DEEPSEEK_REASONER_MODEL -u DEEPSEEK_TIMEOUT_MS -u DEEPSEEK_MAX_RETRIES -u DEPLOYMENT_ACTOR_TENANT_ID -u DEPLOYMENT_ACTOR_USER_ID NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=/dev/null node scripts/rp02b2a-package-gate.mjs --print-range --event push --push-ref "$PUSH_REF" --push-created "$PUSH_CREATED" --push-before "$PUSH_BEFORE_SHA" --push-head "$PUSH_AFTER_SHA" --gate-source "$B2A_GATE_SOURCE_SHA" --g0-evidence-sha "$B2A_G0_EVIDENCE_SHA" --authorized-package-id "$B2A_AUTHORIZED_PACKAGE_ID" --authorized-predecessor-sha "$B2A_AUTHORIZED_PREDECESSOR_SHA" --authorized-candidate-sha "$B2A_AUTHORIZED_CANDIDATE_SHA" --authorized-candidate-tree "$B2A_AUTHORIZED_CANDIDATE_TREE" --authorized-manifest-digest "$B2A_AUTHORIZED_MANIFEST_DIGEST" >> "$GITHUB_OUTPUT"
+          elif [[ "$EVENT_NAME" == "repository_dispatch" ]]; then
+            env -u DATABASE_URL -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL -u DEEPSEEK_MODEL -u DEEPSEEK_STRUCTURE_MODEL -u DEEPSEEK_REASONER_MODEL -u DEEPSEEK_TIMEOUT_MS -u DEEPSEEK_MAX_RETRIES -u DEPLOYMENT_ACTOR_TENANT_ID -u DEPLOYMENT_ACTOR_USER_ID NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=/dev/null node scripts/rp02b2a-package-gate.mjs --print-range --event repository_dispatch --event-ref "$EVENT_REF" --manual-base "$MANUAL_BASE_SHA" --manual-head "$MANUAL_HEAD_SHA" --gate-source "$B2A_GATE_SOURCE_SHA" --g0-evidence-sha "$B2A_G0_EVIDENCE_SHA" --authorized-package-id "$B2A_AUTHORIZED_PACKAGE_ID" --authorized-predecessor-sha "$B2A_AUTHORIZED_PREDECESSOR_SHA" --authorized-candidate-sha "$B2A_AUTHORIZED_CANDIDATE_SHA" --authorized-candidate-tree "$B2A_AUTHORIZED_CANDIDATE_TREE" --authorized-manifest-digest "$B2A_AUTHORIZED_MANIFEST_DIGEST" >> "$GITHUB_OUTPUT"
           else
-            echo "RP-01C only accepts trusted push or explicit workflow_dispatch ranges" >&2
+            echo "RP-01C only accepts trusted push or default-branch repository_dispatch replay ranges" >&2
             exit 1
           fi
           BASE="$(grep '^base=' "$GITHUB_OUTPUT" | tail -n1 | cut -d= -f2-)"
           HEAD="$(grep '^head=' "$GITHUB_OUTPUT" | tail -n1 | cut -d= -f2-)"
-          if [[ -z "$BASE" || -z "$HEAD" || "$BASE" =~ ^0+$ || "$HEAD" =~ ^0+$ ]]; then
-            echo "B2a package gate requires explicit non-zero BASE/HEAD" >&2
+          DELIVERY_BASE="$(grep '^delivery_base=' "$GITHUB_OUTPUT" | tail -n1 | cut -d= -f2-)"
+          DELIVERY_HEAD="$(grep '^delivery_head=' "$GITHUB_OUTPUT" | tail -n1 | cut -d= -f2-)"
+          if [[ -z "$BASE" || -z "$HEAD" || -z "$DELIVERY_BASE" || -z "$DELIVERY_HEAD" || "$BASE" =~ ^0+$ || "$HEAD" =~ ^0+$ || "$DELIVERY_BASE" =~ ^0+$ || "$DELIVERY_HEAD" =~ ^0+$ ]]; then
+            echo "B2a package gate requires explicit non-zero analysis and delivery ranges" >&2
             exit 1
           fi
-          test "$(git rev-parse HEAD)" = "$(git rev-parse "$HEAD")"
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "$WORKFLOW_SHA")"
       - name: Resolve B2a package command
         id: b2a-package
         env:
           B2A_BASE_SHA: ${{ steps.b2a-range.outputs.base }}
           B2A_HEAD_SHA: ${{ steps.b2a-range.outputs.head }}
+          B2A_DELIVERY_BASE_SHA: ${{ steps.b2a-range.outputs.delivery_base }}
+          B2A_DELIVERY_HEAD_SHA: ${{ steps.b2a-range.outputs.delivery_head }}
           B2A_GATE_SOURCE_SHA: ${{ vars.RP02B2A_GATE_SOURCE_SHA }}
           B2A_G0_EVIDENCE_SHA: ${{ vars.RP02B2A_G0_EVIDENCE_SHA }}
           B2A_AUTHORIZED_PACKAGE_ID: ${{ vars.RP02B2A_AUTHORIZED_PACKAGE_ID }}
           B2A_AUTHORIZED_PREDECESSOR_SHA: ${{ vars.RP02B2A_AUTHORIZED_PREDECESSOR_SHA }}
+          B2A_AUTHORIZED_CANDIDATE_SHA: ${{ vars.RP02B2A_AUTHORIZED_CANDIDATE_SHA }}
+          B2A_AUTHORIZED_CANDIDATE_TREE: ${{ vars.RP02B2A_AUTHORIZED_CANDIDATE_TREE }}
+          B2A_AUTHORIZED_MANIFEST_DIGEST: ${{ vars.RP02B2A_AUTHORIZED_MANIFEST_DIGEST }}
         run: |
           set -euo pipefail
           env -u DATABASE_URL -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL -u DEEPSEEK_MODEL -u DEEPSEEK_STRUCTURE_MODEL -u DEEPSEEK_REASONER_MODEL -u DEEPSEEK_TIMEOUT_MS -u DEEPSEEK_MAX_RETRIES -u DEPLOYMENT_ACTOR_TENANT_ID -u DEPLOYMENT_ACTOR_USER_ID NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=/dev/null node scripts/rp02b2a-package-gate.mjs --github-output --base "$B2A_BASE_SHA" --head "$B2A_HEAD_SHA" --gate-source "$B2A_GATE_SOURCE_SHA" --g0-evidence-sha "$B2A_G0_EVIDENCE_SHA" --authorized-package-id "$B2A_AUTHORIZED_PACKAGE_ID" --authorized-predecessor-sha "$B2A_AUTHORIZED_PREDECESSOR_SHA" >> "$GITHUB_OUTPUT"
