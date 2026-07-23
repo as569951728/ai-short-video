@@ -8,6 +8,10 @@ const G0_EVIDENCE_TRIGGER_ID = 'RP-02B2a2-G0-C3', G0_EVIDENCE_TRIGGER_BASELINE_S
 const G0_A2_SCOPE_ID = 'RP-02B2a2-G0-C4', G0_A2_SCOPE_BASELINE_SHA = 'f243595d32f555f1f98162f2f9ddebce0a1f8528', G0_A2_SCOPE_ADR = 'docs/adr/rp-02b2a2-g0-a2-scope-correction-budget.md';
 const G0_A2_SCOPE_V5_ID = 'RP-02B2a2-G0-C5', G0_A2_SCOPE_V5_BASELINE_SHA = 'b22db8e15eb648220e6c8cfab1829ed184ab59da', G0_A2_SCOPE_V5_ADR = 'docs/adr/rp-02b2a2-g0-a2-scope-v5-correction-budget.md';
 const POSTMERGE_RANGE_CORRECTION_ID = 'RP-02B2a2-PM-C1', POSTMERGE_RANGE_CORRECTION_BASELINE_SHA = 'dc193dbbd3ac1970f571fd618f12902a4033994c', POSTMERGE_RANGE_CORRECTION_ADR = 'docs/adr/rp-02b2a2-postmerge-range-correction-budget.md';
+const CLOSEOUT_POLICY_CORRECTION_ID = 'RP-02B2a2-PM-C2', CLOSEOUT_POLICY_CORRECTION_BASELINE_SHA = '9f04986469a3e409b3ce887390e8830cbdfe9493', CLOSEOUT_POLICY_CORRECTION_ADR = 'docs/adr/rp-02b2a2-closeout-policy-correction-budget.md';
+const A2_CLOSEOUT_EVIDENCE_ID = 'RP-02B2a2-E3', A2_CLOSEOUT_EVIDENCE_COMMAND = 'test:governance', A2_CLOSEOUT_EVIDENCE_MAX_ADDITIONS = 180, A2_CLOSEOUT_EVIDENCE_MAX_DELETIONS = 80, A2_CLOSEOUT_EVIDENCE_MAX_NET_ADDITIONS = 180;
+const A2_CLOSEOUT_EVIDENCE_VERIFICATION = 'docs/reviews/remediation-rmd-task-002-003-rp-02b2a2-verification-2026-07-23.md';
+const A2_CLOSEOUT_EVIDENCE_FILES = new Set(['docs/remediation/acceptance-matrix.md', 'docs/remediation/issue-ledger.md', 'docs/reviews/main-control-event-ledger.md', 'docs/reviews/main-control-status.md', A2_CLOSEOUT_EVIDENCE_VERIFICATION]);
 const ACCEPTED_G0_C4_SHA = 'e020fb07d6279de5544ed15962b2a82d820a8247';
 const ACCEPTED_G0_C3_SHA = '81f567d4fb61765c9a5d407dae04011d08d5aa19';
 const ACCEPTED_G0_C1_SHA = 'f27442d159d7f9d6ef273128797be6085bbd8f9d';
@@ -34,7 +38,23 @@ function withRunCache(callback) {
 const MAX_RENDERED_HTML_COMMENTS = 1024, MAX_RENDERED_HTML_COMMENT_LENGTH = 4096;
 const GATE_ENV_COMMAND = 'env -u DATABASE_URL -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL -u DEEPSEEK_MODEL -u DEEPSEEK_STRUCTURE_MODEL -u DEEPSEEK_REASONER_MODEL -u DEEPSEEK_TIMEOUT_MS -u DEEPSEEK_MAX_RETRIES -u DEPLOYMENT_ACTOR_TENANT_ID -u DEPLOYMENT_ACTOR_USER_ID NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=/dev/null';
 const TRUSTED_ADMISSION_WORKFLOW = '.github/workflows/rp02b2a-admission.yml';
-const TRUSTED_ADMISSION_WORKFLOW_CANONICAL_SHA256 = '0e070572c4ef1357380e12975396eba9aea5d03c65f342bb354c0b47f98b5dfc';
+const TRUSTED_ADMISSION_WORKFLOW_CANONICAL_SHA256 = 'c48196d1b167d60c4f94b3f7b915ea2853488ada4b89ab0e4df767214739c7c7';
+const TRUSTED_ADMISSION_WORKFLOW_LEGACY_SHA256 = '0e070572c4ef1357380e12975396eba9aea5d03c65f342bb354c0b47f98b5dfc';
+const TRUSTED_ADMISSION_WORKFLOW_LEGACY_HEADS = new Set([
+  B2A2_GATE_PREP_BASELINE_SHA,
+  G0_CORRECTION_BASELINE_SHA,
+  G0_TEST_LAYER_BASELINE_SHA,
+  G0_EVIDENCE_TRIGGER_BASELINE_SHA,
+  G0_A2_SCOPE_BASELINE_SHA,
+  G0_A2_SCOPE_V5_BASELINE_SHA,
+  ACCEPTED_G0_C1_SHA,
+  ACCEPTED_G0_C3_SHA,
+  ACCEPTED_G0_C4_SHA,
+  '056a8d28910c765c9887a245e2dc4269859e5ec2',
+  'e8e37cd892570e3abee961374ec3512a373f6400',
+  POSTMERGE_RANGE_CORRECTION_BASELINE_SHA,
+  CLOSEOUT_POLICY_CORRECTION_BASELINE_SHA,
+]);
 const B2A2_PACKAGE_SCRIPTS = Object.freeze({
   'test:rp02b2a2:env-probe': `node -e "const keys=['DATABASE_URL','DEEPSEEK_API_KEY','DEEPSEEK_BASE_URL','DEEPSEEK_MODEL','DEEPSEEK_STRUCTURE_MODEL','DEEPSEEK_REASONER_MODEL','DEEPSEEK_TIMEOUT_MS','DEEPSEEK_MAX_RETRIES','DEPLOYMENT_ACTOR_TENANT_ID','DEPLOYMENT_ACTOR_USER_ID']; if(keys.some((key)=>process.env[key]!==undefined)||process.env.NODE_ENV!=='production'||process.env.AI_PROVIDER_MODE!=='mock'||process.env.DOTENV_CONFIG_PATH!=='/dev/null') process.exit(1); console.log('RP02B2A2_ENV_CLEAN')"`,
   'test:rp02b2a2:core': `${GATE_ENV_COMMAND} sh -c 'npm run test:rp02b2a2:env-probe && npm run build -w @ai-shortvideo/shared && npm run prisma:generate -w @ai-shortvideo/api && npm exec -w @ai-shortvideo/api -- tsx --test test/rp02b2a/authority-claim.test.ts test/rp02b2a/repository-authority-hardening.test.ts src/modules/novels/novelRoutes.test.ts'`,
@@ -77,7 +97,7 @@ const YAML_AST_TO_JSON = String.raw`def convert(node, anchors = {}, resolving = 
 end
 stream = Psych.parse_stream(STDIN.read); raise 'workflow YAML must contain exactly one document' unless stream.children.length == 1; puts JSON.generate(convert(stream.children.first))`;
 const COMMON_GATE_FILES = 'scripts/rp02b2a-package-gate.mjs|scripts/rp02b2a-package-gate.test.mjs|.github/workflows/rp01c-fixtures.yml|package.json'.split('|');
-const FIXED_BASELINES = Object.freeze({ 'RP-02B2a1': B2A1_BASELINE_SHA, [B2A2_GATE_PREP_ID]: B2A2_GATE_PREP_BASELINE_SHA, [G0_CORRECTION_ID]: G0_CORRECTION_BASELINE_SHA, [G0_TEST_LAYER_ID]: G0_TEST_LAYER_BASELINE_SHA, [G0_EVIDENCE_TRIGGER_ID]: G0_EVIDENCE_TRIGGER_BASELINE_SHA, [G0_A2_SCOPE_ID]: G0_A2_SCOPE_BASELINE_SHA, [G0_A2_SCOPE_V5_ID]: G0_A2_SCOPE_V5_BASELINE_SHA, [POSTMERGE_RANGE_CORRECTION_ID]: POSTMERGE_RANGE_CORRECTION_BASELINE_SHA, 'RP-02B2a2': GATE_PREP_BASELINE });
+const FIXED_BASELINES = Object.freeze({ 'RP-02B2a1': B2A1_BASELINE_SHA, [B2A2_GATE_PREP_ID]: B2A2_GATE_PREP_BASELINE_SHA, [G0_CORRECTION_ID]: G0_CORRECTION_BASELINE_SHA, [G0_TEST_LAYER_ID]: G0_TEST_LAYER_BASELINE_SHA, [G0_EVIDENCE_TRIGGER_ID]: G0_EVIDENCE_TRIGGER_BASELINE_SHA, [G0_A2_SCOPE_ID]: G0_A2_SCOPE_BASELINE_SHA, [G0_A2_SCOPE_V5_ID]: G0_A2_SCOPE_V5_BASELINE_SHA, [POSTMERGE_RANGE_CORRECTION_ID]: POSTMERGE_RANGE_CORRECTION_BASELINE_SHA, [CLOSEOUT_POLICY_CORRECTION_ID]: CLOSEOUT_POLICY_CORRECTION_BASELINE_SHA, 'RP-02B2a2': GATE_PREP_BASELINE });
 const definition = (packageId, manifestId, adrPath, testCommand, hardMaxFiles, hardMaxNetAdditions, manifest, requiredCategories = ['production', 'test', 'adr']) => ({ packageId, manifestId, adrPath, testCommand, hardMaxFiles, hardMaxNetAdditions, baselinePolicy: FIXED_BASELINES[packageId] ?? RANGE_BASELINE, manifest: new Set(manifest), requiredCategories });
 export const PACKAGE_DEFINITIONS = {
   'RP-02B2a1': definition('RP-02B2a1', 'RP-02B2a1-v1', 'docs/adr/rp-02b2a1-registry-abi-budget.md', 'test:rp02b2a1', 18, 1900, [...'packages/shared/src/api.ts|packages/shared/src/novels.ts|apps/api/src/modules/novels/services/actionExecutionPlan.ts|apps/api/src/modules/novels/services/novelService.ts|apps/api/src/modules/tasks/services/taskService.ts|apps/api/src/modules/novels/providers/mockDirectionProvider.ts|apps/api/src/modules/novels/providers/mockStructureProvider.ts|apps/api/src/modules/novels/providers/mockTrialProvider.ts|apps/api/src/modules/novels/providers/mockBodyProvider.ts|apps/api/src/modules/novels/providers/mockFullReviewProvider.ts|apps/api/src/modules/novels/providers/deepseekNovelProvider.ts|apps/api/test/rp01c/fixtureFactory.test.ts|apps/api/test/rp02a/rp02a.test.ts|apps/api/src/modules/novels/novelRoutes.test.ts|docs/adr/rp-02b2a1-registry-abi-budget.md'.split('|'), ...COMMON_GATE_FILES]),
@@ -88,11 +108,13 @@ export const PACKAGE_DEFINITIONS = {
   [G0_A2_SCOPE_ID]: definition(G0_A2_SCOPE_ID, 'RP-02B2a2-G0-C4-v1', G0_A2_SCOPE_ADR, 'test:rp02b2a1:gate', 4, 500, '.github/workflows/rp01c-fixtures.yml|scripts/rp02b2a-package-gate.mjs|scripts/rp02b2a-package-gate.test.mjs|docs/adr/rp-02b2a2-g0-a2-scope-correction-budget.md'.split('|'), ['governance', 'test', 'adr']),
   [G0_A2_SCOPE_V5_ID]: definition(G0_A2_SCOPE_V5_ID, 'RP-02B2a2-G0-C5-v1', G0_A2_SCOPE_V5_ADR, 'test:rp02b2a1:gate', 6, 900, '.github/workflows/rp01a-e2e.yml|.github/workflows/rp01b-dom.yml|.github/workflows/rp01c-fixtures.yml|scripts/rp02b2a-package-gate.mjs|scripts/rp02b2a-package-gate.test.mjs|docs/adr/rp-02b2a2-g0-a2-scope-v5-correction-budget.md'.split('|'), ['governance', 'test', 'adr']),
   [POSTMERGE_RANGE_CORRECTION_ID]: definition(POSTMERGE_RANGE_CORRECTION_ID, 'RP-02B2a2-PM-C1-v1', POSTMERGE_RANGE_CORRECTION_ADR, 'test:rp02b2a1:gate', 5, 1900, `.github/workflows/rp01c-fixtures.yml|apps/api/test/rp01c/fixtureFactory.test.ts|scripts/rp02b2a-package-gate.mjs|scripts/rp02b2a-package-gate.test.mjs|${POSTMERGE_RANGE_CORRECTION_ADR}`.split('|'), ['governance', 'test', 'adr']),
+  [CLOSEOUT_POLICY_CORRECTION_ID]: definition(CLOSEOUT_POLICY_CORRECTION_ID, 'RP-02B2a2-PM-C2-v1', CLOSEOUT_POLICY_CORRECTION_ADR, 'test:rp02b2a1:gate', 5, 1500, `.github/workflows/rp01c-fixtures.yml|.github/workflows/rp02b2a-admission.yml|scripts/rp02b2a-package-gate.mjs|scripts/rp02b2a-package-gate.test.mjs|${CLOSEOUT_POLICY_CORRECTION_ADR}`.split('|'), ['governance', 'test', 'adr']),
   'RP-02B2a2': definition('RP-02B2a2', 'RP-02B2a2-v5', 'docs/adr/rp-02b2a2-authority-claim-budget.md', 'test:rp02b2a2', 22, 3900, 'packages/shared/src/api.ts|packages/shared/src/novels.ts|apps/api/src/config/env.ts|apps/api/src/modules/novels/domain/executionContract.ts|apps/api/src/modules/novels/domain/novelDomain.ts|apps/api/test/rp01c/fixtureFactory.test.ts|apps/api/test/rp02b/rp02b.test.ts|apps/api/src/modules/novels/services/taskClaim.ts|apps/api/src/modules/novels/services/novelService.ts|apps/api/src/modules/novels/routes/novelRoutes.ts|apps/api/src/modules/tasks/routes/taskRoutes.ts|apps/api/src/modules/novels/repositories/inMemoryNovelRepository.ts|apps/api/src/modules/novels/repositories/prismaNovelRepository.ts|apps/api/src/app.ts|apps/api/src/main.ts|apps/api/test/rp02a/rp02a.test.ts|apps/api/test/rp02b2a/fixtures.ts|apps/api/test/rp02b2a/authority-claim.test.ts|apps/api/test/rp02b2a/repository-authority-hardening.test.ts|apps/api/src/modules/novels/novelRoutes.test.ts|docs/adr/rp-02b2a2-authority-claim-budget.md|package.json'.split('|')),
   'RP-02B2a3': definition('RP-02B2a3', 'RP-02B2a3-v1', 'docs/adr/rp-02b2a3-lease-retry-budget.md', 'test:rp02b2a3', 14, 1800, 'packages/shared/src/api.ts|packages/shared/src/novels.ts|apps/api/src/modules/novels/domain/executionContract.ts|apps/api/src/modules/novels/domain/novelDomain.ts|apps/api/src/modules/novels/services/actionExecutionPlan.ts|apps/api/src/modules/novels/services/taskClaim.ts|apps/api/src/modules/tasks/services/taskService.ts|apps/api/src/modules/novels/repositories/inMemoryNovelRepository.ts|apps/api/src/modules/novels/repositories/prismaNovelRepository.ts|apps/api/src/modules/novels/novelRoutes.test.ts|apps/api/test/rp02b2a/fixtures.ts|apps/api/test/rp02b2a/lease-dispatch-retry.test.ts|docs/adr/rp-02b2a3-lease-retry-budget.md|package.json'.split('|')),
   'RP-02B2a4': definition('RP-02B2a4', 'RP-02B2a4-v1', 'docs/adr/rp-02b2a4-inmemory-finalize-budget.md', 'test:rp02b2a4', 12, 1900, 'packages/shared/src/novels.ts|apps/api/src/modules/novels/domain/executionContract.ts|apps/api/src/modules/novels/domain/novelDomain.ts|apps/api/src/modules/novels/services/actionExecutionPlan.ts|apps/api/src/modules/novels/services/taskClaim.ts|apps/api/src/modules/novels/services/novelService.ts|apps/api/src/modules/novels/repositories/inMemoryNovelRepository.ts|apps/api/test/rp02b2a/fixtures.ts|apps/api/test/rp02b2a/inmemory-fenced-finalize.test.ts|apps/api/src/modules/novels/novelRoutes.test.ts|docs/adr/rp-02b2a4-inmemory-finalize-budget.md|package.json'.split('|')),
   'RP-02B2a5': definition('RP-02B2a5', 'RP-02B2a5-v1', 'docs/adr/rp-02b2a5-prisma-nine-six-budget.md', 'test:rp02b2a5', 10, 1900, 'apps/api/src/modules/novels/domain/executionContract.ts|apps/api/src/modules/novels/domain/novelDomain.ts|apps/api/src/modules/novels/services/actionExecutionPlan.ts|apps/api/src/modules/novels/services/taskClaim.ts|apps/api/src/modules/novels/repositories/prismaNovelRepository.ts|apps/api/src/modules/novels/novelRoutes.test.ts|apps/api/test/rp02b2a/fixtures.ts|apps/api/test/rp02b2a/prisma-fenced-finalize.test.ts|docs/adr/rp-02b2a5-prisma-nine-six-budget.md|package.json'.split('|'))
 };
+const A2_CLOSEOUT_EVIDENCE_DEFINITION = Object.freeze({ packageId: A2_CLOSEOUT_EVIDENCE_ID, manifestId: 'RP-02B2a2-E3-v1', adrPath: 'none', testCommand: A2_CLOSEOUT_EVIDENCE_COMMAND, hardMaxFiles: 5, hardMaxNetAdditions: A2_CLOSEOUT_EVIDENCE_MAX_NET_ADDITIONS, baselinePolicy: 'repository-policy-source', manifest: A2_CLOSEOUT_EVIDENCE_FILES, requiredCategories: ['governance-evidence'] });
 export function parseArgs(argv) {
   const args = new Map();
   for (let index = 0; index < argv.length; index += 1) {
@@ -117,9 +139,16 @@ export function analyzePackageGate({ files, netAdditions, addedLines = netAdditi
   assertUsableSha('BASE', base); assertUsableSha('HEAD', head);
   if (!worktree && base === head) throw new Error('RP-02B2a package gate rejects identical BASE/HEAD');
   const changedFiles = [...new Set(files)].sort(), changedAdrs = changedFiles.filter((file) => file.startsWith('docs/adr/rp-02b2a') && file.endsWith('.md')), touchesManifest = changedFiles.some((file) => Object.values(PACKAGE_DEFINITIONS).some((item) => item.manifest.has(file))), touchesEvidence = changedFiles.some((file) => GATE_PREP_EVIDENCE_FILES.has(file));
-  const changedGovernanceCorrection = changedAdrs.includes(POSTMERGE_RANGE_CORRECTION_ADR) ? POSTMERGE_RANGE_CORRECTION_ID : changedAdrs.includes(G0_A2_SCOPE_V5_ADR) ? G0_A2_SCOPE_V5_ID : changedAdrs.includes(G0_A2_SCOPE_ADR) ? G0_A2_SCOPE_ID : changedAdrs.includes(G0_EVIDENCE_TRIGGER_ADR) ? G0_EVIDENCE_TRIGGER_ID : changedAdrs.includes(G0_TEST_LAYER_ADR) ? G0_TEST_LAYER_ID : changedAdrs.includes(G0_CORRECTION_ADR) ? G0_CORRECTION_ID : undefined;
+  const changedGovernanceCorrection = changedAdrs.includes(CLOSEOUT_POLICY_CORRECTION_ADR) ? CLOSEOUT_POLICY_CORRECTION_ID : changedAdrs.includes(POSTMERGE_RANGE_CORRECTION_ADR) ? POSTMERGE_RANGE_CORRECTION_ID : changedAdrs.includes(G0_A2_SCOPE_V5_ADR) ? G0_A2_SCOPE_V5_ID : changedAdrs.includes(G0_A2_SCOPE_ADR) ? G0_A2_SCOPE_ID : changedAdrs.includes(G0_EVIDENCE_TRIGGER_ADR) ? G0_EVIDENCE_TRIGGER_ID : changedAdrs.includes(G0_TEST_LAYER_ADR) ? G0_TEST_LAYER_ID : changedAdrs.includes(G0_CORRECTION_ADR) ? G0_CORRECTION_ID : undefined;
   if (changedGovernanceCorrection && [...GATE_PREP_EVIDENCE_FILES].every((file) => changedFiles.includes(file))) {
     throw new Error(`${changedGovernanceCorrection} cannot batch ${GATE_PREP_EVIDENCE_ID} publication evidence`);
+  }
+  if (changedAdrs.length === 0 && changedFiles.includes(A2_CLOSEOUT_EVIDENCE_VERIFICATION)) {
+    if (!sameFileSet(changedFiles, A2_CLOSEOUT_EVIDENCE_FILES)) throw new Error(`${A2_CLOSEOUT_EVIDENCE_ID} requires exactly the five frozen closeout evidence files`);
+    if (addedLines > A2_CLOSEOUT_EVIDENCE_MAX_ADDITIONS) throw new Error(`${A2_CLOSEOUT_EVIDENCE_ID} additions budget exceeded: ${addedLines}/${A2_CLOSEOUT_EVIDENCE_MAX_ADDITIONS}`);
+    if (deletedLines > A2_CLOSEOUT_EVIDENCE_MAX_DELETIONS) throw new Error(`${A2_CLOSEOUT_EVIDENCE_ID} deletions budget exceeded: ${deletedLines}/${A2_CLOSEOUT_EVIDENCE_MAX_DELETIONS}`);
+    if (netAdditions > A2_CLOSEOUT_EVIDENCE_MAX_NET_ADDITIONS) throw new Error(`${A2_CLOSEOUT_EVIDENCE_ID} net additions budget exceeded: ${netAdditions}/${A2_CLOSEOUT_EVIDENCE_MAX_NET_ADDITIONS}`);
+    return { packageId: A2_CLOSEOUT_EVIDENCE_ID, manifestId: 'RP-02B2a2-E3-v1', files: changedFiles.length, netAdditions, adr: 'none', testCommand: A2_CLOSEOUT_EVIDENCE_COMMAND, categories: ['governance-evidence'] };
   }
   if (changedAdrs.length === 0 && touchesEvidence) {
     if (!sameFileSet(changedFiles, GATE_PREP_EVIDENCE_FILES)) throw new Error(`${GATE_PREP_EVIDENCE_ID} requires exactly the three frozen evidence files`);
@@ -140,7 +169,7 @@ export function analyzePackageGate({ files, netAdditions, addedLines = netAdditi
   if (![RANGE_BASELINE, GATE_PREP_BASELINE].includes(definition.baselinePolicy) && base !== definition.baselinePolicy) throw new Error(`${definition.packageId} requires fixed baseline ${definition.baselinePolicy}, got ${base}`);
   const outsideManifest = changedFiles.filter((file) => !definition.manifest.has(file));
   if (outsideManifest.length > 0) throw new Error(`${definition.packageId} manifest violation: ${outsideManifest.join(', ')}`);
-  if ([G0_CORRECTION_ID, G0_TEST_LAYER_ID, G0_EVIDENCE_TRIGGER_ID, G0_A2_SCOPE_ID, G0_A2_SCOPE_V5_ID, POSTMERGE_RANGE_CORRECTION_ID].includes(definition.packageId) && !sameFileSet(changedFiles, definition.manifest)) {
+  if ([G0_CORRECTION_ID, G0_TEST_LAYER_ID, G0_EVIDENCE_TRIGGER_ID, G0_A2_SCOPE_ID, G0_A2_SCOPE_V5_ID, POSTMERGE_RANGE_CORRECTION_ID, CLOSEOUT_POLICY_CORRECTION_ID].includes(definition.packageId) && !sameFileSet(changedFiles, definition.manifest)) {
     const missing = [...definition.manifest].filter((file) => !changedFiles.includes(file));
     throw new Error(`${definition.packageId} requires exactly the ${definition.hardMaxFiles} frozen manifest files${missing.length > 0 ? `; missing: ${missing.join(', ')}` : ''}`);
   }
@@ -292,10 +321,10 @@ function trustedSquashDeliveryRange(input, deliveryBase, deliveryHead, { require
 }
 function correctionBootstrapRange(head) {
   const commitAndParents = gitText(['rev-list', '--parents', '-n', '1', head]).trim().split(/\s+/);
-  for (const packageId of [POSTMERGE_RANGE_CORRECTION_ID, G0_A2_SCOPE_V5_ID, G0_A2_SCOPE_ID, G0_EVIDENCE_TRIGGER_ID, G0_TEST_LAYER_ID, G0_CORRECTION_ID]) {
+  for (const packageId of [CLOSEOUT_POLICY_CORRECTION_ID, POSTMERGE_RANGE_CORRECTION_ID, G0_A2_SCOPE_V5_ID, G0_A2_SCOPE_ID, G0_EVIDENCE_TRIGGER_ID, G0_TEST_LAYER_ID, G0_CORRECTION_ID]) {
     const definition = PACKAGE_DEFINITIONS[packageId], fixedBase = FIXED_BASELINES[packageId];
     if (commitAndParents.length !== 2 || commitAndParents[1] !== fixedBase || !adrExistsAt(head, definition)) continue;
-    if (packageId === POSTMERGE_RANGE_CORRECTION_ID) {
+    if ([POSTMERGE_RANGE_CORRECTION_ID, CLOSEOUT_POLICY_CORRECTION_ID].includes(packageId)) {
       const diff = readGitDiff({ base: fixedBase, head, worktree: false });
       const result = analyzePackageGate({ ...diff, adrTextByPath: { [definition.adrPath]: readAdrText(definition.adrPath, head, false) }, base: fixedBase, head, worktree: false });
       if (result.packageId !== packageId) throw new Error(`${packageId} correction candidate structurally resolves as ${result.packageId}`);
@@ -304,12 +333,105 @@ function correctionBootstrapRange(head) {
   }
   return undefined;
 }
+function readAuditedText(path, head) {
+  let bytes;
+  try { bytes = gitBuffer(['show', `${head}:${path}`]); }
+  catch { throw new Error(`${A2_CLOSEOUT_EVIDENCE_ID} cannot read ${path}`); }
+  try { return UTF8_DECODER.decode(bytes); }
+  catch { throw new Error(`${A2_CLOSEOUT_EVIDENCE_ID} rejects invalid UTF-8 in ${path}`); }
+}
+function auditedAddedText(base, head) {
+  const diff = gitText(['diff', '--no-ext-diff', '--no-color', '--unified=0', base, head, '--', ...A2_CLOSEOUT_EVIDENCE_FILES]);
+  const additions = [];
+  let inHunk = false;
+  for (const line of diff.split(/\r?\n/)) {
+    if (line.startsWith('diff --git ')) { inHunk = false; continue; }
+    if (line.startsWith('@@')) { inHunk = true; continue; }
+    if (inHunk && line.startsWith('+')) additions.push(line.slice(1));
+  }
+  return additions.join('\n');
+}
+function validateA2CloseoutAdditions(base, head) {
+  const additions = auditedAddedText(base, head);
+  const normalized = stripRenderedHtmlComments(additions, A2_CLOSEOUT_EVIDENCE_ID)
+    .normalize('NFKC')
+    .replace(/\p{Default_Ignorable_Code_Point}/gu, '')
+    .replace(/[`*~>#\[\](){}|]/g, ' ');
+  if (/\bg0_evidence_[^\s:=]+\s*[:=]/i.test(normalized)) throw new Error(`${A2_CLOSEOUT_EVIDENCE_ID} additions cannot mint or rewrite G0 evidence fields`);
+  if ([...normalized.matchAll(/\b(\d+)\s*\/\s*42\b/g)].some((match) => match[1] !== '9')) throw new Error(`${A2_CLOSEOUT_EVIDENCE_ID} additions contradict the frozen 9/42 total`);
+  if (/RMD-TASK-00[23][^。；;！？!?\n]{0,80}(?:=|:|为|保持)?\s*(?:closed|completed|已关闭|关闭|已完成|完成)(?=$|[\s,，。；;！？!?])/i.test(normalized)) throw new Error(`${A2_CLOSEOUT_EVIDENCE_ID} additions cannot close RMD-TASK-002 or RMD-TASK-003`);
+  const packageSubject = '(?:A[2-5]|B2a[2-5]|RP-02B2a[2-5])';
+  const positiveAuthorization = [
+    `${packageSubject}[^。；;！？!?\\n]{0,48}(?:已(?:经)?(?:获得|获)?授权|授权(?:已经)?生效|获准(?:启动|开始|进入|开发|实施|推进)|approved\\s+for\\s+(?:implementation|development)|is\\s+(?:authorized|allowed|unlocked|released))`,
+    `(?<!不)(?:允许|准予|批准)[^。；;！？!?\\n]{0,36}${packageSubject}(?:[^。；;！？!?\\n]{0,24}(?:启动|开始|进入|开发|实施|推进))?`,
+    `\\b(?:authorized|allowed|unlocked|released)\\b[ \\t,，:：]{1,8}\\b${packageSubject}\\b`,
+  ];
+  if (positiveAuthorization.some((source) => new RegExp(source, 'i').test(normalized))) throw new Error(`${A2_CLOSEOUT_EVIDENCE_ID} additions cannot authorize A2-A5 or downstream implementation`);
+}
+function validateA2CloseoutEvidence(base, head) {
+  validateA2CloseoutAdditions(base, head);
+  const documents = Object.fromEntries([...A2_CLOSEOUT_EVIDENCE_FILES].map((path) => [path, readAuditedText(path, head)]));
+  const verification = documents[A2_CLOSEOUT_EVIDENCE_VERIFICATION];
+  const status = documents['docs/reviews/main-control-status.md'];
+  const eventLedger = documents['docs/reviews/main-control-event-ledger.md'];
+  const issueLedger = documents['docs/remediation/issue-ledger.md'];
+  const acceptanceMatrix = documents['docs/remediation/acceptance-matrix.md'];
+  const requireMatch = (path, text, pattern, label) => {
+    if (!pattern.test(text)) throw new Error(`${A2_CLOSEOUT_EVIDENCE_ID} ${path} missing or conflicts with ${label}`);
+  };
+  requireMatch(A2_CLOSEOUT_EVIDENCE_VERIFICATION, verification, /\| admitted_candidate \| `e8e37cd892570e3abee961374ec3512a373f6400` \|/, 'admitted candidate receipt');
+  requireMatch(A2_CLOSEOUT_EVIDENCE_VERIFICATION, verification, /\| admitted_candidate_tree \| `749fe41f42285dc9115351ddcbc675e77d428cb7` \|/, 'candidate tree receipt');
+  requireMatch(A2_CLOSEOUT_EVIDENCE_VERIFICATION, verification, /\| admitted_manifest_digest \| `11e82805b419a97f598c5b4a9595eb897584c92add2e9d0071184ff9e414c1ba` \|/, 'manifest digest receipt');
+  requireMatch(A2_CLOSEOUT_EVIDENCE_VERIFICATION, verification, /\| squash_delivery_head \| `dc193dbbd3ac1970f571fd618f12902a4033994c` \|/, 'squash delivery receipt');
+  requireMatch(A2_CLOSEOUT_EVIDENCE_VERIFICATION, verification, /\| post_merge_gate_head \| `9f04986469a3e409b3ce887390e8830cbdfe9493` \|/, 'post-merge policy predecessor');
+  requireMatch(A2_CLOSEOUT_EVIDENCE_VERIFICATION, verification, /trusted_replay_run: 29977969717 completed\/success/, 'trusted replay receipt');
+  requireMatch(A2_CLOSEOUT_EVIDENCE_VERIFICATION, verification, /^RMD-TASK-002: partial$/m, 'RMD-TASK-002 partial boundary');
+  requireMatch(A2_CLOSEOUT_EVIDENCE_VERIFICATION, verification, /^RMD-TASK-003: open$/m, 'RMD-TASK-003 open boundary');
+  requireMatch(A2_CLOSEOUT_EVIDENCE_VERIFICATION, verification, /^issue_closed_count: 9\/42 unchanged$/m, '9/42 total boundary');
+  for (const boundary of ['真实 MySQL', '真实付费 provider', '真实媒体', 'E6']) if (!verification.includes(boundary)) throw new Error(`${A2_CLOSEOUT_EVIDENCE_ID} verification must preserve the unproven boundary: ${boundary}`);
+  if (!/ARCH\/SECURITY `APPROVED P0=0\/P1=0\/P2=1`/.test(verification) || !/TEST\/QUALITY `APPROVED P0=0\/P1=0\/P2=0`/.test(verification)) throw new Error(`${A2_CLOSEOUT_EVIDENCE_ID} verification must preserve both independent review verdicts`);
+  requireMatch('docs/reviews/main-control-event-ledger.md', eventLedger, /^accepted_candidate: e8e37cd892570e3abee961374ec3512a373f6400$/m, 'accepted candidate event');
+  requireMatch('docs/reviews/main-control-event-ledger.md', eventLedger, /^accepted_candidate_tree: 749fe41f42285dc9115351ddcbc675e77d428cb7$/m, 'candidate tree event');
+  requireMatch('docs/reviews/main-control-event-ledger.md', eventLedger, /^squash_delivery_head: dc193dbbd3ac1970f571fd618f12902a4033994c$/m, 'delivery event');
+  requireMatch('docs/reviews/main-control-event-ledger.md', eventLedger, /^post_merge_gate_head: 9f04986469a3e409b3ce887390e8830cbdfe9493$/m, 'post-merge event');
+  requireMatch('docs/reviews/main-control-event-ledger.md', eventLedger, /trusted replay `29977969717` completed\/success/, 'trusted replay event');
+  requireMatch('docs/reviews/main-control-event-ledger.md', eventLedger, /RMD-TASK-002 保持 partial、RMD-TASK-003 保持 open、总账保持 9\/42/, 'open issue event boundary');
+  requireMatch('docs/reviews/main-control-status.md', status, /RP-02B2a2 trusted replay `29977969717` 全绿/, 'trusted replay status');
+  requireMatch('docs/reviews/main-control-status.md', status, /总账 9\/42、RMD-TASK-002=partial、RMD-TASK-003=open/, 'status total and issue boundary');
+  requireMatch('docs/remediation/issue-ledger.md', issueLedger, /^\| RMD-TASK-002 \|[^\n]*\| partial \|/m, 'RMD-TASK-002 ledger row');
+  requireMatch('docs/remediation/issue-ledger.md', issueLedger, /^\| RMD-TASK-003 \|[^\n]*\| open \|/m, 'RMD-TASK-003 ledger row');
+  if (/^\| RMD-TASK-00[23] \|[^\n]*\| closed \|/m.test(issueLedger)) throw new Error(`${A2_CLOSEOUT_EVIDENCE_ID} issue ledger cannot close RMD-TASK-002 or RMD-TASK-003`);
+  requireMatch('docs/remediation/acceptance-matrix.md', acceptanceMatrix, /candidate `e8e37cd`[^\n]*trusted replay `29977969717`/, 'A2 acceptance receipt');
+  requireMatch('docs/remediation/acceptance-matrix.md', acceptanceMatrix, /`9\/42`/, 'acceptance total boundary');
+  requireMatch('docs/remediation/acceptance-matrix.md', acceptanceMatrix, /`RMD-TASK-002=partial`/, 'acceptance RMD-TASK-002 boundary');
+  requireMatch('docs/remediation/acceptance-matrix.md', acceptanceMatrix, /`RMD-TASK-003=open`/, 'acceptance RMD-TASK-003 boundary');
+}
+function policyCloseoutRange(input, head) {
+  if (!input.policySource) return undefined;
+  assertUsableSha('POLICY_SOURCE', input.policySource); assertGitCommit('POLICY_SOURCE', input.policySource);
+  if (!isAncestor(input.policySource, head)) return undefined;
+  const files = changedFiles(input.policySource, head);
+  if (!files.includes(A2_CLOSEOUT_EVIDENCE_VERIFICATION)) return undefined;
+  const commitAndParents = gitText(['rev-list', '--parents', '-n', '1', head]).trim().split(/\s+/);
+  if (commitAndParents.length !== 2 || commitAndParents[1] !== input.policySource) throw new Error(`${A2_CLOSEOUT_EVIDENCE_ID} must be one direct child commit of the repository-controlled policy source`);
+  const diff = readGitDiff({ base: input.policySource, head, worktree: false });
+  const result = analyzePackageGate({ ...diff, adrTextByPath: {}, base: input.policySource, head, worktree: false });
+  if (result.packageId !== A2_CLOSEOUT_EVIDENCE_ID) throw new Error(`${A2_CLOSEOUT_EVIDENCE_ID} structurally resolves as ${result.packageId}`);
+  validateA2CloseoutEvidence(input.policySource, head);
+  return { base: input.policySource, head, packageId: A2_CLOSEOUT_EVIDENCE_ID, admissionKind: 'closeout' };
+}
 export function resolvePackageGateRange(input) {
   const event = input.event;
   if (event === 'pull_request_target') {
     const eventBase = input.eventBase, head = input.eventHead;
     assertUsableSha('EVENT_BASE', eventBase); assertUsableSha('EVENT_HEAD', head);
     assertGitCommit('EVENT_BASE', eventBase); assertGitCommit('EVENT_HEAD', head);
+    const closeout = policyCloseoutRange(input, head);
+    if (closeout) {
+      const mergeBase = gitText(['merge-base', eventBase, head]).trim();
+      if (mergeBase !== input.policySource || eventBase !== input.policySource) throw new Error(`${A2_CLOSEOUT_EVIDENCE_ID} pull request base and merge-base must equal the repository-controlled policy source`);
+      return { ...closeout, eventBase };
+    }
     if (!BUSINESS_PACKAGE_SEQUENCE.includes(input.authorizedPackageId) || !input.authorizedPredecessorSha) throw new Error('RP-02B2a authoritative admission requires the repository-controlled package/predecessor tuple');
     assertUsableSha('GATE_SOURCE', input.gateSource); assertGitCommit('GATE_SOURCE', input.gateSource);
     if (!isAncestor(input.gateSource, eventBase)) throw new Error('RP-02B2a authoritative workflow base must descend from the accepted G0 gate source');
@@ -333,9 +455,10 @@ export function resolvePackageGateRange(input) {
   if (event === 'push') {
     const base = input.pushBefore, head = input.pushHead;
     assertUsableSha('PUSH_HEAD', head); assertGitCommit('PUSH_HEAD', head);
-    const correction = correctionBootstrapRange(head);
+    const correction = correctionBootstrapRange(head), closeout = policyCloseoutRange(input, head);
     if (base === ZERO_SHA) {
       if (input.pushCreated !== 'true') throw new Error('RP-02B2a package gate rejects zero PUSH_BEFORE unless GitHub marks a newly created ref');
+      if (closeout) throw new Error(`${A2_CLOSEOUT_EVIDENCE_ID} cannot be admitted from a newly created ref`);
       if (correction) return correction;
       const authorized = externallyAuthorizedRange(input, head);
       if (!authorized) throw new Error('RP-02B2a package gate rejects newly created ref without a complete repository-authorized package/predecessor tuple');
@@ -343,6 +466,11 @@ export function resolvePackageGateRange(input) {
     }
     if (input.pushCreated === 'true') throw new Error('RP-02B2a package gate rejects inconsistent created push with non-zero PUSH_BEFORE');
     assertUsableSha('PUSH_BEFORE', base); assertGitCommit('PUSH_BEFORE', base);
+    if (closeout) {
+      if (input.pushRef !== 'refs/heads/main') throw new Error(`${A2_CLOSEOUT_EVIDENCE_ID} push delivery requires refs/heads/main`);
+      if (base !== input.policySource || !isAncestor(base, head)) throw new Error(`${A2_CLOSEOUT_EVIDENCE_ID} push before must equal the repository-controlled policy source`);
+      return closeout;
+    }
     if (correction) {
       if (base === correction.base) return correction;
       if (correctionBootstrapRange(base)?.packageId === correction.packageId) return correction;
@@ -978,7 +1106,7 @@ export function verifyWorkflowContract({ workflowPath, packageId, testCommand, t
   assertExactKeys(dispatch, ['types'], 'repository_dispatch');
   const dispatchTypes = requireSequence(dispatch.types, 'repository_dispatch types');
   if (JSON.stringify(dispatchTypes) !== JSON.stringify(['rp02b2a_replay'])) throw new Error('RP-02B2a workflow repository_dispatch type must be exactly rp02b2a_replay');
-  const requiredFiles = [...new Set(Object.values(PACKAGE_DEFINITIONS).flatMap((item) => [...item.manifest]))];
+  const requiredFiles = [...new Set([...Object.values(PACKAGE_DEFINITIONS).flatMap((item) => [...item.manifest]), ...A2_CLOSEOUT_EVIDENCE_FILES])];
   for (const event of ['push']) {
     const eventConfig = requireMapping(triggers[event], `workflow ${event}`);
     assertExactKeys(eventConfig, ['paths'], `workflow ${event}`);
@@ -1019,20 +1147,20 @@ export function verifyWorkflowContract({ workflowPath, packageId, testCommand, t
   if (JSON.stringify(actualStepIdentities) !== JSON.stringify(expectedStepIdentities)) throw new Error('RP-02B2a workflow step sequence contains missing, extra, or reordered execution');
   const expectedStepKeys = [['uses', 'with'], ['uses', 'with'], ['name', 'id', 'env', 'run'], ['name', 'id', 'env', 'run'], ['name', 'env', 'run'], ['name', 'if', 'env', 'run'], ['run'], ['run'], ['run'], ['run'], ['env', 'run'], ['run'], ['run'], ['run'], ['run'], ['run'], ['run'], ['run'], ['run']];
   steps.forEach((step, index) => assertExactKeys(step, expectedStepKeys[index], `rp01c-fixtures step ${index + 1}`));
-  assertStepEnv(rangeStep, { EVENT_NAME: '${{ github.event_name }}', EVENT_REF: '${{ github.ref }}', WORKFLOW_SHA: '${{ github.sha }}', PUSH_REF: '${{ github.ref }}', PUSH_CREATED: '${{ github.event.created }}', PUSH_BEFORE_SHA: '${{ github.event.before }}', PUSH_AFTER_SHA: '${{ github.event.after }}', MANUAL_BASE_SHA: '${{ github.event.client_payload.base_sha }}', MANUAL_HEAD_SHA: '${{ github.event.client_payload.head_sha }}', B2A_GATE_SOURCE_SHA: '${{ vars.RP02B2A_GATE_SOURCE_SHA }}', B2A_G0_EVIDENCE_SHA: '${{ vars.RP02B2A_G0_EVIDENCE_SHA }}', B2A_AUTHORIZED_PACKAGE_ID: '${{ vars.RP02B2A_AUTHORIZED_PACKAGE_ID }}', B2A_AUTHORIZED_PREDECESSOR_SHA: '${{ vars.RP02B2A_AUTHORIZED_PREDECESSOR_SHA }}', B2A_AUTHORIZED_CANDIDATE_SHA: '${{ vars.RP02B2A_AUTHORIZED_CANDIDATE_SHA }}', B2A_AUTHORIZED_CANDIDATE_REF: '${{ vars.RP02B2A_AUTHORIZED_CANDIDATE_REF }}', B2A_AUTHORIZED_CANDIDATE_TREE: '${{ vars.RP02B2A_AUTHORIZED_CANDIDATE_TREE }}', B2A_AUTHORIZED_MANIFEST_DIGEST: '${{ vars.RP02B2A_AUTHORIZED_MANIFEST_DIGEST }}' }, 'range resolver');
-  assertStepEnv(resolverStep, { B2A_BASE_SHA: '${{ steps.b2a-range.outputs.base }}', B2A_HEAD_SHA: '${{ steps.b2a-range.outputs.head }}', B2A_DELIVERY_BASE_SHA: '${{ steps.b2a-range.outputs.delivery_base }}', B2A_DELIVERY_HEAD_SHA: '${{ steps.b2a-range.outputs.delivery_head }}', B2A_GATE_SOURCE_SHA: '${{ vars.RP02B2A_GATE_SOURCE_SHA }}', B2A_G0_EVIDENCE_SHA: '${{ vars.RP02B2A_G0_EVIDENCE_SHA }}', B2A_AUTHORIZED_PACKAGE_ID: '${{ vars.RP02B2A_AUTHORIZED_PACKAGE_ID }}', B2A_AUTHORIZED_PREDECESSOR_SHA: '${{ vars.RP02B2A_AUTHORIZED_PREDECESSOR_SHA }}', B2A_AUTHORIZED_CANDIDATE_SHA: '${{ vars.RP02B2A_AUTHORIZED_CANDIDATE_SHA }}', B2A_AUTHORIZED_CANDIDATE_TREE: '${{ vars.RP02B2A_AUTHORIZED_CANDIDATE_TREE }}', B2A_AUTHORIZED_MANIFEST_DIGEST: '${{ vars.RP02B2A_AUTHORIZED_MANIFEST_DIGEST }}' }, 'package resolver');
+  assertStepEnv(rangeStep, { EVENT_NAME: '${{ github.event_name }}', EVENT_REF: '${{ github.ref }}', WORKFLOW_SHA: '${{ github.sha }}', PUSH_REF: '${{ github.ref }}', PUSH_CREATED: '${{ github.event.created }}', PUSH_BEFORE_SHA: '${{ github.event.before }}', PUSH_AFTER_SHA: '${{ github.event.after }}', MANUAL_BASE_SHA: '${{ github.event.client_payload.base_sha }}', MANUAL_HEAD_SHA: '${{ github.event.client_payload.head_sha }}', B2A_POLICY_SOURCE_SHA: '${{ vars.RP02B2A_POLICY_SOURCE_SHA }}', B2A_GATE_SOURCE_SHA: '${{ vars.RP02B2A_GATE_SOURCE_SHA }}', B2A_G0_EVIDENCE_SHA: '${{ vars.RP02B2A_G0_EVIDENCE_SHA }}', B2A_AUTHORIZED_PACKAGE_ID: '${{ vars.RP02B2A_AUTHORIZED_PACKAGE_ID }}', B2A_AUTHORIZED_PREDECESSOR_SHA: '${{ vars.RP02B2A_AUTHORIZED_PREDECESSOR_SHA }}', B2A_AUTHORIZED_CANDIDATE_SHA: '${{ vars.RP02B2A_AUTHORIZED_CANDIDATE_SHA }}', B2A_AUTHORIZED_CANDIDATE_REF: '${{ vars.RP02B2A_AUTHORIZED_CANDIDATE_REF }}', B2A_AUTHORIZED_CANDIDATE_TREE: '${{ vars.RP02B2A_AUTHORIZED_CANDIDATE_TREE }}', B2A_AUTHORIZED_MANIFEST_DIGEST: '${{ vars.RP02B2A_AUTHORIZED_MANIFEST_DIGEST }}' }, 'range resolver');
+  assertStepEnv(resolverStep, { B2A_BASE_SHA: '${{ steps.b2a-range.outputs.base }}', B2A_HEAD_SHA: '${{ steps.b2a-range.outputs.head }}', B2A_DELIVERY_BASE_SHA: '${{ steps.b2a-range.outputs.delivery_base }}', B2A_DELIVERY_HEAD_SHA: '${{ steps.b2a-range.outputs.delivery_head }}', B2A_POLICY_SOURCE_SHA: '${{ vars.RP02B2A_POLICY_SOURCE_SHA }}', B2A_GATE_SOURCE_SHA: '${{ vars.RP02B2A_GATE_SOURCE_SHA }}', B2A_G0_EVIDENCE_SHA: '${{ vars.RP02B2A_G0_EVIDENCE_SHA }}', B2A_AUTHORIZED_PACKAGE_ID: '${{ vars.RP02B2A_AUTHORIZED_PACKAGE_ID }}', B2A_AUTHORIZED_PREDECESSOR_SHA: '${{ vars.RP02B2A_AUTHORIZED_PREDECESSOR_SHA }}', B2A_AUTHORIZED_CANDIDATE_SHA: '${{ vars.RP02B2A_AUTHORIZED_CANDIDATE_SHA }}', B2A_AUTHORIZED_CANDIDATE_TREE: '${{ vars.RP02B2A_AUTHORIZED_CANDIDATE_TREE }}', B2A_AUTHORIZED_MANIFEST_DIGEST: '${{ vars.RP02B2A_AUTHORIZED_MANIFEST_DIGEST }}' }, 'package resolver');
   assertStepEnv(selfCheckStep, { B2A_PACKAGE_ID: '${{ steps.b2a-package.outputs.package_id }}', B2A_TEST_COMMAND: '${{ steps.b2a-package.outputs.test_command }}' }, 'workflow self-check');
   assertStepEnv(evidenceStep, { GH_TOKEN: '${{ github.token }}', GITHUB_REPOSITORY: '${{ github.repository }}', B2A_BASE_SHA: '${{ steps.b2a-range.outputs.base }}', B2A_HEAD_SHA: '${{ steps.b2a-range.outputs.head }}', EVIDENCE_PARENT: '${{ steps.b2a-package.outputs.evidence_parent }}', EVIDENCE_RUNS: '${{ steps.b2a-package.outputs.evidence_runs }}' }, 'evidence parent runs');
   assertStepEnv(selectedTestStep, { B2A_TEST_COMMAND: '${{ steps.b2a-package.outputs.test_command }}' }, 'selected package command');
   if (!(steps.indexOf(rangeStep) < steps.indexOf(resolverStep) && steps.indexOf(resolverStep) < steps.indexOf(selfCheckStep) && steps.indexOf(selfCheckStep) < steps.indexOf(evidenceStep) && steps.indexOf(evidenceStep) < steps.indexOf(installStep))) throw new Error('RP-02B2a workflow package gate and evidence verification must complete before npm ci');
   assertShellBlock(rangeStep, rangeCommands(), 'range resolver');
-  assertShellBlock(resolverStep, ['set -euo pipefail', `${GATE_ENV_COMMAND} node scripts/rp02b2a-package-gate.mjs --github-output --base "$B2A_BASE_SHA" --head "$B2A_HEAD_SHA" --gate-source "$B2A_GATE_SOURCE_SHA" --g0-evidence-sha "$B2A_G0_EVIDENCE_SHA" --authorized-package-id "$B2A_AUTHORIZED_PACKAGE_ID" --authorized-predecessor-sha "$B2A_AUTHORIZED_PREDECESSOR_SHA" >> "$GITHUB_OUTPUT"`], 'package resolver');
+  assertShellBlock(resolverStep, ['set -euo pipefail', `${GATE_ENV_COMMAND} node scripts/rp02b2a-package-gate.mjs --github-output --base "$B2A_BASE_SHA" --head "$B2A_HEAD_SHA" --policy-source "$B2A_POLICY_SOURCE_SHA" --gate-source "$B2A_GATE_SOURCE_SHA" --g0-evidence-sha "$B2A_G0_EVIDENCE_SHA" --authorized-package-id "$B2A_AUTHORIZED_PACKAGE_ID" --authorized-predecessor-sha "$B2A_AUTHORIZED_PREDECESSOR_SHA" >> "$GITHUB_OUTPUT"`], 'package resolver');
   assertShellBlock(selfCheckStep, ['set -euo pipefail', `${GATE_ENV_COMMAND} node scripts/rp02b2a-package-gate.mjs --verify-workflow .github/workflows/rp01c-fixtures.yml --package-id "$B2A_PACKAGE_ID" --test-command "$B2A_TEST_COMMAND"`], 'workflow self-check');
   assertShellBlock(evidenceStep, evidenceRunCommands(), 'evidence parent runs');
   assertShellBlock(selectedTestStep, ['set -euo pipefail', `${GATE_ENV_COMMAND} npm run "$B2A_TEST_COMMAND"`], 'selected package command');
   for (const [index, step] of steps.entries()) if (step !== evidenceStep) assertRequiredStepEnabled(step, index + 1);
   if (evidenceStep.if !== "steps.b2a-package.outputs.package_id == 'RP-02B2a2-G0-E1'" || Object.hasOwn(evidenceStep, 'shell') || (Object.hasOwn(evidenceStep, 'continue-on-error') && evidenceStep['continue-on-error'] !== 'false')) throw new Error('RP-02B2a workflow evidence step condition or failure semantics mismatch');
-  if (packageId || testCommand) { const definition = PACKAGE_DEFINITIONS[packageId], fallback = packageId === FALLBACK_PACKAGE_ID && testCommand === FALLBACK_TEST_COMMAND, evidence = packageId === GATE_PREP_EVIDENCE_ID && testCommand === GATE_PREP_EVIDENCE_COMMAND; if ((!definition || definition.testCommand !== testCommand) && !fallback && !evidence) throw new Error(`RP-02B2a workflow package command mismatch: ${packageId}/${testCommand}`); }
+  if (packageId || testCommand) { const definition = PACKAGE_DEFINITIONS[packageId], fallback = packageId === FALLBACK_PACKAGE_ID && testCommand === FALLBACK_TEST_COMMAND, evidence = packageId === GATE_PREP_EVIDENCE_ID && testCommand === GATE_PREP_EVIDENCE_COMMAND, closeout = packageId === A2_CLOSEOUT_EVIDENCE_ID && testCommand === A2_CLOSEOUT_EVIDENCE_COMMAND; if ((!definition || definition.testCommand !== testCommand) && !fallback && !evidence && !closeout) throw new Error(`RP-02B2a workflow package command mismatch: ${packageId}/${testCommand}`); }
   return { requiredFiles: requiredFiles.length };
 }
 export function verifyTrustedAdmissionWorkflowContract({ workflowPath = TRUSTED_ADMISSION_WORKFLOW, head } = {}) {
@@ -1054,7 +1182,15 @@ export function verifyTrustedAdmissionWorkflowContract({ workflowPath = TRUSTED_
   const jobs = requireMapping(workflow.jobs, 'trusted workflow jobs');
   assertExactKeys(jobs, ['admission', 'candidate'], 'trusted workflow jobs');
   const digest = createHash('sha256').update(workflowText.replace(/\r\n/g, '\n')).digest('hex');
-  if (digest !== TRUSTED_ADMISSION_WORKFLOW_CANONICAL_SHA256) throw new Error(`RP-02B2a trusted admission workflow canonical contract mismatch: ${digest}`);
+  const acceptedLegacyWorkflow = digest === TRUSTED_ADMISSION_WORKFLOW_LEGACY_SHA256 && head && TRUSTED_ADMISSION_WORKFLOW_LEGACY_HEADS.has(head);
+  if (!acceptedLegacyWorkflow) {
+    const candidateJob = requireMapping(jobs.candidate, 'trusted workflow candidate job');
+    if (candidateJob.if !== "needs.admission.outputs.admission_kind == 'business'") throw new Error('RP-02B2a trusted workflow candidate job must run only for business admission');
+  }
+  const acceptedDigests = head && TRUSTED_ADMISSION_WORKFLOW_LEGACY_HEADS.has(head)
+    ? new Set([TRUSTED_ADMISSION_WORKFLOW_LEGACY_SHA256, TRUSTED_ADMISSION_WORKFLOW_CANONICAL_SHA256])
+    : new Set([TRUSTED_ADMISSION_WORKFLOW_CANONICAL_SHA256]);
+  if (!acceptedDigests.has(digest)) throw new Error(`RP-02B2a trusted admission workflow canonical contract mismatch: ${digest}`);
   return { workflowPath, digest };
 }
 function workflowPathCovers(pattern, file) { if (typeof pattern !== 'string') return false; if (pattern.endsWith('/**')) return file.startsWith(pattern.slice(0, -3)); if (pattern.endsWith('.*')) return file.startsWith(pattern.slice(0, -1)); return pattern === file; }
@@ -1066,7 +1202,7 @@ function workflowStepIdentity(step) {
   return 'unknown';
 }
 function rangeCommands() {
-  const authorization = '--gate-source "$B2A_GATE_SOURCE_SHA" --g0-evidence-sha "$B2A_G0_EVIDENCE_SHA" --authorized-package-id "$B2A_AUTHORIZED_PACKAGE_ID" --authorized-predecessor-sha "$B2A_AUTHORIZED_PREDECESSOR_SHA" --authorized-candidate-sha "$B2A_AUTHORIZED_CANDIDATE_SHA" --authorized-candidate-tree "$B2A_AUTHORIZED_CANDIDATE_TREE" --authorized-manifest-digest "$B2A_AUTHORIZED_MANIFEST_DIGEST"';
+  const authorization = '--policy-source "$B2A_POLICY_SOURCE_SHA" --gate-source "$B2A_GATE_SOURCE_SHA" --g0-evidence-sha "$B2A_G0_EVIDENCE_SHA" --authorized-package-id "$B2A_AUTHORIZED_PACKAGE_ID" --authorized-predecessor-sha "$B2A_AUTHORIZED_PREDECESSOR_SHA" --authorized-candidate-sha "$B2A_AUTHORIZED_CANDIDATE_SHA" --authorized-candidate-tree "$B2A_AUTHORIZED_CANDIDATE_TREE" --authorized-manifest-digest "$B2A_AUTHORIZED_MANIFEST_DIGEST"';
   return ['set -euo pipefail', 'if [[ "$EVENT_NAME" == "repository_dispatch" ]]; then', '[[ "$B2A_AUTHORIZED_CANDIDATE_REF" =~ ^refs/tags/rp02b2a-admitted-[a-f0-9]{12,40}$ ]] || { echo "authorized candidate ref must use the durable rp02b2a admission tag namespace" >&2; exit 1; }', 'git fetch --no-tags --force origin "$B2A_AUTHORIZED_CANDIDATE_REF:refs/remotes/origin/rp02b2a-admitted-candidate"', 'test "$(git rev-parse refs/remotes/origin/rp02b2a-admitted-candidate^{commit})" = "$B2A_AUTHORIZED_CANDIDATE_SHA"', 'fi', 'if [[ "$EVENT_NAME" == "push" ]]; then', GATE_ENV_COMMAND + ` node scripts/rp02b2a-package-gate.mjs --print-range --event push --push-ref "$PUSH_REF" --push-created "$PUSH_CREATED" --push-before "$PUSH_BEFORE_SHA" --push-head "$PUSH_AFTER_SHA" ${authorization} >> "$GITHUB_OUTPUT"`, 'elif [[ "$EVENT_NAME" == "repository_dispatch" ]]; then', GATE_ENV_COMMAND + ` node scripts/rp02b2a-package-gate.mjs --print-range --event repository_dispatch --event-ref "$EVENT_REF" --manual-base "$MANUAL_BASE_SHA" --manual-head "$MANUAL_HEAD_SHA" ${authorization} >> "$GITHUB_OUTPUT"`, 'else', 'echo "RP-01C only accepts trusted push or default-branch repository_dispatch replay ranges" >&2', 'exit 1', 'fi', 'BASE="$(grep \'^base=\' "$GITHUB_OUTPUT" | tail -n1 | cut -d= -f2-)"', 'HEAD="$(grep \'^head=\' "$GITHUB_OUTPUT" | tail -n1 | cut -d= -f2-)"', 'DELIVERY_BASE="$(grep \'^delivery_base=\' "$GITHUB_OUTPUT" | tail -n1 | cut -d= -f2-)"', 'DELIVERY_HEAD="$(grep \'^delivery_head=\' "$GITHUB_OUTPUT" | tail -n1 | cut -d= -f2-)"', 'if [[ -z "$BASE" || -z "$HEAD" || -z "$DELIVERY_BASE" || -z "$DELIVERY_HEAD" || "$BASE" =~ ^0+$ || "$HEAD" =~ ^0+$ || "$DELIVERY_BASE" =~ ^0+$ || "$DELIVERY_HEAD" =~ ^0+$ ]]; then', 'echo "B2a package gate requires explicit non-zero analysis and delivery ranges" >&2', 'exit 1', 'fi', 'test "$(git rev-parse HEAD)" = "$(git rev-parse "$WORKFLOW_SHA")"'];
 }
 function evidenceRunCommands() { return ['set -euo pipefail', 'test "$B2A_BASE_SHA" = "$EVIDENCE_PARENT"', `IFS=',' read -r -a RUNS <<< "$EVIDENCE_RUNS"`, 'test "${#RUNS[@]}" -eq 4', 'declare -A SEEN_LABELS=() SEEN_RUN_IDS=()', 'for item in "${RUNS[@]}"; do', 'label="${item%%:*}"', 'run_id="${item#*:}"', 'case "$label" in', 'rp01a) expected="RP-01A backend E2E"; workflow_file="rp01a-e2e.yml"; expected_path=".github/workflows/$workflow_file" ;;', 'rp01b) expected="RP-01B admin DOM tests"; workflow_file="rp01b-dom.yml"; expected_path=".github/workflows/$workflow_file" ;;', 'rp01c) expected="RP-01C deterministic fixtures"; workflow_file="rp01c-fixtures.yml"; expected_path=".github/workflows/$workflow_file" ;;', 'governance) expected="Remediation governance"; workflow_file="remediation-governance.yml"; expected_path=".github/workflows/$workflow_file" ;;', '*) exit 1 ;;', 'esac', '[[ "$run_id" =~ ^[1-9][0-9]+$ ]] || { echo "parent run id is invalid" >&2; exit 1; }', 'test -z "${SEEN_LABELS[$label]+x}" || { echo "duplicate workflow label" >&2; exit 1; }', 'test -z "${SEEN_RUN_IDS[$run_id]+x}" || { echo "duplicate workflow run id" >&2; exit 1; }', 'SEEN_LABELS[$label]=1', 'SEEN_RUN_IDS[$run_id]=1', `IFS=$'\\t' read -r expected_workflow_id repository_path < <(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow_file" --jq '[.id,.path] | @tsv')`, '[[ "$expected_workflow_id" =~ ^[1-9][0-9]+$ ]] || { echo "workflow id lookup is invalid" >&2; exit 1; }', 'test "$repository_path" = "$expected_path" || { echo "workflow repository path mismatch" >&2; exit 1; }', `IFS=$'\\t' read -r name workflow_path workflow_id event run_head head_branch status conclusion < <(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" --jq '[.name,.path,.workflow_id,.event,.head_sha,.head_branch,.status,.conclusion] | @tsv')`, 'test "$name" = "$expected" || { echo "workflow name mismatch" >&2; exit 1; }', 'case "$workflow_path" in', '"$expected_path") ;;', '"$expected_path"@*) workflow_ref="${workflow_path#"$expected_path"@}"; [[ "$workflow_ref" =~ ^[A-Za-z0-9][A-Za-z0-9._/@+-]{0,254}$ ]] || exit 1 ;;', '*) echo "workflow path mismatch" >&2; exit 1 ;;', 'esac', 'test "$workflow_id" = "$expected_workflow_id" || { echo "workflow id mismatch" >&2; exit 1; }', 'test "$event" = "push" || { echo "workflow event mismatch" >&2; exit 1; }', 'test "$run_head" = "$EVIDENCE_PARENT" || { echo "workflow head mismatch" >&2; exit 1; }', 'test "$head_branch" = "main" || { echo "workflow branch mismatch" >&2; exit 1; }', 'test "$status" = "completed" || { echo "workflow status mismatch" >&2; exit 1; }', 'test "$conclusion" = "success" || { echo "workflow conclusion mismatch" >&2; exit 1; }', 'git cat-file -e "${EVIDENCE_PARENT}:${expected_path}"', 'git cat-file -e "${B2A_HEAD_SHA}:${expected_path}"', 'git diff --quiet "$EVIDENCE_PARENT" "$B2A_HEAD_SHA" -- "$expected_path"', 'done']; }
@@ -1081,7 +1217,7 @@ export function parseWorkflowYaml(workflowPath, head) {
   try {
     json = execFileSync('ruby', ['-W0', '-rpsych', '-rjson', '-e', YAML_AST_TO_JSON], { input: workflowText, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
   } catch (error) {
-    const detail = error?.stderr?.toString().trim() || error?.message || String(error); throw new Error(`RP-02B2a workflow YAML structure parse failed: ${detail}`);
+    const detail = error?.stderr?.toString().trim() || error?.message || String(error); throw new Error(`RP-02B2a trusted workflow YAML structure parse failed: ${detail}`);
   }
   try {
     const workflow = requireMapping(JSON.parse(json), 'workflow root');
@@ -1113,16 +1249,16 @@ function runCliUncached(argv = process.argv.slice(2)) {
     console.log(`workflow_contract=passed required_files=${result.requiredFiles}`); return;
   }
   if (args.get('print-range') === 'true') {
-    const range = resolvePackageGateRange({ event: args.get('event'), eventRef: args.get('event-ref'), eventBase: args.get('event-base'), eventHead: args.get('event-head'), gateSource: args.get('gate-source'), g0EvidenceSha: args.get('g0-evidence-sha'), prBaseRef: args.get('pr-base-ref'), prHead: args.get('pr-head'), pushRef: args.get('push-ref') ?? args.get('push-base-ref'), pushCreated: args.get('push-created'), pushBefore: args.get('push-before'), pushHead: args.get('push-head'), manualBase: args.get('manual-base'), manualHead: args.get('manual-head'), authorizedPackageId: args.get('authorized-package-id'), authorizedPredecessorSha: args.get('authorized-predecessor-sha'), authorizedCandidateSha: args.get('authorized-candidate-sha'), authorizedCandidateTree: args.get('authorized-candidate-tree'), authorizedManifestDigest: args.get('authorized-manifest-digest') });
-    console.log(`base=${range.base}`); console.log(`head=${range.head}`); console.log(`delivery_base=${range.deliveryBase ?? range.base}`); console.log(`delivery_head=${range.deliveryHead ?? range.head}`); console.log(`range_mode=${range.rangeMode ?? 'direct'}`); return;
+    const range = resolvePackageGateRange({ event: args.get('event'), eventRef: args.get('event-ref'), eventBase: args.get('event-base'), eventHead: args.get('event-head'), policySource: args.get('policy-source'), gateSource: args.get('gate-source'), g0EvidenceSha: args.get('g0-evidence-sha'), prBaseRef: args.get('pr-base-ref'), prHead: args.get('pr-head'), pushRef: args.get('push-ref') ?? args.get('push-base-ref'), pushCreated: args.get('push-created'), pushBefore: args.get('push-before'), pushHead: args.get('push-head'), manualBase: args.get('manual-base'), manualHead: args.get('manual-head'), authorizedPackageId: args.get('authorized-package-id'), authorizedPredecessorSha: args.get('authorized-predecessor-sha'), authorizedCandidateSha: args.get('authorized-candidate-sha'), authorizedCandidateTree: args.get('authorized-candidate-tree'), authorizedManifestDigest: args.get('authorized-manifest-digest') });
+    console.log(`base=${range.base}`); console.log(`head=${range.head}`); console.log(`delivery_base=${range.deliveryBase ?? range.base}`); console.log(`delivery_head=${range.deliveryHead ?? range.head}`); console.log(`range_mode=${range.rangeMode ?? 'direct'}`); console.log(`admission_kind=${range.admissionKind ?? 'business'}`); return;
   }
   let base = args.get('base'), head = args.get('head');
   const worktree = args.get('worktree') === 'true', githubOutput = args.get('github-output') === 'true', event = args.get('event');
-  let authoritativeEventBase;
+  let authoritativeEventBase, admissionKind = 'business';
   if (event === 'pull_request_target') {
     if (args.has('base') || args.has('head') || worktree) throw new Error('RP-02B2a authoritative admission rejects caller-selected base/head or worktree mode');
-    const range = resolvePackageGateRange({ event, eventBase: args.get('event-base'), eventHead: args.get('event-head'), gateSource: args.get('gate-source'), authorizedPackageId: args.get('authorized-package-id'), authorizedPredecessorSha: args.get('authorized-predecessor-sha') });
-    base = range.base; head = range.head; authoritativeEventBase = range.eventBase;
+    const range = resolvePackageGateRange({ event, eventBase: args.get('event-base'), eventHead: args.get('event-head'), policySource: args.get('policy-source'), gateSource: args.get('gate-source'), authorizedPackageId: args.get('authorized-package-id'), authorizedPredecessorSha: args.get('authorized-predecessor-sha') });
+    base = range.base; head = range.head; authoritativeEventBase = range.eventBase; admissionKind = range.admissionKind ?? 'business';
   } else if (event) throw new Error(`RP-02B2a non-range gate rejects non-authoritative event mode: ${event}`);
   if (worktree && githubOutput) throw new Error('RP-02B2a package gate rejects --worktree with --github-output because dirty reviewed content has no stable output identity');
   const deliveryBase = args.get('delivery-base') ?? process.env.B2A_DELIVERY_BASE_SHA, deliveryHead = args.get('delivery-head') ?? process.env.B2A_DELIVERY_HEAD_SHA;
@@ -1137,6 +1273,14 @@ function runCliUncached(argv = process.argv.slice(2)) {
   const adrTextByPath = Object.fromEntries(changedAdrs.map((path) => [path, readAdrText(path, effectiveHead, worktree)]));
   if (changedAdrs.length === 1 && changedAdrs[0] === B2A2_GATE_PREP_ADR) validateGatePrepPackageScripts({ packageId: B2A2_GATE_PREP_ID, head: effectiveHead, worktree });
   const result = analyzePackageGate({ files, addedLines, deletedLines, netAdditions, adrTextByPath, base, head: effectiveHead, worktree });
+  if (result.packageId === A2_CLOSEOUT_EVIDENCE_ID) {
+    if (worktree) throw new Error(`${A2_CLOSEOUT_EVIDENCE_ID} rejects dirty worktree admission`);
+    const policySource = args.get('policy-source');
+    if (!policySource) throw new Error(`${A2_CLOSEOUT_EVIDENCE_ID} requires an explicit repository-controlled policy source`);
+    const closeout = policyCloseoutRange({ policySource }, effectiveHead);
+    if (!closeout || closeout.base !== base) throw new Error(`${A2_CLOSEOUT_EVIDENCE_ID} base must equal the repository-controlled policy source`);
+    admissionKind = 'closeout';
+  }
   if (result.packageId === B2A2_GATE_PREP_ID) {
     if (worktree) {
       validateGatePrepWorktreeHead(effectiveHead);
@@ -1189,11 +1333,12 @@ function runCliUncached(argv = process.argv.slice(2)) {
   }
   if (args.has('authorized-g0')) throw new Error('RP-02B2a trusted admission rejects retired --authorized-g0; use the repository-controlled package/predecessor tuple');
   const businessAuthorization = validateBusinessAuthorization({ packageId: result.packageId, base, head: effectiveHead, gateSource: args.get('gate-source'), g0EvidenceSha: args.get('g0-evidence-sha'), authorizedPackageId: args.get('authorized-package-id'), authorizedPredecessorSha: args.get('authorized-predecessor-sha') });
+  const closeoutManifestDigest = result.packageId === A2_CLOSEOUT_EVIDENCE_ID ? packageManifestDigest(A2_CLOSEOUT_EVIDENCE_DEFINITION, { base, head: effectiveHead }) : undefined;
   const evidence = result.packageId === GATE_PREP_EVIDENCE_ID ? validateGatePrepEvidencePublication({ base, head: effectiveHead, worktree }) : undefined;
   validateGatePrepPackageScripts({ packageId: result.packageId, head: effectiveHead, worktree });
   validateCandidatePackageScripts({ packageId: result.packageId, head: effectiveHead, base, worktree });
   if (githubOutput) {
-    console.log(`package_id=${result.packageId}`); console.log(`test_command=${result.testCommand}`); console.log(`files=${result.files}`); console.log(`net_additions=${result.netAdditions}`); if (deliveryReceipt) { console.log(`range_mode=${deliveryReceipt.rangeMode}`); console.log(`delivery_base_sha=${deliveryReceipt.deliveryBase}`); console.log(`delivery_head_sha=${deliveryReceipt.deliveryHead}`); } if (businessAuthorization) { if (authoritativeEventBase) console.log(`event_base_sha=${authoritativeEventBase}`); console.log(`gate_source_sha=${businessAuthorization.gateSource}`); console.log(`g0_evidence_sha=${businessAuthorization.g0EvidenceSha}`); console.log(`g0_evidence_digest=${businessAuthorization.g0EvidenceDigest}`); console.log(`authorized_predecessor_sha=${businessAuthorization.authorizedPredecessor}`); console.log(`candidate_sha=${effectiveHead}`); console.log(`manifest_digest=${businessAuthorization.manifestDigest}`); } if (evidence) { console.log(`evidence_parent=${evidence.parent}`); console.log(`evidence_runs=${evidence.runs}`); } return;
+    console.log(`package_id=${result.packageId}`); console.log(`test_command=${result.testCommand}`); console.log(`files=${result.files}`); console.log(`net_additions=${result.netAdditions}`); console.log(`admission_kind=${admissionKind}`); if (authoritativeEventBase) console.log(`event_base_sha=${authoritativeEventBase}`); if (deliveryReceipt) { console.log(`range_mode=${deliveryReceipt.rangeMode}`); console.log(`delivery_base_sha=${deliveryReceipt.deliveryBase}`); console.log(`delivery_head_sha=${deliveryReceipt.deliveryHead}`); } if (businessAuthorization) { console.log(`gate_source_sha=${businessAuthorization.gateSource}`); console.log(`g0_evidence_sha=${businessAuthorization.g0EvidenceSha}`); console.log(`g0_evidence_digest=${businessAuthorization.g0EvidenceDigest}`); console.log(`authorized_predecessor_sha=${businessAuthorization.authorizedPredecessor}`); console.log(`candidate_sha=${effectiveHead}`); console.log(`manifest_digest=${businessAuthorization.manifestDigest}`); } if (closeoutManifestDigest) { console.log(`candidate_sha=${effectiveHead}`); console.log(`manifest_digest=${closeoutManifestDigest}`); } if (evidence) { console.log(`evidence_parent=${evidence.parent}`); console.log(`evidence_runs=${evidence.runs}`); } return;
   }
   console.log(`${result.packageId} package gate passed: files=${result.files}, netAdditions=${result.netAdditions}, adr=${result.adr}, categories=${result.categories.join(',')}`);
 }
