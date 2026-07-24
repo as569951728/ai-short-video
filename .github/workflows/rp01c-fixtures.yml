@@ -80,7 +80,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           EVENT_REF: ${{ github.ref }}
-          WORKFLOW_SHA: ${{ github.sha }}
+          WORKFLOW_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           PUSH_REF: ${{ github.ref }}
           PUSH_CREATED: ${{ github.event.created }}
           PUSH_BEFORE_SHA: ${{ github.event.before }}
