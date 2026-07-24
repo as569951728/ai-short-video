@@ -168,7 +168,7 @@ const ORACLE = Object.freeze({
   [A2_SCOPE_V5_ID]: ["RP-02B2a2-G0-C5-v1", A2_SCOPE_V5_ADR, 6, 900],
   [POSTMERGE_CORRECTION_ID]: ["RP-02B2a2-PM-C1-v1", POSTMERGE_CORRECTION_ADR, 5, 1900],
   [CLOSEOUT_POLICY_CORRECTION_ID]: ["RP-02B2a2-PM-C2-v1", CLOSEOUT_POLICY_CORRECTION_ADR, 5, 1500],
-  [CI_TRIGGER_SPLIT_ID]: ["RP-02B2a2-PM-C3-v1", CI_TRIGGER_SPLIT_ADR, 4, 1200],
+  [CI_TRIGGER_SPLIT_ID]: ["RP-02B2a2-PM-C3-v1", CI_TRIGGER_SPLIT_ADR, 5, 1200],
   "RP-02B2a2": [
     "RP-02B2a2-v5",
     "docs/adr/rp-02b2a2-authority-claim-budget.md",
@@ -259,7 +259,7 @@ s/novels/services/novelService.ts|apps/api/src/modules/tasks/services/taskServic
     `.github/workflows/rp01c-fixtures.yml|.github/workflows/rp02b2a-admission.yml|${GATE_SCRIPT}|scripts/rp02b2a-package-gate.test.mjs|${CLOSEOUT_POLICY_CORRECTION_ADR}`,
   ),
   [CI_TRIGGER_SPLIT_ID]: manifest(
-    `.github/workflows/rp01c-fixtures.yml|${GATE_SCRIPT}|scripts/rp02b2a-package-gate.test.mjs|${CI_TRIGGER_SPLIT_ADR}`,
+    `.github/workflows/rp01c-fixtures.yml|apps/api/test/rp01c/fixtureFactory.test.ts|${GATE_SCRIPT}|scripts/rp02b2a-package-gate.test.mjs|${CI_TRIGGER_SPLIT_ADR}`,
   ),
   "RP-02B2a2": manifest(
     "packages/shared/src/api.ts|packages/shared/src/novels.ts|apps/api/src/config/env.ts|apps/api/src/modules/novels/domain/executionContract.ts|apps/api/src/modules/novels/domain/novelDomain.ts|apps/api/test/rp01c/fixtureFactory.test.ts|apps/api/test/rp02b/rp02b.test.ts|apps/api/src/modules/novels/services/taskClaim.ts|apps/api/src/modules/novels/services/novelService.ts|apps/api/src/modules/novels/routes/novelRoutes.ts|apps/api/src/modules/tasks/routes/taskRoutes.ts|apps/api/src/modules/novels/repositories/inMemoryNovelRepository.ts|apps/api/src/modules/novels/repositories/prismaNovelRepository.ts|apps/api/src/app.ts|apps/api/src/main.ts|apps/api/test/rp02a/rp02a.test.ts|apps/api/test/rp02b2a/fixtures.ts|apps/api/test/rp02b2a/authority-claim.test.ts|apps/api/test/rp02b2a/repository-authority-hardening.test.ts|apps/api/src/modules/novels/novelRoutes.test.ts|docs/adr/rp-02b2a2-authority-claim-budget.md|package.json",

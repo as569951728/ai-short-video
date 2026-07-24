@@ -4,9 +4,9 @@ status: ready
 package_id: RP-02B2a2-PM-C3
 manifest_id: RP-02B2a2-PM-C3-v1
 baseline_sha: 0ff9107bbfbf95983ae8c21391754520f4374711
-hard_max_files: 4
+hard_max_files: 5
 hard_max_net_additions: 1200
-actual_files: 4
+actual_files: 5
 actual_net_additions: 69
 exceeded_budget: false
 split_reason: Separate pull request validation from main-branch delivery checks without weakening either gate.

@@ -53,7 +53,7 @@ describe('RP-01C fixture factory contract', () => {
     assert.match(apiCommand, /NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=\/dev\/null/);
 
     const workflow = readFileSync(new URL('../../../../.github/workflows/rp01c-fixtures.yml', import.meta.url), 'utf8');
-    assert.match(workflow, /uses: actions\/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5\n\s+with:\n\s+fetch-depth: 0\n\s+ref: \$\{\{ github\.event_name == 'repository_dispatch' && github\.sha \|\| github\.event\.after \}\}\n\s+persist-credentials: false/);
+    assert.match(workflow, /uses: actions\/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5\n\s+with:\n\s+fetch-depth: 0\n\s+ref: \$\{\{ github\.event_name == 'repository_dispatch' && github\.sha \|\| github\.event_name == 'pull_request' && github\.event\.pull_request\.head\.sha \|\| github\.event\.after \}\}\n\s+persist-credentials: false/);
     assert.match(workflow, /\[\[ "\$B2A_AUTHORIZED_CANDIDATE_REF" =~ \^refs\/tags\/rp02b2a-admitted-\[a-f0-9\]\{12,40\}\$ \]\]/);
     assert.match(workflow, /git fetch --no-tags --force origin "\$B2A_AUTHORIZED_CANDIDATE_REF:refs\/remotes\/origin\/rp02b2a-admitted-candidate"/);
     assert.match(workflow, /test "\$\(git rev-parse refs\/remotes\/origin\/rp02b2a-admitted-candidate\^\{commit\}\)" = "\$B2A_AUTHORIZED_CANDIDATE_SHA"/);
