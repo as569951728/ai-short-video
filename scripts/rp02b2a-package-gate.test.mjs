@@ -58,6 +58,9 @@ const ROOT = resolve("."),
   CLOSEOUT_POLICY_CORRECTION_ID = "RP-02B2a2-PM-C2",
   CLOSEOUT_POLICY_CORRECTION_BASELINE = "9f04986469a3e409b3ce887390e8830cbdfe9493",
   CLOSEOUT_POLICY_CORRECTION_ADR = "docs/adr/rp-02b2a2-closeout-policy-correction-budget.md",
+  CI_TRIGGER_SPLIT_ID = "RP-02B2a2-PM-C3",
+  CI_TRIGGER_SPLIT_BASELINE = "0ff9107bbfbf95983ae8c21391754520f4374711",
+  CI_TRIGGER_SPLIT_ADR = "docs/adr/rp-02b2a2-ci-trigger-split-budget.md",
   A2_CLOSEOUT_EVIDENCE_ID = "RP-02B2a2-E3",
   A2_CLOSEOUT_EVIDENCE_COMMAND = "test:governance",
   A2_CLOSEOUT_EVIDENCE_VERIFICATION = "docs/reviews/remediation-rmd-task-002-003-rp-02b2a2-verification-2026-07-23.md",
@@ -148,6 +151,7 @@ test:rp02b2a1:gate",
   [A2_SCOPE_V5_ID]: "test:rp02b2a1:gate",
   [POSTMERGE_CORRECTION_ID]: "test:rp02b2a1:gate",
   [CLOSEOUT_POLICY_CORRECTION_ID]: "test:rp02b2a1:gate",
+  [CI_TRIGGER_SPLIT_ID]: "test:rp02b2a1:gate",
   "RP-02B2a2": "test:rp02b2a2",
   "RP-02B2a3": "test:rp02b2a3",
   "RP-02B2a4": "test:rp02b2a4",
@@ -164,6 +168,7 @@ const ORACLE = Object.freeze({
   [A2_SCOPE_V5_ID]: ["RP-02B2a2-G0-C5-v1", A2_SCOPE_V5_ADR, 6, 900],
   [POSTMERGE_CORRECTION_ID]: ["RP-02B2a2-PM-C1-v1", POSTMERGE_CORRECTION_ADR, 5, 1900],
   [CLOSEOUT_POLICY_CORRECTION_ID]: ["RP-02B2a2-PM-C2-v1", CLOSEOUT_POLICY_CORRECTION_ADR, 5, 1500],
+  [CI_TRIGGER_SPLIT_ID]: ["RP-02B2a2-PM-C3-v1", CI_TRIGGER_SPLIT_ADR, 5, 1200],
   "RP-02B2a2": [
     "RP-02B2a2-v5",
     "docs/adr/rp-02b2a2-authority-claim-budget.md",
@@ -200,6 +205,7 @@ const BASELINES = Object.freeze({
   [A2_SCOPE_V5_ID]: A2_SCOPE_V5_BASELINE,
   [POSTMERGE_CORRECTION_ID]: POSTMERGE_CORRECTION_BASELINE,
   [CLOSEOUT_POLICY_CORRECTION_ID]: CLOSEOUT_POLICY_CORRECTION_BASELINE,
+  [CI_TRIGGER_SPLIT_ID]: CI_TRIGGER_SPLIT_BASELINE,
   "RP-02B2a2": VERIFIED_GATE_PREP,
   "RP-02B2a3": "range-base",
   "RP-02B2a4": "range-base",
@@ -215,6 +221,7 @@ const REQUIRED_CATEGORIES = Object.freeze({
     [A2_SCOPE_V5_ID]: Object.freeze(["governance", "test", "adr"]),
     [POSTMERGE_CORRECTION_ID]: Object.freeze(["governance", "test", "adr"]),
     [CLOSEOUT_POLICY_CORRECTION_ID]: Object.freeze(["governance", "test", "adr"]),
+    [CI_TRIGGER_SPLIT_ID]: Object.freeze(["governance", "test", "adr"]),
     "RP-02B2a2": Object.freeze(["production", "test", "adr"]),
     "RP-02B2a3": Object.freeze(["production", "test", "adr"]),
     "RP-02B2a4": Object.freeze(["production", "test", "adr"]),
@@ -251,6 +258,9 @@ s/novels/services/novelService.ts|apps/api/src/modules/tasks/services/taskServic
   [CLOSEOUT_POLICY_CORRECTION_ID]: manifest(
     `.github/workflows/rp01c-fixtures.yml|.github/workflows/rp02b2a-admission.yml|${GATE_SCRIPT}|scripts/rp02b2a-package-gate.test.mjs|${CLOSEOUT_POLICY_CORRECTION_ADR}`,
   ),
+  [CI_TRIGGER_SPLIT_ID]: manifest(
+    `.github/workflows/rp01c-fixtures.yml|apps/api/test/rp01c/fixtureFactory.test.ts|${GATE_SCRIPT}|scripts/rp02b2a-package-gate.test.mjs|${CI_TRIGGER_SPLIT_ADR}`,
+  ),
   "RP-02B2a2": manifest(
     "packages/shared/src/api.ts|packages/shared/src/novels.ts|apps/api/src/config/env.ts|apps/api/src/modules/novels/domain/executionContract.ts|apps/api/src/modules/novels/domain/novelDomain.ts|apps/api/test/rp01c/fixtureFactory.test.ts|apps/api/test/rp02b/rp02b.test.ts|apps/api/src/modules/novels/services/taskClaim.ts|apps/api/src/modules/novels/services/novelService.ts|apps/api/src/modules/novels/routes/novelRoutes.ts|apps/api/src/modules/tasks/routes/taskRoutes.ts|apps/api/src/modules/novels/repositories/inMemoryNovelRepository.ts|apps/api/src/modules/novels/repositories/prismaNovelRepository.ts|apps/api/src/app.ts|apps/api/src/main.ts|apps/api/test/rp02a/rp02a.test.ts|apps/api/test/rp02b2a/fixtures.ts|apps/api/test/rp02b2a/authority-claim.test.ts|apps/api/test/rp02b2a/repository-authority-hardening.test.ts|apps/api/src/modules/novels/novelRoutes.test.ts|docs/adr/rp-02b2a2-authority-claim-budget.md|package.json",
   ),
@@ -283,6 +293,7 @@ vices/actionExecutionPlan.ts",
     [A2_SCOPE_V5_ID]: GATE_SCRIPT,
     [POSTMERGE_CORRECTION_ID]: GATE_SCRIPT,
     [CLOSEOUT_POLICY_CORRECTION_ID]: GATE_SCRIPT,
+    [CI_TRIGGER_SPLIT_ID]: GATE_SCRIPT,
     "RP-02B2a2": "apps/api/src/app.ts",
     "RP-02B2a3": "apps/api/test/rp02b2a/lease-dispatch-retry.test.ts",
     "RP-02B2a4":
@@ -358,7 +369,7 @@ function select(packageId) {
     packageId === GATE_PREP_ID ||
     packageId === CORRECTION_ID ||
     packageId === TEST_LAYER_ID || packageId === EVIDENCE_TRIGGER_ID || packageId === A2_SCOPE_ID || packageId === A2_SCOPE_V5_ID
-    || packageId === POSTMERGE_CORRECTION_ID || packageId === CLOSEOUT_POLICY_CORRECTION_ID
+    || packageId === POSTMERGE_CORRECTION_ID || packageId === CLOSEOUT_POLICY_CORRECTION_ID || packageId === CI_TRIGGER_SPLIT_ID
   )
     return [...all];
   const production =
@@ -440,7 +451,7 @@ function prepareUncached(packageId = "RP-02B2a1", files, options = {}) {
   }
   const chosen = files ?? select(packageId);
   for (const file of chosen.filter((item) =>
-    packageId === CORRECTION_ID || packageId === TEST_LAYER_ID || packageId === EVIDENCE_TRIGGER_ID || packageId === A2_SCOPE_ID || packageId === A2_SCOPE_V5_ID || packageId === POSTMERGE_CORRECTION_ID || packageId === CLOSEOUT_POLICY_CORRECTION_ID
+    packageId === CORRECTION_ID || packageId === TEST_LAYER_ID || packageId === EVIDENCE_TRIGGER_ID || packageId === A2_SCOPE_ID || packageId === A2_SCOPE_V5_ID || packageId === POSTMERGE_CORRECTION_ID || packageId === CLOSEOUT_POLICY_CORRECTION_ID || packageId === CI_TRIGGER_SPLIT_ID
       ? item !== defaultAdr
       : !item.startsWith(
           "\
@@ -460,7 +471,7 @@ docs/adr/",
     else if (packageId === A2_SCOPE_ID)
       copyTestLayerFile(path, file, ACCEPTED_G0_C4_SHA);
     else if (packageId === A2_SCOPE_V5_ID) copyA2ScopeV5File(path, file);
-    else if (packageId === POSTMERGE_CORRECTION_ID || packageId === CLOSEOUT_POLICY_CORRECTION_ID)
+    else if (packageId === POSTMERGE_CORRECTION_ID || packageId === CLOSEOUT_POLICY_CORRECTION_ID || packageId === CI_TRIGGER_SPLIT_ID)
       write(path, file, readFileSync(resolve(ROOT, file)));
     else if (file === GATE_SCRIPT)
       write(path, file, readFileSync(resolve(ROOT, file)));
@@ -1016,7 +1027,7 @@ stderr);expectRejected(run(path,["--base",BASELINE,"--head",BASELINE,"--worktree
 assert.equal(passed.status,0,`${id}: ${passed.stderr}`);assert.match(output.stdout,new RegExp(`package_id=${id}.*test_command=${command}`,"s"))});for(const[field,value,pattern]of[["package_id","wrong",/package_id mismatch/],["manifest_id","wrong",/manifest_id mismatch/],["hard_max_files",999,/hard_max_files mismatch/],["hard_max_net_additions",999,/hard_max_net_additions mismatch/]])expectRejected(gate(prepare("RP-02B2a2",void 0,{overrides:{[field]:value}})),pattern);const duplicate=prepare("RP-02B2a2"),duplicateAdr=ORACLE["RP-02B2a2"][1];write(duplicate.repo,duplicateAdr,`${readFileSync(resolve(duplicate.repo,duplicateAdr),"utf8")}status: ready\n`);duplicate.head=commit(duplicate.repo,"duplicate ADR status");expectRejected(gate(duplicate),/ADR duplicate field: status/);const unknown=prepare("RP-02B2a2"),unknownAdr=ORACLE["RP-02B2a2"][1];write(unknown.repo,unknownAdr,`${readFileSync(resolve(unknown.repo,unknownAdr),"utf8")}authorization: approved\n`);unknown.head=commit(unknown.repo,"unknown ADR authorization");expectRejected(gate(unknown),/ADR unsupported field: authorization/);const unauthorized=prepare("RP-02B2a2");unauthorized.authorizedPackageId="";expectRejected(gate(unauthorized),/trusted admission package mismatch/)});it("expands YAML aliase\
 s and rejects unknown or cyclic aliases",()=>{const positive=mutate(text=>aliasPermissions(text));assert.equal(positive.status,0,positive.stderr);for(const[change,pattern]of[[text=>aliasPermissions(text,"missing"),/unknown YAML alias/],[text=>text.replace("permissions:\n  actions: read\n  contents: read","permissions: &workflow_permissions\n  actions: read\n  contents: read\n  cycle: *workflow_permissions"),/cyclic YAML alias/]]){const result=mutate(change);assert.notEqual(result.status,0);expectRejected(result,pattern)}});it("parses and enforces the structured workflow c\
 	ontract",()=>{const trusted=trustedWorkflow();assert.equal(trusted.status,0,trusted.stderr);assert.match(trusted.stdout,new RegExp(`canonical_sha256=${TRUSTED_WORKFLOW_ORACLE_SHA256}`));for(const change of[text=>text.replace("    if: needs.admission.outputs.admission_kind == 'business'\n",""),text=>text.replace("needs.admission.outputs.admission_kind == 'business'","always()"),text=>text.replace("needs.admission.outputs.admission_kind == 'business'","needs.admission.outputs.admission_kind == 'closeout'")])expectRejected(mutateTrustedWorkflow(change),/candidate job must run only for business admission/);for(const change of[text=>text.replace("pull_request_target:","pull_request:"),text=>text.replace("  actions: read\n",""),text=>text.replace("      - synchronize\n","      - synchronize\n      - closed\n"),text=>text.replace("actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5","actions/checkout@v4"),text=>text.replace("actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020","actions/setup-node@v4"),text=>text.replace("actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02","actions/upload-artifact@v4"),text=>text.replace("          fetch-depth: 0","          fetch-depth: 1")]){const result=mutateTrustedWorkflow(change);assert.notEqual(result.status,0);expectRejected(result,/trusted (?:admission|workflow)/)}assert.equal(workflow().status,0);assert.equal(workflow(WORKFLOW,["--package-id","RP-01C","--test-command","test:rp02b1"]).status,0);for(const file of[A1_ADR,A2_SCOPE_ADR,"scripts/rp02b2a-package-gate.mjs",A1_FILES[1],".github/workflows/rp01a-e2e.yml",".github/workflows/rp01b-dom.yml",".github/workflows/remediation-governance.yml"])assert.equal(workflow(WORKFLOW,["--trigger-file",file]).status,0,file);for(const args of[["--package-id","RP-02B2a1","--test-command","wrong"],["--package-id","wrong","--test-command","test:rp02b2a1"]])assert.notEqual(workflow(WORKFLOW,args).status,0);const clean=CLEAN_ENV;const resolver=`${clean}\
- node scripts/rp02b2a-package-gate.mjs --github-output --base "$B2A_BASE_SHA" --head "$B2A_HEAD_SHA" --policy-source "$B2A_POLICY_SOURCE_SHA" --gate-source "$B2A_GATE_SOURCE_SHA" --g0-evidence-sha "$B2A_G0_EVIDENCE_SHA" --authorized-package-id "$B2A_AUTHORIZED_PACKAGE_ID" --authorized-predecessor-sha "$B2A_AUTHORIZED_PREDECESSOR_SHA" >> "$GITHUB_OUTPUT"`,selected=`${clean} npm run "$B2A_TEST_COMMAND"`,selfCheck=`${clean} node scripts/rp02b2a-package-gate.mjs --verify-workflow .github/workflows/rp01c-fixtures.yml --package-id "$B2A_PACKAGE_ID" --test-command "$B2A_TEST_COMMAND"`;const changes=[[text=>text.replace("      - rp02b2a_replay","      - untrusted_replay"),/repository_dispatch type/],[text=>text.replace("      - 'docs/adr/rp-02b2a2-g0-a2-scope-correction-budget.md'\n",""),/workflow push missing required path/],[text=>text.replace("      - 'scripts/rp02b2a-package-gate.*'\n",""),/missing required path/],[text=>text.replace(`          ${selected}`,"          echo selected-package-command-disabled"),/selected package command/],[text=>text.replace(
+ node scripts/rp02b2a-package-gate.mjs --github-output --base "$B2A_BASE_SHA" --head "$B2A_HEAD_SHA" --policy-source "$B2A_POLICY_SOURCE_SHA" --gate-source "$B2A_GATE_SOURCE_SHA" --g0-evidence-sha "$B2A_G0_EVIDENCE_SHA" --authorized-package-id "$B2A_AUTHORIZED_PACKAGE_ID" --authorized-predecessor-sha "$B2A_AUTHORIZED_PREDECESSOR_SHA" >> "$GITHUB_OUTPUT"`,selected=`${clean} npm run "$B2A_TEST_COMMAND"`,selfCheck=`${clean} node scripts/rp02b2a-package-gate.mjs --verify-workflow .github/workflows/rp01c-fixtures.yml --package-id "$B2A_PACKAGE_ID" --test-command "$B2A_TEST_COMMAND"`;const changes=[[text=>text.replace("      - rp02b2a_replay","      - untrusted_replay"),/repository_dispatch type/],[text=>text.replace("      - main\n    paths: &rp02b2a_paths","      - feature\n    paths: &rp02b2a_paths"),/push branches must be exactly main/],[text=>text.replace("  pull_request:\n    paths: *rp02b2a_paths\n",""),/workflow triggers keys mismatch/],[text=>text.replace("    paths: *rp02b2a_paths","    paths:\n      - 'package.json'"),/pull request paths must match main push paths|workflow pull_request missing required path/],[text=>text.replace("      - 'docs/adr/rp-02b2a2-g0-a2-scope-correction-budget.md'\n",""),/workflow push missing required path/],[text=>text.replace("      - 'scripts/rp02b2a-package-gate.*'\n",""),/missing required path/],[text=>text.replace("WORKFLOW_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}","WORKFLOW_SHA: ${{ github.sha }}"),/range resolver env binding mismatch/],[text=>text.replace("PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}","PR_BASE_SHA: ${{ github.event.pull_request.head.sha }}"),/range resolver env binding mismatch/],[text=>text.replace('PR_MERGE_BASE="$(git merge-base "$PR_BASE_SHA" "$PR_HEAD_SHA")"','PR_MERGE_BASE="$PR_BASE_SHA"'),/range resolver shell semantics mismatch/],[text=>text.replace(`          ${selected}`,"          echo selected-package-command-disabled"),/selected package command/],[text=>text.replace(
 "      - name: Resolve B2a package command","      - name: Resolve B2a package command\n        continue-on-error: true"),/step 4 keys mismatch|required step is disabled/],[text=>text.replace("        id: b2a-package\n","        id: b2a-package\n        shell: bash\n"),/step 4 keys mismatch|custom shell/],[text=>text.replace("      - env:\n          B2A_TEST_COMMAND: ${{ steps.b2a-package.outputs.test_command }}","      - shell: bash\n        env:\n          B2A_TEST_COMMAND: ${{ steps.b2a-package.outputs.test_command }}"),/step [0-9]+ keys mismatch|custom shell/],
 [text=>text.replace("\njobs:\n","\ndefaults:\n  run:\n    shell: bash\n\njobs:\n"),/workflow defaults\.run\.shell/],[text=>text.replace("  rp01c-fixtures:\n","  rp01c-fixtures:\n    defaults:\n      run:\n        shell: bash\n"),/job defaults\.run\.shell/],[text=>text.replace("--push-before","--before-missing"),/shell semantics mismatch/],[text=>text.replace("--push-head","--head-missing"),/shell semantics mismatch/],[text=>text.replace("--manual-base","--manual-base-missing"),/shell semantics mismatch/],
 [text=>text.replace("--manual-head","--manual-head-missing"),/shell semantics mismatch/],[text=>text.replace(" || github.event.after }}"," || github.sha }}"),/checkout ref/],[text=>text.replace("Resolve B2a package gate range","Resolve B2a1 package gate range"),/step named Resolve B2a package gate range/],[text=>text.replace("id: b2a-range","id: b2a1-range"),/dynamic package step ids mismatch/],[text=>text.replace("id: b2a-package","id: static-package"),/dynamic package step ids mismatch/],[text=>text.
