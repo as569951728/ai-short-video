@@ -5,6 +5,8 @@ on:
     types:
       - rp02b2a_replay
   push:
+    branches:
+      - main
     paths: &rp02b2a_paths
       - '.github/workflows/rp01a-e2e.yml'
       - '.github/workflows/rp01b-dom.yml'
@@ -41,6 +43,7 @@ on:
       - 'docs/adr/rp-02b2a2-g0-a2-scope-v5-correction-budget.md'
       - 'docs/adr/rp-02b2a2-postmerge-range-correction-budget.md'
       - 'docs/adr/rp-02b2a2-closeout-policy-correction-budget.md'
+      - 'docs/adr/rp-02b2a2-ci-trigger-split-budget.md'
       - 'docs/adr/rp-02b2a2-authority-claim-budget.md'
       - 'docs/adr/rp-02b2a3-lease-retry-budget.md'
       - 'docs/adr/rp-02b2a4-inmemory-finalize-budget.md'
@@ -49,6 +52,8 @@ on:
       - 'docs/reviews/remediation-rmd-task-002-003-rp-02b2a2-verification-2026-07-23.md'
       - 'package.json'
       - 'package-lock.json'
+  pull_request:
+    paths: *rp02b2a_paths
 permissions:
   actions: read
   contents: read
@@ -64,7 +69,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           fetch-depth: 0
-          ref: ${{ github.event_name == 'repository_dispatch' && github.sha || github.event.after }}
+          ref: ${{ github.event_name == 'repository_dispatch' && github.sha || github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.event.after }}
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
@@ -80,6 +85,8 @@ jobs:
           PUSH_CREATED: ${{ github.event.created }}
           PUSH_BEFORE_SHA: ${{ github.event.before }}
           PUSH_AFTER_SHA: ${{ github.event.after }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           MANUAL_BASE_SHA: ${{ github.event.client_payload.base_sha }}
           MANUAL_HEAD_SHA: ${{ github.event.client_payload.head_sha }}
           B2A_GATE_SOURCE_SHA: ${{ vars.RP02B2A_GATE_SOURCE_SHA }}
@@ -100,10 +107,18 @@ jobs:
           fi
           if [[ "$EVENT_NAME" == "push" ]]; then
             env -u DATABASE_URL -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL -u DEEPSEEK_MODEL -u DEEPSEEK_STRUCTURE_MODEL -u DEEPSEEK_REASONER_MODEL -u DEEPSEEK_TIMEOUT_MS -u DEEPSEEK_MAX_RETRIES -u DEPLOYMENT_ACTOR_TENANT_ID -u DEPLOYMENT_ACTOR_USER_ID NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=/dev/null node scripts/rp02b2a-package-gate.mjs --print-range --event push --push-ref "$PUSH_REF" --push-created "$PUSH_CREATED" --push-before "$PUSH_BEFORE_SHA" --push-head "$PUSH_AFTER_SHA" --policy-source "$B2A_POLICY_SOURCE_SHA" --gate-source "$B2A_GATE_SOURCE_SHA" --g0-evidence-sha "$B2A_G0_EVIDENCE_SHA" --authorized-package-id "$B2A_AUTHORIZED_PACKAGE_ID" --authorized-predecessor-sha "$B2A_AUTHORIZED_PREDECESSOR_SHA" --authorized-candidate-sha "$B2A_AUTHORIZED_CANDIDATE_SHA" --authorized-candidate-tree "$B2A_AUTHORIZED_CANDIDATE_TREE" --authorized-manifest-digest "$B2A_AUTHORIZED_MANIFEST_DIGEST" >> "$GITHUB_OUTPUT"
+          elif [[ "$EVENT_NAME" == "pull_request" ]]; then
+            PR_MERGE_BASE="$(git merge-base "$PR_BASE_SHA" "$PR_HEAD_SHA")"
+            {
+              echo "base=$PR_MERGE_BASE"
+              echo "head=$PR_HEAD_SHA"
+              echo "delivery_base=$PR_MERGE_BASE"
+              echo "delivery_head=$PR_HEAD_SHA"
+            } >> "$GITHUB_OUTPUT"
           elif [[ "$EVENT_NAME" == "repository_dispatch" ]]; then
             env -u DATABASE_URL -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL -u DEEPSEEK_MODEL -u DEEPSEEK_STRUCTURE_MODEL -u DEEPSEEK_REASONER_MODEL -u DEEPSEEK_TIMEOUT_MS -u DEEPSEEK_MAX_RETRIES -u DEPLOYMENT_ACTOR_TENANT_ID -u DEPLOYMENT_ACTOR_USER_ID NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=/dev/null node scripts/rp02b2a-package-gate.mjs --print-range --event repository_dispatch --event-ref "$EVENT_REF" --manual-base "$MANUAL_BASE_SHA" --manual-head "$MANUAL_HEAD_SHA" --policy-source "$B2A_POLICY_SOURCE_SHA" --gate-source "$B2A_GATE_SOURCE_SHA" --g0-evidence-sha "$B2A_G0_EVIDENCE_SHA" --authorized-package-id "$B2A_AUTHORIZED_PACKAGE_ID" --authorized-predecessor-sha "$B2A_AUTHORIZED_PREDECESSOR_SHA" --authorized-candidate-sha "$B2A_AUTHORIZED_CANDIDATE_SHA" --authorized-candidate-tree "$B2A_AUTHORIZED_CANDIDATE_TREE" --authorized-manifest-digest "$B2A_AUTHORIZED_MANIFEST_DIGEST" >> "$GITHUB_OUTPUT"
           else
-            echo "RP-01C only accepts trusted push or default-branch repository_dispatch replay ranges" >&2
+            echo "RP-01C only accepts pull requests, trusted main pushes, or default-branch repository_dispatch replay ranges" >&2
             exit 1
           fi
           BASE="$(grep '^base=' "$GITHUB_OUTPUT" | tail -n1 | cut -d= -f2-)"
