@@ -1,6 +1,6 @@
 # AIShortvideo 主控统一状态
 
-更新时间：2026-08-01 CST
+更新时间：2026-08-02 CST
 
 本文件是需求主控的当前状态入口。历史过程和详细证据仍保留在各模块设计、验收和工程质量文档中；发生冲突时，以当前代码、最新正式验收结论和本文件列出的证据为准。
 
@@ -18,14 +18,14 @@
 
 | 维度 | 当前状态 | 主控判断 |
 | --- | --- | --- |
-| 执行模式 | `execution_reset` | 最近 5 个合并 PR 没有增加总账关闭项，超过停工阈值 2；先重建结果链，不自动进入 RP-02B2a3 |
+| 执行模式 | `execution_reset` | 状态单源回归已关闭，停工计数归零；当前仍无活动实现包，下一步只选择明确推进 PB/P0 或 RB/P0/P1 的结果链，不自动进入 RP-02B2a3 |
 | 小说核心流程 | mock/in-memory 主流程可演示，已知个案已定向修复 | 已有创建草稿 backend 浏览器 E2E 基线，但不是全链；真实 Prisma 后半程未实现、全书审稿未输入正文，仍有 2 个未关闭 P0 |
 | 视频 P8-P9 | 工作台状态流与版本流程按限定范围验收 | P9c 无可播放音频，P9e 无真实 MP4/下载文件；不能称为真实视频生成闭环 |
 | P10-preflight | 已正式收口 | `creationSource` 的 shared/API/仓储/migration/admin 与浏览器链路通过 `CS-R3` 及条件项复验 |
 | P10 | `P10-R0` 已正式收口；R1 准入设计通过 | R1 准入文档已纳入当前远程分支；尚未授权，未启动业务代码 |
-| 整改计划 | RP-00A、RP-00B、RP-01A、RP-01B、RP-01C 已正式关闭；RP-02A、RP-02B1、RP-02B2a0、RP-02B2a1、RP-02B2a2 限定阶段完成 | 唯一总账当前关闭 9/43；RMD-GOV-STATUS-001 回归为 implemented_pending_verification，RMD-GOV-TYPECHECK-001 已校正关闭，RMD-TASK-002 为 partial、003 为 open；B2a3-B2a5/B2b/B2c/B3 仍未授权 |
+| 整改计划 | RP-00A、RP-00B、RP-01A、RP-01B、RP-01C 已正式关闭；RP-02A、RP-02B1、RP-02B2a0、RP-02B2a1、RP-02B2a2 限定阶段完成 | 唯一总账当前关闭 10/43；RMD-GOV-STATUS-001 回归与 RMD-GOV-TYPECHECK-001 均已关闭，RMD-TASK-002 为 partial、003 为 open；B2a3-B2a5/B2b/B2c/B3 仍未授权 |
 | 测试 | RP-02B2a2 trusted replay `29977969717` 全绿；TEST/QUALITY `APPROVED 0/0/0`，本地 clean-install 复跑 272/272 | 只证明 authenticated actor、authority reload/stale gate、legacy fail closed 的 E3 范围；仍不能外推真实 DB/provider/media/E6 |
-| 工程质量 | `blocked / high` | clean worktree 经 workspace-local `npm ci` 后根级 typecheck 全绿，原 20 个错误确认为父工作树依赖解析污染并已关闭；当前高风险仍来自小说真实完本与全书审稿 2 个既有 P0，PR #58 的远端 required checks 仍待重跑 |
+| 工程质量 | `guarded / high` | clean worktree 根级 typecheck 全绿；PR #59 与 merge `e3cdc9a` 的 governance/admin-dom/backend-e2e/rp01c-fixtures 全绿，历史 A2 receipt 不再劫持普通 main push；当前高风险仍来自小说真实完本与全书审稿 2 个既有 P0 |
 | 本地服务 | 运行态不入版本化状态 | 用户需要浏览器验收时实时检查 health、端口和 fixture；不得沿用文档中的历史瞬时状态 |
 | 真实环境 | 数据库/模型已获阶段性授权，待安全前置 | P8b-L1b 与真实模型只在隔离、回滚、费用上限和密钥脱敏满足后执行；外部渲染/云存储仍未授权 |
 
@@ -35,20 +35,20 @@
 
 ```text
 execution_mode: execution_reset
-ledger_closed: 9/43
+ledger_closed: 10/43
 pb_closed: 0/7
 rb_closed: 0/12
 active_implementation_package: none
-merged_prs_without_ledger_closure: 5
+merged_prs_without_ledger_closure: 0
 stop_review_threshold: 2
-next_decision: rebaseline_before_new_package
+next_decision: select_result_linked_package
 ```
 
 四层结论：
 
 | 层级 | 当前状态 | 结论 |
 | --- | --- | --- |
-| 总账关闭 | 9/43；PB 0/7；RB 0/12 | RMD-GOV-TYPECHECK-001 已校正关闭；RMD-GOV-STATUS-001 回归修复仍待远端 required checks；不表示项目完成度 |
+| 总账关闭 | 10/43；PB 0/7；RB 0/12 | RMD-GOV-TYPECHECK-001 与 RMD-GOV-STATUS-001 回归均已关闭；不表示项目完成度 |
 | 研发交付 | 无活动实现包；最近完成 RP-02B2a2 E3 | E3 证据可靠，但对应问题仍为 partial/open |
 | 独立验收 | 当前无待验候选 | RP-02B2a2 历史候选已通过，不自动覆盖后续包 |
 | 用户结果 | `not_proven` | 尚无 PB/RB 正式关闭，不能称小说或视频真实闭环 |
@@ -162,7 +162,7 @@ next_decision: rebaseline_before_new_package
 
 ## 5. 工程质量与工作树
 
-- 最新工程质量：当前总账 43 项 PB/RB/QG/DEBT 和专项验证缺口；`RMD-GOV-TYPECHECK-001` 已确认是隔离工作树依赖解析污染并关闭，`RMD-GOV-STATUS-001` 因同根回归仍待远端 required checks，当前关闭 9/43。
+- 最新工程质量：当前总账 43 项 PB/RB/QG/DEBT 和专项验证缺口；`RMD-GOV-TYPECHECK-001` 与 `RMD-GOV-STATUS-001` 同根回归均已关闭，当前关闭 10/43，PB/RB 仍为 0。
 - `.playwright-cli/` 已安全忽略；源码、migration、测试和文档未被 ignore。
 - 已创建并推送检查点分支 `codex/aishortvideo-checkpoint-20260711`；P10-R0 检查点 `68957be` 及后续 R1 准入文档均纳入该远程分支。
 - RP-00B 的 `Remediation governance` 已在远程 push runs `29196618102`、`29196969050` 成功执行，Git 预算与 SLA 门禁不再只有本地证据。
@@ -174,7 +174,7 @@ next_decision: rebaseline_before_new_package
 - RP-02B2a1 已在 `eee5568` 建立 15-action registry、strict provider ABI、同步调用点精确覆盖和 provider-backed public retry freeze；`ec8278e` 修复 RP-01C fixture。早期 `0a583c8` 的远程绿灯被最终 QUALITY 发现的 package resolver 累计范围绕过与 RP-02A AST oracle 绕过两个 P1 否决；修复链 `072b9be -> f342297 -> 4817abc` 已闭合。固定基线 `501a3cf..4817abc` 的单一累计 package gate 为 18 files / 1,898 net additions，workflow contract `required_files=35`；accepted code head 四路远程 runs `29405557756`、`29405557734`、`29405557763`、`29405557764` 均成功。治理证据以 `6eaf60a` 发布并推送，run `29410503391` completed/success。该子包关闭时 B2a2 尚未完成；这一历史边界已由下一项 A2 最终证据替代。RMD-TASK-002 仍为 partial、003 仍为 open。
 - RP-02B2a2 已以 admitted candidate `e8e37cd` 完成 authenticated resolver actor、15-action authoritative source refs、T0/T1 replay、三阶段 stale authority gate、Prisma/InMemory active-claim fence 与 legacy fail closed 的限定 E3 实现。PR #51 squash delivery `dc193db`，PR #53 post-merge gate `9f04986`；trusted replay `29977969717` 对候选与交付双区间、SHA/tree/digest、65/65 package gate、272/272 core 和全链门禁验证成功。ARCH/SECURITY `APPROVED 0/0/1`、TEST/QUALITY `APPROVED 0/0/0`；唯一 P2 为 resolver 单次解析缺动态 invocation counter。worker lifecycle、真实 retry child、真实 MySQL/provider/media/E6 仍未证明。
 - RP-02B2a2 closeout 已由 PR #56 squash 合并为 `0ff9107`，tree `58ad3981`；四路 main push required checks 成功，PR #54 已关闭且不得复用。
-- PR #57 已将 RP-01C 候选检查与 main delivery 检查分离并 squash 合并为 `8940d6d`；当前主干 required contexts 为 governance/admin-dom/backend-e2e/rp01c-fixtures 且 main push 全绿。该 CI 修复没有改变总账状态。
+- PR #57 已将 RP-01C 候选检查与 main delivery 检查分离并 squash 合并为 `8940d6d`。PR #58 的治理资产合并为 `b2b9dad` 后暴露历史 A2 receipt 劫持普通 main push；PR #59 以 `e3cdc9a` 修复并通过 PR required checks，随后同头 main runs `30717159482`/`30717159488`/`30717159479`/`30717159477` 全部 success。该闭环关闭 RMD-GOV-STATUS-001，但不改变 PB/RB。
 - 工程质量任务已对远程检查点执行一次性只读复核：本地与 upstream 同步，未发现敏感信息、浏览器产物、一次性配置或 P10/P12 可执行越界误纳管，结论为 `passed`，无 P0/P1。
 - 一次性 `apps/api/tsconfig.testrun.json` 已由 RP-00B 完成归因和安全删除，未加入 ignore；独立 TEST/QUALITY 已复核。`.playwright-cli/` 继续作为本地浏览器运行产物忽略。
 - `docs/modules/video-p10-r1-implementation-package.md` 与多会话评审记录已安全归因并纳入远程基线；它们是需求资产，不是已授权业务实现。

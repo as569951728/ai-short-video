@@ -1477,3 +1477,24 @@ evidence: final focused package-gate tests 5/5；G0-E1 stale/forged/topology 负
 mc_decision: RMD-GOV-TYPECHECK-001 关闭，总账变为 9/43、QG 8/22；RMD-GOV-STATUS-001 继续保持 implemented_pending_verification，等待 PR #58 required checks 全绿。
 next_action: 运行完整治理与 package-gate 回归，提交推送当前候选，并在远端 required checks 全绿后形成 RMD-GOV-STATUS-001 最终关闭证据。
 ```
+
+### MCE-20260802-GOV-STATUS-REGRESSION-CLOSED
+
+```text
+event_id: MCE-20260802-GOV-STATUS-REGRESSION-CLOSED
+occurred_at: 2026-08-02 CST
+event_type: governance_regression_closed
+source_thread: main-control with independent QUALITY review and remote CI
+package_id: GOV-PROGRESS-01
+issue_ids: RMD-GOV-STATUS-001
+acceptance_ids: GOV-STATUS-01, GOV-PROGRESS-01
+merged_pr_58: b2b9dadbd3850f3f72ec6412f991367de91f9ca1
+merged_pr_59: e3cdc9a2474750c28110e6b83b0e39a43bf80cb6
+closure_issue_id: RMD-GOV-STATUS-001
+closure_head: e3cdc9a2474750c28110e6b83b0e39a43bf80cb6
+closure_ledger_closed: 10
+summary: PR #58 落地主控状态单源与进度门禁后，main push 暴露历史 RP-02B2a2 admission receipt 劫持普通治理差异；PR #59 将已消费 A2 receipt 与原始 squash delivery 严格分流，并校验 main ref、accepted G0-E1 receipt 与祖先拓扑。
+evidence: routing candidate 8c272832585e402d57b085913159e24a490efbbf tree 65852f95a29e0076bd1b82479db0c535c4750268；exact PR #58 range 8940d6d..b2b9dad resolves direct_after_consumed_a2_receipt and RP-01C/test:rp02b1；independent QUALITY APPROVED P0/P1/P2=0/0/0；PR #59 required runs governance 30717074302/30717087026, admin-dom 30717074314, backend-e2e 30717074281/30717086994, rp01c 30717086992 success；merge main runs governance 30717159482, admin-dom 30717159488, backend-e2e 30717159479, rp01c 30717159477 success。
+mc_decision: RMD-GOV-STATUS-001 重新关闭；总账更新为 10/43、QG 9/22，PB 0/7、RB 0/12 不变。停工计数在本关闭检查点归零，execution_reset 暂不自动退出，且不自动授权 RP-02B2a3 或其他业务包。
+next_action: 选择一个明确推进 PB/P0 或 RB/P0/P1 的纵向结果包；授权前必须声明 target_issue_ids、expected_ledger_transition、用户结果和证据桶。
+```
