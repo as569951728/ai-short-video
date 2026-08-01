@@ -1,6 +1,6 @@
 # AIShortvideo 整改执行方案
 
-状态：ready_for_review
+状态：execution_reset
 
 问题源：`docs/remediation/issue-ledger.md`
 
@@ -8,7 +8,7 @@
 
 ## 1. 总目标
 
-在开展任何下一阶段需求设计或业务研发前，关闭唯一问题总账中的全部 42 项问题与验证缺口，并建立可以防止同类问题复发的工程、测试和主控门禁。
+在开展任何下一阶段需求设计或业务研发前，关闭唯一问题总账中的全部 43 项问题与验证缺口，并建立可以防止同类问题复发的工程、测试和主控门禁。
 
 整改不是一次“大修提交”。每个整改包必须独立完成需求确认、实现、自测、独立验收、关闭证据、commit 和 push。
 
@@ -21,6 +21,19 @@
 5. DEV 自测不能关闭问题；TEST 独立验收后，由 MC 更新唯一总账。
 6. 涉及真实 DB/provider/media 的包必须单独取得用户授权，并写成本、安全和回滚边界。
 7. 任一包出现 P0/P1 回归，停止后续包并返回当前包修复。
+8. 每个实现包在授权前必须声明 `target_issue_ids`、`expected_ledger_transition`、用户结果和适用证据桶；缺失任一字段时保持 `not_authorized`。
+9. 同一时间最多一个实现包处于 `in_progress`，只读审计可以并行，但不能把审计数量计入研发交付。
+10. `merged_prs_without_ledger_closure` 连续达到 2 时，立即进入 `execution_reset`，清空活动实现包并重新选择结果链；不得按编号自动启动下一包。
+11. 主控按总账关闭、研发交付、独立验收、用户结果四层报告原始状态，不再使用单一项目完成百分比。
+12. 每个包最多一个实现 PR 和一个关闭证据 PR；超出时必须先记录失败原因和继续投入的结果收益，由 MC 重新裁决。
+
+### 2.1 当前执行重置
+
+- 当前没有活动实现包；`RP-02B2a3` 未自动授权。
+- 最近完成的 `RP-02B2a2` 只形成 E3 限定证据，`RMD-TASK-002=partial`、`RMD-TASK-003=open`，没有增加总账关闭项；`RMD-GOV-STATUS-001` 同根回归在重新验收前恢复为 `implemented_pending_verification`。
+- 从 PR #51、#53、#55、#56 到 #57 已连续 5 个合并 PR 未增加总账关闭项，超过停工阈值 2。
+- 下一动作固定为 `rebaseline_before_new_package`：先通过结果进度门禁和独立复核，再选择能够明确推进 PB/P0 或 RB/P0/P1 的纵向包。
+- 当前机器状态由 `docs/remediation/execution-scoreboard.json` 投影，`npm run governance:progress` 校验其与总账和主控状态一致。
 
 ## 3. 依赖图
 
@@ -360,7 +373,7 @@ Owner：MC；PRODUCT/DEV/TEST/QUALITY 全部签字。
 
 只有以下条件全部满足，才允许准备下一阶段需求：
 
-1. 总账 42 项全部 `closed`。
+1. 总账 43 项全部 `closed`。
 2. 小说真实完本金丝雀达到 E7。
 3. 视频真实媒体金丝雀达到 media E5 与 browser E7。
 4. 真实 MySQL 小说和视频路径达到 E6。

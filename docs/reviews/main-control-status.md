@@ -1,10 +1,10 @@
 # AIShortvideo 主控统一状态
 
-更新时间：2026-07-23 12:44 CST
+更新时间：2026-08-01 CST
 
 本文件是需求主控的当前状态入口。历史过程和详细证据仍保留在各模块设计、验收和工程质量文档中；发生冲突时，以当前代码、最新正式验收结论和本文件列出的证据为准。
 
-主控采用长期目标驱动，在会话恢复或收到研发、测试、验收、质量进展时更新；不使用定时器。
+主控采用结果目标驱动，在会话恢复或收到研发、测试、验收、质量进展时更新；不使用定时器。当前处于 `execution_reset`，没有活动实现包。
 
 ## 0. 状态单源规则
 
@@ -18,30 +18,42 @@
 
 | 维度 | 当前状态 | 主控判断 |
 | --- | --- | --- |
+| 执行模式 | `execution_reset` | 最近 5 个合并 PR 没有增加总账关闭项，超过停工阈值 2；先重建结果链，不自动进入 RP-02B2a3 |
 | 小说核心流程 | mock/in-memory 主流程可演示，已知个案已定向修复 | 已有创建草稿 backend 浏览器 E2E 基线，但不是全链；真实 Prisma 后半程未实现、全书审稿未输入正文，仍有 2 个未关闭 P0 |
 | 视频 P8-P9 | 工作台状态流与版本流程按限定范围验收 | P9c 无可播放音频，P9e 无真实 MP4/下载文件；不能称为真实视频生成闭环 |
 | P10-preflight | 已正式收口 | `creationSource` 的 shared/API/仓储/migration/admin 与浏览器链路通过 `CS-R3` 及条件项复验 |
 | P10 | `P10-R0` 已正式收口；R1 准入设计通过 | R1 准入文档已纳入当前远程分支；尚未授权，未启动业务代码 |
-| 整改计划 | RP-00A、RP-00B、RP-01A、RP-01B、RP-01C 已正式关闭；RP-02A、RP-02B1、RP-02B2a0、RP-02B2a1、RP-02B2a2 限定阶段完成 | 唯一总账仍关闭 9/42；RMD-TASK-002 为 partial、003 为 open；B2a3-B2a5/B2b/B2c/B3 仍未授权 |
+| 整改计划 | RP-00A、RP-00B、RP-01A、RP-01B、RP-01C 已正式关闭；RP-02A、RP-02B1、RP-02B2a0、RP-02B2a1、RP-02B2a2 限定阶段完成 | 唯一总账当前关闭 8/43；RMD-GOV-STATUS-001 回归为 implemented_pending_verification，RMD-TASK-002 为 partial、003 为 open；B2a3-B2a5/B2b/B2c/B3 仍未授权 |
 | 测试 | RP-02B2a2 trusted replay `29977969717` 全绿；TEST/QUALITY `APPROVED 0/0/0`，本地 clean-install 复跑 272/272 | 只证明 authenticated actor、authority reload/stale gate、legacy fail closed 的 E3 范围；仍不能外推真实 DB/provider/media/E6 |
-| 工程质量 | `review / high` | ARCH/SECURITY `APPROVED 0/0/1`；唯一 P2 为 resolver 单次调用缺动态计数断言，不阻断 A2；小说真实完本与全书审稿 2 个既有 P0 仍未关闭 |
-| 本地服务 | 未运行 | `5173`、`3001` 当前无监听；用户需要浏览器验收时按需启动 |
+| 工程质量 | `blocked / high` | main@`8940d6d` 全量 `npm run typecheck` 在 API 阶段因 execution-envelope/shared 导出不一致失败，已登记 `RMD-GOV-TYPECHECK-001`；小说真实完本与全书审稿 2 个既有 P0 仍未关闭 |
+| 本地服务 | 运行态不入版本化状态 | 用户需要浏览器验收时实时检查 health、端口和 fixture；不得沿用文档中的历史瞬时状态 |
 | 真实环境 | 数据库/模型已获阶段性授权，待安全前置 | P8b-L1b 与真实模型只在隔离、回滚、费用上限和密钥脱敏满足后执行；外部渲染/云存储仍未授权 |
 
 ### 1.1 复盘整改进度
 
-总体关闭进度只统计 `docs/remediation/issue-ledger.md` 中已经具备正式关闭证据的 `closed` 项；准入评审、需求修订、开发完成或自测通过均不提前计入。
+进度按四层分别报告，不转换成项目完成百分比。总账计数只来自 `docs/remediation/issue-ledger.md`；研发交付、独立验收和用户结果不得互相替代。
 
 ```text
-总体关闭进度  [████░░░░░░░░░░░░░░░░]  9 / 42（21%）
-剩余问题      33
-当前整改包    RP-02B2a2 completed；candidate e8e37cd，delivery dc193db，post-merge gate 9f04986；trusted replay 29977969717 success
-拆包准入进度  [████████████████████]  7 / 7（100%）：第六轮四角色全部 approved，P0/P1=0
-研发交付进度  [████████░░░░░░░░░░░░]  2 / 5（40%）：B2a1、B2a2 限定阶段完成
-当前状态      RP-02B2a2 E3 已完成；ARCH/SECURITY 与 TEST/QUALITY 均 approved，P0/P1=0；总账 9/42、RMD-TASK-002=partial、RMD-TASK-003=open；后续包未自动授权
+execution_mode: execution_reset
+ledger_closed: 8/43
+pb_closed: 0/7
+rb_closed: 0/12
+active_implementation_package: none
+merged_prs_without_ledger_closure: 5
+stop_review_threshold: 2
+next_decision: rebaseline_before_new_package
 ```
 
-当前包阶段：
+四层结论：
+
+| 层级 | 当前状态 | 结论 |
+| --- | --- | --- |
+| 总账关闭 | 8/43；PB 0/7；RB 0/12 | RMD-GOV-STATUS-001 回归修复待固定候选、独立复核和远端检查；新增 typecheck P1 已入账；不表示项目完成度 |
+| 研发交付 | 无活动实现包；最近完成 RP-02B2a2 E3 | E3 证据可靠，但对应问题仍为 partial/open |
+| 独立验收 | 当前无待验候选 | RP-02B2a2 历史候选已通过，不自动覆盖后续包 |
+| 用户结果 | `not_proven` | 尚无 PB/RB 正式关闭，不能称小说或视频真实闭环 |
+
+历史包阶段（审计参考，不作为当前进度）：
 
 | 阶段 | 状态 | 说明 |
 | --- | --- | --- |
@@ -55,7 +67,7 @@
 | 需求提交与远程治理 | 已完成 | 需求合同 `42a3f18` 已推送；Remediation governance run `29246455165` success |
 | RP-02B2a0 研发 | 已完成 | 实现提交 `2da6d31`；严格 8 files / 319 net additions；未进入 B2a+ |
 | 独立验收 | 已完成 | TEST 与 QUALITY 最终均 approved，P0/P1/P2=0；四类 canary 与日志/DOM 返工闭合 |
-| 关闭证据与总账更新 | 已完成 | 阶段证据已形成；`RMD-TASK-002` 保持 partial，总体关闭数仍为 9/42 |
+| 关闭证据与总账更新 | 已完成 | 阶段证据已形成；`RMD-TASK-002` 保持 partial；该历史阶段当时关闭数为 9/42 |
 | RP-02B2a 第一轮单包授权审计 | 已完成 | 后端 approved 0/0/1、QUALITY approved 0/0/0、产品 rejected 0/2/0、TEST rejected 0/1/0；去重为 route 回归写集、retry 用户文案、远程 CI 3 个 P1 |
 | RP-02B2a 第一轮拒绝项修订 | 已完成 | manifest 改为 22 个实现/测试/CI 文件 + 同 diff ADR，补 route retry 精确回归、固定失败文案和远程 B1+B2a 串行命令 |
 | RP-02B2a 第二轮单包授权复核 | 已完成 | 产品/TEST approved 0/0/0；后端 rejected 0/2/0、QUALITY rejected 0/1/0；去重为远程 budget/ADR ready 门禁和顶部授权口径 2 类 P1 |
@@ -79,11 +91,11 @@
 | 拆包资产提交与 B2a1 独立实施 | 已完成 | B2a1 从 clean 基线 `501a3cf` 独立实施；不联动授权后续包 |
 | RP-02B2a1 实现与远程验收 | 已完成 | 早期 `0a583c8` 因两个最终质量 P1 被拒绝；修复链 `072b9be -> f342297 -> 4817abc` 已推送，固定基线单一累计门禁为 18 files / 1,898 net additions，accepted code head 四路远程 CI 全绿 |
 | RP-02B2a1 最终 TEST/QUALITY/clean checkout | 已完成 | TEST/QUALITY/clean-checkout 均 `APPROVED`；复合链 192/192、API 119/119、RP-01C 13/13、根 RP-02A 11/11、14/14 负向变异拒绝，P1/P2=0/0 |
-| RP-02B2a1 阶段证据与总账同步 | 已完成 | accepted code head `4817abc` 与 immutable evidence publication head `6eaf60a` 分离绑定；Remediation governance run `29410503391` completed/success；`RMD-TASK-002=partial`、`RMD-TASK-003=open`，总览仍为 9/42 |
+| RP-02B2a1 阶段证据与总账同步 | 已完成 | accepted code head `4817abc` 与 immutable evidence publication head `6eaf60a` 分离绑定；Remediation governance run `29410503391` completed/success；`RMD-TASK-002=partial`、`RMD-TASK-003=open`；该历史阶段总览为 9/42 |
 | RP-02B2a2 四路准入 | 已拒绝 | 后端合同 `APPROVED P0=0/P1=0/P2=2`；TEST `REJECTED P0=0/P1=3/P2=1`；QUALITY 对当前实现 `REJECTED P0=3/P1=2/P2=1`；治理 `REJECTED P0=0/P1=3/P2=1`。四路未清零，B2a2 保持 `not_authorized` |
 | RP-02B2a2-G0 首轮独立复核 | 已拒绝 4/4 | TEST `0/2/0`、后端架构 `0/3/3`、QUALITY `0/5/1`、治理 `0/3/1`；共同 P1 为治理文件无独立 package 归属、range/命令/workflow 假绿及 actor/legacy 合同越界。当时按固定 `6eaf60a` 的 10-file G0 包整改，业务实现未启动 |
 | RP-02B2a2-G0 整改后最终复核 | 已完成 | accepted code head `056a8d2`；6 files / 424 net additions；package gate 63/63；四路远程 CI completed/success；B2a2 `not_authorized` |
-| RP-02B2a2 实现、可信重放与最终独立复核 | 已完成 | admitted candidate `e8e37cd`，22 files / 3,891 net additions；squash delivery `dc193db`；post-merge gate `9f04986`；trusted replay `29977969717` success，A2 core 272/272、package gate 65/65；ARCH/SECURITY `0/0/1`、TEST/QUALITY `0/0/0` approved；`RMD-TASK-002=partial`、`RMD-TASK-003=open`、总账 9/42 |
+| RP-02B2a2 实现、可信重放与最终独立复核 | 已完成 | admitted candidate `e8e37cd`，22 files / 3,891 net additions；squash delivery `dc193db`；post-merge gate `9f04986`；trusted replay `29977969717` success，A2 core 272/272、package gate 65/65；ARCH/SECURITY `0/0/1`、TEST/QUALITY `0/0/0` approved；`RMD-TASK-002=partial`、`RMD-TASK-003=open`；该历史阶段总账为 9/42 |
 
 ## 2. 小说模块
 
@@ -150,7 +162,7 @@
 
 ## 5. 工程质量与工作树
 
-- 最新工程质量：二次复盘归并 42 项 PB/RB/QG/DEBT 和专项验证缺口；`RP-00A`、`RP-00B`、`RP-01A`、`RP-01B`、`RP-01C` 已关闭 8 项 QG 和 1 项 DEBT，当前关闭 9/42。
+- 最新工程质量：当前总账 43 项 PB/RB/QG/DEBT 和专项验证缺口；`RMD-GOV-STATUS-001` 因同根回归恢复待验、`RMD-GOV-TYPECHECK-001` 新增 open，当前关闭 8/43。
 - `.playwright-cli/` 已安全忽略；源码、migration、测试和文档未被 ignore。
 - 已创建并推送检查点分支 `codex/aishortvideo-checkpoint-20260711`；P10-R0 检查点 `68957be` 及后续 R1 准入文档均纳入该远程分支。
 - RP-00B 的 `Remediation governance` 已在远程 push runs `29196618102`、`29196969050` 成功执行，Git 预算与 SLA 门禁不再只有本地证据。
@@ -161,6 +173,8 @@
 - RP-02B1 已在 `415d03a` 建立 shared 15-action ExecutionEnvelope、显式 source refs 禁止合成/跨字段一致、lease/fencing/recovery CAS、安全回执与多结果 Prisma 合同；独立 TEST/QUALITY 最终 P0/P1/P2 = 0，干净检出 13/13，远程 runs `29220634159`、`29220634162`、`29220634178`、`29220634187` 成功。worker 权威重载和 stale 双门禁未证明；RMD-TASK-002 为 partial、003 为 open，E6 未证明。
 - RP-02B2a1 已在 `eee5568` 建立 15-action registry、strict provider ABI、同步调用点精确覆盖和 provider-backed public retry freeze；`ec8278e` 修复 RP-01C fixture。早期 `0a583c8` 的远程绿灯被最终 QUALITY 发现的 package resolver 累计范围绕过与 RP-02A AST oracle 绕过两个 P1 否决；修复链 `072b9be -> f342297 -> 4817abc` 已闭合。固定基线 `501a3cf..4817abc` 的单一累计 package gate 为 18 files / 1,898 net additions，workflow contract `required_files=35`；accepted code head 四路远程 runs `29405557756`、`29405557734`、`29405557763`、`29405557764` 均成功。治理证据以 `6eaf60a` 发布并推送，run `29410503391` completed/success。该子包关闭时 B2a2 尚未完成；这一历史边界已由下一项 A2 最终证据替代。RMD-TASK-002 仍为 partial、003 仍为 open。
 - RP-02B2a2 已以 admitted candidate `e8e37cd` 完成 authenticated resolver actor、15-action authoritative source refs、T0/T1 replay、三阶段 stale authority gate、Prisma/InMemory active-claim fence 与 legacy fail closed 的限定 E3 实现。PR #51 squash delivery `dc193db`，PR #53 post-merge gate `9f04986`；trusted replay `29977969717` 对候选与交付双区间、SHA/tree/digest、65/65 package gate、272/272 core 和全链门禁验证成功。ARCH/SECURITY `APPROVED 0/0/1`、TEST/QUALITY `APPROVED 0/0/0`；唯一 P2 为 resolver 单次解析缺动态 invocation counter。worker lifecycle、真实 retry child、真实 MySQL/provider/media/E6 仍未证明。
+- RP-02B2a2 closeout 已由 PR #56 squash 合并为 `0ff9107`，tree `58ad3981`；四路 main push required checks 成功，PR #54 已关闭且不得复用。
+- PR #57 已将 RP-01C 候选检查与 main delivery 检查分离并 squash 合并为 `8940d6d`；当前主干 required contexts 为 governance/admin-dom/backend-e2e/rp01c-fixtures 且 main push 全绿。该 CI 修复没有改变总账状态。
 - 工程质量任务已对远程检查点执行一次性只读复核：本地与 upstream 同步，未发现敏感信息、浏览器产物、一次性配置或 P10/P12 可执行越界误纳管，结论为 `passed`，无 P0/P1。
 - 一次性 `apps/api/tsconfig.testrun.json` 已由 RP-00B 完成归因和安全删除，未加入 ignore；独立 TEST/QUALITY 已复核。`.playwright-cli/` 继续作为本地浏览器运行产物忽略。
 - `docs/modules/video-p10-r1-implementation-package.md` 与多会话评审记录已安全归因并纳入远程基线；它们是需求资产，不是已授权业务实现。
@@ -207,10 +221,10 @@
 
 ## 7. 当前唯一推荐动作
 
-1. `RP-02B2a2` 已在限定 E3 范围完成，候选/交付/可信重放/双独立复核证据已形成但尚待本次 closeout commit/push 与远程治理绿灯；研发交付进度 2/5，总账仍 9/42。发布完成后再单独形成并审查 `RP-02B2a3` 授权，不得把 A2 完成解释为自动开工。
-2. `RP-01D` 真实 MySQL 与真实模型费用调用已获用户后续执行授权；达到对应阶段门禁后可直接执行，但必须使用隔离测试库、可回滚写集、严格单次费用上限、密钥脱敏且禁用自动付费重试。每个子包独立研发、测试、关闭、commit 和 push。
-3. 小说真实完本金丝雀通过后，再执行 P9-real；P10-R1 只在 `RP-10` 重新决策。
-4. 真实 DB/provider 按已授权的安全前置执行；外部媒体和平台发布继续保持独立授权门禁。
+1. 只执行结果进度重置：校准 `execution-scoreboard.json`、通过 `GOV-PROGRESS-01`、归因共享工作树未提交内容并取得独立 QUALITY 复核。
+2. `RP-02B2a3`、P9-real、P10-R1 和其他业务包均不自动启动；下一包必须先声明 `target_issue_ids`、`expected_ledger_transition`、用户结果和证据桶。
+3. 下一包选择以能够明确推进 PB/P0 或 RB/P0/P1 为第一目标；若不能说明总账状态收益，则保持 `not_authorized`。
+4. 真实 MySQL 与真实模型费用调用已有后续授权，但只有在选定结果链需要且隔离测试库、可回滚写集、单次费用上限、密钥脱敏和禁用自动付费重试全部满足时才执行。
 g0_evidence_parent_sha: 056a8d28910c765c9887a245e2dc4269859e5ec2
 g0_evidence_rp01a_run: 29955581285
 g0_evidence_rp01b_run: 29955581242

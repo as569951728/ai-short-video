@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-08-01",
+  "mode": "execution_reset",
+  "ledger": {
+    "total": 43,
+    "closed": 8,
+    "openOrPending": 35,
+    "byCategory": {
+      "PB": { "total": 7, "closed": 0 },
+      "RB": { "total": 12, "closed": 0 },
+      "QG": { "total": 22, "closed": 7 },
+      "DEBT": { "total": 2, "closed": 1 }
+    }
+  },
+  "delivery": {
+    "activeImplementationPackage": null,
+    "lastCompletedPackage": "RP-02B2a2",
+    "lastCompletedStage": "E3",
+    "lastResult": "verified_partial_issue_impact"
+  },
+  "acceptance": {
+    "activePackage": null,
+    "status": "not_started"
+  },
+  "productOutcome": {
+    "pbClosed": 0,
+    "rbClosed": 0,
+    "status": "not_proven"
+  },
+  "worktreeAttribution": {
+    "status": "classified_no_mutation",
+    "entries": 15,
+    "preserveForSeparateUiPackage": 2,
+    "doNotMigrate": 13
+  },
+  "flowControl": {
+    "maxActiveImplementationPackages": 1,
+    "mergedPullRequestsWithoutLedgerClosure": 5,
+    "mergedPullRequestRefs": ["#51", "#53", "#55", "#56", "#57"],
+    "stopReviewThreshold": 2
+  },
+  "decision": {
+    "nextAction": "rebaseline_before_new_package",
+    "newBusinessDevelopment": "frozen",
+    "realEnvironment": "authorized_with_safety_gates"
+  },
+  "sources": [
+    "docs/remediation/issue-ledger.md",
+    "docs/remediation/execution-flow-events.json",
+    "docs/reviews/main-control-event-ledger.md",
+    "docs/reviews/main-control-status.md"
+  ]
+}

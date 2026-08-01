@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "events": [
+    {
+      "id": "ledger-closure-checkpoint-2026-07-15",
+      "type": "ledger_closure",
+      "authorityEventId": "MCE-20260713-RP01C-CLOSE-CI-VERIFY",
+      "issueId": "RMD-TEST-FIXTURE-001",
+      "closureHead": "bdfa8142c4f9f13ce047c1f4faeb56fcbaa0d192",
+      "closedCountAfterEvent": 9
+    },
+    {
+      "id": "pr-51-merged",
+      "type": "pull_request_merged",
+      "pullRequest": 51,
+      "mergeSha": "dc193dbbd3ac1970f571fd618f12902a4033994c",
+      "authorityEventId": "MCE-20260723-RP02B2A2-FINAL-ACCEPTED"
+    },
+    {
+      "id": "pr-53-merged",
+      "type": "pull_request_merged",
+      "pullRequest": 53,
+      "mergeSha": "9f04986469a3e409b3ce887390e8830cbdfe9493",
+      "authorityEventId": "MCE-20260723-RP02B2A2-FINAL-ACCEPTED"
+    },
+    {
+      "id": "pr-55-merged",
+      "type": "pull_request_merged",
+      "pullRequest": 55,
+      "mergeSha": "b77496d57aaffaaa229769be276a86d967a64af6",
+      "authorityEventId": "MCE-20260801-RESULT-PROGRESS-RESET"
+    },
+    {
+      "id": "pr-56-merged",
+      "type": "pull_request_merged",
+      "pullRequest": 56,
+      "mergeSha": "0ff9107bbfbf95983ae8c21391754520f4374711",
+      "authorityEventId": "MCE-20260801-RESULT-PROGRESS-RESET"
+    },
+    {
+      "id": "pr-57-merged",
+      "type": "pull_request_merged",
+      "pullRequest": 57,
+      "mergeSha": "8940d6dda29f6cdcfd9b272f317f6fc5d4f5e766",
+      "authorityEventId": "MCE-20260801-RESULT-PROGRESS-RESET"
+    }
+  ]
+}
