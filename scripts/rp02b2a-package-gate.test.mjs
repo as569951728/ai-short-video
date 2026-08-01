@@ -776,6 +776,8 @@ function expectedManifestDigest(item, base = item.base) {
 function admittedCandidateArgs(item, overrides = {}) {
   const values = {
     packageId: item.packageId,
+    gateSource: item.gateSource,
+    g0EvidenceSha: item.g0EvidenceSha,
     predecessor: item.base,
     candidate: item.head,
     tree: sh(item.repo, ["git", "rev-parse", `${item.head}^{tree}`]).trim(),
@@ -783,8 +785,8 @@ function admittedCandidateArgs(item, overrides = {}) {
     ...overrides,
   };
   return [
-    "--gate-source", item.gateSource,
-    "--g0-evidence-sha", item.g0EvidenceSha,
+    "--gate-source", values.gateSource,
+    "--g0-evidence-sha", values.g0EvidenceSha,
     "--authorized-package-id", values.packageId,
     "--authorized-predecessor-sha", values.predecessor,
     "--authorized-candidate-sha", values.candidate,
@@ -1747,6 +1749,43 @@ describe("RP-02B2a2 G0 evidence publication gate", () => {
     assert.equal(verified.status, 0, verified.stderr);
     assert.match(verified.stdout, new RegExp(`range_mode=trusted_squash_post_merge.*delivery_base_sha=${deliveryBase}.*delivery_head_sha=${deliveryHead}.*candidate_sha=${item.head}`, "s"));
 
+    sh(item.repo, ["git", "checkout", "-q", "--detach", deliveryHead]);
+    write(item.repo, "docs/reviews/main-control-status.md", `${readFileSync(resolve(item.repo, "docs/reviews/main-control-status.md"), "utf8")}\n`);
+    write(item.repo, "package.json", `${readFileSync(resolve(item.repo, "package.json"), "utf8")}\n`);
+    const ordinaryHead = commit(item.repo, "ordinary governance change after A2 delivery");
+    const ordinaryRange = run(item.repo, [
+      "--print-range", "--event", "push", "--push-ref", "refs/heads/main", "--push-created", "false",
+      "--push-before", deliveryHead, "--push-head", ordinaryHead, ...receipt,
+    ]);
+    assert.equal(ordinaryRange.status, 0, ordinaryRange.stderr);
+    assert.match(ordinaryRange.stdout, new RegExp(`base=${deliveryHead}\\nhead=${ordinaryHead}\\ndelivery_base=${deliveryHead}\\ndelivery_head=${ordinaryHead}\\nrange_mode=direct_after_consumed_a2_receipt`));
+    const ordinaryGate = run(item.repo, [
+      "--github-output", "--base", deliveryHead, "--head", ordinaryHead,
+      "--policy-source", ordinaryHead, "--gate-source", item.gateSource,
+      "--g0-evidence-sha", item.g0EvidenceSha,
+      "--authorized-package-id", "RP-02B2a2",
+      "--authorized-predecessor-sha", item.base,
+    ]);
+    assert.equal(ordinaryGate.status, 0, ordinaryGate.stderr);
+    assert.match(ordinaryGate.stdout, /package_id=RP-01C.*test_command=test:rp02b1/s);
+    expectRejected(run(item.repo, [
+      "--print-range", "--event", "push", "--push-ref", "refs/heads/feature", "--push-created", "false",
+      "--push-before", deliveryHead, "--push-head", ordinaryHead, ...receipt,
+    ]), /consumed admission receipt is accepted only on refs\/heads\/main/);
+    sh(item.repo, ["git", "checkout", "-q", "--detach", item.gateSource]);
+    write(item.repo, "ordinary-before-evidence.txt", "ordinary\n");
+    const beforeEvidenceHead = commit(item.repo, "ordinary branch before accepted evidence");
+    expectRejected(run(item.repo, [
+      "--print-range", "--event", "push", "--push-ref", "refs/heads/main", "--push-created", "false",
+      "--push-before", item.gateSource, "--push-head", beforeEvidenceHead, ...receipt,
+    ]), /requires PUSH_BEFORE to descend from the accepted G0-E1 evidence SHA/);
+    expectRejected(run(item.repo, [
+      "--print-range", "--event", "push", "--push-ref", "refs/heads/main", "--push-created", "false",
+      "--push-before", deliveryHead, "--push-head", ordinaryHead,
+      ...admittedCandidateArgs(item, { g0EvidenceSha: item.gateSource }),
+    ]), /requires accepted G0 package RP-02B2a2-G0-C5|must be one direct child commit/);
+    sh(item.repo, ["git", "checkout", "-q", "--detach", deliveryHead]);
+
     const replay = run(item.repo, [
       "--print-range", "--event", "repository_dispatch", "--event-ref", "refs/heads/main",
       "--manual-base", deliveryBase, "--manual-head", deliveryHead, ...receipt,
@@ -2060,7 +2099,8 @@ describe("RP-02B2a2 G0 evidence publication gate", () => {
   it("rejects C2 as the current E1 parent or A2 gate source", () => {
     const staleGate = prepare(TEST_LAYER_ID);
     const staleEvidence = publishEvidence(staleGate);
-    expectRejected(currentGate(staleEvidence), /requires accepted G0 package RP-02B2a2-G0-C5|candidate job must run only for business admission/);
+    write(staleEvidence.repo, GATE_SCRIPT, readFileSync(resolve(ROOT, GATE_SCRIPT), "utf8"));
+    expectRejected(gate(staleEvidence), /requires accepted G0 package RP-02B2a2-G0-C5|candidate job must run only for business admission/);
     sh(staleGate.repo, ["git", "checkout", "-q", "--detach", staleGate.head]);
     const staleA2 = addMinimalB2a2Candidate(staleGate.repo, staleGate.head);
     expectRejected(currentGate({
@@ -2071,7 +2111,7 @@ describe("RP-02B2a2 G0 evidence publication gate", () => {
       g0EvidenceSha: staleGate.head,
       authorizedPackageId: "RP-02B2a2",
       authorizedPredecessorSha: staleGate.head,
-    }), /requires accepted G0 package RP-02B2a2-G0-C5|candidate job must run only for business admission/);
+    }), /RP-02B2a2 manifest violation: scripts\/rp02b2a-package-gate\.mjs/);
   });
   it("accepts only the fixed-E1 four-file C4 scope correction", () => {
     const valid = prepare(A2_SCOPE_ID), passed = gate(valid);
