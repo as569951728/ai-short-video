@@ -7,6 +7,13 @@ on:
       - synchronize
       - reopened
       - ready_for_review
+    paths:
+      - 'docs/adr/rp-02b2a2-authority-claim-budget.md'
+      - 'docs/adr/rp-02b2a3-lease-retry-budget.md'
+      - 'docs/adr/rp-02b2a4-inmemory-finalize-budget.md'
+      - 'docs/adr/rp-02b2a5-prisma-nine-six-budget.md'
+      - 'docs/reviews/remediation-rmd-task-002-003-rp-02b2a1-verification-2026-07-15.md'
+      - 'docs/reviews/remediation-rmd-task-002-003-rp-02b2a2-verification-2026-07-23.md'
 
 concurrency:
   group: rp02b2a-admission-pr-${{ github.event.pull_request.number }}

@@ -30,7 +30,7 @@ const ROOT = resolve("."),
   WORKFLOW = resolve(".github/workflows/rp01c-fixtures.yml"),
   ADMISSION_WORKFLOW = resolve(".github/workflows/rp02b2a-admission.yml"),
   TRUSTED_WORKFLOW_ORACLE_SHA256 =
-    "c48196d1b167d60c4f94b3f7b915ea2853488ada4b89ab0e4df767214739c7c7",
+    "a380525cb31217a6f5ec9c880bf60f6c0ca0c2cc562d66cd3994f6ab45d29070",
   BASELINE = "501a3cfcdf12341d9f611f0fdd6a6336d4ade483",
   B2A2_BASELINE = "6eaf60af4155a8b95ff77d53261f5896d3a8f77d",
   STALE_B2A2_BASELINE = "4817abc67cf916772b317aff027403b97ab4df76",
@@ -1037,6 +1037,80 @@ replace(`          ${resolver}`,`          cat <<'EOF'
           EOF`),/shell semantics mismatch/],[text=>text.replace(selected,`${selected} || true`),/shell semantics mismatch/],[text=>text.replace(`          ${resolver}`,`          if false; then
           ${resolver}
           fi`),/shell semantics mismatch/],[text=>text.replace(`          ${resolver}`,'          echo "package_id=RP-02B2a1" >> "$GITHUB_OUTPUT"\n          echo "test_command=test:rp02b2a1" >> "$GITHUB_OUTPUT"'),/shell semantics mismatch/]];for(const[index,[change,pattern]]of changes.entries()){const result=mutate(change,`workflow mutation ${index} did not change fixture`);assert.notEqual(result.status,0,`workflow mutation ${index} passed`);expectRejected(result,pattern,`workflow mutation ${index}`)}})});
+it("limits trusted admission to explicit B2a package markers", () => {
+  const result = mutateTrustedWorkflow((text) => text.replace(
+    "      - 'docs/adr/rp-02b2a3-lease-retry-budget.md'\n",
+    "      - 'docs/remediation/issue-ledger.md'\n",
+  ));
+  expectRejected(result, /trusted admission trigger paths mismatch/);
+});
+
+it("routes ordinary PRs with historical manifest overlap to the RP-01C fallback only when explicitly allowed", () => {
+  const input = {
+    files: ["docs/reviews/main-control-status.md", "package.json"],
+    netAdditions: 2,
+    addedLines: 2,
+    deletedLines: 0,
+    adrTextByPath: {},
+    base: "1".repeat(40),
+    head: "2".repeat(40),
+  };
+  assert.throws(() => analyzePackageGate(input), /requires exactly the three frozen evidence files/);
+  const result = analyzePackageGate({ ...input, allowFallbackOverlap: true });
+  assert.equal(result.packageId, "RP-01C");
+  assert.equal(result.testCommand, "test:rp02b1");
+});
+
+it("never lets fallback overlap weaken frozen evidence manifests", () => {
+  const base = "1".repeat(40);
+  const head = "2".repeat(40);
+  assert.throws(() => analyzePackageGate({
+    files: [
+      "docs/remediation/acceptance-matrix.md",
+      "docs/remediation/issue-ledger.md",
+      "docs/reviews/main-control-event-ledger.md",
+      "docs/reviews/main-control-status.md",
+      "docs/reviews/remediation-rmd-task-002-003-rp-02b2a2-verification-2026-07-23.md",
+      "README.md",
+    ],
+    netAdditions: 1,
+    addedLines: 1,
+    deletedLines: 0,
+    adrTextByPath: {},
+    base,
+    head,
+    allowFallbackOverlap: true,
+  }), /requires exactly the five frozen closeout evidence files/);
+  assert.throws(() => analyzePackageGate({
+    files: [
+      "docs/reviews/main-control-status.md",
+      "docs/reviews/main-control-event-ledger.md",
+      "docs/reviews/remediation-rmd-task-002-003-rp-02b2a1-verification-2026-07-15.md",
+      "README.md",
+    ],
+    netAdditions: 1,
+    addedLines: 1,
+    deletedLines: 0,
+    adrTextByPath: {},
+    base,
+    head,
+    allowFallbackOverlap: true,
+  }), /requires exactly the three frozen evidence files/);
+  for (const files of [
+    ["docs/reviews/remediation-rmd-task-002-003-rp-02b2a1-verification-2026-07-15.md"],
+    ["docs/reviews/remediation-rmd-task-002-003-rp-02b2a1-verification-2026-07-15.md", "README.md"],
+  ]) assert.throws(() => analyzePackageGate({
+    files,
+    netAdditions: 1,
+    addedLines: 1,
+    deletedLines: 0,
+    adrTextByPath: {},
+    base,
+    head,
+    allowFallbackOverlap: true,
+  }), /requires exactly the three frozen evidence files/);
+});
+
 describe("RP-02B2a2 PM-C2 and E3 closeout policy", () => {
   it("admits PM-C2 only as the fixed-baseline exact five-file direct child", () => {
     const candidate = prepare(CLOSEOUT_POLICY_CORRECTION_ID), passed = gate(candidate);
@@ -1130,7 +1204,7 @@ describe("RP-02B2a2 PM-C2 and E3 closeout policy", () => {
     write(arbitrary, "unrelated.txt", "arbitrary successor\n");
     const successor = commit(arbitrary, "arbitrary legacy successor");
     write(arbitrary, GATE_SCRIPT, readFileSync(resolve(ROOT, GATE_SCRIPT)));
-    expectRejected(run(arbitrary, ["--verify-admission-workflow", ".github/workflows/rp02b2a-admission.yml", "--head", successor]), /candidate job must run only for business admission|canonical contract mismatch/);
+    expectRejected(run(arbitrary, ["--verify-admission-workflow", ".github/workflows/rp02b2a-admission.yml", "--head", successor]), /pull_request_target keys mismatch|candidate job must run only for business admission|canonical contract mismatch/);
     const policy = prepare(CLOSEOUT_POLICY_CORRECTION_ID);
     const current = run(policy.repo, ["--verify-admission-workflow", ".github/workflows/rp02b2a-admission.yml", "--head", policy.head]);
     assert.equal(current.status, 0, current.stderr);

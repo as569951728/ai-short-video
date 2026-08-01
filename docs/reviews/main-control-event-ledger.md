@@ -552,6 +552,9 @@ source_thread: 019ed4a5-a2f5-7d13-86d0-0c28381af555
 package_id: RP-01C
 issue_ids: RMD-TEST-FIXTURE-001
 acceptance_ids: TEST-FIXTURE-01
+closure_issue_id: RMD-TEST-FIXTURE-001
+closure_head: bdfa8142c4f9f13ce047c1f4faeb56fcbaa0d192
+closure_ledger_closed: 9
 summary: RP-01C 正式关闭提交 bdfa814 已推送，Remediation governance 远程运行成功。
 evidence: GitHub Actions run 29209311021; status completed/success; headSha bdfa814
 mc_decision: 关闭提交远程验证完成，RP-01C 保持 closed，总账保持 9/42。
@@ -1409,6 +1412,8 @@ accepted_candidate_tree: 749fe41f42285dc9115351ddcbc675e77d428cb7
 squash_delivery_base: 50d5839fd4d965b2c6fc40213be32beaf6f6cfb2
 squash_delivery_head: dc193dbbd3ac1970f571fd618f12902a4033994c
 post_merge_gate_head: 9f04986469a3e409b3ce887390e8830cbdfe9493
+merged_pr_51: dc193dbbd3ac1970f571fd618f12902a4033994c
+merged_pr_53: 9f04986469a3e409b3ce887390e8830cbdfe9493
 summary: RP-02B2a2 在限定 E3 范围完成 authenticated resolver actor、15-action authoritative source refs、T0/T1 replay、三阶段 authority stale gate、active-claim fence 与 legacy fail closed；不包含正常 leased provider、worker lifecycle、retry child 消费或真实环境。
 evidence: PR #51 candidate delivery and PR #53 post-merge range correction；trusted admission run 29965011647；candidate RP-01C run 29972477016；post-merge main runs 29977676415/29977676443/29977676404/29977676439；trusted replay `29977969717` completed/success；22 files / 3,891 net additions；package gate 65/65；A2 core 272/272；本地 clean-install 复跑 272/272
 independent_arch_security: APPROVED P0=0/P1=0/P2=1；非阻断 P2 为 resolver 每请求恰好一次缺动态 invocation counter
@@ -1416,4 +1421,59 @@ independent_test_quality: APPROVED P0=0/P1=0/P2=0；独立候选复跑 212/212�
 mc_decision: RP-02B2a2 package completed；研发交付进度更新为 2/5。RMD-TASK-002 保持 partial、RMD-TASK-003 保持 open、总账保持 9/42；B2a3-B2a5/B2b/B2c/B3 不自动授权。
 environment_boundary: 未证明真实 MySQL 多进程事务、真实付费 provider、TTS/media、渲染、发布或 E6。真实数据库和真实模型已获用户后续执行授权，但必须等对应阶段门禁满足后，以隔离测试库、可回滚写集、严格单次费用上限、密钥脱敏和禁用自动付费重试执行。
 next_action: 发布本阶段证据并取得远程治理绿灯；随后单独形成 RP-02B2a3 授权，不得跳过测试或把 A2 通过外推为后续能力。
+```
+
+### MCE-20260801-RESULT-PROGRESS-RESET
+
+```text
+event_id: MCE-20260801-RESULT-PROGRESS-RESET
+occurred_at: 2026-08-01 CST
+event_type: result_progress_reset_started
+source_thread: main-control with independent read-only status audit
+package_id: GOV-PROGRESS-01
+issue_ids: RMD-GOV-STATUS-001, RMD-GOV-GIT-001, RMD-GOV-TYPECHECK-001
+acceptance_ids: GOV-PROGRESS-01, GOV-GIT-01, GOV-TYPECHECK-01
+merged_pr_55: b77496d57aaffaaa229769be276a86d967a64af6
+merged_pr_56: 0ff9107bbfbf95983ae8c21391754520f4374711
+merged_pr_57: 8940d6dda29f6cdcfd9b272f317f6fc5d4f5e766
+summary: 复核确认 PR #55 closeout policy、PR #56 E3 closeout 和 PR #57 RP-01C trigger split 均已进入 main，但主控状态仍称 closeout 待提交，总账更新时间滞后，并把 9/42 转换成项目完成百分比。最近五个合并 PR 没有增加总账关闭项，超过停工阈值 2；main@8940d6d 根级 typecheck 在 API 阶段失败，新增 RMD-GOV-TYPECHECK-001 入账。
+evidence: PR #55 merge b77496d；PR #56 merge 0ff9107、tree 58ad3981、四路 main push required checks success；PR #57 merge 8940d6d、tree 4681b42、main runs 30078937635/30078937736/30078937596/30078937682 success；共享工作树 15 条未提交状态已只读归因为 2 条 UI 保留迁移、13 条旧任务平台不迁移，详见 `docs/reviews/shared-worktree-attribution-2026-08-01.md`。
+mc_decision: 执行模式切换为 execution_reset，活动实现包清空；RP-02B2a3 及其他业务包不自动授权。进度改为总账关闭、研发交付、独立验收、用户结果四层原始状态，并由机器门禁校验。
+next_action: 完成 execution scoreboard、progress consistency gate、治理测试和独立 QUALITY 复核；形成 RMD-GOV-STATUS-001 回归关闭证据后单独 commit/push。共享工作树保持不变；随后仅选择能声明 target_issue_ids、expected_ledger_transition 和用户结果的下一包。
+```
+
+### MCE-20260801-RESULT-PROGRESS-REMOTE-BLOCKED
+
+```text
+event_id: MCE-20260801-RESULT-PROGRESS-REMOTE-BLOCKED
+occurred_at: 2026-08-01 CST
+event_type: remote_ci_result
+source_thread: main-control
+package_id: GOV-PROGRESS-01
+issue_ids: RMD-GOV-STATUS-001, RMD-GOV-TYPECHECK-001
+acceptance_ids: GOV-PROGRESS-01, GOV-TYPECHECK-01
+candidate_sha: f27aa765b9447e55d42659ac32d343ffd1e123c9
+candidate_tree: c0b3260809cbf8da70a977fb0b3e0fa0de55c828
+summary: PR #58 的 governance、admin-dom、backend-e2e 通过；rp01c-fixtures 在执行测试前失败，原因是普通治理差异被旧 package gate 误判为 RP-02B2a2-G0-E1；非 required 的 Trusted admission 也把普通 PR 当作已授权 B2a 候选并失败。
+evidence: runs 30685215200/30685215194/30685215206 success；rp01c run 30685215276 failed；trusted admission run 30685215177 failed
+mc_decision: 不关闭 RMD-GOV-STATUS-001，不用管理员绕过，不把三路绿灯解释为远端通过；PR #58 保持可审查状态。
+next_action: 将 CI 普通 PR 与 RP-02B2a 授权候选准确分流，并单独修复 RMD-GOV-TYPECHECK-001；重新跑 required checks 后再形成关闭证据。
+```
+
+### MCE-20260802-GOV-CI-TYPECHECK-CORRECTED
+
+```text
+event_id: MCE-20260802-GOV-CI-TYPECHECK-CORRECTED
+occurred_at: 2026-08-02 CST
+event_type: local_correction_verified
+source_thread: main-control with independent QUALITY sidecar
+package_id: GOV-PROGRESS-01
+issue_ids: RMD-GOV-STATUS-001, RMD-GOV-TYPECHECK-001
+acceptance_ids: GOV-PROGRESS-01, GOV-TYPECHECK-01
+correction_candidate_sha: ae3e4e4ece94003cf51139dea77b10770670c53a
+correction_candidate_tree: 10a468ff986bce8d22f6a42d8d2d662b7412a46b
+summary: package gate 对普通治理 PR 增加显式 RP-01C fallback，同时保持 pull_request_target 与冻结 B2a 包严格校验；Trusted admission 仅由六个明确 B2a marker path 触发。原根级 typecheck 20 错误确认来自隔离工作树缺本地 node_modules 后向父工作树解析旧 workspace 链接，不是源码合同漂移。
+evidence: final focused package-gate tests 5/5；G0-E1 stale/forged/topology 负向矩阵 1/1；RP-01C workflow contract passed；trusted admission canonical digest `a380525cb31217a6f5ec9c880bf60f6c0ca0c2cc562d66cd3994f6ab45d29070`；当前治理 diff 本地分类为 RP-01C；隔离工作树 npm ci 后 workspace links 均指向当前工作树，root typecheck shared/admin/api passed；independent QUALITY APPROVED P0/P1/P2=0/0/0。
+mc_decision: RMD-GOV-TYPECHECK-001 关闭，总账变为 9/43、QG 8/22；RMD-GOV-STATUS-001 继续保持 implemented_pending_verification，等待 PR #58 required checks 全绿。
+next_action: 运行完整治理与 package-gate 回归，提交推送当前候选，并在远端 required checks 全绿后形成 RMD-GOV-STATUS-001 最终关闭证据。
 ```
