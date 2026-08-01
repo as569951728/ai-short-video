@@ -79,7 +79,7 @@
 | ID | 类别/级别 | 问题与影响 | 状态 | 主要证据 | Owner | 整改包 | 验收 ID |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | RMD-GOV-GIT-001 | QG/P0 | 曾跨包累积并一次纳管 89 文件，无法逐包审查、回滚和 bisect | closed | `7e10975`；15/15 治理测试；独立 TEST/QUALITY approved；关闭记录 | MC + DEV + QUALITY | RP-00B | GOV-GIT-01 |
-| RMD-GOV-STATUS-001 | QG/P1 | 当前状态、历史事件和追加式文档曾互相冲突，巡检口径滞后 | implemented_pending_verification | `056f60a` 初始关闭；2026-08-01 同根回归已实现 `GOV-PROGRESS-01` 机器门禁，等待固定候选、独立复核和远端 required checks 后重新关闭 | MC + QUALITY | RP-00A | GOV-STATUS-01, GOV-PROGRESS-01 |
+| RMD-GOV-STATUS-001 | QG/P1 | 当前状态、历史事件和追加式文档曾互相冲突，巡检口径滞后 | closed | `056f60a` 初始关闭；2026-08-02 同根回归由 PR #58/#59 修复，独立 QUALITY `APPROVED 0/0/0`，PR #59 与 merge `e3cdc9a` 四路 required checks 全绿；关闭记录 | MC + QUALITY | RP-00A | GOV-STATUS-01, GOV-PROGRESS-01 |
 | RMD-GOV-SLA-001 | QG/P1 | 研发完成到测试派发曾依赖用户提醒，没有可追踪 SLA | closed | RP-00A/RP-00B SLA 收据；独立 TEST/QUALITY approved；关闭记录 | MC | RP-00B | GOV-SLA-01 |
 | RMD-GOV-TEMP-001 | DEBT/P1 | `apps/api/tsconfig.testrun.json` 长期无 owner、期限和处理决策 | closed | 无代码/脚本引用；安全删除且未 ignore；独立 TEST/QUALITY approved | QUALITY + DEV | RP-00B | GOV-TEMP-01 |
 | RMD-ARCH-SIZE-001 | DEBT/P1 | 小说/视频核心 service、repository、workbench 和 shared 文件过大，回归半径持续扩大 | open | 首次复盘代码体量表 | DEV + QUALITY | RP-09H1, RP-09H2 | ARCH-SPLIT-01 |
@@ -104,8 +104,8 @@
 | --- | ---: | ---: |
 | PB | 7 | 0 |
 | RB | 12 | 0 |
-| QG | 22 | 8 |
+| QG | 22 | 9 |
 | DEBT | 2 | 1 |
-| 合计 | 43 | 9 |
+| 合计 | 43 | 10 |
 
 数量只用于确认总账覆盖和正式关闭状态，不转换成项目完成百分比。每次更新必须重新核对实际分类数量，并分别报告研发交付、独立验收和用户结果。

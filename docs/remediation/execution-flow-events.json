@@ -43,6 +43,28 @@
       "pullRequest": 57,
       "mergeSha": "8940d6dda29f6cdcfd9b272f317f6fc5d4f5e766",
       "authorityEventId": "MCE-20260801-RESULT-PROGRESS-RESET"
+    },
+    {
+      "id": "pr-58-merged",
+      "type": "pull_request_merged",
+      "pullRequest": 58,
+      "mergeSha": "b2b9dadbd3850f3f72ec6412f991367de91f9ca1",
+      "authorityEventId": "MCE-20260802-GOV-STATUS-REGRESSION-CLOSED"
+    },
+    {
+      "id": "pr-59-merged",
+      "type": "pull_request_merged",
+      "pullRequest": 59,
+      "mergeSha": "e3cdc9a2474750c28110e6b83b0e39a43bf80cb6",
+      "authorityEventId": "MCE-20260802-GOV-STATUS-REGRESSION-CLOSED"
+    },
+    {
+      "id": "ledger-closure-rmd-gov-status-001-2026-08-02",
+      "type": "ledger_closure",
+      "authorityEventId": "MCE-20260802-GOV-STATUS-REGRESSION-CLOSED",
+      "issueId": "RMD-GOV-STATUS-001",
+      "closureHead": "e3cdc9a2474750c28110e6b83b0e39a43bf80cb6",
+      "closedCountAfterEvent": 10
     }
   ]
 }

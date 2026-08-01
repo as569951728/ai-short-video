@@ -30,9 +30,9 @@
 ### 2.1 当前执行重置
 
 - 当前没有活动实现包；`RP-02B2a3` 未自动授权。
-- 最近完成的 `RP-02B2a2` 只形成 E3 限定证据，`RMD-TASK-002=partial`、`RMD-TASK-003=open`，没有增加总账关闭项；`RMD-GOV-STATUS-001` 同根回归在重新验收前恢复为 `implemented_pending_verification`。
-- 从 PR #51、#53、#55、#56 到 #57 已连续 5 个合并 PR 未增加总账关闭项，超过停工阈值 2。
-- 下一动作固定为 `rebaseline_before_new_package`：先通过结果进度门禁和独立复核，再选择能够明确推进 PB/P0 或 RB/P0/P1 的纵向包。
+- 最近完成的 `RP-02B2a2` 只形成 E3 限定证据，`RMD-TASK-002=partial`、`RMD-TASK-003=open`；不因本轮治理关闭而改变。
+- PR #58/#59 已完成状态单源、进度门禁和主干 push 路由回归修复；`RMD-GOV-STATUS-001` 重新关闭，停工计数在本关闭检查点归零。
+- 下一动作固定为 `select_result_linked_package`：只选择能够明确推进 PB/P0 或 RB/P0/P1 的纵向包，并在授权前写明 `target_issue_ids`、`expected_ledger_transition`、用户结果和证据桶。
 - 当前机器状态由 `docs/remediation/execution-scoreboard.json` 投影，`npm run governance:progress` 校验其与总账和主控状态一致。
 
 ## 3. 依赖图
