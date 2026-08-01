@@ -1,6 +1,6 @@
 # RMD-GOV-STATUS-001 回归关闭记录
 
-状态：pending_independent_review
+状态：implemented_pending_remote_verification
 
 日期：2026-08-01
 
@@ -23,13 +23,14 @@ PR #56 已完成 E3 closeout、PR #57 已完成 RP-01C candidate/delivery 触发
 
 | 证据 | 结果 |
 | --- | --- |
-| candidate SHA | pending commit |
-| candidate tree | pending commit |
+| implementation candidate SHA | `f27aa765b9447e55d42659ac32d343ffd1e123c9` |
+| implementation candidate tree | `c0b3260809cbf8da70a977fb0b3e0fa0de55c828` |
 | `npm run governance:progress` | second candidate passed；ledger 43、closed 8、PB 0/7、RB 0/12、mode execution_reset |
 | `npm run test:governance` | 29/29 passed；覆盖删除 PR、伪造 closure、交换 PR/SHA、活动包、百分比、汇总和用户结果篡改 |
 | `git diff --check` | passed |
 | independent QUALITY | APPROVED；P0/P1/P2 = 0/0/0；三轮复核关闭首轮 4 P1 与二轮 1 P1/1 P2 |
-| remote required checks | pending |
+| remote required checks | PR #58：governance/admin-dom/backend-e2e passed；rp01c-fixtures failed before tests because ordinary governance diff was misclassified as frozen RP-02B2a2 package |
+| trusted admission | failed as non-required side check because every PR is treated as an RP-02B2a authorized candidate |
 | root `npm run typecheck` | baseline failed in API with 20 TS errors；已独立登记 `RMD-GOV-TYPECHECK-001=open`，不冒充本包通过 |
 
 ## 4. 边界
@@ -40,4 +41,4 @@ PR #56 已完成 E3 closeout、PR #57 已完成 RP-01C candidate/delivery 触发
 
 ## 5. 结论
 
-等待固定候选、独立 QUALITY 和远程 required checks 后裁决。
+固定实现候选和独立 QUALITY 已满足；远端 required checks 暴露主干 CI 分流缺陷，当前不得关闭 `RMD-GOV-STATUS-001`，也不得用本记录外推根级 typecheck 已恢复。先修复或重新裁决 CI 分流与 `RMD-GOV-TYPECHECK-001`，再对同一实现候选形成最终关闭证据。

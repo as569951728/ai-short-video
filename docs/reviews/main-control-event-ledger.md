@@ -1441,3 +1441,21 @@ evidence: PR #55 merge b77496d；PR #56 merge 0ff9107、tree 58ad3981、四路 m
 mc_decision: 执行模式切换为 execution_reset，活动实现包清空；RP-02B2a3 及其他业务包不自动授权。进度改为总账关闭、研发交付、独立验收、用户结果四层原始状态，并由机器门禁校验。
 next_action: 完成 execution scoreboard、progress consistency gate、治理测试和独立 QUALITY 复核；形成 RMD-GOV-STATUS-001 回归关闭证据后单独 commit/push。共享工作树保持不变；随后仅选择能声明 target_issue_ids、expected_ledger_transition 和用户结果的下一包。
 ```
+
+### MCE-20260801-RESULT-PROGRESS-REMOTE-BLOCKED
+
+```text
+event_id: MCE-20260801-RESULT-PROGRESS-REMOTE-BLOCKED
+occurred_at: 2026-08-01 CST
+event_type: remote_ci_result
+source_thread: main-control
+package_id: GOV-PROGRESS-01
+issue_ids: RMD-GOV-STATUS-001, RMD-GOV-TYPECHECK-001
+acceptance_ids: GOV-PROGRESS-01, GOV-TYPECHECK-01
+candidate_sha: f27aa765b9447e55d42659ac32d343ffd1e123c9
+candidate_tree: c0b3260809cbf8da70a977fb0b3e0fa0de55c828
+summary: PR #58 的 governance、admin-dom、backend-e2e 通过；rp01c-fixtures 在执行测试前失败，原因是普通治理差异被旧 package gate 误判为 RP-02B2a2-G0-E1；非 required 的 Trusted admission 也把普通 PR 当作已授权 B2a 候选并失败。
+evidence: runs 30685215200/30685215194/30685215206 success；rp01c run 30685215276 failed；trusted admission run 30685215177 failed
+mc_decision: 不关闭 RMD-GOV-STATUS-001，不用管理员绕过，不把三路绿灯解释为远端通过；PR #58 保持可审查状态。
+next_action: 将 CI 普通 PR 与 RP-02B2a 授权候选准确分流，并单独修复 RMD-GOV-TYPECHECK-001；重新跑 required checks 后再形成关闭证据。
+```
