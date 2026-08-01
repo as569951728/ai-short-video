@@ -25,6 +25,8 @@ PR #56 已完成 E3 closeout、PR #57 已完成 RP-01C candidate/delivery 触发
 | --- | --- |
 | implementation candidate SHA | `f27aa765b9447e55d42659ac32d343ffd1e123c9` |
 | implementation candidate tree | `c0b3260809cbf8da70a977fb0b3e0fa0de55c828` |
+| CI/typecheck correction candidate SHA | `ae3e4e4ece94003cf51139dea77b10770670c53a` |
+| CI/typecheck correction candidate tree | `10a468ff986bce8d22f6a42d8d2d662b7412a46b` |
 | `npm run governance:progress` | passed；ledger 43、closed 9、PB 0/7、RB 0/12、mode execution_reset |
 | `npm run test:governance` | 29/29 passed；覆盖删除 PR、伪造 closure、交换 PR/SHA、活动包、百分比、汇总和用户结果篡改 |
 | `git diff --check` | passed |
