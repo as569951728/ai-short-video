@@ -1,6 +1,6 @@
 # AIShortvideo 整改唯一问题总账
 
-更新时间：2026-08-01
+更新时间：2026-08-02
 
 状态：frozen_for_remediation
 
@@ -84,7 +84,7 @@
 | RMD-GOV-TEMP-001 | DEBT/P1 | `apps/api/tsconfig.testrun.json` 长期无 owner、期限和处理决策 | closed | 无代码/脚本引用；安全删除且未 ignore；独立 TEST/QUALITY approved | QUALITY + DEV | RP-00B | GOV-TEMP-01 |
 | RMD-ARCH-SIZE-001 | DEBT/P1 | 小说/视频核心 service、repository、workbench 和 shared 文件过大，回归半径持续扩大 | open | 首次复盘代码体量表 | DEV + QUALITY | RP-09H1, RP-09H2 | ARCH-SPLIT-01 |
 | RMD-GOV-STAGE-001 | QG/P1 | 协作文档原先仍称“研发前设计阶段”，当前已修改为整改冻结期并完成独立验收 | closed | `056f60a`；独立 TEST/PRODUCT/QUALITY approved；关闭记录 | MC | RP-00A | GOV-STAGE-01 |
-| RMD-GOV-TYPECHECK-001 | QG/P1 | 最新主干全量 `npm run typecheck` 在 API 阶段失败：API 引用的 execution-envelope、actor helper 和 ErrorCode 与 shared 导出不一致，主干不能称为类型全绿 | open | 2026-08-01 main@`8940d6d` 本地 clean worktree 复现；shared/admin 通过后 API 报 20 个 TS 错误 | DEV + QUALITY | 待重基线选包 | GOV-TYPECHECK-01 |
+| RMD-GOV-TYPECHECK-001 | QG/P1 | 隔离工作树缺少本地 `node_modules` 时，Node/TypeScript 向上解析到父工作树的旧 workspace 链接，造成 API shared 合同漂移的假阻塞 | closed | 关闭记录 `docs/reviews/remediation-rmd-gov-typecheck-001-closure-2026-08-02.md`；隔离工作树执行 `npm ci` 后 workspace 链接均落在本工作树，根级 shared/admin/api typecheck 全绿；未修改业务合同 | DEV + QUALITY | RP-00A | GOV-TYPECHECK-01 |
 
 ## 8. 专项验证缺口
 
@@ -104,8 +104,8 @@
 | --- | ---: | ---: |
 | PB | 7 | 0 |
 | RB | 12 | 0 |
-| QG | 22 | 7 |
+| QG | 22 | 8 |
 | DEBT | 2 | 1 |
-| 合计 | 43 | 8 |
+| 合计 | 43 | 9 |
 
 数量只用于确认总账覆盖和正式关闭状态，不转换成项目完成百分比。每次更新必须重新核对实际分类数量，并分别报告研发交付、独立验收和用户结果。

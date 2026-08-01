@@ -25,13 +25,13 @@ PR #56 已完成 E3 closeout、PR #57 已完成 RP-01C candidate/delivery 触发
 | --- | --- |
 | implementation candidate SHA | `f27aa765b9447e55d42659ac32d343ffd1e123c9` |
 | implementation candidate tree | `c0b3260809cbf8da70a977fb0b3e0fa0de55c828` |
-| `npm run governance:progress` | second candidate passed；ledger 43、closed 8、PB 0/7、RB 0/12、mode execution_reset |
+| `npm run governance:progress` | passed；ledger 43、closed 9、PB 0/7、RB 0/12、mode execution_reset |
 | `npm run test:governance` | 29/29 passed；覆盖删除 PR、伪造 closure、交换 PR/SHA、活动包、百分比、汇总和用户结果篡改 |
 | `git diff --check` | passed |
-| independent QUALITY | APPROVED；P0/P1/P2 = 0/0/0；三轮复核关闭首轮 4 P1 与二轮 1 P1/1 P2 |
+| independent QUALITY | 原治理候选 APPROVED；本轮 CI/typecheck correction 首轮发现 frozen G0-E1 marker fallback P1，修复后复验 APPROVED，P0/P1/P2 = 0/0/0 |
 | remote required checks | PR #58：governance/admin-dom/backend-e2e passed；rp01c-fixtures failed before tests because ordinary governance diff was misclassified as frozen RP-02B2a2 package |
 | trusted admission | failed as non-required side check because every PR is treated as an RP-02B2a authorized candidate |
-| root `npm run typecheck` | baseline failed in API with 20 TS errors；已独立登记 `RMD-GOV-TYPECHECK-001=open`，不冒充本包通过 |
+| root `npm run typecheck` | 原 baseline 的 20 个 API 错误来自隔离工作树缺少本地依赖后向上解析父工作树旧 workspace 链接；本工作树执行 `npm ci` 后，workspace 链接解析到本工作树，shared/admin/api 全部通过；详见 `RMD-GOV-TYPECHECK-001` 关闭记录 |
 
 ## 4. 边界
 
@@ -41,4 +41,4 @@ PR #56 已完成 E3 closeout、PR #57 已完成 RP-01C candidate/delivery 触发
 
 ## 5. 结论
 
-固定实现候选和独立 QUALITY 已满足；远端 required checks 暴露主干 CI 分流缺陷，当前不得关闭 `RMD-GOV-STATUS-001`，也不得用本记录外推根级 typecheck 已恢复。先修复或重新裁决 CI 分流与 `RMD-GOV-TYPECHECK-001`，再对同一实现候选形成最终关闭证据。
+固定实现候选和独立 QUALITY 已满足；根级 typecheck 假阻塞已经校正，CI 分流修复也已进入当前候选。`RMD-GOV-STATUS-001` 仍需等待 PR #58 的远端 required checks 全绿后才能重新关闭，不得用本地门禁替代远端证据。

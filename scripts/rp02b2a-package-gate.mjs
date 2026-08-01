@@ -18,7 +18,8 @@ const ACCEPTED_G0_C3_SHA = '81f567d4fb61765c9a5d407dae04011d08d5aa19';
 const ACCEPTED_G0_C1_SHA = 'f27442d159d7f9d6ef273128797be6085bbd8f9d';
 const G0_CORRECTION_ADRS = new Set([G0_CORRECTION_ADR, B2A2_GATE_PREP_ADR, 'docs/adr/rp-02b2a2-authority-claim-budget.md']);
 const GATE_PREP_EVIDENCE_ID = 'RP-02B2a2-G0-E1', GATE_PREP_EVIDENCE_COMMAND = 'test:governance', GATE_PREP_EVIDENCE_MAX_ADDITIONS = 64, GATE_PREP_EVIDENCE_MAX_DELETIONS = 48, GATE_PREP_EVIDENCE_MAX_NET_ADDITIONS = 64;
-const GATE_PREP_EVIDENCE_FILES = new Set(['docs/reviews/main-control-status.md', 'docs/reviews/main-control-event-ledger.md', 'docs/reviews/remediation-rmd-task-002-003-rp-02b2a1-verification-2026-07-15.md']);
+const GATE_PREP_EVIDENCE_VERIFICATION = 'docs/reviews/remediation-rmd-task-002-003-rp-02b2a1-verification-2026-07-15.md';
+const GATE_PREP_EVIDENCE_FILES = new Set(['docs/reviews/main-control-status.md', 'docs/reviews/main-control-event-ledger.md', GATE_PREP_EVIDENCE_VERIFICATION]);
 const GATE_PREP_EVIDENCE_FIELDS = Object.freeze(['g0_evidence_parent_sha', 'g0_evidence_rp01a_run', 'g0_evidence_rp01b_run', 'g0_evidence_rp01c_run', 'g0_evidence_governance_run', 'g0_evidence_a2_authorization', 'g0_evidence_issue_closed_count', 'g0_evidence_rmd_task_002', 'g0_evidence_rmd_task_003']);
 const GATE_PREP_TEST_PATH = 'scripts/rp02b2a-package-gate.test.mjs';
 const ADR_ALLOWED_FIELDS = new Set(['status', 'package_id', 'manifest_id', 'baseline_sha', 'hard_max_files', 'hard_max_net_additions', 'exceeded_budget', 'actual_files', 'actual_net_additions', 'split_reason', 'owner', 'valid_until']);
@@ -39,7 +40,7 @@ function withRunCache(callback) {
 const MAX_RENDERED_HTML_COMMENTS = 1024, MAX_RENDERED_HTML_COMMENT_LENGTH = 4096;
 const GATE_ENV_COMMAND = 'env -u DATABASE_URL -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL -u DEEPSEEK_MODEL -u DEEPSEEK_STRUCTURE_MODEL -u DEEPSEEK_REASONER_MODEL -u DEEPSEEK_TIMEOUT_MS -u DEEPSEEK_MAX_RETRIES -u DEPLOYMENT_ACTOR_TENANT_ID -u DEPLOYMENT_ACTOR_USER_ID NODE_ENV=production AI_PROVIDER_MODE=mock DOTENV_CONFIG_PATH=/dev/null';
 const TRUSTED_ADMISSION_WORKFLOW = '.github/workflows/rp02b2a-admission.yml';
-const TRUSTED_ADMISSION_WORKFLOW_CANONICAL_SHA256 = 'c48196d1b167d60c4f94b3f7b915ea2853488ada4b89ab0e4df767214739c7c7';
+const TRUSTED_ADMISSION_WORKFLOW_CANONICAL_SHA256 = 'a380525cb31217a6f5ec9c880bf60f6c0ca0c2cc562d66cd3994f6ab45d29070';
 const TRUSTED_ADMISSION_WORKFLOW_LEGACY_SHA256 = '0e070572c4ef1357380e12975396eba9aea5d03c65f342bb354c0b47f98b5dfc';
 const TRUSTED_ADMISSION_WORKFLOW_LEGACY_HEADS = new Set([
   B2A2_GATE_PREP_BASELINE_SHA,
@@ -137,7 +138,7 @@ export function parseAdr(text) {
   }
   return record;
 }
-export function analyzePackageGate({ files, netAdditions, addedLines = netAdditions, deletedLines = 0, adrTextByPath, base, head, worktree = false }) {
+export function analyzePackageGate({ files, netAdditions, addedLines = netAdditions, deletedLines = 0, adrTextByPath, base, head, worktree = false, allowFallbackOverlap = false }) {
   assertUsableSha('BASE', base); assertUsableSha('HEAD', head);
   if (!worktree && base === head) throw new Error('RP-02B2a package gate rejects identical BASE/HEAD');
   const changedFiles = [...new Set(files)].sort(), changedAdrs = changedFiles.filter((file) => file.startsWith('docs/adr/rp-02b2a') && file.endsWith('.md')), touchesManifest = changedFiles.some((file) => Object.values(PACKAGE_DEFINITIONS).some((item) => item.manifest.has(file))), touchesEvidence = changedFiles.some((file) => GATE_PREP_EVIDENCE_FILES.has(file));
@@ -145,20 +146,22 @@ export function analyzePackageGate({ files, netAdditions, addedLines = netAdditi
   if (changedGovernanceCorrection && [...GATE_PREP_EVIDENCE_FILES].every((file) => changedFiles.includes(file))) {
     throw new Error(`${changedGovernanceCorrection} cannot batch ${GATE_PREP_EVIDENCE_ID} publication evidence`);
   }
-  if (changedAdrs.length === 0 && changedFiles.includes(A2_CLOSEOUT_EVIDENCE_VERIFICATION)) {
-    if (!sameFileSet(changedFiles, A2_CLOSEOUT_EVIDENCE_FILES)) throw new Error(`${A2_CLOSEOUT_EVIDENCE_ID} requires exactly the five frozen closeout evidence files`);
+  if (changedAdrs.length === 0 && changedFiles.includes(A2_CLOSEOUT_EVIDENCE_VERIFICATION) && sameFileSet(changedFiles, A2_CLOSEOUT_EVIDENCE_FILES)) {
     if (addedLines > A2_CLOSEOUT_EVIDENCE_MAX_ADDITIONS) throw new Error(`${A2_CLOSEOUT_EVIDENCE_ID} additions budget exceeded: ${addedLines}/${A2_CLOSEOUT_EVIDENCE_MAX_ADDITIONS}`);
     if (deletedLines > A2_CLOSEOUT_EVIDENCE_MAX_DELETIONS) throw new Error(`${A2_CLOSEOUT_EVIDENCE_ID} deletions budget exceeded: ${deletedLines}/${A2_CLOSEOUT_EVIDENCE_MAX_DELETIONS}`);
     if (netAdditions > A2_CLOSEOUT_EVIDENCE_MAX_NET_ADDITIONS) throw new Error(`${A2_CLOSEOUT_EVIDENCE_ID} net additions budget exceeded: ${netAdditions}/${A2_CLOSEOUT_EVIDENCE_MAX_NET_ADDITIONS}`);
     return { packageId: A2_CLOSEOUT_EVIDENCE_ID, manifestId: 'RP-02B2a2-E3-v1', files: changedFiles.length, netAdditions, adr: 'none', testCommand: A2_CLOSEOUT_EVIDENCE_COMMAND, categories: ['governance-evidence'] };
   }
-  if (changedAdrs.length === 0 && touchesEvidence) {
-    if (!sameFileSet(changedFiles, GATE_PREP_EVIDENCE_FILES)) throw new Error(`${GATE_PREP_EVIDENCE_ID} requires exactly the three frozen evidence files`);
+  if (changedAdrs.length === 0 && changedFiles.includes(A2_CLOSEOUT_EVIDENCE_VERIFICATION)) throw new Error(`${A2_CLOSEOUT_EVIDENCE_ID} requires exactly the five frozen closeout evidence files`);
+  if (changedAdrs.length === 0 && touchesEvidence && sameFileSet(changedFiles, GATE_PREP_EVIDENCE_FILES)) {
     if (addedLines > GATE_PREP_EVIDENCE_MAX_ADDITIONS) throw new Error(`${GATE_PREP_EVIDENCE_ID} additions budget exceeded: ${addedLines}/${GATE_PREP_EVIDENCE_MAX_ADDITIONS}`);
     if (deletedLines > GATE_PREP_EVIDENCE_MAX_DELETIONS) throw new Error(`${GATE_PREP_EVIDENCE_ID} deletions budget exceeded: ${deletedLines}/${GATE_PREP_EVIDENCE_MAX_DELETIONS}`);
     if (netAdditions > GATE_PREP_EVIDENCE_MAX_NET_ADDITIONS) throw new Error(`${GATE_PREP_EVIDENCE_ID} net additions budget exceeded: ${netAdditions}/${GATE_PREP_EVIDENCE_MAX_NET_ADDITIONS}`);
     return { packageId: GATE_PREP_EVIDENCE_ID, manifestId: 'RP-02B2a2-G0-EVIDENCE-v1', files: changedFiles.length, netAdditions, adr: 'none', testCommand: GATE_PREP_EVIDENCE_COMMAND, categories: ['governance-evidence'] };
   }
+  if (changedAdrs.length === 0 && changedFiles.includes(GATE_PREP_EVIDENCE_VERIFICATION)) throw new Error(`${GATE_PREP_EVIDENCE_ID} requires exactly the three frozen evidence files`);
+  if (changedAdrs.length === 0 && allowFallbackOverlap) return { packageId: FALLBACK_PACKAGE_ID, manifestId: 'none', files: changedFiles.length, netAdditions, adr: 'none', testCommand: FALLBACK_TEST_COMMAND, categories: [...new Set(changedFiles.map(categorizeFile))].sort() };
+  if (changedAdrs.length === 0 && touchesEvidence) throw new Error(`${GATE_PREP_EVIDENCE_ID} requires exactly the three frozen evidence files`);
   if (changedAdrs.length === 0 && !touchesManifest) return { packageId: FALLBACK_PACKAGE_ID, manifestId: 'none', files: changedFiles.length, netAdditions, adr: 'none', testCommand: FALLBACK_TEST_COMMAND, categories: [...new Set(changedFiles.map(categorizeFile))].sort() };
   const isCorrection = changedAdrs.includes(G0_CORRECTION_ADR);
   if (isCorrection) {
@@ -1176,22 +1179,27 @@ export function verifyTrustedAdmissionWorkflowContract({ workflowPath = TRUSTED_
   if (workflowPath !== TRUSTED_ADMISSION_WORKFLOW) throw new Error(`RP-02B2a trusted admission workflow path must be ${TRUSTED_ADMISSION_WORKFLOW}`);
   const workflowText = readWorkflowText(workflowPath, head);
   const workflow = parseWorkflowYaml(workflowPath, head);
+  const digest = createHash('sha256').update(workflowText.replace(/\r\n/g, '\n')).digest('hex');
+  const acceptedLegacyWorkflow = digest === TRUSTED_ADMISSION_WORKFLOW_LEGACY_SHA256 && head && TRUSTED_ADMISSION_WORKFLOW_LEGACY_HEADS.has(head);
   assertExactKeys(workflow, ['name', 'on', 'concurrency', 'permissions', 'jobs'], 'trusted workflow root');
   if (workflow.name !== 'RP-02B2a trusted admission') throw new Error('RP-02B2a trusted admission workflow name mismatch');
   const triggers = requireMapping(workflow.on, 'trusted workflow on');
   assertExactKeys(triggers, ['pull_request_target'], 'trusted workflow triggers');
   const pullRequestTarget = requireMapping(triggers.pull_request_target, 'trusted pull_request_target');
-  assertExactKeys(pullRequestTarget, ['types'], 'trusted pull_request_target');
+  assertExactKeys(pullRequestTarget, acceptedLegacyWorkflow ? ['types'] : ['types', 'paths'], 'trusted pull_request_target');
   const types = requireSequence(pullRequestTarget.types, 'trusted pull_request_target types');
   if (JSON.stringify(types) !== JSON.stringify(['opened', 'synchronize', 'reopened', 'ready_for_review'])) throw new Error('RP-02B2a trusted admission trigger types mismatch');
+  if (!acceptedLegacyWorkflow) {
+    const trustedPaths = requireSequence(pullRequestTarget.paths, 'trusted pull_request_target paths');
+    const expectedTrustedPaths = ['docs/adr/rp-02b2a2-authority-claim-budget.md', 'docs/adr/rp-02b2a3-lease-retry-budget.md', 'docs/adr/rp-02b2a4-inmemory-finalize-budget.md', 'docs/adr/rp-02b2a5-prisma-nine-six-budget.md', GATE_PREP_EVIDENCE_VERIFICATION, A2_CLOSEOUT_EVIDENCE_VERIFICATION];
+    if (JSON.stringify(trustedPaths) !== JSON.stringify(expectedTrustedPaths)) throw new Error('RP-02B2a trusted admission trigger paths mismatch');
+  }
   const concurrency = requireMapping(workflow.concurrency, 'trusted workflow concurrency');
   if (JSON.stringify(concurrency) !== JSON.stringify({ group: 'rp02b2a-admission-pr-${{ github.event.pull_request.number }}', 'cancel-in-progress': 'true' })) throw new Error('RP-02B2a trusted admission concurrency must cancel stale runs for the same PR');
   const permissions = requireMapping(workflow.permissions, 'trusted workflow permissions');
   if (JSON.stringify(permissions) !== JSON.stringify({ actions: 'read', contents: 'read', 'pull-requests': 'read' })) throw new Error('RP-02B2a trusted admission permissions must be exactly actions/contents/pull-requests read');
   const jobs = requireMapping(workflow.jobs, 'trusted workflow jobs');
   assertExactKeys(jobs, ['admission', 'candidate'], 'trusted workflow jobs');
-  const digest = createHash('sha256').update(workflowText.replace(/\r\n/g, '\n')).digest('hex');
-  const acceptedLegacyWorkflow = digest === TRUSTED_ADMISSION_WORKFLOW_LEGACY_SHA256 && head && TRUSTED_ADMISSION_WORKFLOW_LEGACY_HEADS.has(head);
   if (!acceptedLegacyWorkflow) {
     const candidateJob = requireMapping(jobs.candidate, 'trusted workflow candidate job');
     if (candidateJob.if !== "needs.admission.outputs.admission_kind == 'business'") throw new Error('RP-02B2a trusted workflow candidate job must run only for business admission');
@@ -1281,7 +1289,9 @@ function runCliUncached(argv = process.argv.slice(2)) {
   const changedAdrs = files.filter((file) => file.startsWith('docs/adr/rp-02b2a') && file.endsWith('.md'));
   const adrTextByPath = Object.fromEntries(changedAdrs.map((path) => [path, readAdrText(path, effectiveHead, worktree)]));
   if (changedAdrs.length === 1 && changedAdrs[0] === B2A2_GATE_PREP_ADR) validateGatePrepPackageScripts({ packageId: B2A2_GATE_PREP_ID, head: effectiveHead, worktree });
-  const result = analyzePackageGate({ files, addedLines, deletedLines, netAdditions, adrTextByPath, base, head: effectiveHead, worktree });
+  const allowFallbackOverlap = args.get('allow-fallback-overlap') === 'true' || (githubOutput && !event && !worktree);
+  if (event === 'pull_request_target' && allowFallbackOverlap) throw new Error('RP-02B2a authoritative admission rejects fallback overlap mode');
+  const result = analyzePackageGate({ files, addedLines, deletedLines, netAdditions, adrTextByPath, base, head: effectiveHead, worktree, allowFallbackOverlap });
   if (result.packageId === A2_CLOSEOUT_EVIDENCE_ID) {
     if (worktree) throw new Error(`${A2_CLOSEOUT_EVIDENCE_ID} rejects dirty worktree admission`);
     const policySource = args.get('policy-source');

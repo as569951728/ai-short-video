@@ -1459,3 +1459,19 @@ evidence: runs 30685215200/30685215194/30685215206 success；rp01c run 306852152
 mc_decision: 不关闭 RMD-GOV-STATUS-001，不用管理员绕过，不把三路绿灯解释为远端通过；PR #58 保持可审查状态。
 next_action: 将 CI 普通 PR 与 RP-02B2a 授权候选准确分流，并单独修复 RMD-GOV-TYPECHECK-001；重新跑 required checks 后再形成关闭证据。
 ```
+
+### MCE-20260802-GOV-CI-TYPECHECK-CORRECTED
+
+```text
+event_id: MCE-20260802-GOV-CI-TYPECHECK-CORRECTED
+occurred_at: 2026-08-02 CST
+event_type: local_correction_verified
+source_thread: main-control with independent QUALITY sidecar
+package_id: GOV-PROGRESS-01
+issue_ids: RMD-GOV-STATUS-001, RMD-GOV-TYPECHECK-001
+acceptance_ids: GOV-PROGRESS-01, GOV-TYPECHECK-01
+summary: package gate 对普通治理 PR 增加显式 RP-01C fallback，同时保持 pull_request_target 与冻结 B2a 包严格校验；Trusted admission 仅由五个明确 B2a marker path 触发。原根级 typecheck 20 错误确认来自隔离工作树缺本地 node_modules 后向父工作树解析旧 workspace 链接，不是源码合同漂移。
+evidence: final focused package-gate tests 5/5；G0-E1 stale/forged/topology 负向矩阵 1/1；RP-01C workflow contract passed；trusted admission canonical digest `a380525cb31217a6f5ec9c880bf60f6c0ca0c2cc562d66cd3994f6ab45d29070`；当前治理 diff 本地分类为 RP-01C；隔离工作树 npm ci 后 workspace links 均指向当前工作树，root typecheck shared/admin/api passed；independent QUALITY APPROVED P0/P1/P2=0/0/0。
+mc_decision: RMD-GOV-TYPECHECK-001 关闭，总账变为 9/43、QG 8/22；RMD-GOV-STATUS-001 继续保持 implemented_pending_verification，等待 PR #58 required checks 全绿。
+next_action: 运行完整治理与 package-gate 回归，提交推送当前候选，并在远端 required checks 全绿后形成 RMD-GOV-STATUS-001 最终关闭证据。
+```

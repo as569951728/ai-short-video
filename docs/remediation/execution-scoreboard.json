@@ -1,15 +1,15 @@
 {
   "schemaVersion": 1,
-  "asOf": "2026-08-01",
+  "asOf": "2026-08-02",
   "mode": "execution_reset",
   "ledger": {
     "total": 43,
-    "closed": 8,
-    "openOrPending": 35,
+    "closed": 9,
+    "openOrPending": 34,
     "byCategory": {
       "PB": { "total": 7, "closed": 0 },
       "RB": { "total": 12, "closed": 0 },
-      "QG": { "total": 22, "closed": 7 },
+      "QG": { "total": 22, "closed": 8 },
       "DEBT": { "total": 2, "closed": 1 }
     }
   },

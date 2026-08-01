@@ -23,9 +23,9 @@
 | 视频 P8-P9 | 工作台状态流与版本流程按限定范围验收 | P9c 无可播放音频，P9e 无真实 MP4/下载文件；不能称为真实视频生成闭环 |
 | P10-preflight | 已正式收口 | `creationSource` 的 shared/API/仓储/migration/admin 与浏览器链路通过 `CS-R3` 及条件项复验 |
 | P10 | `P10-R0` 已正式收口；R1 准入设计通过 | R1 准入文档已纳入当前远程分支；尚未授权，未启动业务代码 |
-| 整改计划 | RP-00A、RP-00B、RP-01A、RP-01B、RP-01C 已正式关闭；RP-02A、RP-02B1、RP-02B2a0、RP-02B2a1、RP-02B2a2 限定阶段完成 | 唯一总账当前关闭 8/43；RMD-GOV-STATUS-001 回归为 implemented_pending_verification，RMD-TASK-002 为 partial、003 为 open；B2a3-B2a5/B2b/B2c/B3 仍未授权 |
+| 整改计划 | RP-00A、RP-00B、RP-01A、RP-01B、RP-01C 已正式关闭；RP-02A、RP-02B1、RP-02B2a0、RP-02B2a1、RP-02B2a2 限定阶段完成 | 唯一总账当前关闭 9/43；RMD-GOV-STATUS-001 回归为 implemented_pending_verification，RMD-GOV-TYPECHECK-001 已校正关闭，RMD-TASK-002 为 partial、003 为 open；B2a3-B2a5/B2b/B2c/B3 仍未授权 |
 | 测试 | RP-02B2a2 trusted replay `29977969717` 全绿；TEST/QUALITY `APPROVED 0/0/0`，本地 clean-install 复跑 272/272 | 只证明 authenticated actor、authority reload/stale gate、legacy fail closed 的 E3 范围；仍不能外推真实 DB/provider/media/E6 |
-| 工程质量 | `blocked / high` | main@`8940d6d` 全量 `npm run typecheck` 在 API 阶段因 execution-envelope/shared 导出不一致失败，已登记 `RMD-GOV-TYPECHECK-001`；小说真实完本与全书审稿 2 个既有 P0 仍未关闭 |
+| 工程质量 | `blocked / high` | clean worktree 经 workspace-local `npm ci` 后根级 typecheck 全绿，原 20 个错误确认为父工作树依赖解析污染并已关闭；当前高风险仍来自小说真实完本与全书审稿 2 个既有 P0，PR #58 的远端 required checks 仍待重跑 |
 | 本地服务 | 运行态不入版本化状态 | 用户需要浏览器验收时实时检查 health、端口和 fixture；不得沿用文档中的历史瞬时状态 |
 | 真实环境 | 数据库/模型已获阶段性授权，待安全前置 | P8b-L1b 与真实模型只在隔离、回滚、费用上限和密钥脱敏满足后执行；外部渲染/云存储仍未授权 |
 
@@ -35,7 +35,7 @@
 
 ```text
 execution_mode: execution_reset
-ledger_closed: 8/43
+ledger_closed: 9/43
 pb_closed: 0/7
 rb_closed: 0/12
 active_implementation_package: none
@@ -48,7 +48,7 @@ next_decision: rebaseline_before_new_package
 
 | 层级 | 当前状态 | 结论 |
 | --- | --- | --- |
-| 总账关闭 | 8/43；PB 0/7；RB 0/12 | RMD-GOV-STATUS-001 回归修复待固定候选、独立复核和远端检查；新增 typecheck P1 已入账；不表示项目完成度 |
+| 总账关闭 | 9/43；PB 0/7；RB 0/12 | RMD-GOV-TYPECHECK-001 已校正关闭；RMD-GOV-STATUS-001 回归修复仍待远端 required checks；不表示项目完成度 |
 | 研发交付 | 无活动实现包；最近完成 RP-02B2a2 E3 | E3 证据可靠，但对应问题仍为 partial/open |
 | 独立验收 | 当前无待验候选 | RP-02B2a2 历史候选已通过，不自动覆盖后续包 |
 | 用户结果 | `not_proven` | 尚无 PB/RB 正式关闭，不能称小说或视频真实闭环 |
@@ -162,7 +162,7 @@ next_decision: rebaseline_before_new_package
 
 ## 5. 工程质量与工作树
 
-- 最新工程质量：当前总账 43 项 PB/RB/QG/DEBT 和专项验证缺口；`RMD-GOV-STATUS-001` 因同根回归恢复待验、`RMD-GOV-TYPECHECK-001` 新增 open，当前关闭 8/43。
+- 最新工程质量：当前总账 43 项 PB/RB/QG/DEBT 和专项验证缺口；`RMD-GOV-TYPECHECK-001` 已确认是隔离工作树依赖解析污染并关闭，`RMD-GOV-STATUS-001` 因同根回归仍待远端 required checks，当前关闭 9/43。
 - `.playwright-cli/` 已安全忽略；源码、migration、测试和文档未被 ignore。
 - 已创建并推送检查点分支 `codex/aishortvideo-checkpoint-20260711`；P10-R0 检查点 `68957be` 及后续 R1 准入文档均纳入该远程分支。
 - RP-00B 的 `Remediation governance` 已在远程 push runs `29196618102`、`29196969050` 成功执行，Git 预算与 SLA 门禁不再只有本地证据。
