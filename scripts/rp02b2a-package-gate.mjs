@@ -482,7 +482,19 @@ export function resolvePackageGateRange(input) {
       throw new Error(`${correction.packageId} replacement push requires the fixed baseline or a separately valid correction candidate as PUSH_BEFORE`);
     }
     if (!isAncestor(base, head)) throw new Error('RP-02B2a package gate rejects push before that is not an ancestor of after');
-    if (input.authorizedCandidateSha) return trustedSquashDeliveryRange(input, base, head, { requireMainRef: input.pushRef });
+    if (input.authorizedCandidateSha) {
+      // A2 has exactly one admissible squash-delivery base. Once main has moved
+      // past that evidence commit, the retained receipt is replay-only and must
+      // not take over unrelated default-branch pushes.
+      if (input.authorizedPackageId === 'RP-02B2a2' && base !== input.g0EvidenceSha) {
+        if (input.pushRef !== 'refs/heads/main') throw new Error('RP-02B2a2 consumed admission receipt is accepted only on refs/heads/main');
+        assertUsableSha('G0_EVIDENCE', input.g0EvidenceSha); assertGitCommit('G0_EVIDENCE', input.g0EvidenceSha);
+        validateAcceptedGatePrepEvidence({ gateSource: input.gateSource, evidenceHead: input.g0EvidenceSha });
+        if (!isAncestor(input.g0EvidenceSha, base)) throw new Error('RP-02B2a2 consumed admission receipt requires PUSH_BEFORE to descend from the accepted G0-E1 evidence SHA');
+        return { base, head, rangeMode: 'direct_after_consumed_a2_receipt' };
+      }
+      return trustedSquashDeliveryRange(input, base, head, { requireMainRef: input.pushRef });
+    }
     return externallyAuthorizedRange(input, head) ?? { base: fixedPackageBase(base, head), head };
   }
   if (event === 'workflow_dispatch') {
