@@ -1273,6 +1273,20 @@ function createStructureGenerateRouteSchema() {
         type: 'object',
         properties: {
           regenerateReason: { type: ['string', 'null'], maxLength: 500 },
+          optimization: {
+            anyOf: [
+              { type: 'null' },
+              {
+                type: 'object',
+                required: ['sourceVersionId', 'instruction'],
+                properties: {
+                  sourceVersionId: { type: 'string', minLength: 1, maxLength: 128 },
+                  instruction: { type: 'string', minLength: 1, maxLength: 2000 }
+                },
+                additionalProperties: false
+              }
+            ]
+          },
           idempotencyKey: idempotencyKeySchema
         },
         additionalProperties: false

@@ -1,0 +1,78 @@
+# RP-05B1 小说候选动作结果承接验收记录
+
+status: implementation_verified_pending_independent_review
+package_id: RP-05B1
+manifest_id: RP-05B1-v2
+baseline_sha: 058071861598f58dbe33e1c4f4d2e3df8f2a55de
+fixed_candidate_sha: pending
+target_issue: RMD-NOV-UX-001
+
+## 1. 结论边界
+
+本包已完成共享合同、API、内存仓储、Prisma 实现、管理端交互和真实浏览器原事故复验。当前只证明候选动作完成后的结果承接闭环；独立 PRODUCT/TEST/QUALITY、远端 required checks 和正常合并尚未完成，因此总账保持 `10/43`、`PB 0/7`、`RB 0/12`，不得提前关闭 `RMD-NOV-UX-001`。
+
+## 2. 验收映射
+
+| 验收 ID | 通过证据 | 结果 |
+| --- | --- | --- |
+| NOV-CANDIDATE-01 | 方向和结构手动编辑均创建新版本；API 刷新后保留 `sourceVersionIds`、`changeReason`；旧版本不被覆盖 | passed_local |
+| NOV-CANDIDATE-02 | 优化请求必须携带明确 instruction；方向与结构新候选展示来源版本、优化目标和差异；provider ABI 收到同一权威输入 | passed_local |
+| NOV-CANDIDATE-03 | 融合使用动作返回的精确候选 ID，展示多个来源版本和融合原因；DOM 回归覆盖精确聚焦 | passed_local |
+| NOV-CANDIDATE-04 | 采用时只把包含实际采用版本的任务标记为接受；其他批次归档；页面只显示一个正式版本，旧版历史化 | passed_local |
+| NOV-CANDIDATE-05 | 方向采用进入设定；设定采用进入全书大纲；全书大纲采用进入阶段大纲；刷新保持一致 | passed_local |
+| NOV-CANDIDATE-06 | 最近任务使用 `resultVersionIds` 切换正确步骤并聚焦精确候选；跨步骤路由等待后再恢复子步骤 | passed_local |
+| NOV-AI-CTA-01 | 章节目录、试写候选沿用可观察任务和精确结果承接；不以按钮 loading 代替任务状态 | passed_local |
+
+## 3. 自动化证据
+
+| 命令 | 结果 |
+| --- | --- |
+| `npm run typecheck` | shared、admin-web、api 全部通过 |
+| `npm test -w @ai-shortvideo/shared` | 23/23 passed |
+| `npm test -w @ai-shortvideo/api` | 126/126 passed |
+| `NODE_ENV=production npm run test:dom:admin` | admin 78/78；DOM 21/21 passed |
+| `npm run test:rp02b1` | 14/14 passed；包含 pre-RP-05B1 普通结构任务 replay/lease/recovery 兼容回归 |
+| `git diff --check` | passed |
+
+API 回归额外覆盖：
+
+- 方向或结构多个候选批次中，仅实际采用版本所属任务获得 `userAcceptedResult=true`。
+- 已采用任务指向下一步骤，未采用批次归档且不再提供错误聚焦入口。
+- 结构继续优化的来源候选、instruction、request hash、source refs、worker claim、provider input 和恢复身份保持一致。
+- 新普通结构任务显式写入 `optimization: null`；旧任务缺少该字段时仅走兼容读取，不允许新任务用占位引用伪装成功。
+- discarded、hard-stale 或跨租户/跨小说/类型不匹配来源在 provider 调用前失败。
+
+## 4. 真实浏览器原事故复验
+
+环境：`http://127.0.0.1:5183` + mock API `http://127.0.0.1:3011`；测试小说 `novel_000001`，标题 `RP05B1 浏览器验收小说`。
+
+1. 生成 4 个方向候选后，页面直接定位新结果，最近任务显示“有新结果待确认”。
+2. 采用方向 v1 后自动进入设定；重新打开方向页时，v1 标记为“正式采用版本”，其余候选标记为“历史版本”。
+3. 在已采用方向上点击“基于当前优化”，填写 `强化前三秒冲突，并保留系统能力边界`，生成 v5；页面展示来源 `v1` 和同一变更原因，未覆盖 v1。
+4. 采用 v5 后进入设定，正式方向刷新为 v5；生成并采用设定后进入全书大纲。
+5. 生成全书大纲 v1，点击“查看大纲候选”后页面滚动并高亮精确卡片，而不是无响应或定位列表第一项。
+6. 点击“继续优化”，填写 `把反派资源链提前到第一阶段，并让中段每五章出现一次实质反转`，生成 v2；页面展示来源 v1、原样优化目标以及标题/摘要差异。
+7. 采用 v2 后自动进入阶段大纲；返回全书主线时 v2 为唯一“正式采用版本”，v1 为“历史版本”且无采用动作。
+
+截图证据：
+
+- `/tmp/rp05b1-adopted-direction-optimized.png`
+- `/tmp/rp05b1-outline-result-focus.png`
+- `/tmp/rp05b1-outline-optimized-provenance.png`
+- `/tmp/rp05b1-outline-current-history.png`
+
+## 5. 预算与未覆盖项
+
+- 当前变更文件数：24，等于 `hard_max_files=24`，未超出冻结清单。
+- 当前净新增：`1871 - 190 = 1681` 行，低于 `hard_max_net_additions=3200`。
+- 未连接真实 MySQL，因此不关闭 `RMD-NOV-VERSION-001`，也不外推数据库并发唯一性。
+- 未调用真实模型，因此不证明真实 provider 输出质量、时延或费用表现。
+- 未执行跨设备恢复、长章节 checkpoint 或后续视频业务包。
+
+## 6. 待完成门禁
+
+1. 冻结候选 SHA/tree。
+2. 独立 PRODUCT、TEST、QUALITY 对同一候选清零 P0/P1。
+3. 推送分支并创建 PR，远端 required checks 全绿。
+4. 正常 squash 合并；禁止 admin bypass。
+5. 合并后再按证据决定是否更新 issue ledger；未满足以上条件时账本保持不变。

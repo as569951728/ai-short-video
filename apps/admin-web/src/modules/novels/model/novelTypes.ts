@@ -58,6 +58,8 @@ export interface DirectionCandidateRow {
   videoPotential: string
   sellingPoints: string[]
   primaryReason: string
+  sourceVersionIds: string[]
+  changeReason: string
   lowScoreRequiresConfirm: boolean
   canAdopt: boolean
 }
@@ -87,8 +89,19 @@ export interface StructureAssetRow {
     conflict: string
     payoff: string
   }>
+  chapters: Array<{
+    chapterNo: number
+    stageIndex: number
+    title: string
+    wordTarget: number
+    goal: string
+    conflict: string
+    hook: string
+  }>
   chapterCount: number
   primaryReason: string
+  sourceVersionIds: string[]
+  changeReason: string
   canAdopt: boolean
   highRiskRequiresConfirm: boolean
 }

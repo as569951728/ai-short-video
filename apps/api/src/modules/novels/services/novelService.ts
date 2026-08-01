@@ -145,6 +145,7 @@ import {
   projectNovelProviderInput,
   projectPreferencesProviderInput,
   type BodyChapterProviderDraft,
+  type NovelProviderActionInputFor,
   type NovelProviderSet,
   type TrialFollowupChapterProviderDraft
 } from './actionExecutionPlan.js';
@@ -454,8 +455,8 @@ export class NovelService {
   async optimizeDirection(novelId: string, versionId: string, request: OptimizeDirectionRequest, context: RequestContext): Promise<DirectionActionResultDTO> {
     const novel = await this.findNovelOrThrow(context.tenantId, novelId);
     this.ensureLifecycleActive(novel);
-    this.ensureDirectionWorkStage(novel);
     const source = await this.findDirectionVersionOrThrow(context.tenantId, novelId, versionId);
+    this.ensureDirectionOptimizationAllowed(novel, source);
     const providerInput = {
       action: 'direction_optimize' as const,
       source: projectDirectionDraftProviderInput(toDirectionDraft(source)),
@@ -658,7 +659,7 @@ export class NovelService {
       taskType: `${getStructureTaskType(objectType)}_manual_edit`,
       changeReason: reason,
       sourceVersionRefs: {
-        ...createStructureSourceRefs(novel, objectType),
+        ...createStructureSourceRefs(novel, objectType, [versionId]),
         sourceStructureVersionId: versionId,
         editReason: reason
       },
@@ -2064,30 +2065,35 @@ export class NovelService {
     const directionVersions = await this.options.repository.listDirectionVersions(context.tenantId, novelId);
     const currentAssets = getCurrentCreativeAssetRecords(novel, directionVersions, allStructureVersions);
     const taskType = getStructureTaskType(objectType);
-    const changeReason = request.regenerateReason ?? `模型服务生成 ${objectType} 候选`;
-    const sourceVersionRefs = createStructureSourceRefs(novel, objectType);
-    const action = getStructureGenerateAction(objectType);
-    const providerBaseInput = {
-      novel: projectNovelProviderInput(novel),
-      preferences: projectPreferencesProviderInput(preferences ?? createEmptyPreferences(novel)),
-      currentAssets: {
-        direction: projectCreativeAssetProviderInput(currentAssets.direction),
-        setting: action === 'setting_generate' ? null : projectCreativeAssetProviderInput(currentAssets.setting),
-        outline: action === 'setting_generate' || action === 'outline_generate' ? null : projectCreativeAssetProviderInput(currentAssets.outline),
-        stageOutline: action === 'chapter_plan_generate' ? projectCreativeAssetProviderInput(currentAssets.stageOutline) : null
+    const optimization = normalizeStructureOptimizationRequest(request.optimization);
+    if (optimization) {
+      const source = await this.options.repository.findStructureVersionById(
+        context.tenantId,
+        novelId,
+        objectType,
+        optimization.sourceVersionId
+      );
+      if (!source || source.status === VersionStatus.Discarded) {
+        throw new BusinessError(ErrorCode.VersionConflict, '待优化的结构候选不存在或已不可用，请刷新后重试。');
       }
-    };
+      if (source.staleLevel === StaleLevel.HardStale) {
+        throw new BusinessError(ErrorCode.CandidateStale, '待优化的结构候选已过期，请刷新后重新选择。');
+      }
+    }
+    const changeReason = optimization?.instruction ?? request.regenerateReason ?? `模型服务生成 ${objectType} 候选`;
+    const sourceVersionRefs = createStructureSourceRefs(novel, objectType, optimization ? [optimization.sourceVersionId] : []);
+    const action = getStructureGenerateAction(objectType);
     const execution = await executeClaimedGeneration({
       action,
       repository: this.options.repository,
       novel,
       idempotencyKey: request.idempotencyKey,
-      effectiveRequest: { objectType, regenerateReason: request.regenerateReason?.trim() || null },
+      effectiveRequest: { objectType, regenerateReason: request.regenerateReason?.trim() || null, optimization },
       sourceVersionRefs,
       context,
       now: this.now,
       providerCapability: this.structureProvider,
-      provider: (authoritativeInput) => executeNovelProviderAction(this.getProviderSet(), authoritativeInput as typeof providerBaseInput & { action: typeof action; objectType: typeof objectType }),
+      provider: (authoritativeInput) => executeNovelProviderAction(this.getProviderSet(), authoritativeInput as NovelProviderActionInputFor<typeof action>),
       finalize: (task, asset) => this.options.repository.createStructureCandidate({
         novel,
         task,
@@ -2185,6 +2191,12 @@ export class NovelService {
     if (novel.creationStage !== NovelCreationStage.Direction) {
       throw new BusinessError(ErrorCode.InvalidStage, '当前阶段不能处理方向候选');
     }
+  }
+
+  private ensureDirectionOptimizationAllowed(novel: NovelRecord, source: CreativeVersionRecord) {
+    if (novel.creationStage === NovelCreationStage.Direction) return;
+    if (source.id === novel.currentDirectionVersionId && source.status === VersionStatus.Current) return;
+    throw new BusinessError(ErrorCode.InvalidStage, '当前阶段只能基于正式方向生成优化候选');
   }
 
   private async ensureStructureGenerationGate(novel: NovelRecord, objectType: StructureAssetType) {
@@ -2823,6 +2835,8 @@ function toDirectionCandidateDTO(version: CreativeVersionRecord): DirectionCandi
     versionNo: version.versionNo,
     status: version.status,
     staleLevel: version.staleLevel,
+    sourceVersionIds: toDirectionSourceVersionIds(version.sourceVersionRefs),
+    changeReason: version.changeReason,
     title: content.title,
     summary: version.summary ?? content.logline,
     content,
@@ -2833,6 +2847,14 @@ function toDirectionCandidateDTO(version: CreativeVersionRecord): DirectionCandi
     recommendedReason: metadata.recommendedReason || content.recommendation,
     createdAt: version.createdAt.toISOString()
   };
+}
+
+function toDirectionSourceVersionIds(value: unknown): string[] {
+  if (!value || typeof value !== 'object') return [];
+  const sourceVersionIds = (value as Record<string, unknown>).sourceVersionIds;
+  if (!Array.isArray(sourceVersionIds)) return [];
+
+  return sourceVersionIds.filter((item): item is string => typeof item === 'string' && item.length > 0);
 }
 
 function toStructureAssetDTO(version: CreativeVersionRecord): StructureAssetDTO {
@@ -2852,6 +2874,8 @@ function toStructureAssetDTO(version: CreativeVersionRecord): StructureAssetDTO 
     riskLevel: version.riskLevel,
     riskTags: metadata.riskTags.length > 0 ? metadata.riskTags : content.riskTags,
     recommendedReason: metadata.recommendedReason || content.recommendation,
+    sourceVersionIds: toDirectionSourceVersionIds(version.sourceVersionRefs),
+    changeReason: version.changeReason,
     createdAt: version.createdAt.toISOString()
   };
 }
@@ -3870,14 +3894,27 @@ function getStructureGenerateAction(objectType: StructureAssetType): StructureGe
   return 'chapter_plan_generate';
 }
 
-function createStructureSourceRefs(novel: NovelRecord, objectType: StructureAssetType) {
+function createStructureSourceRefs(novel: NovelRecord, objectType: StructureAssetType, sourceVersionIds: string[] = []) {
   return {
     currentDirectionVersionId: novel.currentDirectionVersionId,
     currentSettingVersionId: novel.currentSettingVersionId,
     currentOutlineVersionId: novel.currentOutlineVersionId,
     currentStageOutlineVersionId: novel.currentStageOutlineVersionId,
+    sourceVersionIds,
     objectType
   };
+}
+
+function normalizeStructureOptimizationRequest(value: GenerateStructureAssetRequest['optimization']) {
+  if (value === null || value === undefined) return null;
+  const sourceVersionId = value.sourceVersionId?.trim();
+  const instruction = value.instruction?.trim();
+  if (!sourceVersionId || !instruction || instruction.length > 2_000) {
+    throw new BusinessError(ErrorCode.ValidationError, '结构优化参数不完整。', {
+      issues: [{ path: 'optimization', message: 'sourceVersionId and instruction are required; instruction max length is 2000' }]
+    });
+  }
+  return { sourceVersionId, instruction };
 }
 
 function getCurrentVersionId(novel: NovelRecord, objectType: StructureAssetType) {

@@ -21,6 +21,29 @@ describe('RP-02B1 recoverable execution contract', () => {
       assert.equal(hashCanonicalJson(envelope), hashCanonicalJson(normalizeExecutionEnvelope(envelope)), action);
     }
   });
+  it('preserves the canonical shape of pre-RP-05B1 ordinary structure envelopes', () => {
+    const legacyInput = envelopeInput('setting_generate') as any;
+    delete legacyInput.effectiveRequest.optimization;
+    delete legacyInput.sourceVersionRefs.sourceVersionIds;
+    const legacy = createExecutionEnvelope(legacyInput) as any;
+    assert.equal(Object.prototype.hasOwnProperty.call(legacy.effectiveRequest, 'optimization'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(legacy.sourceVersionRefs, 'sourceVersionIds'), false);
+
+    const currentInput = envelopeInput('setting_generate') as any;
+    currentInput.effectiveRequest.optimization = null;
+    const current = createExecutionEnvelope(currentInput) as any;
+    assert.equal(current.effectiveRequest.optimization, null);
+    assert.deepEqual(current.sourceVersionRefs.sourceVersionIds, []);
+
+    assert.throws(() => createExecutionEnvelope({
+      ...legacyInput,
+      effectiveRequest: { ...legacyInput.effectiveRequest, optimization: null }
+    }), /authoritative sourceVersionRefs/i);
+    assert.throws(() => createExecutionEnvelope({
+      ...legacyInput,
+      sourceVersionRefs: { ...legacyInput.sourceVersionRefs, sourceVersionIds: [] }
+    }), /authoritative sourceVersionRefs/i);
+  });
   it('enforces bounds while de-duplicating, sorting, and trimming normalized values', () => {
     const fused = createExecutionEnvelope({
       ...envelopeInput('direction_fuse'),
@@ -339,10 +362,10 @@ function envelopeInput(action: NovelProviderAction) {
     direction_generate: { effectiveRequest: { regenerateReason: 'again' }, sourceVersionRefs: { currentDirectionVersionId: null } },
     direction_fuse: { effectiveRequest: { versionIds: ['version-b', 'version-a'], reason: 'fuse' }, sourceVersionRefs: { sourceVersionIds: ['version-a', 'version-b'] } },
     direction_optimize: { effectiveRequest: { versionId: 'version-a', instruction: 'improve' }, sourceVersionRefs: { sourceVersionIds: ['version-a'] } },
-    setting_generate: { effectiveRequest: { currentDirectionVersionId: 'direction-v1' }, sourceVersionRefs: { ...structureRefs, objectType: 'setting' } },
-    outline_generate: { effectiveRequest: { currentDirectionVersionId: 'direction-v1', currentSettingVersionId: 'setting-v1' }, sourceVersionRefs: { ...structureRefs, objectType: 'outline' } },
-    stage_outline_generate: { effectiveRequest: { currentOutlineVersionId: 'outline-v1' }, sourceVersionRefs: { ...structureRefs, objectType: 'stage_outline' } },
-    chapter_plan_generate: { effectiveRequest: { currentOutlineVersionId: 'outline-v1', currentStageOutlineVersionId: 'stage-v1' }, sourceVersionRefs: { ...structureRefs, objectType: 'chapter_plan' } },
+    setting_generate: { effectiveRequest: { currentDirectionVersionId: 'direction-v1', optimization: null }, sourceVersionRefs: { ...structureRefs, sourceVersionIds: [], objectType: 'setting' } },
+    outline_generate: { effectiveRequest: { currentDirectionVersionId: 'direction-v1', currentSettingVersionId: 'setting-v1', optimization: null }, sourceVersionRefs: { ...structureRefs, sourceVersionIds: [], objectType: 'outline' } },
+    stage_outline_generate: { effectiveRequest: { currentOutlineVersionId: 'outline-v1', optimization: null }, sourceVersionRefs: { ...structureRefs, sourceVersionIds: [], objectType: 'stage_outline' } },
+    chapter_plan_generate: { effectiveRequest: { currentOutlineVersionId: 'outline-v1', currentStageOutlineVersionId: 'stage-v1', optimization: null }, sourceVersionRefs: { ...structureRefs, sourceVersionIds: [], objectType: 'chapter_plan' } },
     trial_chapter_one_generate: { effectiveRequest: { chapterPlanVersionId: 'plan-v1', chapterCount: 3 }, sourceVersionRefs: { ...structureRefs, currentChapterPlanVersionId: 'plan-v1', objectType: 'trial_run' } },
     trial_followup_generate: { effectiveRequest: { selectedCandidateVersionId: 'candidate-1', chapterPlanVersionId: 'plan-v1' }, sourceVersionRefs: { ...structureRefs, currentChapterPlanVersionId: 'plan-v1', objectType: 'trial_run', selectedChapterOneCandidateId: 'candidate-1' } },
     body_batch_generate: { effectiveRequest: { startChapter: 1, endChapter: 10, batchSize: 10, strategySnapshotId: 'strategy-1' }, sourceVersionRefs: bodyRefs },

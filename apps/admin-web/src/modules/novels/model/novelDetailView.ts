@@ -122,6 +122,7 @@ export function createLocalPendingTaskSummary(input: {
     statusText: '生成中',
     progress: 0,
     currentStep: `${input.label}：${LONG_RUNNING_MODEL_STATUS_NOTE}`,
+    resultVersionIds: [],
     isLocalPending: true,
     action: input.action,
     startedAt,
@@ -177,24 +178,34 @@ export function canInteractWithSubStep(state: NovelWorkbenchStepState): boolean 
   return state !== 'locked'
 }
 
-export function getTaskResultPlacement(task: (Pick<RecentTaskSummaryDTO, 'status'> & { taskType?: string | null }) | null | undefined): TaskResultPlacement | null {
+export function getTaskResultPlacement(task: (Pick<RecentTaskSummaryDTO, 'status'> & {
+  taskType?: string | null
+  currentStep?: string | null
+  userAcceptedResult?: boolean
+}) | null | undefined): TaskResultPlacement | null {
   if (!task) return null
   if (task.status !== TaskStatus.Completed && task.status !== TaskStatus.WaitingConfirmation) return null
 
   const taskType = task.taskType ?? ''
+  const acceptedResult = task.userAcceptedResult ?? (task.currentStep?.includes('已采用') === true)
+  const archivedResult = task.currentStep?.includes('已归档') === true
+  if (archivedResult) return null
+
   if (taskType.includes('direction')) {
+    const adopted = taskType.includes('adopt') || acceptedResult
     return {
-      summary: taskType.includes('adopt') ? '正式方向已采用，下一步可生成小说设定。' : '新方向候选已进入候选池，请查看后决定是否采用。',
-      actionLabel: taskType.includes('adopt') ? '进入设定' : '查看方向候选',
-      stepKey: taskType.includes('adopt') ? 'setting' : 'direction',
+      summary: adopted ? '正式方向已采用，下一步可生成小说设定。' : '新方向候选已进入候选池，请查看后决定是否采用。',
+      actionLabel: adopted ? '进入设定' : '查看方向候选',
+      stepKey: adopted ? 'setting' : 'direction',
     }
   }
 
   if (taskType.includes('setting')) {
+    const adopted = taskType.includes('adopt') || acceptedResult
     return {
-      summary: taskType.includes('adopt') ? '正式设定已采用，下一步可生成全书大纲。' : '新设定候选已进入候选池，请查看后决定是否采用。',
-      actionLabel: taskType.includes('adopt') ? '进入大纲' : '查看设定候选',
-      stepKey: taskType.includes('adopt') ? 'outline' : 'setting',
+      summary: adopted ? '正式设定已采用，下一步可生成全书大纲。' : '新设定候选已进入候选池，请查看后决定是否采用。',
+      actionLabel: adopted ? '进入大纲' : '查看设定候选',
+      stepKey: adopted ? 'outline' : 'setting',
     }
   }
 
@@ -215,6 +226,11 @@ export function getTaskResultPlacement(task: (Pick<RecentTaskSummaryDTO, 'status
   }
 
   if (taskType.includes('outline') || taskType.includes('stage_outline')) {
+    if (acceptedResult) {
+      return taskType.includes('stage_outline')
+        ? { summary: '阶段大纲已采用，下一步可生成章节目录。', actionLabel: '进入章节目录', stepKey: 'chapterPlan' }
+        : { summary: '全书大纲已采用，下一步需要生成并采用阶段大纲。', actionLabel: '生成阶段大纲', stepKey: 'outline' }
+    }
     return {
       summary: '新大纲候选已进入候选池，请查看后决定是否采用。',
       actionLabel: '查看大纲候选',
@@ -223,10 +239,11 @@ export function getTaskResultPlacement(task: (Pick<RecentTaskSummaryDTO, 'status
   }
 
   if (taskType.includes('chapter_plan') || taskType.includes('chapterPlan')) {
+    const adopted = taskType.includes('adopt') || acceptedResult
     return {
-      summary: taskType.includes('adopt') ? '章节目录已采用，下一步可进入试写调试。' : '新章节目录候选已进入候选池，请查看后决定是否采用。',
-      actionLabel: taskType.includes('adopt') ? '进入试写' : '查看章节目录',
-      stepKey: taskType.includes('adopt') ? 'trial' : 'chapterPlan',
+      summary: adopted ? '章节目录已采用，下一步可进入试写调试。' : '新章节目录候选已进入候选池，请查看后决定是否采用。',
+      actionLabel: adopted ? '进入试写' : '查看章节目录',
+      stepKey: adopted ? 'trial' : 'chapterPlan',
     }
   }
 

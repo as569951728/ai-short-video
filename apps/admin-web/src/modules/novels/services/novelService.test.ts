@@ -205,7 +205,13 @@ describe('novel service data source switching', () => {
   })
 
   it('maps direction candidates into rows with low-score confirmation hints', () => {
-    const row = toDirectionCandidateRow(createDirectionCandidateDTO({ score: 62, riskLevel: RiskLevel.High }))
+    const candidate = createDirectionCandidateDTO({ score: 62, riskLevel: RiskLevel.High }) as DirectionCandidateDTO & {
+      sourceVersionIds: string[]
+      changeReason: string
+    }
+    candidate.sourceVersionIds = ['cv-source-001', 'cv-source-002']
+    candidate.changeReason = '强化开篇冲突并保留原方向的商业主线。'
+    const row = toDirectionCandidateRow(candidate)
 
     assert.equal(row.title, '低谷系统翻盘线')
     assert.equal(row.scoreText, '62')
@@ -214,6 +220,8 @@ describe('novel service data source switching', () => {
     assert.equal(row.lowScoreRequiresConfirm, true)
     assert.equal(row.riskLevelText, '高风险')
     assert.equal(row.primaryReason, '差异化强但理解成本偏高。')
+    assert.deepEqual(row.sourceVersionIds, ['cv-source-001', 'cv-source-002'])
+    assert.equal(row.changeReason, '强化开篇冲突并保留原方向的商业主线。')
   })
 
   it('posts direction generation and adoption requests to the backend', async () => {
@@ -1068,6 +1076,8 @@ function createDirectionCandidateDTO(overrides: Partial<DirectionCandidateDTO> =
     versionNo: 1,
     status: VersionStatus.Candidate,
     staleLevel: StaleLevel.None,
+    sourceVersionIds: [],
+    changeReason: null,
     title: '低谷系统翻盘线',
     summary: '主角在最低谷获得成长系统，逐步完成反击。',
     content: {

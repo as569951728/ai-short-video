@@ -386,16 +386,23 @@ export class PrismaNovelRepository implements NovelRepository {
     ]);
     const versions = [...directions, ...structures];
     const versionById = (id: unknown) => typeof id === 'string' ? versions.find((item) => item.id === id) ?? null : null;
+    const structureAction = ['setting_generate', 'outline_generate', 'stage_outline_generate', 'chapter_plan_generate'].includes(input.action);
+    const currentVersionIds = [refs.currentDirectionVersionId, refs.currentSettingVersionId, refs.currentOutlineVersionId, refs.currentStageOutlineVersionId, refs.currentChapterPlanVersionId];
+    const optimizationSourceIds = structureAction && Array.isArray(refs.sourceVersionIds) ? refs.sourceVersionIds : [];
     const selectedIds = input.action === 'direction_fuse' || input.action === 'direction_optimize'
       ? (Array.isArray(refs.sourceVersionIds) ? refs.sourceVersionIds : [])
-      : [refs.currentDirectionVersionId, refs.currentSettingVersionId, refs.currentOutlineVersionId, refs.currentStageOutlineVersionId, refs.currentChapterPlanVersionId];
+      : [...currentVersionIds, ...optimizationSourceIds];
     const selectedVersions = selectedIds.map(versionById);
     if (selectedVersions.some((item, index) => selectedIds[index] !== null && selectedIds[index] !== undefined && !item)) return null;
     if ((input.action === 'direction_fuse' || input.action === 'direction_optimize') && selectedVersions.some((item) =>
       !item || item.objectType !== 'direction' || item.status === VersionStatus.Discarded
     )) return null;
+    if (structureAction && optimizationSourceIds.some((id) => {
+      const item = versionById(id);
+      return !item || item.objectType !== refs.objectType || item.status === VersionStatus.Discarded || item.staleLevel === StaleLevel.HardStale;
+    })) return null;
     if (input.action !== 'direction_fuse' && input.action !== 'direction_optimize'
-      && selectedVersions.some((item) => item && item.status !== VersionStatus.Current)) return null;
+      && currentVersionIds.map(versionById).some((item) => item && item.status !== VersionStatus.Current)) return null;
     const chapter = chapters.find((item) => item.id === input.objectId) ?? null;
     if (['chapter_body_generate', 'chapter_rewrite', 'chapter_impact_assess', 'chapter_adopt_impact_assess'].includes(input.action) && !chapter) return null;
     if (chapter && 'currentContentVersionId' in refs && chapter.currentContentVersionId !== refs.currentContentVersionId) return null;
@@ -1136,28 +1143,27 @@ export class PrismaNovelRepository implements NovelRepository {
         }
       });
 
-      await tx.generationTask.updateMany({
-        where: {
-          tenantId: input.context.tenantId,
-          novelId: input.novel.id,
-          objectType: 'direction',
-          status: PrismaTaskStatus.WAITING_CONFIRMATION
-        },
-        data: {
-          status: PrismaTaskStatus.COMPLETED,
-          statusNote: '用户已采用方向',
-          currentStep: '方向已采用',
-          userAcceptedResult: true,
-          finishedAt: input.now,
-          updatedAt: input.now
-        }
-      });
-
       for (const waitingTask of waitingTasks) {
+        const resultVersionIds = Array.isArray(waitingTask.resultVersionIdsJson)
+          ? waitingTask.resultVersionIdsJson.filter((value): value is string => typeof value === 'string')
+          : waitingTask.resultVersionId ? [waitingTask.resultVersionId] : [];
+        const acceptedResult = resultVersionIds.includes(input.candidate.id);
+        const completedTask = await tx.generationTask.update({
+          where: { id: waitingTask.id },
+          data: {
+            status: PrismaTaskStatus.COMPLETED,
+            activeClaimKey: null,
+            statusNote: acceptedResult ? '用户已采用方向' : '本任务方向候选未采用，已归档',
+            currentStep: acceptedResult ? '方向已采用' : '方向候选未采用，已归档',
+            userAcceptedResult: acceptedResult,
+            finishedAt: input.now,
+            updatedAt: input.now
+          }
+        });
         await createTaskEvent(tx, {
-          task: { ...waitingTask, status: PrismaTaskStatus.COMPLETED },
+          task: completedTask,
           eventType: 'task_completed',
-          message: '方向已采用，任务完成。',
+          message: acceptedResult ? '方向已采用，任务完成。' : '本任务方向候选未采用，已转为历史版本。',
           progress: 100,
           requestId: input.context.requestId,
           createdAt: input.now
@@ -1493,28 +1499,29 @@ export class PrismaNovelRepository implements NovelRepository {
         }
       });
 
-      await tx.generationTask.updateMany({
-        where: {
-          tenantId: input.context.tenantId,
-          novelId: input.novel.id,
-          objectType: input.objectType,
-          status: PrismaTaskStatus.WAITING_CONFIRMATION
-        },
-        data: {
-          status: PrismaTaskStatus.COMPLETED,
-          statusNote: '用户已采用结构资产',
-          currentStep: getStructureAdoptStep(input.objectType),
-          userAcceptedResult: true,
-          finishedAt: input.now,
-          updatedAt: input.now
-        }
-      });
-
       for (const waitingTask of waitingTasks) {
+        const resultVersionIds = Array.isArray(waitingTask.resultVersionIdsJson)
+          ? waitingTask.resultVersionIdsJson.filter((value): value is string => typeof value === 'string')
+          : waitingTask.resultVersionId ? [waitingTask.resultVersionId] : [];
+        const acceptedResult = resultVersionIds.includes(input.candidate.id);
+        const completedTask = await tx.generationTask.update({
+          where: { id: waitingTask.id },
+          data: {
+            status: PrismaTaskStatus.COMPLETED,
+            activeClaimKey: null,
+            statusNote: acceptedResult ? '用户已采用结构资产' : '本任务结构候选未采用，已归档',
+            currentStep: acceptedResult ? getStructureAdoptStep(input.objectType) : `${getStructureObjectText(input.objectType)}候选未采用，已归档`,
+            userAcceptedResult: acceptedResult,
+            finishedAt: input.now,
+            updatedAt: input.now
+          }
+        });
         await createTaskEvent(tx, {
-          task: { ...waitingTask, status: PrismaTaskStatus.COMPLETED },
+          task: completedTask,
           eventType: 'task_completed',
-          message: `${input.objectType} 已采用，任务完成。`,
+          message: acceptedResult
+            ? `${getStructureObjectText(input.objectType)}已采用，任务完成。`
+            : `本任务${getStructureObjectText(input.objectType)}候选未采用，已转为历史版本。`,
           progress: 100,
           requestId: input.context.requestId,
           createdAt: input.now
@@ -3920,6 +3927,14 @@ function getStructureAdoptStep(objectType: string) {
   if (objectType === 'outline') return '全书大纲已采用，准备阶段大纲';
   if (objectType === 'stage_outline') return '阶段大纲已采用，进入章节目录阶段';
   return '章节目录已采用，准备试写';
+}
+
+function getStructureObjectText(objectType: string) {
+  if (objectType === 'setting') return '设定';
+  if (objectType === 'outline') return '全书大纲';
+  if (objectType === 'stage_outline') return '阶段大纲';
+  if (objectType === 'chapter_plan') return '章节目录';
+  return objectType;
 }
 
 function getCurrentVersionId(novel: NovelRecord, objectType: string) {

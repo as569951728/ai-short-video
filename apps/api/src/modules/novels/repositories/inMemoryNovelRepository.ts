@@ -190,16 +190,23 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     const contentById = (id: unknown) => typeof id === 'string'
       ? chapterContentVersions.find((item) => item.tenantId === input.tenantId && item.novelId === novel.id && item.id === id)
       : null;
+    const structureAction = ['setting_generate', 'outline_generate', 'stage_outline_generate', 'chapter_plan_generate'].includes(input.action);
+    const currentVersionIds = [refs.currentDirectionVersionId, refs.currentSettingVersionId, refs.currentOutlineVersionId, refs.currentStageOutlineVersionId, refs.currentChapterPlanVersionId];
+    const optimizationSourceIds = structureAction && Array.isArray(refs.sourceVersionIds) ? refs.sourceVersionIds : [];
     const selectedIds = input.action === 'direction_fuse' || input.action === 'direction_optimize'
       ? (Array.isArray(refs.sourceVersionIds) ? refs.sourceVersionIds : [])
-      : [refs.currentDirectionVersionId, refs.currentSettingVersionId, refs.currentOutlineVersionId, refs.currentStageOutlineVersionId, refs.currentChapterPlanVersionId];
+      : [...currentVersionIds, ...optimizationSourceIds];
     const selectedVersions = selectedIds.map(versionById);
     if (selectedVersions.some((item, index) => selectedIds[index] !== null && selectedIds[index] !== undefined && !item)) return null;
     if ((input.action === 'direction_fuse' || input.action === 'direction_optimize') && selectedVersions.some((item) =>
       !item || item.objectType !== 'direction' || item.status === VersionStatus.Discarded
     )) return null;
+    if (structureAction && optimizationSourceIds.some((id) => {
+      const item = versionById(id);
+      return !item || item.objectType !== refs.objectType || item.status === VersionStatus.Discarded || item.staleLevel === StaleLevel.HardStale;
+    })) return null;
     if (input.action !== 'direction_fuse' && input.action !== 'direction_optimize'
-      && selectedVersions.some((item) => item && item.status !== VersionStatus.Current)) return null;
+      && currentVersionIds.map(versionById).some((item) => item && item.status !== VersionStatus.Current)) return null;
     const chapter = chapters.find((item) => item.tenantId === input.tenantId && item.novelId === novel.id && item.id === input.objectId);
     if (['chapter_body_generate', 'chapter_rewrite', 'chapter_impact_assess', 'chapter_adopt_impact_assess'].includes(input.action) && !chapter) return null;
     if (chapter && 'currentContentVersionId' in refs && chapter.currentContentVersionId !== refs.currentContentVersionId) return null;
@@ -890,16 +897,17 @@ export function createInMemoryNovelRepository(): NovelRepository & {
           task.objectType === 'direction' &&
           task.status === TaskStatus.WaitingConfirmation
         ) {
+          const acceptedResult = task.resultVersionIds.includes(input.candidate.id);
           task.status = TaskStatus.Completed;
           task.activeClaimKey = null;
-          task.statusNote = '用户已采用方向';
-          task.currentStep = '方向已采用';
-          task.userAcceptedResult = true;
+          task.statusNote = acceptedResult ? '用户已采用方向' : '本任务方向候选未采用，已归档';
+          task.currentStep = acceptedResult ? '方向已采用' : '方向候选未采用，已归档';
+          task.userAcceptedResult = acceptedResult;
           task.finishedAt = input.now;
           task.updatedAt = input.now;
           appendTaskEvent(task, {
             eventType: 'task_completed',
-            message: '方向已采用，任务完成。',
+            message: acceptedResult ? '方向已采用，任务完成。' : '本任务方向候选未采用，已转为历史版本。',
             progress: 100,
             requestId: input.context.requestId,
             createdAt: input.now
@@ -1120,16 +1128,19 @@ export function createInMemoryNovelRepository(): NovelRepository & {
           task.objectType === input.objectType &&
           task.status === TaskStatus.WaitingConfirmation
         ) {
+          const acceptedResult = task.resultVersionIds.includes(input.candidate.id);
           task.status = TaskStatus.Completed;
           task.activeClaimKey = null;
-          task.statusNote = '用户已采用结构资产';
-          task.currentStep = getStructureAdoptStep(input.objectType);
-          task.userAcceptedResult = true;
+          task.statusNote = acceptedResult ? '用户已采用结构资产' : '本任务结构候选未采用，已归档';
+          task.currentStep = acceptedResult ? getStructureAdoptStep(input.objectType) : `${getStructureObjectText(input.objectType)}候选未采用，已归档`;
+          task.userAcceptedResult = acceptedResult;
           task.finishedAt = input.now;
           task.updatedAt = input.now;
           appendTaskEvent(task, {
             eventType: 'task_completed',
-            message: `${getStructureObjectText(input.objectType)}已采用，任务完成。`,
+            message: acceptedResult
+              ? `${getStructureObjectText(input.objectType)}已采用，任务完成。`
+              : `本任务${getStructureObjectText(input.objectType)}候选未采用，已转为历史版本。`,
             progress: 100,
             requestId: input.context.requestId,
             createdAt: input.now
