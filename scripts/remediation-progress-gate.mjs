@@ -143,7 +143,11 @@ export function validateNovelCandidateAcceptanceOwnership(markdown) {
   const versionRow = rows.find((line) => /^\|\s*RMD-NOV-VERSION-001\s*\|/.test(line));
   if (!uxRow && !versionRow) return;
   if (!uxRow || !versionRow) fail('novel candidate acceptance ownership requires both UX and VERSION rows');
-  if (!uxRow.includes('NOV-CANDIDATE-UI-01') || uxRow.includes('NOV-CANDIDATE-04')) {
+  if (
+    !uxRow.includes('NOV-CANDIDATE-UI-01') ||
+    uxRow.includes('NOV-CANDIDATE-04') ||
+    uxRow.includes('NOV-CURRENT-01')
+  ) {
     fail('RMD-NOV-UX-001 must own only the E4 current-version UI projection acceptance');
   }
   if (!versionRow.includes('NOV-CANDIDATE-04') || !versionRow.includes('NOV-CURRENT-01')) {

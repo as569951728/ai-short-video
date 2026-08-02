@@ -132,6 +132,13 @@ test('keeps UI projection acceptance separate from MySQL current uniqueness', ()
     /must own only the E4 current-version UI projection/
   );
   assert.throws(
+    () =>
+      validateNovelCandidateAcceptanceOwnership(
+        ownership.replace('NOV-CANDIDATE-UI-01 |', 'NOV-CANDIDATE-UI-01, NOV-CURRENT-01 |')
+      ),
+    /must own only the E4 current-version UI projection/
+  );
+  assert.throws(
     () => validateNovelCandidateAcceptanceOwnership(ownership.replace('NOV-CURRENT-01, NOV-CANDIDATE-04', 'NOV-CURRENT-01')),
     /must retain candidate current uniqueness and MySQL acceptance/
   );
