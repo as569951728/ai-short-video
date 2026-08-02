@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { Writable } from 'node:stream';
-import { ErrorCode, NOVEL_PROVIDER_ACTIONS, RiskLevel, StaleLevel, TaskStatus, type NovelProviderAction } from '@ai-shortvideo/shared';
+import { ErrorCode, NOVEL_PROVIDER_ACTIONS, RiskLevel, StaleLevel, TaskStatus, VersionStatus, type NovelProviderAction } from '@ai-shortvideo/shared';
 import Fastify from 'fastify';
 import { buildApp as buildBaseApp } from '../../app.js';
 import type { LlmClient } from '../ai/llmClient.js';
@@ -392,6 +392,25 @@ describe('novel package 2 direction routes', () => {
     const originalCandidates = new Map(generated.candidates.map((candidate: any) => [candidate.id, candidate]));
     const fusionReason = '融合开篇钩子和视频化表达';
 
+    const taskCountBeforeInvalidRequests = repository.getGenerationTasks().length;
+    const versionCountBeforeInvalidRequests = repository.getCreativeVersions().length;
+    for (const payload of [{}, { instruction: null }, { instruction: '   ' }]) {
+      const response = await app.inject({
+        method: 'POST',
+        url: `/novels/${novelId}/directions/${sourceIds[0]}/optimize`,
+        payload
+      });
+      assert.equal(response.statusCode, 400, response.body);
+    }
+    const duplicateFusion = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/directions/fuse`,
+      payload: { versionIds: [sourceIds[0], sourceIds[0]] }
+    });
+    assert.equal(duplicateFusion.statusCode, 400, duplicateFusion.body);
+    assert.equal(repository.getGenerationTasks().length, taskCountBeforeInvalidRequests);
+    assert.equal(repository.getCreativeVersions().length, versionCountBeforeInvalidRequests);
+
     const fuseResponse = await app.inject({
       method: 'POST',
       url: `/novels/${novelId}/directions/fuse`,
@@ -558,6 +577,11 @@ describe('novel package 2 direction routes', () => {
     assert.equal(decision.isForced, false);
     assert.equal(repository.getOperationLogs()[0]?.action, 'adopt_direction');
 
+    const setting = await postStructure(app, novelId, 'settings', 'generate');
+    await postStructure(app, novelId, 'settings', 'adopt', setting.candidate.id, {
+      reason: '先形成下游正式设定，再验证更换方向后的失效语义。'
+    });
+
     const optimizeInstruction = '采用后继续强化前三秒钩子。';
     const optimizeResponse = await app.inject({
       method: 'POST',
@@ -571,6 +595,20 @@ describe('novel package 2 direction routes', () => {
     assert.deepEqual(optimized.candidate.sourceVersionIds, [candidate.id]);
     assert.equal(optimized.candidate.changeReason, optimizeInstruction);
     assert.equal(optimized.statusSummary.creationStage, 'direction');
+
+    const replaceDirection = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/directions/${optimized.candidate.id}/adopt`,
+      payload: { reason: '采用优化方向并重新生成下游资产。' }
+    });
+    assert.equal(replaceDirection.statusCode, 200, replaceDirection.body);
+    const replacedDetail = (await app.inject({ method: 'GET', url: `/novels/${novelId}` })).json().data;
+    assert.equal(replacedDetail.currentAssets.direction.id, optimized.candidate.id);
+    assert.equal(replacedDetail.currentAssets.setting, null);
+    assert.equal(replacedDetail.creationStage, 'setting');
+    const staleSetting = replacedDetail.structureCandidates.find((item: any) => item.id === setting.candidate.id);
+    assert.equal(staleSetting.status, 'stale');
+    assert.equal(staleSetting.staleLevel, 'hard_stale');
 
     await app.close();
   });
@@ -730,6 +768,18 @@ describe('novel package 3 structure routes', () => {
     assert.deepEqual(refreshed.sourceVersionIds, [generated.candidate.id]);
     assert.equal(refreshed.changeReason, instruction);
 
+    await postStructure(app, novelId, 'settings', 'adopt', optimized.candidate.id, {
+      reason: '采用优化设定，验证历史版本不能再次作为优化来源。'
+    });
+    const callsBeforeHistorical = providerCalls.length;
+    const historical = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/settings/generate`,
+      payload: { optimization: { sourceVersionId: generated.candidate.id, instruction: '历史版本不得重新进入 provider。' } }
+    });
+    assert.equal(historical.statusCode, 409, historical.body);
+    assert.equal(providerCalls.length, callsBeforeHistorical);
+
     const beforeMismatchCalls = providerCalls.length;
     const mismatch = await app.inject({
       method: 'POST',
@@ -739,14 +789,37 @@ describe('novel package 3 structure routes', () => {
     assert.equal(mismatch.statusCode, 409, mismatch.body);
     assert.equal(providerCalls.length, beforeMismatchCalls);
 
-    const sourceRecord = repository.getCreativeVersions().find((item) => item.id === generated.candidate.id);
+    const sourceRecord = repository.getCreativeVersions().find((item) => item.id === optimized.candidate.id);
     assert.ok(sourceRecord);
+    const unavailableSources = [
+      { ...structuredClone(sourceRecord), id: 'cv_discarded_source', status: VersionStatus.Discarded },
+      { ...structuredClone(sourceRecord), id: 'cv_cross_tenant_source', tenantId: 'tenant_other' },
+      { ...structuredClone(sourceRecord), id: 'cv_cross_novel_source', novelId: 'novel_other' }
+    ];
+    repository.getCreativeVersions().push(...unavailableSources);
+    for (const unavailableSource of unavailableSources) {
+      const callsBeforeUnavailable = providerCalls.length;
+      const tasksBeforeUnavailable = repository.getGenerationTasks().length;
+      const response = await app.inject({
+        method: 'POST',
+        url: `/novels/${novelId}/settings/generate`,
+        payload: {
+          optimization: {
+            sourceVersionId: unavailableSource.id,
+            instruction: '不可用来源不得进入任务 claim 或 provider。'
+          }
+        }
+      });
+      assert.equal(response.statusCode, 409, response.body);
+      assert.equal(providerCalls.length, callsBeforeUnavailable);
+      assert.equal(repository.getGenerationTasks().length, tasksBeforeUnavailable);
+    }
     sourceRecord.staleLevel = StaleLevel.HardStale;
     const beforeStaleCalls = providerCalls.length;
     const stale = await app.inject({
       method: 'POST',
       url: `/novels/${novelId}/settings/generate`,
-      payload: { optimization: { sourceVersionId: generated.candidate.id, instruction: '过期来源不得进入 provider。' } }
+      payload: { optimization: { sourceVersionId: optimized.candidate.id, instruction: '过期来源不得进入 provider。' } }
     });
     assert.equal(stale.statusCode, 409, stale.body);
     assert.equal(providerCalls.length, beforeStaleCalls);
@@ -3940,7 +4013,7 @@ describe('RP-02B2a1 registry and strict provider ABI', () => {
     const providers = createProviderSet(calls);
     await executeNovelProviderAction(providers, { action: 'direction_generate', novel, preferences });
     await executeNovelProviderAction(providers, { action: 'direction_fuse', sources: [direction] });
-    await executeNovelProviderAction(providers, { action: 'direction_optimize', source: direction });
+    await executeNovelProviderAction(providers, { action: 'direction_optimize', source: direction, instruction: '强化前三秒钩子' });
     for (const pair of [
       { action: 'setting_generate', objectType: 'setting' },
       { action: 'outline_generate', objectType: 'outline' },
@@ -3972,7 +4045,8 @@ describe('RP-02B2a1 registry and strict provider ABI', () => {
     assert.doesNotMatch(JSON.stringify(calls), /PROMPT_CANARY|SECRET_API_KEY_CANARY|RAW_ENTITY_CANARY/);
     for (const item of calls) assertNestedProviderAbi(item.action, item.payload as Record<string, unknown>);
     assert.deepEqual(calls.find((item) => item.action === 'direction_generate')?.keys, ['action', 'novel', 'preferences']);
-    for (const action of ['direction_fuse', 'direction_optimize', 'chapter_impact_assess', 'chapter_adopt_impact_assess'] as const) assert.deepEqual(calls.find((item) => item.action === action)?.keys, ACTION_INPUT_KEYS[action].filter((key) => key !== 'reason' && key !== 'instruction').sort(), `${action} optional key`);
+    for (const action of ['direction_fuse', 'chapter_impact_assess', 'chapter_adopt_impact_assess'] as const) assert.deepEqual(calls.find((item) => item.action === action)?.keys, ACTION_INPUT_KEYS[action].filter((key) => key !== 'reason' && key !== 'instruction').sort(), `${action} optional key`);
+    assert.deepEqual(calls.find((item) => item.action === 'direction_optimize')?.keys, ACTION_INPUT_KEYS.direction_optimize.slice().sort());
     assert.deepEqual(calls.find((item) => item.action === 'trial_followup_generate')?.keys, ['action', 'chapters', 'novel', 'selectedCandidate']);
     const after = await snapshotScenarioCounts(repository, calls.length);
     assert.deepEqual(diffScenarioCounts(before, after), scenarioExpectedCounts({ provider: 15 }));

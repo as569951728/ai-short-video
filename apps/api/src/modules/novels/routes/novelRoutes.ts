@@ -288,7 +288,8 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
               type: 'array',
               items: { type: 'string', minLength: 1, maxLength: 80 },
               minItems: 2,
-              maxItems: 5
+              maxItems: 5,
+              uniqueItems: true
             },
             reason: { type: ['string', 'null'], maxLength: 500 },
             idempotencyKey: idempotencyKeySchema
@@ -319,8 +320,9 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
         params: directionVersionParamsSchema,
         body: {
           type: 'object',
+          required: ['instruction'],
           properties: {
-            instruction: { type: ['string', 'null'], maxLength: 500 },
+            instruction: { type: 'string', minLength: 1, maxLength: 500 },
             idempotencyKey: idempotencyKeySchema
           },
           additionalProperties: false

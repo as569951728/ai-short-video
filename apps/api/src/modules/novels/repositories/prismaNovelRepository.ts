@@ -395,11 +395,11 @@ export class PrismaNovelRepository implements NovelRepository {
     const selectedVersions = selectedIds.map(versionById);
     if (selectedVersions.some((item, index) => selectedIds[index] !== null && selectedIds[index] !== undefined && !item)) return null;
     if ((input.action === 'direction_fuse' || input.action === 'direction_optimize') && selectedVersions.some((item) =>
-      !item || item.objectType !== 'direction' || item.status === VersionStatus.Discarded
+      !item || item.objectType !== 'direction' || ![VersionStatus.Candidate, VersionStatus.Current].includes(item.status)
     )) return null;
     if (structureAction && optimizationSourceIds.some((id) => {
       const item = versionById(id);
-      return !item || item.objectType !== refs.objectType || item.status === VersionStatus.Discarded || item.staleLevel === StaleLevel.HardStale;
+      return !item || item.objectType !== refs.objectType || ![VersionStatus.Candidate, VersionStatus.Current].includes(item.status) || item.staleLevel === StaleLevel.HardStale;
     })) return null;
     if (input.action !== 'direction_fuse' && input.action !== 'direction_optimize'
       && currentVersionIds.map(versionById).some((item) => item && item.status !== VersionStatus.Current)) return null;
@@ -1094,7 +1094,7 @@ export class PrismaNovelRepository implements NovelRepository {
           decisionReason: input.reason,
           isForced: input.isForced,
           riskSummary: input.isForced ? '低分方向采用，已记录用户确认原因。' : '方向评分满足采用门槛。',
-          impactSummary: '当前方向切换为正式方向，小说进入设定阶段；其他方向候选转为历史。',
+          impactSummary: '当前方向切换为正式方向，小说进入设定阶段；其他方向候选转为历史，下游正式资产失效并等待重新生成。',
           pageVersionSnapshot: toJsonObject(input.pageVersionSnapshot ?? {}),
           sourceTaskId: input.candidate.sourceTaskId,
           createdBy: input.context.userId,
@@ -1115,6 +1115,19 @@ export class PrismaNovelRepository implements NovelRepository {
         }
       });
 
+      await tx.creativeVersion.updateMany({
+        where: {
+          tenantId: input.context.tenantId,
+          novelId: input.novel.id,
+          objectType: { in: ['setting', 'outline', 'stage_outline', 'chapter_plan'] },
+          status: { in: [PrismaVersionStatus.CANDIDATE, PrismaVersionStatus.CURRENT] }
+        },
+        data: {
+          status: PrismaVersionStatus.STALE,
+          staleLevel: PrismaStaleLevel.HARD_STALE
+        }
+      });
+
       const currentDirection = await tx.creativeVersion.update({
         where: { id: input.candidate.id },
         data: {
@@ -1127,6 +1140,10 @@ export class PrismaNovelRepository implements NovelRepository {
         where: { id: input.novel.id },
         data: {
           currentDirectionVersionId: input.candidate.id,
+          currentSettingVersionId: null,
+          currentOutlineVersionId: null,
+          currentStageOutlineVersionId: null,
+          currentChapterPlanVersionId: null,
           creationStage: PrismaNovelCreationStage.SETTING,
           stageStatus: PrismaStageStatus.NOT_STARTED,
           updatedBy: input.context.userId,

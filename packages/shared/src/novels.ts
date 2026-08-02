@@ -72,7 +72,7 @@ export interface FullReviewChapterSourceRefV1 {
 export type ExecutionEnvelopeV1 =
   | ExecutionEnvelopeBaseV1<'direction_generate', 'direction', { regenerateReason?: string }, { currentDirectionVersionId: string | null }>
   | ExecutionEnvelopeBaseV1<'direction_fuse', 'direction', { versionIds: string[]; reason?: string }, { sourceVersionIds: string[] }>
-  | ExecutionEnvelopeBaseV1<'direction_optimize', 'direction', { versionId: string; instruction?: string }, { sourceVersionIds: string[] }>
+  | ExecutionEnvelopeBaseV1<'direction_optimize', 'direction', { versionId: string; instruction: string }, { sourceVersionIds: string[] }>
   | ExecutionEnvelopeBaseV1<'setting_generate', 'setting', { currentDirectionVersionId: string; regenerateReason?: string; optimization?: StructureOptimizationExecutionV1 | null }, StructureExecutionSourceRefsV1>
   | ExecutionEnvelopeBaseV1<'outline_generate', 'outline', { currentDirectionVersionId: string; currentSettingVersionId: string; regenerateReason?: string; optimization?: StructureOptimizationExecutionV1 | null }, StructureExecutionSourceRefsV1>
   | ExecutionEnvelopeBaseV1<'stage_outline_generate', 'stage_outline', { currentOutlineVersionId: string; regenerateReason?: string; optimization?: StructureOptimizationExecutionV1 | null }, StructureExecutionSourceRefsV1>
@@ -316,7 +316,7 @@ function executionExact(common: { schemaVersion: 1; action: NovelProviderAction;
 }
 function executionOptionalTextRequest(value: unknown, key: string, max: number) { const source = executionRecord(value, [key], 'effectiveRequest'); const text = executionOptionalText(source[key], `effectiveRequest.${key}`, max); return text === undefined ? {} : { [key]: text }; }
 function executionFuseRequest(value: unknown) { const source = executionRecord(value, ['versionIds', 'reason'], 'effectiveRequest'); const reason = executionOptionalText(source.reason, 'effectiveRequest.reason', 500); return { versionIds: executionIdArray(source.versionIds, 'effectiveRequest.versionIds', 2, 20), ...(reason ? { reason } : {}) }; }
-function executionOptimizeRequest(value: unknown) { const source = executionRecord(value, ['versionId', 'instruction'], 'effectiveRequest'); const instruction = executionOptionalText(source.instruction, 'effectiveRequest.instruction', 2_000); return { versionId: executionId(source.versionId, 'effectiveRequest.versionId'), ...(instruction ? { instruction } : {}) }; }
+function executionOptimizeRequest(value: unknown) { const source = executionRequiredRecord(value, ['versionId', 'instruction'], 'effectiveRequest'); return { versionId: executionId(source.versionId, 'effectiveRequest.versionId'), instruction: executionText(source.instruction, 'effectiveRequest.instruction', 2_000) }; }
 function executionStructureRequest(value: unknown, keys: string[]) {
   const source = executionRecord(value, [...keys, 'regenerateReason', 'optimization'], 'effectiveRequest');
   const regenerateReason = executionOptionalText(source.regenerateReason, 'effectiveRequest.regenerateReason', 500);
@@ -1510,7 +1510,7 @@ export interface FuseDirectionsRequest {
 }
 
 export interface OptimizeDirectionRequest {
-  instruction?: string | null;
+  instruction: string;
   idempotencyKey?: string | null;
 }
 

@@ -1,15 +1,15 @@
 # RP-05B1 小说候选动作结果承接验收记录
 
-status: implementation_verified_pending_independent_review
+status: implementation_verified_pending_independent_re_review
 package_id: RP-05B1
 manifest_id: RP-05B1-v2
 baseline_sha: 058071861598f58dbe33e1c4f4d2e3df8f2a55de
-fixed_candidate_sha: pending
+fixed_candidate_sha: pending_re_review
 target_issue: RMD-NOV-UX-001
 
 ## 1. 结论边界
 
-本包已完成共享合同、API、内存仓储、Prisma 实现、管理端交互和真实浏览器原事故复验。当前只证明候选动作完成后的结果承接闭环；独立 PRODUCT/TEST/QUALITY、远端 required checks 和正常合并尚未完成，因此总账保持 `10/43`、`PB 0/7`、`RB 0/12`，不得提前关闭 `RMD-NOV-UX-001`。
+本包已完成共享合同、API、内存仓储、Prisma 实现、管理端交互和真实浏览器原事故复验。首轮独立 PRODUCT/TEST 门禁发现 3 个 P1，候选未获准入；对应修复和负向回归已完成，等待新固定候选的独立复验。远端 required checks 和正常合并尚未完成，因此总账保持 `10/43`、`PB 0/7`、`RB 0/12`，不得提前关闭 `RMD-NOV-UX-001`。
 
 ## 2. 验收映射
 
@@ -31,7 +31,7 @@ target_issue: RMD-NOV-UX-001
 | `npm test -w @ai-shortvideo/shared` | 23/23 passed |
 | `npm test -w @ai-shortvideo/api` | 126/126 passed |
 | `NODE_ENV=production npm run test:dom:admin` | admin 78/78；DOM 21/21 passed |
-| `npm run test:rp02b1` | 14/14 passed；包含 pre-RP-05B1 普通结构任务 replay/lease/recovery 兼容回归 |
+| `npm run test:rp02b1` | 14/14 passed；覆盖严格 envelope、legacy shape 与缺失权威引用 fail-closed 合同 |
 | `git diff --check` | passed |
 
 API 回归额外覆盖：
@@ -39,10 +39,27 @@ API 回归额外覆盖：
 - 方向或结构多个候选批次中，仅实际采用版本所属任务获得 `userAcceptedResult=true`。
 - 已采用任务指向下一步骤，未采用批次归档且不再提供错误聚焦入口。
 - 结构继续优化的来源候选、instruction、request hash、source refs、worker claim、provider input 和恢复身份保持一致。
+- API 套件动态覆盖 pre-RP-05B1 普通结构任务 replay、lease、recovery，且不改变旧任务身份。
 - 新普通结构任务显式写入 `optimization: null`；旧任务缺少该字段时仅走兼容读取，不允许新任务用占位引用伪装成功。
-- discarded、hard-stale 或跨租户/跨小说/类型不匹配来源在 provider 调用前失败。
+- API 套件动态覆盖 historical、discarded、hard-stale、跨租户、跨小说或类型不匹配来源在任务 claim/provider 调用前失败。
 
-## 4. 真实浏览器原事故复验
+## 4. 首轮独立门禁与修复
+
+首轮固定候选 `5a43a20c378ee3f5b78d5d5a5769bfc0485d2354` / tree `6f5969a09dbc2281c3c948fae3578c4ebb5e0b37` 的独立结论为：PRODUCT `P0=0/P1=2/P2=2`，TEST `P0=0/P1=2/P2=1`，QUALITY `P0=0/P1=0/P2=2`。合并去重后存在 3 个 P1，候选拒绝准入：
+
+1. 方向优化允许省略、`null` 或空白 instruction。
+2. historical 结构版本仍可重新进入优化任务和 provider。
+3. 更换正式方向后，旧方向生成的设定、大纲和章节目录仍保持 current。
+
+修复后的可重复证据：
+
+- 共享请求、执行 envelope、provider ABI、HTTP schema 和 service 一致要求非空 direction optimization instruction；非法输入 `provider=0/task=0/version=0`。
+- 方向融合来源要求唯一；重复版本 ID 在 HTTP/service 双层拒绝。
+- direction/structure 的生成 authority 只接受 candidate/current 来源；historical/discarded/hard-stale 以及跨租户、跨小说、类型不匹配来源均在 claim/provider 前失败。
+- 更换正式方向时，内存与 Prisma 仓储在同一提交路径中将 setting/outline/stage_outline/chapter_plan 的 candidate/current 标为 hard-stale，并清空小说下游 current 指针。
+- 新固定候选必须重新通过 PRODUCT/TEST/QUALITY 的 `P0=0/P1=0` 门禁，首轮结论不得复用为准入结论。
+
+## 5. 真实浏览器原事故复验
 
 环境：`http://127.0.0.1:5183` + mock API `http://127.0.0.1:3011`；测试小说 `novel_000001`，标题 `RP05B1 浏览器验收小说`。
 
@@ -61,15 +78,15 @@ API 回归额外覆盖：
 - `/tmp/rp05b1-outline-optimized-provenance.png`
 - `/tmp/rp05b1-outline-current-history.png`
 
-## 5. 预算与未覆盖项
+## 6. 预算与未覆盖项
 
 - 当前变更文件数：24，等于 `hard_max_files=24`，未超出冻结清单。
-- 当前净新增：`1871 - 190 = 1681` 行，低于 `hard_max_net_additions=3200`。
+- 当前净新增：`2027 - 214 = 1813` 行，低于 `hard_max_net_additions=3200`。
 - 未连接真实 MySQL，因此不关闭 `RMD-NOV-VERSION-001`，也不外推数据库并发唯一性。
 - 未调用真实模型，因此不证明真实 provider 输出质量、时延或费用表现。
 - 未执行跨设备恢复、长章节 checkpoint 或后续视频业务包。
 
-## 6. 待完成门禁
+## 7. 待完成门禁
 
 1. 冻结候选 SHA/tree。
 2. 独立 PRODUCT、TEST、QUALITY 对同一候选清零 P0/P1。

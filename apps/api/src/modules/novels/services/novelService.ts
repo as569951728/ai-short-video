@@ -413,7 +413,7 @@ export class NovelService {
     this.ensureLifecycleActive(novel);
     this.ensureDirectionWorkStage(novel);
 
-    if (request.versionIds.length < 2) {
+    if (request.versionIds.length < 2 || new Set(request.versionIds).size !== request.versionIds.length) {
       throw new BusinessError(ErrorCode.ValidationError, '至少选择两个方向候选进行融合');
     }
 
@@ -457,10 +457,16 @@ export class NovelService {
     this.ensureLifecycleActive(novel);
     const source = await this.findDirectionVersionOrThrow(context.tenantId, novelId, versionId);
     this.ensureDirectionOptimizationAllowed(novel, source);
+    const instruction = request.instruction.trim();
+    if (!instruction) {
+      throw new BusinessError(ErrorCode.ValidationError, '方向优化要求不能为空。', {
+        issues: [{ path: 'instruction', message: 'instruction is required' }]
+      });
+    }
     const providerInput = {
       action: 'direction_optimize' as const,
       source: projectDirectionDraftProviderInput(toDirectionDraft(source)),
-      instruction: request.instruction
+      instruction
     };
     const execution = await executeClaimedGeneration({
       action: 'direction_optimize',
@@ -468,7 +474,7 @@ export class NovelService {
       novel,
       objectId: versionId,
       idempotencyKey: request.idempotencyKey,
-      effectiveRequest: { versionId, instruction: request.instruction?.trim() || null },
+      effectiveRequest: { versionId, instruction },
       sourceVersionRefs: { sourceVersionIds: [versionId] },
       context,
       now: this.now,
@@ -479,7 +485,7 @@ export class NovelService {
         task,
         candidate,
         taskType: 'novel_direction_optimize',
-        changeReason: request.instruction ?? '优化方向候选',
+        changeReason: instruction,
         sourceVersionIds: [versionId],
         context,
         now: this.now()
@@ -2073,7 +2079,7 @@ export class NovelService {
         objectType,
         optimization.sourceVersionId
       );
-      if (!source || source.status === VersionStatus.Discarded) {
+      if (!source || ![VersionStatus.Candidate, VersionStatus.Current].includes(source.status)) {
         throw new BusinessError(ErrorCode.VersionConflict, '待优化的结构候选不存在或已不可用，请刷新后重试。');
       }
       if (source.staleLevel === StaleLevel.HardStale) {
@@ -2194,9 +2200,12 @@ export class NovelService {
   }
 
   private ensureDirectionOptimizationAllowed(novel: NovelRecord, source: CreativeVersionRecord) {
-    if (novel.creationStage === NovelCreationStage.Direction) return;
+    if (
+      novel.creationStage === NovelCreationStage.Direction
+      && [VersionStatus.Candidate, VersionStatus.Current].includes(source.status)
+    ) return;
     if (source.id === novel.currentDirectionVersionId && source.status === VersionStatus.Current) return;
-    throw new BusinessError(ErrorCode.InvalidStage, '当前阶段只能基于正式方向生成优化候选');
+    throw new BusinessError(ErrorCode.InvalidStage, '只能基于候选方向或正式方向生成优化候选');
   }
 
   private async ensureStructureGenerationGate(novel: NovelRecord, objectType: StructureAssetType) {

@@ -160,7 +160,7 @@ export async function fuseDirections(
 export async function optimizeDirection(
   novelId: string,
   versionId: string,
-  request: OptimizeDirectionRequest = {},
+  request: OptimizeDirectionRequest,
   mode: ApiMode = getApiMode(),
 ): Promise<DirectionActionResultDTO> {
   if (mode === 'mock') {
