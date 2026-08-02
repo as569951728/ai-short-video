@@ -540,7 +540,6 @@ export class NovelService {
   async adoptDirection(novelId: string, versionId: string, request: AdoptDirectionRequest, context: RequestContext): Promise<DirectionActionResultDTO> {
     const novel = await this.findNovelOrThrow(context.tenantId, novelId);
     this.ensureLifecycleActive(novel);
-    this.ensureDirectionWorkStage(novel);
 
     if (request.currentVersionId !== undefined && request.currentVersionId !== novel.currentDirectionVersionId) {
       throw new BusinessError(ErrorCode.VersionConflict, '当前方向版本已变化，请刷新后重试');
@@ -552,6 +551,15 @@ export class NovelService {
     }
     if (candidate.staleLevel === StaleLevel.HardStale) {
       throw new BusinessError(ErrorCode.CandidateStale, '该方向候选已过期，请重新生成');
+    }
+    if (
+      novel.creationStage !== NovelCreationStage.Direction &&
+      (
+        !novel.currentDirectionVersionId ||
+        !toDirectionSourceVersionIds(candidate.sourceVersionRefs).includes(novel.currentDirectionVersionId)
+      )
+    ) {
+      throw new BusinessError(ErrorCode.InvalidStage, '当前阶段只能采用基于正式方向生成的新候选');
     }
 
     const score = candidate.score ?? 0;

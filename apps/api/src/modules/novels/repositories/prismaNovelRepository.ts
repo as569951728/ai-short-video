@@ -965,8 +965,12 @@ export class PrismaNovelRepository implements NovelRepository {
       const novel = await tx.novel.update({
         where: { id: input.novel.id },
         data: {
-          creationStage: PrismaNovelCreationStage.DIRECTION,
-          stageStatus: PrismaStageStatus.WAITING_USER,
+          ...(input.novel.currentDirectionVersionId
+            ? {}
+            : {
+                creationStage: PrismaNovelCreationStage.DIRECTION,
+                stageStatus: PrismaStageStatus.WAITING_USER
+              }),
           updatedBy: input.context.userId,
           updatedAt: input.now
         }
@@ -1048,8 +1052,12 @@ export class PrismaNovelRepository implements NovelRepository {
       const novel = await tx.novel.update({
         where: { id: input.novel.id },
         data: {
-          creationStage: PrismaNovelCreationStage.DIRECTION,
-          stageStatus: PrismaStageStatus.WAITING_USER,
+          ...(input.novel.currentDirectionVersionId
+            ? {}
+            : {
+                creationStage: PrismaNovelCreationStage.DIRECTION,
+                stageStatus: PrismaStageStatus.WAITING_USER
+              }),
           updatedBy: input.context.userId,
           updatedAt: input.now
         }
@@ -1102,6 +1110,17 @@ export class PrismaNovelRepository implements NovelRepository {
         }
       });
 
+      const invalidatedDownstreamVersions = await tx.creativeVersion.findMany({
+        where: {
+          tenantId: input.context.tenantId,
+          novelId: input.novel.id,
+          objectType: { in: ['setting', 'outline', 'stage_outline', 'chapter_plan'] },
+          status: { in: [PrismaVersionStatus.CANDIDATE, PrismaVersionStatus.CURRENT] }
+        },
+        select: { id: true }
+      });
+      const invalidatedDownstreamVersionIds = new Set(invalidatedDownstreamVersions.map((version) => version.id));
+
       await tx.creativeVersion.updateMany({
         where: {
           tenantId: input.context.tenantId,
@@ -1132,6 +1151,7 @@ export class PrismaNovelRepository implements NovelRepository {
         where: { id: input.candidate.id },
         data: {
           status: PrismaVersionStatus.CURRENT,
+          staleLevel: PrismaStaleLevel.NONE,
           decisionRecordId: decisionRecord.id
         }
       });
@@ -1155,7 +1175,7 @@ export class PrismaNovelRepository implements NovelRepository {
         where: {
           tenantId: input.context.tenantId,
           novelId: input.novel.id,
-          objectType: 'direction',
+          objectType: { in: ['direction', 'setting', 'outline', 'stage_outline', 'chapter_plan'] },
           status: PrismaTaskStatus.WAITING_CONFIRMATION
         }
       });
@@ -1164,14 +1184,23 @@ export class PrismaNovelRepository implements NovelRepository {
         const resultVersionIds = Array.isArray(waitingTask.resultVersionIdsJson)
           ? waitingTask.resultVersionIdsJson.filter((value): value is string => typeof value === 'string')
           : waitingTask.resultVersionId ? [waitingTask.resultVersionId] : [];
-        const acceptedResult = resultVersionIds.includes(input.candidate.id);
+        const isDirectionTask = waitingTask.objectType === 'direction';
+        const acceptedResult = isDirectionTask && resultVersionIds.includes(input.candidate.id);
+        const invalidatedDownstreamResult = !isDirectionTask && resultVersionIds.some((versionId) => invalidatedDownstreamVersionIds.has(versionId));
+        if (!isDirectionTask && !invalidatedDownstreamResult) continue;
+        const statusNote = isDirectionTask
+          ? acceptedResult ? '用户已采用方向' : '本任务方向候选未采用，已归档'
+          : '上游方向已变更，本任务候选已过期并归档';
+        const currentStep = isDirectionTask
+          ? acceptedResult ? '方向已采用' : '方向候选未采用，已归档'
+          : '候选因方向变更已过期并归档';
         const completedTask = await tx.generationTask.update({
           where: { id: waitingTask.id },
           data: {
             status: PrismaTaskStatus.COMPLETED,
             activeClaimKey: null,
-            statusNote: acceptedResult ? '用户已采用方向' : '本任务方向候选未采用，已归档',
-            currentStep: acceptedResult ? '方向已采用' : '方向候选未采用，已归档',
+            statusNote,
+            currentStep,
             userAcceptedResult: acceptedResult,
             finishedAt: input.now,
             updatedAt: input.now
@@ -1180,7 +1209,9 @@ export class PrismaNovelRepository implements NovelRepository {
         await createTaskEvent(tx, {
           task: completedTask,
           eventType: 'task_completed',
-          message: acceptedResult ? '方向已采用，任务完成。' : '本任务方向候选未采用，已转为历史版本。',
+          message: isDirectionTask
+            ? acceptedResult ? '方向已采用，任务完成。' : '本任务方向候选未采用，已转为历史版本。'
+            : '上游方向已变更，本任务候选已过期，待确认入口已归档。',
           progress: 100,
           requestId: input.context.requestId,
           createdAt: input.now
@@ -1207,7 +1238,7 @@ export class PrismaNovelRepository implements NovelRepository {
             stageStatus: StageStatus.NotStarted
           },
           reason: input.reason,
-          impactSummary: '当前方向切换为正式方向，小说进入设定阶段；其他方向候选转为历史。',
+          impactSummary: '当前方向切换为正式方向，小说进入设定阶段；其他方向候选转为历史，下游正式资产失效并等待重新生成。',
           sourceTaskId: input.candidate.sourceTaskId,
           requestId: input.context.requestId,
           ip: input.context.ip ?? null,

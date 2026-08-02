@@ -793,8 +793,12 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       appendTaskProgressEvents(task, input.context.requestId, input.now);
       creativeVersions.unshift(...versions);
       mutateNovel(input.novel.id, {
-        creationStage: NovelCreationStage.Direction,
-        stageStatus: StageStatus.WaitingUser,
+        ...(input.novel.currentDirectionVersionId
+          ? {}
+          : {
+              creationStage: NovelCreationStage.Direction,
+              stageStatus: StageStatus.WaitingUser
+            }),
         updatedBy: input.context.userId,
         updatedAt: input.now
       });
@@ -833,8 +837,12 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       appendTaskProgressEvents(task, input.context.requestId, input.now);
       creativeVersions.unshift(version);
       mutateNovel(input.novel.id, {
-        creationStage: NovelCreationStage.Direction,
-        stageStatus: StageStatus.WaitingUser,
+        ...(input.novel.currentDirectionVersionId
+          ? {}
+          : {
+              creationStage: NovelCreationStage.Direction,
+              stageStatus: StageStatus.WaitingUser
+            }),
         updatedBy: input.context.userId,
         updatedAt: input.now
       });
@@ -872,6 +880,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
         createdAt: input.now
       };
 
+      const invalidatedDownstreamVersionIds = new Set<string>();
       for (const version of creativeVersions) {
         if (version.tenantId !== input.context.tenantId || version.novelId !== input.novel.id) continue;
         if (version.objectType === 'direction') {
@@ -888,6 +897,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
         ) {
           version.status = VersionStatus.Stale;
           version.staleLevel = StaleLevel.HardStale;
+          invalidatedDownstreamVersionIds.add(version.id);
         }
       }
 
@@ -904,12 +914,8 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       });
 
       for (const task of generationTasks) {
-        if (
-          task.tenantId === input.context.tenantId &&
-          task.novelId === input.novel.id &&
-          task.objectType === 'direction' &&
-          task.status === TaskStatus.WaitingConfirmation
-        ) {
+        if (task.tenantId !== input.context.tenantId || task.novelId !== input.novel.id || task.status !== TaskStatus.WaitingConfirmation) continue;
+        if (task.objectType === 'direction') {
           const acceptedResult = task.resultVersionIds.includes(input.candidate.id);
           task.status = TaskStatus.Completed;
           task.activeClaimKey = null;
@@ -921,6 +927,21 @@ export function createInMemoryNovelRepository(): NovelRepository & {
           appendTaskEvent(task, {
             eventType: 'task_completed',
             message: acceptedResult ? '方向已采用，任务完成。' : '本任务方向候选未采用，已转为历史版本。',
+            progress: 100,
+            requestId: input.context.requestId,
+            createdAt: input.now
+          });
+        } else if (task.resultVersionIds.some((versionId) => invalidatedDownstreamVersionIds.has(versionId))) {
+          task.status = TaskStatus.Completed;
+          task.activeClaimKey = null;
+          task.statusNote = '上游方向已变更，本任务候选已过期并归档';
+          task.currentStep = '候选因方向变更已过期并归档';
+          task.userAcceptedResult = false;
+          task.finishedAt = input.now;
+          task.updatedAt = input.now;
+          appendTaskEvent(task, {
+            eventType: 'task_completed',
+            message: '上游方向已变更，本任务候选已过期，待确认入口已归档。',
             progress: 100,
             requestId: input.context.requestId,
             createdAt: input.now

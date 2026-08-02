@@ -581,6 +581,17 @@ describe('novel package 2 direction routes', () => {
     await postStructure(app, novelId, 'settings', 'adopt', setting.candidate.id, {
       reason: '先形成下游正式设定，再验证更换方向后的失效语义。'
     });
+    const pendingSetting = await postStructure(app, novelId, 'settings', 'generate', undefined, {
+      optimization: {
+        sourceVersionId: setting.candidate.id,
+        instruction: '保留为待确认候选，用于验证上游方向变更后的任务归档。'
+      }
+    });
+    assert.equal(
+      repository.getGenerationTasks().find((task) => task.id === pendingSetting.task.id)?.status,
+      TaskStatus.WaitingConfirmation
+    );
+    const stageBeforeDirectionOptimization = pendingSetting.statusSummary.creationStage;
 
     const optimizeInstruction = '采用后继续强化前三秒钩子。';
     const optimizeResponse = await app.inject({
@@ -594,7 +605,9 @@ describe('novel package 2 direction routes', () => {
     assert.equal(optimized.candidate.status, 'candidate');
     assert.deepEqual(optimized.candidate.sourceVersionIds, [candidate.id]);
     assert.equal(optimized.candidate.changeReason, optimizeInstruction);
-    assert.equal(optimized.statusSummary.creationStage, 'direction');
+    assert.equal(optimized.statusSummary.creationStage, stageBeforeDirectionOptimization);
+    const detailBeforeReplace = (await app.inject({ method: 'GET', url: `/novels/${novelId}` })).json().data;
+    assert.equal(detailBeforeReplace.currentAssets.setting.id, setting.candidate.id);
 
     const replaceDirection = await app.inject({
       method: 'POST',
@@ -609,6 +622,15 @@ describe('novel package 2 direction routes', () => {
     const staleSetting = replacedDetail.structureCandidates.find((item: any) => item.id === setting.candidate.id);
     assert.equal(staleSetting.status, 'stale');
     assert.equal(staleSetting.staleLevel, 'hard_stale');
+    const adoptedSettingTask = repository.getGenerationTasks().find((task) => task.id === setting.task.id);
+    assert.equal(adoptedSettingTask?.status, TaskStatus.Completed);
+    assert.equal(adoptedSettingTask?.userAcceptedResult, true);
+    const archivedSettingTask = repository.getGenerationTasks().find((task) => task.id === pendingSetting.task.id);
+    assert.equal(archivedSettingTask?.status, TaskStatus.Completed);
+    assert.equal(archivedSettingTask?.userAcceptedResult, false);
+    assert.equal(archivedSettingTask?.currentStep, '候选因方向变更已过期并归档');
+    assert.match(archivedSettingTask?.statusNote ?? '', /已过期并归档/);
+    assert.equal(replacedDetail.recentTasks.find((task: any) => task.id === pendingSetting.task.id)?.status, 'completed');
 
     await app.close();
   });
