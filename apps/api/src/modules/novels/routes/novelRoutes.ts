@@ -288,7 +288,8 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
               type: 'array',
               items: { type: 'string', minLength: 1, maxLength: 80 },
               minItems: 2,
-              maxItems: 5
+              maxItems: 5,
+              uniqueItems: true
             },
             reason: { type: ['string', 'null'], maxLength: 500 },
             idempotencyKey: idempotencyKeySchema
@@ -319,8 +320,9 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
         params: directionVersionParamsSchema,
         body: {
           type: 'object',
+          required: ['instruction'],
           properties: {
-            instruction: { type: ['string', 'null'], maxLength: 500 },
+            instruction: { type: 'string', minLength: 1, maxLength: 500 },
             idempotencyKey: idempotencyKeySchema
           },
           additionalProperties: false
@@ -398,11 +400,13 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
         params: directionVersionParamsSchema,
         body: {
           type: 'object',
+          required: ['currentVersionId', 'idempotencyKey'],
           properties: {
             confirmLowScore: { type: 'boolean' },
             reason: { type: ['string', 'null'], maxLength: 1000 },
             pageVersionSnapshot: { type: ['object', 'null'], additionalProperties: true },
-            currentVersionId: { type: ['string', 'null'], maxLength: 80 }
+            currentVersionId: { type: ['string', 'null'], maxLength: 80 },
+            idempotencyKey: idempotencyKeySchema
           },
           additionalProperties: false
         },
@@ -416,7 +420,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
       const data = await novelService.adoptDirection(
         novelId,
         versionId,
-        (request.body ?? {}) as AdoptDirectionRequest,
+        withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as AdoptDirectionRequest),
         await resolveProviderContext(options.requestContextResolver, request)
       );
 
@@ -1273,6 +1277,20 @@ function createStructureGenerateRouteSchema() {
         type: 'object',
         properties: {
           regenerateReason: { type: ['string', 'null'], maxLength: 500 },
+          optimization: {
+            anyOf: [
+              { type: 'null' },
+              {
+                type: 'object',
+                required: ['sourceVersionId', 'instruction'],
+                properties: {
+                  sourceVersionId: { type: 'string', minLength: 1, maxLength: 128 },
+                  instruction: { type: 'string', minLength: 1, maxLength: 2000 }
+                },
+                additionalProperties: false
+              }
+            ]
+          },
           idempotencyKey: idempotencyKeySchema
         },
         additionalProperties: false
@@ -1327,7 +1345,11 @@ async function createOutlineAcceptanceSeed(
   await service.adoptDirection(
     novelId,
     direction.id,
-    { reason: '本地验收种子：采用方向，进入设定节点。' },
+    {
+      currentVersionId: null,
+      idempotencyKey: `seed-outline-adopt-${novelId}`,
+      reason: '本地验收种子：采用方向，进入设定节点。'
+    },
     context
   );
 
@@ -1414,7 +1436,11 @@ async function createTrialAcceptanceSeed(
   await service.adoptDirection(
     novelId,
     direction.id,
-    { reason: '本地验收种子：采用方向，进入设定节点。' },
+    {
+      currentVersionId: null,
+      idempotencyKey: `seed-trial-adopt-${novelId}`,
+      reason: '本地验收种子：采用方向，进入设定节点。'
+    },
     context
   );
 

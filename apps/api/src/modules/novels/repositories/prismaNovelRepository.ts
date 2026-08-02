@@ -386,16 +386,23 @@ export class PrismaNovelRepository implements NovelRepository {
     ]);
     const versions = [...directions, ...structures];
     const versionById = (id: unknown) => typeof id === 'string' ? versions.find((item) => item.id === id) ?? null : null;
+    const structureAction = ['setting_generate', 'outline_generate', 'stage_outline_generate', 'chapter_plan_generate'].includes(input.action);
+    const currentVersionIds = [refs.currentDirectionVersionId, refs.currentSettingVersionId, refs.currentOutlineVersionId, refs.currentStageOutlineVersionId, refs.currentChapterPlanVersionId];
+    const optimizationSourceIds = structureAction && Array.isArray(refs.sourceVersionIds) ? refs.sourceVersionIds : [];
     const selectedIds = input.action === 'direction_fuse' || input.action === 'direction_optimize'
       ? (Array.isArray(refs.sourceVersionIds) ? refs.sourceVersionIds : [])
-      : [refs.currentDirectionVersionId, refs.currentSettingVersionId, refs.currentOutlineVersionId, refs.currentStageOutlineVersionId, refs.currentChapterPlanVersionId];
+      : [...currentVersionIds, ...optimizationSourceIds];
     const selectedVersions = selectedIds.map(versionById);
     if (selectedVersions.some((item, index) => selectedIds[index] !== null && selectedIds[index] !== undefined && !item)) return null;
     if ((input.action === 'direction_fuse' || input.action === 'direction_optimize') && selectedVersions.some((item) =>
-      !item || item.objectType !== 'direction' || item.status === VersionStatus.Discarded
+      !item || item.objectType !== 'direction' || ![VersionStatus.Candidate, VersionStatus.Current].includes(item.status)
     )) return null;
+    if (structureAction && optimizationSourceIds.some((id) => {
+      const item = versionById(id);
+      return !item || item.objectType !== refs.objectType || ![VersionStatus.Candidate, VersionStatus.Current].includes(item.status) || item.staleLevel === StaleLevel.HardStale;
+    })) return null;
     if (input.action !== 'direction_fuse' && input.action !== 'direction_optimize'
-      && selectedVersions.some((item) => item && item.status !== VersionStatus.Current)) return null;
+      && currentVersionIds.map(versionById).some((item) => item && item.status !== VersionStatus.Current)) return null;
     const chapter = chapters.find((item) => item.id === input.objectId) ?? null;
     if (['chapter_body_generate', 'chapter_rewrite', 'chapter_impact_assess', 'chapter_adopt_impact_assess'].includes(input.action) && !chapter) return null;
     if (chapter && 'currentContentVersionId' in refs && chapter.currentContentVersionId !== refs.currentContentVersionId) return null;
@@ -958,8 +965,12 @@ export class PrismaNovelRepository implements NovelRepository {
       const novel = await tx.novel.update({
         where: { id: input.novel.id },
         data: {
-          creationStage: PrismaNovelCreationStage.DIRECTION,
-          stageStatus: PrismaStageStatus.WAITING_USER,
+          ...(input.novel.currentDirectionVersionId
+            ? {}
+            : {
+                creationStage: PrismaNovelCreationStage.DIRECTION,
+                stageStatus: PrismaStageStatus.WAITING_USER
+              }),
           updatedBy: input.context.userId,
           updatedAt: input.now
         }
@@ -1041,8 +1052,12 @@ export class PrismaNovelRepository implements NovelRepository {
       const novel = await tx.novel.update({
         where: { id: input.novel.id },
         data: {
-          creationStage: PrismaNovelCreationStage.DIRECTION,
-          stageStatus: PrismaStageStatus.WAITING_USER,
+          ...(input.novel.currentDirectionVersionId
+            ? {}
+            : {
+                creationStage: PrismaNovelCreationStage.DIRECTION,
+                stageStatus: PrismaStageStatus.WAITING_USER
+              }),
           updatedBy: input.context.userId,
           updatedAt: input.now
         }
@@ -1071,8 +1086,71 @@ export class PrismaNovelRepository implements NovelRepository {
 
   async adoptDirection(input: DirectionAdoptionInput): Promise<AdoptedDirectionRecord> {
     return this.prisma.$transaction(async (tx) => {
-      await assertNoActiveAuthorityClaim(tx, input.context.tenantId, input.novel.id);
-      const currentVersionIdBefore = input.novel.currentDirectionVersionId;
+      await lockNovelAuthorityRoot(tx, input.context.tenantId, input.novel.id);
+      const lockedNovel = await tx.novel.findFirst({
+        where: { id: input.novel.id, tenantId: input.context.tenantId }
+      });
+      const lockedCandidate = await tx.creativeVersion.findFirst({
+        where: {
+          id: input.candidate.id,
+          tenantId: input.context.tenantId,
+          novelId: input.novel.id,
+          objectType: 'direction'
+        }
+      });
+      if (!lockedNovel || !lockedCandidate) throw new BusinessError(ErrorCode.NotFound, '小说或方向候选不存在');
+
+      const priorDecisions = await tx.assetDecisionRecord.findMany({
+        where: {
+          tenantId: input.context.tenantId,
+          novelId: input.novel.id,
+          actionType: 'adopt_direction'
+        },
+        orderBy: { createdAt: 'desc' }
+      });
+      const replayDecision = priorDecisions.find((item) =>
+        toJsonObject(item.metadata).adoptionIdempotencyToken === input.idempotencyToken
+      );
+      if (replayDecision) {
+        const metadata = toJsonObject(replayDecision.metadata);
+        if (metadata.adoptionRequestHash !== input.requestHash) {
+          throw new BusinessError(ErrorCode.IdempotencyConflict, '同一个幂等键已绑定到不同的方向采用请求');
+        }
+        if (lockedNovel.currentDirectionVersionId !== replayDecision.candidateVersionId) {
+          throw new BusinessError(ErrorCode.VersionConflict, '原方向采用结果已不再是当前版本，请刷新后重试');
+        }
+        const replayOperationLog = await tx.operationLog.findFirst({
+          where: {
+            tenantId: input.context.tenantId,
+            novelId: input.novel.id,
+            action: 'adopt_direction',
+            objectId: replayDecision.candidateVersionId
+          },
+          orderBy: { createdAt: 'desc' }
+        });
+        if (!replayOperationLog) throw new BusinessError(ErrorCode.InternalError, '方向采用审计记录不完整');
+        const replayVersions = await tx.creativeVersion.findMany({
+          where: { tenantId: input.context.tenantId, novelId: input.novel.id, objectType: 'direction' },
+          orderBy: { versionNo: 'desc' }
+        });
+        return {
+          novel: mapNovel(lockedNovel),
+          currentDirection: mapCreativeVersion(lockedCandidate),
+          versions: replayVersions.map(mapCreativeVersion),
+          decisionRecord: mapAssetDecisionRecord(replayDecision),
+          operationLog: mapOperationLog(replayOperationLog)
+        };
+      }
+
+      await assertNoActiveAuthorityClaimAfterRootLock(tx, input.context.tenantId, input.novel.id);
+      if (lockedNovel.currentDirectionVersionId !== input.expectedCurrentVersionId) {
+        throw new BusinessError(ErrorCode.VersionConflict, '当前方向版本已变化，请刷新后重试');
+      }
+      if (lockedCandidate.status !== PrismaVersionStatus.CANDIDATE || lockedCandidate.staleLevel === PrismaStaleLevel.HARD_STALE) {
+        throw new BusinessError(ErrorCode.VersionConflict, '该方向候选当前不可采用');
+      }
+
+      const currentVersionIdBefore = lockedNovel.currentDirectionVersionId;
       const decisionRecord = await tx.assetDecisionRecord.create({
         data: {
           id: createId('decision'),
@@ -1087,13 +1165,27 @@ export class PrismaNovelRepository implements NovelRepository {
           decisionReason: input.reason,
           isForced: input.isForced,
           riskSummary: input.isForced ? '低分方向采用，已记录用户确认原因。' : '方向评分满足采用门槛。',
-          impactSummary: '当前方向切换为正式方向，小说进入设定阶段；其他方向候选转为历史。',
+          impactSummary: '当前方向切换为正式方向，小说进入设定阶段；其他方向候选转为历史，下游正式资产失效并等待重新生成。',
           pageVersionSnapshot: toJsonObject(input.pageVersionSnapshot ?? {}),
           sourceTaskId: input.candidate.sourceTaskId,
           createdBy: input.context.userId,
-          createdAt: input.now
+          createdAt: input.now,
+          metadata: {
+            adoptionIdempotencyToken: input.idempotencyToken,
+            adoptionRequestHash: input.requestHash
+          }
         }
       });
+
+      const invalidatedDownstreamVersions = await tx.creativeVersion.findMany({
+        where: {
+          tenantId: input.context.tenantId,
+          novelId: input.novel.id,
+          objectType: { in: ['setting', 'outline', 'stage_outline', 'chapter_plan'] }
+        },
+        select: { id: true }
+      });
+      const invalidatedDownstreamVersionIds = new Set(invalidatedDownstreamVersions.map((version) => version.id));
 
       await tx.creativeVersion.updateMany({
         where: {
@@ -1108,10 +1200,24 @@ export class PrismaNovelRepository implements NovelRepository {
         }
       });
 
+      await tx.creativeVersion.updateMany({
+        where: {
+          tenantId: input.context.tenantId,
+          novelId: input.novel.id,
+          objectType: { in: ['setting', 'outline', 'stage_outline', 'chapter_plan'] },
+          status: { in: [PrismaVersionStatus.CANDIDATE, PrismaVersionStatus.CURRENT] }
+        },
+        data: {
+          status: PrismaVersionStatus.STALE,
+          staleLevel: PrismaStaleLevel.HARD_STALE
+        }
+      });
+
       const currentDirection = await tx.creativeVersion.update({
         where: { id: input.candidate.id },
         data: {
           status: PrismaVersionStatus.CURRENT,
+          staleLevel: PrismaStaleLevel.NONE,
           decisionRecordId: decisionRecord.id
         }
       });
@@ -1120,6 +1226,10 @@ export class PrismaNovelRepository implements NovelRepository {
         where: { id: input.novel.id },
         data: {
           currentDirectionVersionId: input.candidate.id,
+          currentSettingVersionId: null,
+          currentOutlineVersionId: null,
+          currentStageOutlineVersionId: null,
+          currentChapterPlanVersionId: null,
           creationStage: PrismaNovelCreationStage.SETTING,
           stageStatus: PrismaStageStatus.NOT_STARTED,
           updatedBy: input.context.userId,
@@ -1131,33 +1241,66 @@ export class PrismaNovelRepository implements NovelRepository {
         where: {
           tenantId: input.context.tenantId,
           novelId: input.novel.id,
-          objectType: 'direction',
-          status: PrismaTaskStatus.WAITING_CONFIRMATION
-        }
-      });
-
-      await tx.generationTask.updateMany({
-        where: {
-          tenantId: input.context.tenantId,
-          novelId: input.novel.id,
-          objectType: 'direction',
-          status: PrismaTaskStatus.WAITING_CONFIRMATION
-        },
-        data: {
-          status: PrismaTaskStatus.COMPLETED,
-          statusNote: '用户已采用方向',
-          currentStep: '方向已采用',
-          userAcceptedResult: true,
-          finishedAt: input.now,
-          updatedAt: input.now
+          objectType: { in: ['direction', 'setting', 'outline', 'stage_outline', 'chapter_plan'] },
+          status: { in: [PrismaTaskStatus.WAITING_CONFIRMATION, PrismaTaskStatus.COMPLETED] }
         }
       });
 
       for (const waitingTask of waitingTasks) {
+        const resultVersionIds = Array.isArray(waitingTask.resultVersionIdsJson)
+          ? waitingTask.resultVersionIdsJson.filter((value): value is string => typeof value === 'string')
+          : waitingTask.resultVersionId ? [waitingTask.resultVersionId] : [];
+        const isDirectionTask = waitingTask.objectType === 'direction';
+        const isWaiting = waitingTask.status === PrismaTaskStatus.WAITING_CONFIRMATION;
+        const acceptedResult = isDirectionTask && isWaiting && resultVersionIds.includes(input.candidate.id);
+        const invalidatedDownstreamResult = !isDirectionTask && resultVersionIds.some((versionId) => invalidatedDownstreamVersionIds.has(versionId));
+        if (isDirectionTask && !isWaiting) continue;
+        if (!isDirectionTask && !invalidatedDownstreamResult) continue;
+        if (!isWaiting && !waitingTask.userAcceptedResult) continue;
+        if (!isWaiting) {
+          if (waitingTask.currentStep === '历史采用结果已失效（上游方向变更）') continue;
+          const invalidatedTask = await tx.generationTask.update({
+            where: { id: waitingTask.id },
+            data: {
+              statusNote: '上游方向已变更，本任务曾采用的结果现已失效',
+              currentStep: '历史采用结果已失效（上游方向变更）',
+              updatedAt: input.now
+            }
+          });
+          await createTaskEvent(tx, {
+            task: invalidatedTask,
+            eventType: 'task_result_invalidated',
+            message: '上游方向已变更，本任务曾采用的结果已转为失效历史；原采用事实保留。',
+            progress: 100,
+            requestId: input.context.requestId,
+            createdAt: input.now
+          });
+          continue;
+        }
+        const statusNote = isDirectionTask
+          ? acceptedResult ? '用户已采用方向' : '本任务方向候选未采用，已归档'
+          : '上游方向已变更，本任务候选已过期并归档';
+        const currentStep = isDirectionTask
+          ? acceptedResult ? '方向已采用' : '方向候选未采用，已归档'
+          : '候选因方向变更已过期并归档';
+        const completedTask = await tx.generationTask.update({
+          where: { id: waitingTask.id },
+          data: {
+            status: PrismaTaskStatus.COMPLETED,
+            activeClaimKey: null,
+            statusNote,
+            currentStep,
+            userAcceptedResult: acceptedResult,
+            finishedAt: input.now,
+            updatedAt: input.now
+          }
+        });
         await createTaskEvent(tx, {
-          task: { ...waitingTask, status: PrismaTaskStatus.COMPLETED },
+          task: completedTask,
           eventType: 'task_completed',
-          message: '方向已采用，任务完成。',
+          message: isDirectionTask
+            ? acceptedResult ? '方向已采用，任务完成。' : '本任务方向候选未采用，已转为历史版本。'
+            : '上游方向已变更，本任务候选已过期，待确认入口已归档。',
           progress: 100,
           requestId: input.context.requestId,
           createdAt: input.now
@@ -1175,8 +1318,8 @@ export class PrismaNovelRepository implements NovelRepository {
           objectId: input.candidate.id,
           beforeSnapshot: {
             currentDirectionVersionId: currentVersionIdBefore,
-            creationStage: input.novel.creationStage,
-            stageStatus: input.novel.stageStatus
+            creationStage: fromPrismaEnum<NovelCreationStage>(lockedNovel.creationStage),
+            stageStatus: fromPrismaEnum<StageStatus>(lockedNovel.stageStatus)
           },
           afterSnapshot: {
             currentDirectionVersionId: input.candidate.id,
@@ -1184,7 +1327,7 @@ export class PrismaNovelRepository implements NovelRepository {
             stageStatus: StageStatus.NotStarted
           },
           reason: input.reason,
-          impactSummary: '当前方向切换为正式方向，小说进入设定阶段；其他方向候选转为历史。',
+          impactSummary: '当前方向切换为正式方向，小说进入设定阶段；其他方向候选转为历史，下游正式资产失效并等待重新生成。',
           sourceTaskId: input.candidate.sourceTaskId,
           requestId: input.context.requestId,
           ip: input.context.ip ?? null,
@@ -1493,28 +1636,29 @@ export class PrismaNovelRepository implements NovelRepository {
         }
       });
 
-      await tx.generationTask.updateMany({
-        where: {
-          tenantId: input.context.tenantId,
-          novelId: input.novel.id,
-          objectType: input.objectType,
-          status: PrismaTaskStatus.WAITING_CONFIRMATION
-        },
-        data: {
-          status: PrismaTaskStatus.COMPLETED,
-          statusNote: '用户已采用结构资产',
-          currentStep: getStructureAdoptStep(input.objectType),
-          userAcceptedResult: true,
-          finishedAt: input.now,
-          updatedAt: input.now
-        }
-      });
-
       for (const waitingTask of waitingTasks) {
+        const resultVersionIds = Array.isArray(waitingTask.resultVersionIdsJson)
+          ? waitingTask.resultVersionIdsJson.filter((value): value is string => typeof value === 'string')
+          : waitingTask.resultVersionId ? [waitingTask.resultVersionId] : [];
+        const acceptedResult = resultVersionIds.includes(input.candidate.id);
+        const completedTask = await tx.generationTask.update({
+          where: { id: waitingTask.id },
+          data: {
+            status: PrismaTaskStatus.COMPLETED,
+            activeClaimKey: null,
+            statusNote: acceptedResult ? '用户已采用结构资产' : '本任务结构候选未采用，已归档',
+            currentStep: acceptedResult ? getStructureAdoptStep(input.objectType) : `${getStructureObjectText(input.objectType)}候选未采用，已归档`,
+            userAcceptedResult: acceptedResult,
+            finishedAt: input.now,
+            updatedAt: input.now
+          }
+        });
         await createTaskEvent(tx, {
-          task: { ...waitingTask, status: PrismaTaskStatus.COMPLETED },
+          task: completedTask,
           eventType: 'task_completed',
-          message: `${input.objectType} 已采用，任务完成。`,
+          message: acceptedResult
+            ? `${getStructureObjectText(input.objectType)}已采用，任务完成。`
+            : `本任务${getStructureObjectText(input.objectType)}候选未采用，已转为历史版本。`,
           progress: 100,
           requestId: input.context.requestId,
           createdAt: input.now
@@ -2781,10 +2925,23 @@ async function assertNoActiveAuthorityClaim(
   novelId: string,
   allowedTask?: Pick<GenerationTaskRecord, 'id' | 'conflictScope' | 'conflictKey'>
 ) {
+  await lockNovelAuthorityRoot(tx, tenantId, novelId);
+  await assertNoActiveAuthorityClaimAfterRootLock(tx, tenantId, novelId, allowedTask);
+}
+
+async function lockNovelAuthorityRoot(tx: Prisma.TransactionClient, tenantId: string, novelId: string) {
   // The novel row is the shared lock root for claim, fences, finalizers, and authority-changing user writes.
   await tx.$queryRaw(
     Prisma.sql`SELECT id FROM novel WHERE tenant_id = ${tenantId} AND id = ${novelId} FOR UPDATE`
   );
+}
+
+async function assertNoActiveAuthorityClaimAfterRootLock(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  novelId: string,
+  allowedTask?: Pick<GenerationTaskRecord, 'id' | 'conflictScope' | 'conflictKey'>
+) {
   const activeTask = await tx.generationTask.findFirst({
     where: {
       tenantId,
@@ -3250,6 +3407,7 @@ function mapAssetDecisionRecord(record: {
   sourceTaskId: string | null;
   createdBy: string | null;
   createdAt: Date;
+  metadata?: unknown;
 }): AssetDecisionRecord {
   return record;
 }
@@ -3920,6 +4078,14 @@ function getStructureAdoptStep(objectType: string) {
   if (objectType === 'outline') return '全书大纲已采用，准备阶段大纲';
   if (objectType === 'stage_outline') return '阶段大纲已采用，进入章节目录阶段';
   return '章节目录已采用，准备试写';
+}
+
+function getStructureObjectText(objectType: string) {
+  if (objectType === 'setting') return '设定';
+  if (objectType === 'outline') return '全书大纲';
+  if (objectType === 'stage_outline') return '阶段大纲';
+  if (objectType === 'chapter_plan') return '章节目录';
+  return objectType;
 }
 
 function getCurrentVersionId(novel: NovelRecord, objectType: string) {

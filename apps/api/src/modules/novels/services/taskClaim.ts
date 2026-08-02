@@ -128,7 +128,7 @@ export async function executeClaimedGeneration<TProviderResult, TFinalResult>(
       || persistedEnvelope.objectId !== objectId
       || persistedEnvelope.policyProfileVersionId !== input.novel.policyProfileVersionId
       || persistedEnvelope.modelRoutingVersion !== modelRoutingVersion
-      || hashCanonicalJson(persistedEnvelope.normalizedRequest) !== hashCanonicalJson(normalizedRequest)
+      || !requestsMatchForReplay(input.action, persistedEnvelope.normalizedRequest, normalizedRequest)
     ) {
       throw taskConflict(ErrorCode.IdempotencyConflict, '同一个幂等键已绑定到不同请求。', existingIdempotentTask);
     }
@@ -391,6 +391,18 @@ function normalizeOptionalKey(value: unknown): string | undefined {
   return normalized;
 }
 
+function requestsMatchForReplay(action: NovelProviderAction, persistedRequest: unknown, currentRequest: unknown): boolean {
+  if (!['setting_generate', 'outline_generate', 'stage_outline_generate', 'chapter_plan_generate'].includes(action)) {
+    return hashCanonicalJson(persistedRequest) === hashCanonicalJson(currentRequest);
+  }
+  const normalizeLegacyStructureRequest = (value: unknown) => {
+    const request = toRecord(value);
+    return { ...request, optimization: request.optimization ?? null };
+  };
+  return hashCanonicalJson(normalizeLegacyStructureRequest(persistedRequest))
+    === hashCanonicalJson(normalizeLegacyStructureRequest(currentRequest));
+}
+
 function normalizeClaimEffectiveRequest(action: NovelProviderAction, objectId: string, effectiveRequest: unknown, sourceVersionRefs: unknown, policyProfileVersionId: string | null) {
   const request = toRecord(effectiveRequest);
   const refs = toRecord(sourceVersionRefs);
@@ -398,10 +410,10 @@ function normalizeClaimEffectiveRequest(action: NovelProviderAction, objectId: s
     case 'direction_generate': return compact({ regenerateReason: request.regenerateReason });
     case 'direction_fuse': return compact({ versionIds: canonicalIdArray(request.versionIds ?? refs.sourceVersionIds), reason: request.reason });
     case 'direction_optimize': return compact({ versionId: request.versionId ?? objectId, instruction: request.instruction });
-    case 'setting_generate': return compact({ currentDirectionVersionId: refs.currentDirectionVersionId, regenerateReason: request.regenerateReason });
-    case 'outline_generate': return compact({ currentDirectionVersionId: refs.currentDirectionVersionId, currentSettingVersionId: refs.currentSettingVersionId, regenerateReason: request.regenerateReason });
-    case 'stage_outline_generate': return compact({ currentOutlineVersionId: refs.currentOutlineVersionId, regenerateReason: request.regenerateReason });
-    case 'chapter_plan_generate': return compact({ currentOutlineVersionId: refs.currentOutlineVersionId, currentStageOutlineVersionId: refs.currentStageOutlineVersionId, regenerateReason: request.regenerateReason });
+    case 'setting_generate': return { ...compact({ currentDirectionVersionId: refs.currentDirectionVersionId, regenerateReason: request.regenerateReason }), optimization: normalizeStructureOptimization(request.optimization) };
+    case 'outline_generate': return { ...compact({ currentDirectionVersionId: refs.currentDirectionVersionId, currentSettingVersionId: refs.currentSettingVersionId, regenerateReason: request.regenerateReason }), optimization: normalizeStructureOptimization(request.optimization) };
+    case 'stage_outline_generate': return { ...compact({ currentOutlineVersionId: refs.currentOutlineVersionId, regenerateReason: request.regenerateReason }), optimization: normalizeStructureOptimization(request.optimization) };
+    case 'chapter_plan_generate': return { ...compact({ currentOutlineVersionId: refs.currentOutlineVersionId, currentStageOutlineVersionId: refs.currentStageOutlineVersionId, regenerateReason: request.regenerateReason }), optimization: normalizeStructureOptimization(request.optimization) };
     case 'trial_chapter_one_generate': return compact({ chapterPlanVersionId: refs.currentChapterPlanVersionId, chapterCount: request.chapterCount ?? 3, regenerateReason: request.regenerateReason });
     case 'trial_followup_generate': return compact({
       trialRunId: objectId,
@@ -434,7 +446,7 @@ function normalizeClaimSourceRefs(action: NovelProviderAction, value: unknown, o
   if (action === 'direction_generate') return { currentDirectionVersionId: refs.currentDirectionVersionId };
   if (action === 'direction_fuse' || action === 'direction_optimize') return { sourceVersionIds: canonicalIdArray(refs.sourceVersionIds) };
   if (action === 'setting_generate' || action === 'outline_generate' || action === 'stage_outline_generate' || action === 'chapter_plan_generate') {
-    return { ...structure, objectType: action.replace('_generate', '') };
+    return { ...structure, sourceVersionIds: canonicalIdArray(refs.sourceVersionIds), objectType: action.replace('_generate', '') };
   }
   if (action === 'trial_chapter_one_generate' || action === 'trial_followup_generate') {
     return { ...structure, currentChapterPlanVersionId: refs.currentChapterPlanVersionId, objectType: 'trial_run',
@@ -473,7 +485,7 @@ function assertRequiredClaimSourceRefs(action: NovelProviderAction, value: unkno
     case 'setting_generate':
     case 'outline_generate':
     case 'stage_outline_generate':
-    case 'chapter_plan_generate': required = [...structure, 'objectType']; break;
+    case 'chapter_plan_generate': required = [...structure, 'sourceVersionIds', 'objectType']; break;
     case 'trial_chapter_one_generate': required = [...structure, 'currentChapterPlanVersionId', 'objectType']; break;
     case 'trial_followup_generate': required = [...structure, 'currentChapterPlanVersionId', 'selectedChapterOneCandidateId', 'objectType']; break;
     case 'body_batch_generate':
@@ -513,6 +525,14 @@ function canonicalIdArray(value: unknown): unknown {
   if (!Array.isArray(value)) return value;
   return [...new Set(value.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean))].sort();
 }
+function normalizeStructureOptimization(value: unknown) {
+  if (value === null || value === undefined) return null;
+  const optimization = toRecord(value);
+  return {
+    sourceVersionId: optimization.sourceVersionId,
+    instruction: typeof optimization.instruction === 'string' ? optimization.instruction.trim() : optimization.instruction
+  };
+}
 function buildAuthoritativeProviderInput(
   action: NovelProviderAction,
   authority: GenerationAuthoritySnapshot,
@@ -535,6 +555,9 @@ function buildAuthoritativeProviderInput(
   if (action === 'direction_fuse') return { action, sources: versions.map(projectAuthorityDirection), reason: request.reason };
   if (action === 'direction_optimize') return { action, source: projectAuthorityDirection(versions[0]), instruction: request.instruction };
   if (['setting_generate', 'outline_generate', 'stage_outline_generate', 'chapter_plan_generate'].includes(action)) {
+    const optimization = request.optimization == null ? null : toRecord(request.optimization);
+    const optimizationSource = optimization ? projectCreativeAssetProviderInput(version(optimization.sourceVersionId)) : null;
+    if (optimization && !optimizationSource) throw sourceStale();
     return {
       action,
       objectType: action.replace('_generate', ''),
@@ -545,7 +568,8 @@ function buildAuthoritativeProviderInput(
         setting: action === 'setting_generate' ? null : projectCreativeAssetProviderInput(version(refs.currentSettingVersionId)),
         outline: action === 'setting_generate' || action === 'outline_generate' ? null : projectCreativeAssetProviderInput(version(refs.currentOutlineVersionId)),
         stageOutline: action === 'chapter_plan_generate' ? projectCreativeAssetProviderInput(version(refs.currentStageOutlineVersionId)) : null
-      }
+      },
+      optimization: optimization ? { source: optimizationSource!, instruction: optimization.instruction } : null
     };
   }
   if (action === 'trial_chapter_one_generate') {

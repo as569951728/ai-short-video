@@ -141,10 +141,15 @@ const STRUCTURE_ASSET_DEPENDENCIES = { setting_generate: ['direction'], outline_
 type StructureAssetDependency<A extends StructureProviderAction> = (typeof STRUCTURE_ASSET_DEPENDENCIES)[A][number];
 export type StructureCurrentAssetsProviderInputV1 = { [S in StructureAssetSlot]: CreativeAssetProviderInputV1 | null };
 export type StructureCurrentAssetsProviderInputFor<A extends StructureProviderAction> = { [S in StructureAssetSlot]: S extends StructureAssetDependency<A> ? CreativeAssetProviderInputV1 : null };
+export interface StructureOptimizationProviderInputV1 {
+  source: CreativeAssetProviderInputV1;
+  instruction: string;
+}
 type StructureProviderObjectType<A extends StructureProviderAction> = (typeof STRUCTURE_PROVIDER_OBJECT_TYPES)[A];
 interface StructureProviderActionInputBase {
   novel: NovelProviderInputV1;
   preferences: NovelPreferencesProviderInputV1;
+  optimization: StructureOptimizationProviderInputV1 | null;
 }
 type StructureProviderActionInput = {
   [A in StructureProviderAction]: StructureProviderActionInputBase & {
@@ -157,7 +162,7 @@ type StructureProviderActionInput = {
 export type NovelProviderActionInput =
   | { action: 'direction_generate'; novel: NovelProviderInputV1; preferences: NovelPreferencesProviderInputV1 }
   | { action: 'direction_fuse'; sources: DirectionDraftProviderInputV1[]; reason?: string | null }
-  | { action: 'direction_optimize'; source: DirectionDraftProviderInputV1; instruction?: string | null }
+  | { action: 'direction_optimize'; source: DirectionDraftProviderInputV1; instruction: string }
   | StructureProviderActionInput
   | { action: 'trial_chapter_one_generate'; novel: NovelProviderInputV1; preferences: NovelPreferencesProviderInputV1; chapters: ChapterProviderInputV1[]; chapterCount: number }
   | { action: 'trial_followup_generate'; novel: NovelProviderInputV1; selectedCandidate: TrialChapterCandidateDraftLike; chapters: ChapterProviderInputV1[] }
@@ -173,10 +178,10 @@ export const ACTION_INPUT_KEYS = {
   direction_generate: ['action', 'novel', 'preferences'],
   direction_fuse: ['action', 'reason', 'sources'],
   direction_optimize: ['action', 'instruction', 'source'],
-  setting_generate: ['action', 'currentAssets', 'novel', 'objectType', 'preferences'],
-  outline_generate: ['action', 'currentAssets', 'novel', 'objectType', 'preferences'],
-  stage_outline_generate: ['action', 'currentAssets', 'novel', 'objectType', 'preferences'],
-  chapter_plan_generate: ['action', 'currentAssets', 'novel', 'objectType', 'preferences'],
+  setting_generate: ['action', 'currentAssets', 'novel', 'objectType', 'optimization', 'preferences'],
+  outline_generate: ['action', 'currentAssets', 'novel', 'objectType', 'optimization', 'preferences'],
+  stage_outline_generate: ['action', 'currentAssets', 'novel', 'objectType', 'optimization', 'preferences'],
+  chapter_plan_generate: ['action', 'currentAssets', 'novel', 'objectType', 'optimization', 'preferences'],
   trial_chapter_one_generate: ['action', 'chapterCount', 'chapters', 'novel', 'preferences'],
   trial_followup_generate: ['action', 'chapters', 'novel', 'selectedCandidate'],
   body_batch_generate: ['action', 'chapter', 'enhancedReview', 'novel', 'previousBatchNotes', 'previousContent', 'previousMemory', 'strategySnapshot'],
@@ -518,12 +523,15 @@ function plan<A extends NovelProviderAction>(
   };
 }
 
-function assertProviderAction(input: { action: NovelProviderAction; objectType?: StructureAssetType; currentAssets?: unknown }, action: NovelProviderAction): asserts input is typeof input & NovelProviderActionInput {
+function assertProviderAction(input: { action: NovelProviderAction; objectType?: StructureAssetType; currentAssets?: unknown; optimization?: unknown }, action: NovelProviderAction): asserts input is typeof input & NovelProviderActionInput {
   if (input.action !== action) {
     throw new BusinessError(ErrorCode.ConfigMissing, '生成动作与执行计划不匹配。', { action: input.action, expectedAction: action });
   }
   assertStructureActionObjectType(input);
-  if (isStructureProviderAction(input.action)) projectStructureCurrentAssetsPrompt(input.action, 'currentAssets' in input ? input.currentAssets : undefined);
+  if (isStructureProviderAction(input.action)) {
+    projectStructureCurrentAssetsPrompt(input.action, 'currentAssets' in input ? input.currentAssets : undefined);
+    strictStructureOptimization(input.optimization, input.objectType!);
+  }
 }
 
 function assertStructureActionObjectType(input: {
@@ -569,7 +577,34 @@ function stringList(value: unknown, label: string, maxItems: number, maxText: nu
 type ProviderInputShape = string | number | boolean | readonly [ProviderInputShape] | readonly [ProviderInputShape, null] | { readonly [key: string]: ProviderInputShape };
 const PROVIDER_METADATA_SHAPE = { scoringStrategyVersion: ['', null], hardFailed: [false, null], candidateRank: [0, null], isMockOutput: [false, null] } as const, CHAPTER_SHAPE = { id: '', chapterNo: 0, title: '', wordTarget: [0, null], statusNote: ['', null] } as const;
 const CHAPTER_CONTENT_SHAPE = { id: '', content: '', summary: ['', null], reviewScore: [0, null], providerSafeMetadata: PROVIDER_METADATA_SHAPE } as const, DIRECTION_CONTENT_SHAPE = { title: '', logline: '', coreHook: '', audienceAppeal: '', videoPotential: '', sellingPoints: [''], riskTags: [''], recommendation: '' } as const;
-const DIRECTION_DRAFT_SHAPE = { title: '', summary: '', content: DIRECTION_CONTENT_SHAPE, score: 0, marketScore: 0, riskLevel: '', riskTags: [''], recommendedReason: '' } as const, OPTIONAL_ACTION_KEYS = { direction_fuse: ['reason'], direction_optimize: ['instruction'], chapter_impact_assess: ['instruction'], chapter_adopt_impact_assess: ['instruction'] } as const;
-const PROVIDER_INPUT_SHAPES = { action: '', objectType: '', reason: ['', null], instruction: ['', null], novel: { id: '', title: '', genres: [''], chapterLimit: 0, chapterWordMin: 0, chapterWordMax: 0, policyProfileVersionId: ['', null] }, preferences: { appealPoints: [''], targetAudience: ['', null], stageCount: [0, null] }, source: DIRECTION_DRAFT_SHAPE, sources: [DIRECTION_DRAFT_SHAPE], chapter: CHAPTER_SHAPE, chapters: [CHAPTER_SHAPE], chapterCount: 0, selectedCandidate: CHAPTER_CONTENT_SHAPE, strategySnapshot: { id: '', versionNo: 0, title: ['', null], summary: ['', null], riskLevel: '', riskTags: [''], providerSafeMetadata: PROVIDER_METADATA_SHAPE }, previousContent: [CHAPTER_CONTENT_SHAPE, null], currentContent: CHAPTER_CONTENT_SHAPE, oldContent: [CHAPTER_CONTENT_SHAPE, null], newContent: CHAPTER_CONTENT_SHAPE, previousMemory: [{ previousSummary: ['', null], characterStates: [''], relationshipStates: [''], unresolvedConflicts: [''], factsCannotContradict: [''] }, null], previousBatchNotes: [''], enhancedReview: false, sourceVersionRefs: { directionVersionId: ['', null], settingVersionId: ['', null], outlineVersionId: ['', null], stageOutlineVersionId: ['', null], chapterPlanVersionId: ['', null], bodyStrategySnapshotId: ['', null], chapterContentVersionIds: [''] }, currentAssets: '' } as const satisfies Record<(typeof ACTION_INPUT_KEYS)[NovelProviderAction][number], ProviderInputShape>;
-function strictProviderInput(input: { action: NovelProviderAction; objectType?: StructureAssetType; currentAssets?: unknown }, action: NovelProviderAction): NovelProviderActionInput { const optional = (OPTIONAL_ACTION_KEYS as Partial<Record<NovelProviderAction, readonly string[]>>)[action] ?? [], source = exactRecord(input, `${action} input`, ACTION_INPUT_KEYS[action], optional); assertProviderAction(source as typeof input, action); return Object.fromEntries(Object.entries(source).filter(([key, value]) => !optional.includes(key) || value !== undefined).map(([key, value]) => [key, key === 'currentAssets' ? structuredClone(value) : strictProviderValue(value, key === 'instruction' && action === 'chapter_rewrite' ? '' : PROVIDER_INPUT_SHAPES[key as keyof typeof PROVIDER_INPUT_SHAPES], `${action}.${key}`)])) as NovelProviderActionInput; }
+const DIRECTION_DRAFT_SHAPE = { title: '', summary: '', content: DIRECTION_CONTENT_SHAPE, score: 0, marketScore: 0, riskLevel: '', riskTags: [''], recommendedReason: '' } as const, OPTIONAL_ACTION_KEYS = { direction_fuse: ['reason'], direction_optimize: [], chapter_impact_assess: ['instruction'], chapter_adopt_impact_assess: ['instruction'] } as const;
+const PROVIDER_INPUT_SHAPES = { action: '', objectType: '', reason: ['', null], instruction: ['', null], novel: { id: '', title: '', genres: [''], chapterLimit: 0, chapterWordMin: 0, chapterWordMax: 0, policyProfileVersionId: ['', null] }, preferences: { appealPoints: [''], targetAudience: ['', null], stageCount: [0, null] }, source: DIRECTION_DRAFT_SHAPE, sources: [DIRECTION_DRAFT_SHAPE], chapter: CHAPTER_SHAPE, chapters: [CHAPTER_SHAPE], chapterCount: 0, selectedCandidate: CHAPTER_CONTENT_SHAPE, strategySnapshot: { id: '', versionNo: 0, title: ['', null], summary: ['', null], riskLevel: '', riskTags: [''], providerSafeMetadata: PROVIDER_METADATA_SHAPE }, previousContent: [CHAPTER_CONTENT_SHAPE, null], currentContent: CHAPTER_CONTENT_SHAPE, oldContent: [CHAPTER_CONTENT_SHAPE, null], newContent: CHAPTER_CONTENT_SHAPE, previousMemory: [{ previousSummary: ['', null], characterStates: [''], relationshipStates: [''], unresolvedConflicts: [''], factsCannotContradict: [''] }, null], previousBatchNotes: [''], enhancedReview: false, sourceVersionRefs: { directionVersionId: ['', null], settingVersionId: ['', null], outlineVersionId: ['', null], stageOutlineVersionId: ['', null], chapterPlanVersionId: ['', null], bodyStrategySnapshotId: ['', null], chapterContentVersionIds: [''] }, currentAssets: '', optimization: '' } as const satisfies Record<(typeof ACTION_INPUT_KEYS)[NovelProviderAction][number], ProviderInputShape>;
+function strictProviderInput(input: { action: NovelProviderAction; objectType?: StructureAssetType; currentAssets?: unknown; optimization?: unknown }, action: NovelProviderAction): NovelProviderActionInput { const optional = (OPTIONAL_ACTION_KEYS as Partial<Record<NovelProviderAction, readonly string[]>>)[action] ?? [], source = exactRecord(input, `${action} input`, ACTION_INPUT_KEYS[action], optional); assertProviderAction(source as typeof input, action); return Object.fromEntries(Object.entries(source).filter(([key, value]) => !optional.includes(key) || value !== undefined).map(([key, value]) => [key, key === 'currentAssets' ? structuredClone(value) : key === 'optimization' ? strictStructureOptimization(value, source.objectType as StructureAssetType) : strictProviderValue(value, key === 'instruction' && action === 'chapter_rewrite' ? '' : PROVIDER_INPUT_SHAPES[key as keyof typeof PROVIDER_INPUT_SHAPES], `${action}.${key}`)])) as NovelProviderActionInput; }
+function strictStructureOptimization(value: unknown, objectType: StructureAssetType): StructureOptimizationProviderInputV1 | null {
+  if (value === null) return null;
+  const optimization = exactRecord(value, 'optimization', ['source', 'instruction'] as const);
+  const source = exactRecord(optimization.source, 'optimization.source', STRUCTURE_ASSET_KEYS);
+  if (source.objectType !== objectType) throw new Error('optimization.source.objectType is invalid');
+  const content = exactRecord(source.content, 'optimization.source.content', ['kind', 'sections', 'stages', 'chapters'] as const);
+  if (content.kind !== 'structure') throw new Error('optimization.source.content.kind is invalid');
+  return {
+    instruction: requiredText(optimization.instruction, 'optimization.instruction', 2_000),
+    source: {
+      id: requiredText(source.id, 'optimization.source.id', 120),
+      objectType,
+      versionNo: requiredNumber(source.versionNo, 'optimization.source.versionNo'),
+      title: nullableText(source.title, 'optimization.source.title', 120),
+      summary: nullableText(source.summary, 'optimization.source.summary', 500),
+      score: nullableNumber(source.score, 'optimization.source.score'),
+      riskLevel: requiredText(source.riskLevel, 'optimization.source.riskLevel', 20) as RiskLevel,
+      riskTags: stringList(source.riskTags, 'optimization.source.riskTags', 20, 80),
+      content: {
+        kind: 'structure',
+        sections: structuredClone(content.sections) as StructureAssetContentDTO['sections'],
+        stages: structuredClone(content.stages) as StructureAssetContentDTO['stages'],
+        chapters: structuredClone(content.chapters) as StructureAssetContentDTO['chapters']
+      }
+    }
+  };
+}
 function strictProviderValue(value: unknown, shape: ProviderInputShape, label: string): unknown { if (Array.isArray(shape)) { if (shape.length === 2) return value === null ? null : strictProviderValue(value, shape[0], label); return strictList(value, label).map((item, index) => strictProviderValue(item, shape[0], `${label}[${index}]`)); } if (typeof shape === 'object') { const fields = shape as { readonly [key: string]: ProviderInputShape }, source = exactRecord(value, label, Object.keys(fields)); return Object.fromEntries(Object.entries(fields).map(([key, child]) => [key, strictProviderValue(source[key], child, `${label}.${key}`)])); } if (typeof value !== typeof shape) throw new Error(`${label} has invalid type`); return value; }

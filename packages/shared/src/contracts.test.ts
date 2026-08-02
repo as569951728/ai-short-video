@@ -54,12 +54,64 @@ import {
 import type {
   CreatePlatformMetricSnapshotRequest,
   CreateVideoPublishRecordRequest,
+  DirectionCandidateDTO,
+  RecentTaskSummaryDTO,
   VideoMetricBackfillNodeDTO,
   VideoPublishRecordDTO,
   VideoPublishSourceVersionRefsDTO
 } from './index.js';
 
 describe('shared contract enums', () => {
+  it('exposes only safe direction-candidate provenance', () => {
+    const candidate = {
+      id: 'cv_2',
+      versionNo: 2,
+      status: VersionStatus.Candidate,
+      staleLevel: StaleLevel.None,
+      sourceVersionIds: ['cv_1'],
+      changeReason: '强化开篇钩子',
+      title: '候选方向',
+      summary: '方向摘要',
+      content: {
+        title: '候选方向',
+        logline: '方向摘要',
+        coreHook: '开篇钩子',
+        audienceAppeal: '目标读者',
+        videoPotential: '适合短视频',
+        sellingPoints: ['逆袭'],
+        riskTags: [],
+        recommendation: '可作为新候选'
+      },
+      score: 88,
+      marketScore: 86,
+      riskLevel: RiskLevel.Low,
+      riskTags: [],
+      recommendedReason: '钩子清晰',
+      createdAt: '2026-08-02T00:00:00.000Z'
+    } satisfies DirectionCandidateDTO;
+
+    assert.deepEqual(candidate.sourceVersionIds, ['cv_1']);
+    assert.equal(candidate.changeReason, '强化开篇钩子');
+    assert.equal(Object.prototype.hasOwnProperty.call(candidate, 'prompt'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(candidate, 'modelResponse'), false);
+  });
+
+  it('carries exact result version ids in recent task summaries', () => {
+    const task = {
+      id: 'task_1',
+      taskType: 'novel_direction_fuse',
+      status: TaskStatus.WaitingConfirmation,
+      statusText: '待确认',
+      progress: 100,
+      currentStep: '方向融合候选已生成',
+      resultVersionIds: ['cv_2'],
+      errorCode: null,
+      errorMessage: null
+    } satisfies RecentTaskSummaryDTO;
+
+    assert.deepEqual(task.resultVersionIds, ['cv_2']);
+  });
+
   it('keeps package-0 enum values aligned with the novel contracts', () => {
     assert.deepEqual(Object.values(NovelLifecycleStatus), ['active', 'paused', 'archived', 'deleted']);
     assert.deepEqual(Object.values(NovelCreationStage), [

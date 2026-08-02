@@ -125,7 +125,8 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
       model: this.getStructureTaskModel(input.objectType),
       messages: createMessages(getStructureInstruction(input.objectType), input.novel, {
         preferences: input.preferences,
-        currentAssets: structurePromptAssets(input)
+        currentAssets: structurePromptAssets(input),
+        optimization: structurePromptOptimization(input)
       }, getStructureSchemaHint(input.objectType)),
       maxTokens: getStructureMaxTokens(input.objectType),
       validate: (value) => toStructureDraft(input.objectType, unwrapPayload(value, ['candidate', 'asset', input.objectType, 'result']))
@@ -147,6 +148,7 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
         messages: createMessages(getChapterPlanChunkInstruction(start, end, chapterCount, wordTargetPolicy), input.novel, {
           preferences: input.preferences,
           currentAssets,
+          optimization: structurePromptOptimization(input),
           chapterRange: { start, end },
           requiredChapterNumbers: Array.from({ length: end - start + 1 }, (_, index) => start + index),
           wordTargetPolicy
@@ -492,6 +494,19 @@ function structurePromptAssets(input: StructureProviderInput): Record<string, un
   const action = (input as { action?: StructureProviderInput['action'] }).action;
   const assets = action ? projectStructureCurrentAssetsPrompt(action, input.currentAssets) : input.currentAssets;
   return summarizeCurrentAssets(assets);
+}
+
+function structurePromptOptimization(input: StructureProviderInput): Record<string, unknown> | null {
+  if (!input.optimization) return null;
+  return {
+    instruction: truncateText(input.optimization.instruction, 2_000),
+    source: {
+      id: input.optimization.source.id,
+      objectType: input.optimization.source.objectType,
+      versionNo: input.optimization.source.versionNo,
+      ...asRecord(summarizeAssetValue(input.optimization.source))
+    }
+  };
 }
 
 const STRUCTURE_PROMPT_SLOTS = ['direction', 'setting', 'outline', 'stageOutline'] as const;

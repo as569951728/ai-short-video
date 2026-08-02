@@ -289,7 +289,11 @@ describe('RP-02B2a2 authoritative claim', () => {
         const adoption = await fixture.app.inject({
           method: 'POST',
           url: `/novels/${fixture.novelId}/directions/${candidate.id}/adopt`,
-          payload: { reason: '验证 active claim 与采用操作互斥。' }
+          payload: {
+            currentVersionId: null,
+            idempotencyKey: 'authority-claim-adopt-direction',
+            reason: '验证 active claim 与采用操作互斥。'
+          }
         });
         assert.equal(adoption.statusCode, 409, adoption.body);
         assert.equal(adoption.json().error.code, ErrorCode.ConflictTaskExists);

@@ -363,6 +363,52 @@ describe('novel detail view model', () => {
     assert.equal(getTaskResultPlacement({ ...baseTask, taskType: 'video_readiness_check' })?.stepKey, 'videoReady')
   })
 
+  it('routes only the actually accepted candidate task forward and hides archived batch results', () => {
+    const acceptedDirectionTask = {
+      taskType: 'novel_direction_generate',
+      status: TaskStatus.Completed,
+      currentStep: '稳定机器字段优先，不依赖此文案',
+      userAcceptedResult: true,
+    }
+    assert.deepEqual(getTaskResultPlacement(acceptedDirectionTask), {
+      summary: '正式方向已采用，下一步可生成小说设定。',
+      actionLabel: '进入设定',
+      stepKey: 'setting',
+    })
+    assert.equal(getTaskResultPlacement({
+      ...acceptedDirectionTask,
+      currentStep: '方向候选未采用，已归档',
+      userAcceptedResult: false,
+    }), null)
+
+    const acceptedStructureTask = {
+      taskType: 'novel_outline_generate',
+      status: TaskStatus.Completed,
+      currentStep: '稳定机器字段优先，不依赖此文案',
+      userAcceptedResult: true,
+    }
+    assert.deepEqual(getTaskResultPlacement(acceptedStructureTask), {
+      summary: '全书大纲已采用，下一步需要生成并采用阶段大纲。',
+      actionLabel: '生成阶段大纲',
+      stepKey: 'outline',
+    })
+    assert.equal(getTaskResultPlacement({
+      ...acceptedStructureTask,
+      currentStep: '全书大纲候选未采用，已归档',
+      userAcceptedResult: false,
+    }), null)
+    assert.equal(getTaskResultPlacement({
+      ...acceptedStructureTask,
+      currentStep: '候选因方向变更已过期并归档',
+      userAcceptedResult: false,
+    }), null)
+    assert.equal(getTaskResultPlacement({
+      ...acceptedStructureTask,
+      currentStep: '历史采用结果已失效（上游方向变更）',
+      userAcceptedResult: true,
+    }), null)
+  })
+
   it('maps adopted structure assets to the next concrete authoring step', () => {
     const completedTask: RecentTaskSummaryDTO = {
       id: 'task-adopt-1',

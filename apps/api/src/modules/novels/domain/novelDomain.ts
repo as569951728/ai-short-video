@@ -684,6 +684,7 @@ export interface AssetDecisionRecord {
   sourceTaskId: string | null;
   createdBy: string | null;
   createdAt: Date;
+  metadata?: unknown;
 }
 
 export interface NovelPreferencesRecord {
@@ -782,6 +783,9 @@ export interface CreatedDirectionRevisionRecord {
 export interface DirectionAdoptionInput {
   novel: NovelRecord;
   candidate: CreativeVersionRecord;
+  expectedCurrentVersionId: string | null;
+  idempotencyToken: string;
+  requestHash: string;
   reason: string;
   isForced: boolean;
   pageVersionSnapshot?: unknown;

@@ -26,7 +26,13 @@ export interface StructureExecutionSourceRefsV1 {
   currentSettingVersionId: string | null;
   currentOutlineVersionId: string | null;
   currentStageOutlineVersionId: string | null;
+  sourceVersionIds?: string[];
   objectType: 'setting' | 'outline' | 'stage_outline' | 'chapter_plan';
+}
+
+export interface StructureOptimizationExecutionV1 {
+  sourceVersionId: string;
+  instruction: string;
 }
 
 export interface BodyExecutionSourceRefsV1 {
@@ -66,11 +72,11 @@ export interface FullReviewChapterSourceRefV1 {
 export type ExecutionEnvelopeV1 =
   | ExecutionEnvelopeBaseV1<'direction_generate', 'direction', { regenerateReason?: string }, { currentDirectionVersionId: string | null }>
   | ExecutionEnvelopeBaseV1<'direction_fuse', 'direction', { versionIds: string[]; reason?: string }, { sourceVersionIds: string[] }>
-  | ExecutionEnvelopeBaseV1<'direction_optimize', 'direction', { versionId: string; instruction?: string }, { sourceVersionIds: string[] }>
-  | ExecutionEnvelopeBaseV1<'setting_generate', 'setting', { currentDirectionVersionId: string; regenerateReason?: string }, StructureExecutionSourceRefsV1>
-  | ExecutionEnvelopeBaseV1<'outline_generate', 'outline', { currentDirectionVersionId: string; currentSettingVersionId: string; regenerateReason?: string }, StructureExecutionSourceRefsV1>
-  | ExecutionEnvelopeBaseV1<'stage_outline_generate', 'stage_outline', { currentOutlineVersionId: string; regenerateReason?: string }, StructureExecutionSourceRefsV1>
-  | ExecutionEnvelopeBaseV1<'chapter_plan_generate', 'chapter_plan', { currentOutlineVersionId: string; currentStageOutlineVersionId: string; regenerateReason?: string }, StructureExecutionSourceRefsV1>
+  | ExecutionEnvelopeBaseV1<'direction_optimize', 'direction', { versionId: string; instruction: string }, { sourceVersionIds: string[] }>
+  | ExecutionEnvelopeBaseV1<'setting_generate', 'setting', { currentDirectionVersionId: string; regenerateReason?: string; optimization?: StructureOptimizationExecutionV1 | null }, StructureExecutionSourceRefsV1>
+  | ExecutionEnvelopeBaseV1<'outline_generate', 'outline', { currentDirectionVersionId: string; currentSettingVersionId: string; regenerateReason?: string; optimization?: StructureOptimizationExecutionV1 | null }, StructureExecutionSourceRefsV1>
+  | ExecutionEnvelopeBaseV1<'stage_outline_generate', 'stage_outline', { currentOutlineVersionId: string; regenerateReason?: string; optimization?: StructureOptimizationExecutionV1 | null }, StructureExecutionSourceRefsV1>
+  | ExecutionEnvelopeBaseV1<'chapter_plan_generate', 'chapter_plan', { currentOutlineVersionId: string; currentStageOutlineVersionId: string; regenerateReason?: string; optimization?: StructureOptimizationExecutionV1 | null }, StructureExecutionSourceRefsV1>
   | ExecutionEnvelopeBaseV1<'trial_chapter_one_generate', 'trial_run', { chapterPlanVersionId: string; chapterCount: number; regenerateReason?: string }, TrialExecutionSourceRefsV1>
   | ExecutionEnvelopeBaseV1<'trial_followup_generate', 'trial_run', { trialRunId: string; selectedCandidateVersionId: string; chapterPlanVersionId: string; selectionReason?: string; confirmRisk?: boolean }, TrialFollowupExecutionSourceRefsV1>
   | ExecutionEnvelopeBaseV1<'body_batch_generate', 'novel', { startChapter: number; endChapter: number; batchSize: number; strategySnapshotId: string }, BodyExecutionSourceRefsV1>
@@ -290,10 +296,10 @@ function assertExecutionSourceConsistency(envelope: ExecutionEnvelopeV1) {
     case 'direction_generate': return;
     case 'direction_fuse': return mismatch(canonicalExecutionJson(envelope.effectiveRequest.versionIds) !== canonicalExecutionJson(envelope.sourceVersionRefs.sourceVersionIds));
     case 'direction_optimize': return mismatch(!envelope.sourceVersionRefs.sourceVersionIds.includes(envelope.effectiveRequest.versionId));
-    case 'setting_generate': return mismatch(envelope.effectiveRequest.currentDirectionVersionId !== envelope.sourceVersionRefs.currentDirectionVersionId);
-    case 'outline_generate': return mismatch(envelope.effectiveRequest.currentDirectionVersionId !== envelope.sourceVersionRefs.currentDirectionVersionId || envelope.effectiveRequest.currentSettingVersionId !== envelope.sourceVersionRefs.currentSettingVersionId);
-    case 'stage_outline_generate': return mismatch(envelope.effectiveRequest.currentOutlineVersionId !== envelope.sourceVersionRefs.currentOutlineVersionId);
-    case 'chapter_plan_generate': return mismatch(envelope.effectiveRequest.currentOutlineVersionId !== envelope.sourceVersionRefs.currentOutlineVersionId || envelope.effectiveRequest.currentStageOutlineVersionId !== envelope.sourceVersionRefs.currentStageOutlineVersionId);
+    case 'setting_generate': return mismatch(envelope.effectiveRequest.currentDirectionVersionId !== envelope.sourceVersionRefs.currentDirectionVersionId || !structureOptimizationMatchesRefs(envelope.effectiveRequest.optimization, envelope.sourceVersionRefs.sourceVersionIds));
+    case 'outline_generate': return mismatch(envelope.effectiveRequest.currentDirectionVersionId !== envelope.sourceVersionRefs.currentDirectionVersionId || envelope.effectiveRequest.currentSettingVersionId !== envelope.sourceVersionRefs.currentSettingVersionId || !structureOptimizationMatchesRefs(envelope.effectiveRequest.optimization, envelope.sourceVersionRefs.sourceVersionIds));
+    case 'stage_outline_generate': return mismatch(envelope.effectiveRequest.currentOutlineVersionId !== envelope.sourceVersionRefs.currentOutlineVersionId || !structureOptimizationMatchesRefs(envelope.effectiveRequest.optimization, envelope.sourceVersionRefs.sourceVersionIds));
+    case 'chapter_plan_generate': return mismatch(envelope.effectiveRequest.currentOutlineVersionId !== envelope.sourceVersionRefs.currentOutlineVersionId || envelope.effectiveRequest.currentStageOutlineVersionId !== envelope.sourceVersionRefs.currentStageOutlineVersionId || !structureOptimizationMatchesRefs(envelope.effectiveRequest.optimization, envelope.sourceVersionRefs.sourceVersionIds));
     case 'trial_chapter_one_generate': return mismatch(envelope.effectiveRequest.chapterPlanVersionId !== envelope.sourceVersionRefs.currentChapterPlanVersionId);
     case 'trial_followup_generate': return mismatch(envelope.effectiveRequest.trialRunId !== envelope.objectId || envelope.effectiveRequest.trialRunId !== envelope.sourceVersionRefs.trialRunId || envelope.effectiveRequest.chapterPlanVersionId !== envelope.sourceVersionRefs.currentChapterPlanVersionId || envelope.effectiveRequest.selectedCandidateVersionId !== envelope.sourceVersionRefs.selectedChapterOneCandidateId);
     case 'body_batch_generate': return mismatch(envelope.effectiveRequest.strategySnapshotId !== envelope.sourceVersionRefs.strategySnapshotId);
@@ -310,8 +316,32 @@ function executionExact(common: { schemaVersion: 1; action: NovelProviderAction;
 }
 function executionOptionalTextRequest(value: unknown, key: string, max: number) { const source = executionRecord(value, [key], 'effectiveRequest'); const text = executionOptionalText(source[key], `effectiveRequest.${key}`, max); return text === undefined ? {} : { [key]: text }; }
 function executionFuseRequest(value: unknown) { const source = executionRecord(value, ['versionIds', 'reason'], 'effectiveRequest'); const reason = executionOptionalText(source.reason, 'effectiveRequest.reason', 500); return { versionIds: executionIdArray(source.versionIds, 'effectiveRequest.versionIds', 2, 20), ...(reason ? { reason } : {}) }; }
-function executionOptimizeRequest(value: unknown) { const source = executionRecord(value, ['versionId', 'instruction'], 'effectiveRequest'); const instruction = executionOptionalText(source.instruction, 'effectiveRequest.instruction', 2_000); return { versionId: executionId(source.versionId, 'effectiveRequest.versionId'), ...(instruction ? { instruction } : {}) }; }
-function executionStructureRequest(value: unknown, keys: string[]) { const source = executionRecord(value, [...keys, 'regenerateReason'], 'effectiveRequest'); const regenerateReason = executionOptionalText(source.regenerateReason, 'effectiveRequest.regenerateReason', 500); return { ...Object.fromEntries(keys.map((key) => [key, executionId(source[key], `effectiveRequest.${key}`)])), ...(regenerateReason ? { regenerateReason } : {}) }; }
+function executionOptimizeRequest(value: unknown) { const source = executionRequiredRecord(value, ['versionId', 'instruction'], 'effectiveRequest'); return { versionId: executionId(source.versionId, 'effectiveRequest.versionId'), instruction: executionText(source.instruction, 'effectiveRequest.instruction', 2_000) }; }
+function executionStructureRequest(value: unknown, keys: string[]) {
+  const source = executionRecord(value, [...keys, 'regenerateReason', 'optimization'], 'effectiveRequest');
+  const regenerateReason = executionOptionalText(source.regenerateReason, 'effectiveRequest.regenerateReason', 500);
+  const hasOptimization = Object.prototype.hasOwnProperty.call(source, 'optimization');
+  return {
+    ...Object.fromEntries(keys.map((key) => [key, executionId(source[key], `effectiveRequest.${key}`)])),
+    ...(regenerateReason ? { regenerateReason } : {}),
+    ...(hasOptimization ? { optimization: executionStructureOptimization(source.optimization) } : {})
+  };
+}
+function executionStructureOptimization(value: unknown): StructureOptimizationExecutionV1 | null {
+  if (value === null || value === undefined) return null;
+  const source = executionRecord(value, ['sourceVersionId', 'instruction'], 'effectiveRequest.optimization');
+  return {
+    sourceVersionId: executionAuthorityId(source.sourceVersionId, 'effectiveRequest.optimization.sourceVersionId'),
+    instruction: executionText(source.instruction, 'effectiveRequest.optimization.instruction', 2_000)
+  };
+}
+function structureOptimizationMatchesRefs(optimization: StructureOptimizationExecutionV1 | null | undefined, sourceVersionIds: string[] | undefined) {
+  if (optimization === undefined) return sourceVersionIds === undefined;
+  if (!sourceVersionIds) return false;
+  return optimization === null
+    ? sourceVersionIds.length === 0
+    : sourceVersionIds.length === 1 && sourceVersionIds[0] === optimization.sourceVersionId;
+}
 function executionTrialOneRequest(value: unknown) { const source = executionRecord(value, ['chapterPlanVersionId', 'chapterCount', 'regenerateReason'], 'effectiveRequest'); const regenerateReason = executionOptionalText(source.regenerateReason, 'effectiveRequest.regenerateReason', 500); return { chapterPlanVersionId: executionId(source.chapterPlanVersionId, 'effectiveRequest.chapterPlanVersionId'), chapterCount: executionInteger(source.chapterCount, 'effectiveRequest.chapterCount', 2, 5), ...(regenerateReason ? { regenerateReason } : {}) }; }
 function executionTrialFollowupRequest(value: unknown, objectId: string) { const source = executionRecord(value, ['trialRunId', 'selectedCandidateVersionId', 'chapterPlanVersionId', 'selectionReason', 'confirmRisk'], 'effectiveRequest'); const trialRunId = executionId(source.trialRunId ?? objectId, 'effectiveRequest.trialRunId'); if (trialRunId !== objectId) executionUnsupported('effectiveRequest.trialRunId must match objectId'); const selectionReason = executionOptionalText(source.selectionReason, 'effectiveRequest.selectionReason', 500); if (source.confirmRisk !== undefined && typeof source.confirmRisk !== 'boolean') executionUnsupported('effectiveRequest.confirmRisk must be boolean'); return { trialRunId, selectedCandidateVersionId: executionId(source.selectedCandidateVersionId, 'effectiveRequest.selectedCandidateVersionId'), chapterPlanVersionId: executionId(source.chapterPlanVersionId, 'effectiveRequest.chapterPlanVersionId'), ...(selectionReason ? { selectionReason } : {}), ...(source.confirmRisk === undefined ? {} : { confirmRisk: source.confirmRisk }) }; }
 function executionBodyBatchRequest(value: unknown) {
@@ -328,15 +358,26 @@ function executionFullReviewRequest(value: unknown) { const source = executionRe
 function executionDirectionGenerateRefs(value: unknown) { const source = executionRequiredRecord(value, ['currentDirectionVersionId'], 'sourceVersionRefs'); return { currentDirectionVersionId: executionNullableAuthorityId(source.currentDirectionVersionId, 'sourceVersionRefs.currentDirectionVersionId') }; }
 function executionVersionRefs(value: unknown) { const source = executionRecord(value, ['sourceVersionIds'], 'sourceVersionRefs'); return { sourceVersionIds: executionAuthorityIdArray(source.sourceVersionIds, 'sourceVersionRefs.sourceVersionIds', 1, 100) }; }
 function executionStructureRefs(value: unknown, objectType: string) {
-  const source = executionRequiredRecord(value, ['currentDirectionVersionId', 'currentSettingVersionId', 'currentOutlineVersionId', 'currentStageOutlineVersionId', 'objectType'], 'sourceVersionRefs');
+  const requiredKeys = ['currentDirectionVersionId', 'currentSettingVersionId', 'currentOutlineVersionId', 'currentStageOutlineVersionId', 'objectType'];
+  const source = executionRecord(value, [...requiredKeys, 'sourceVersionIds'], 'sourceVersionRefs');
+  for (const key of requiredKeys) if (!(key in source)) executionUnsupported(`sourceVersionRefs.${key} is required`);
   if (source.objectType !== objectType) executionUnsupported(`sourceVersionRefs.objectType must be ${objectType}`);
-  return { currentDirectionVersionId: executionNullableAuthorityId(source.currentDirectionVersionId, 'sourceVersionRefs.currentDirectionVersionId'), currentSettingVersionId: executionNullableAuthorityId(source.currentSettingVersionId, 'sourceVersionRefs.currentSettingVersionId'), currentOutlineVersionId: executionNullableAuthorityId(source.currentOutlineVersionId, 'sourceVersionRefs.currentOutlineVersionId'), currentStageOutlineVersionId: executionNullableAuthorityId(source.currentStageOutlineVersionId, 'sourceVersionRefs.currentStageOutlineVersionId'), objectType };
+  const hasSourceVersionIds = Object.prototype.hasOwnProperty.call(source, 'sourceVersionIds');
+  return { currentDirectionVersionId: executionNullableAuthorityId(source.currentDirectionVersionId, 'sourceVersionRefs.currentDirectionVersionId'), currentSettingVersionId: executionNullableAuthorityId(source.currentSettingVersionId, 'sourceVersionRefs.currentSettingVersionId'), currentOutlineVersionId: executionNullableAuthorityId(source.currentOutlineVersionId, 'sourceVersionRefs.currentOutlineVersionId'), currentStageOutlineVersionId: executionNullableAuthorityId(source.currentStageOutlineVersionId, 'sourceVersionRefs.currentStageOutlineVersionId'), ...(hasSourceVersionIds ? { sourceVersionIds: executionAuthorityIdArray(source.sourceVersionIds, 'sourceVersionRefs.sourceVersionIds', 0, 1) } : {}), objectType };
 }
 function executionTrialRefs(value: unknown, followup: boolean, objectId?: string) {
   const keys = ['currentDirectionVersionId', 'currentSettingVersionId', 'currentOutlineVersionId', 'currentStageOutlineVersionId', 'currentChapterPlanVersionId', 'objectType', ...(followup ? ['trialRunId', 'selectedChapterOneCandidateId'] : [])];
-  const source = executionRecord(value, keys, 'sourceVersionRefs');
+  const source = executionRecord(value, [...keys, 'sourceVersionIds'], 'sourceVersionRefs');
   for (const key of keys) if (key !== 'trialRunId' && !(key in source)) executionUnsupported(`sourceVersionRefs.${key} is required`);
-  const base = executionStructureRefs(Object.fromEntries(['currentDirectionVersionId', 'currentSettingVersionId', 'currentOutlineVersionId', 'currentStageOutlineVersionId'].map((key) => [key, source[key]]).concat([['objectType', source.objectType]])), 'trial_run');
+  if (source.sourceVersionIds !== undefined && executionAuthorityIdArray(source.sourceVersionIds, 'sourceVersionRefs.sourceVersionIds', 0, 0).length) executionUnsupported('sourceVersionRefs.sourceVersionIds must be empty');
+  if (source.objectType !== 'trial_run') executionUnsupported('sourceVersionRefs.objectType must be trial_run');
+  const base = {
+    currentDirectionVersionId: executionNullableAuthorityId(source.currentDirectionVersionId, 'sourceVersionRefs.currentDirectionVersionId'),
+    currentSettingVersionId: executionNullableAuthorityId(source.currentSettingVersionId, 'sourceVersionRefs.currentSettingVersionId'),
+    currentOutlineVersionId: executionNullableAuthorityId(source.currentOutlineVersionId, 'sourceVersionRefs.currentOutlineVersionId'),
+    currentStageOutlineVersionId: executionNullableAuthorityId(source.currentStageOutlineVersionId, 'sourceVersionRefs.currentStageOutlineVersionId'),
+    objectType: 'trial_run' as const
+  };
   const trialRunId = followup ? executionAuthorityId(source.trialRunId ?? objectId, 'sourceVersionRefs.trialRunId') : undefined;
   if (trialRunId && objectId && trialRunId !== objectId) executionUnsupported('sourceVersionRefs.trialRunId must match objectId');
   return { ...base, currentChapterPlanVersionId: executionAuthorityId(source.currentChapterPlanVersionId, 'sourceVersionRefs.currentChapterPlanVersionId'), ...(followup ? { trialRunId: trialRunId!, selectedChapterOneCandidateId: executionAuthorityId(source.selectedChapterOneCandidateId, 'sourceVersionRefs.selectedChapterOneCandidateId') } : {}) };
@@ -490,7 +531,10 @@ function assertAuthoritySourceIdentityCoverage(envelope: ExecutionEnvelopeV1_1):
   ];
   for (const [key, sourceType] of currentTypes) requireIdentity(sourceType, refs[key] as string | null | undefined, `sourceVersionRefs.${key}`);
   if (Array.isArray(refs.sourceVersionIds)) {
-    for (const [index, id] of refs.sourceVersionIds.entries()) requireIdentity('direction', id as string, `sourceVersionRefs.sourceVersionIds[${index}]`);
+    const sourceType: AuthoritySourceType = ['setting_generate', 'outline_generate', 'stage_outline_generate', 'chapter_plan_generate'].includes(envelope.action)
+      ? envelope.objectType as AuthoritySourceType
+      : 'direction';
+    for (const [index, id] of refs.sourceVersionIds.entries()) requireIdentity(sourceType, id as string, `sourceVersionRefs.sourceVersionIds[${index}]`);
   }
   requireIdentity('trial_run', refs.trialRunId as string | null | undefined, 'sourceVersionRefs.trialRunId');
   requireIdentity('chapter_content', refs.selectedChapterOneCandidateId as string | null | undefined, 'sourceVersionRefs.selectedChapterOneCandidateId');
@@ -575,6 +619,8 @@ export interface RecentTaskSummaryDTO {
   statusText: string;
   progress: number;
   currentStep: string | null;
+  resultVersionIds: string[];
+  userAcceptedResult?: boolean;
   errorCode?: string | null;
   errorMessage?: string | null;
   createdAt?: string;
@@ -662,6 +708,8 @@ export interface DirectionCandidateDTO {
   versionNo: number;
   status: VersionStatus;
   staleLevel: StaleLevel;
+  sourceVersionIds: string[];
+  changeReason: string | null;
   title: string;
   summary: string;
   content: DirectionCandidateContentDTO;
@@ -740,6 +788,8 @@ export interface StructureAssetDTO {
   riskLevel: RiskLevel;
   riskTags: string[];
   recommendedReason: string;
+  sourceVersionIds: string[];
+  changeReason: string | null;
   createdAt: string;
 }
 
@@ -1460,7 +1510,7 @@ export interface FuseDirectionsRequest {
 }
 
 export interface OptimizeDirectionRequest {
-  instruction?: string | null;
+  instruction: string;
   idempotencyKey?: string | null;
 }
 
@@ -1480,11 +1530,13 @@ export interface AdoptDirectionRequest {
   confirmLowScore?: boolean;
   reason?: string | null;
   pageVersionSnapshot?: unknown;
-  currentVersionId?: string | null;
+  currentVersionId: string | null;
+  idempotencyKey: string;
 }
 
 export interface GenerateStructureAssetRequest {
   regenerateReason?: string | null;
+  optimization?: StructureOptimizationExecutionV1 | null;
   idempotencyKey?: string | null;
 }
 

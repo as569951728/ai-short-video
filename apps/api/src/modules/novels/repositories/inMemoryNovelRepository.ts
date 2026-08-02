@@ -190,16 +190,23 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     const contentById = (id: unknown) => typeof id === 'string'
       ? chapterContentVersions.find((item) => item.tenantId === input.tenantId && item.novelId === novel.id && item.id === id)
       : null;
+    const structureAction = ['setting_generate', 'outline_generate', 'stage_outline_generate', 'chapter_plan_generate'].includes(input.action);
+    const currentVersionIds = [refs.currentDirectionVersionId, refs.currentSettingVersionId, refs.currentOutlineVersionId, refs.currentStageOutlineVersionId, refs.currentChapterPlanVersionId];
+    const optimizationSourceIds = structureAction && Array.isArray(refs.sourceVersionIds) ? refs.sourceVersionIds : [];
     const selectedIds = input.action === 'direction_fuse' || input.action === 'direction_optimize'
       ? (Array.isArray(refs.sourceVersionIds) ? refs.sourceVersionIds : [])
-      : [refs.currentDirectionVersionId, refs.currentSettingVersionId, refs.currentOutlineVersionId, refs.currentStageOutlineVersionId, refs.currentChapterPlanVersionId];
+      : [...currentVersionIds, ...optimizationSourceIds];
     const selectedVersions = selectedIds.map(versionById);
     if (selectedVersions.some((item, index) => selectedIds[index] !== null && selectedIds[index] !== undefined && !item)) return null;
     if ((input.action === 'direction_fuse' || input.action === 'direction_optimize') && selectedVersions.some((item) =>
-      !item || item.objectType !== 'direction' || item.status === VersionStatus.Discarded
+      !item || item.objectType !== 'direction' || ![VersionStatus.Candidate, VersionStatus.Current].includes(item.status)
     )) return null;
+    if (structureAction && optimizationSourceIds.some((id) => {
+      const item = versionById(id);
+      return !item || item.objectType !== refs.objectType || ![VersionStatus.Candidate, VersionStatus.Current].includes(item.status) || item.staleLevel === StaleLevel.HardStale;
+    })) return null;
     if (input.action !== 'direction_fuse' && input.action !== 'direction_optimize'
-      && selectedVersions.some((item) => item && item.status !== VersionStatus.Current)) return null;
+      && currentVersionIds.map(versionById).some((item) => item && item.status !== VersionStatus.Current)) return null;
     const chapter = chapters.find((item) => item.tenantId === input.tenantId && item.novelId === novel.id && item.id === input.objectId);
     if (['chapter_body_generate', 'chapter_rewrite', 'chapter_impact_assess', 'chapter_adopt_impact_assess'].includes(input.action) && !chapter) return null;
     if (chapter && 'currentContentVersionId' in refs && chapter.currentContentVersionId !== refs.currentContentVersionId) return null;
@@ -786,8 +793,12 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       appendTaskProgressEvents(task, input.context.requestId, input.now);
       creativeVersions.unshift(...versions);
       mutateNovel(input.novel.id, {
-        creationStage: NovelCreationStage.Direction,
-        stageStatus: StageStatus.WaitingUser,
+        ...(input.novel.currentDirectionVersionId
+          ? {}
+          : {
+              creationStage: NovelCreationStage.Direction,
+              stageStatus: StageStatus.WaitingUser
+            }),
         updatedBy: input.context.userId,
         updatedAt: input.now
       });
@@ -826,8 +837,12 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       appendTaskProgressEvents(task, input.context.requestId, input.now);
       creativeVersions.unshift(version);
       mutateNovel(input.novel.id, {
-        creationStage: NovelCreationStage.Direction,
-        stageStatus: StageStatus.WaitingUser,
+        ...(input.novel.currentDirectionVersionId
+          ? {}
+          : {
+              creationStage: NovelCreationStage.Direction,
+              stageStatus: StageStatus.WaitingUser
+            }),
         updatedBy: input.context.userId,
         updatedAt: input.now
       });
@@ -843,8 +858,56 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async adoptDirection(input: DirectionAdoptionInput): Promise<AdoptedDirectionRecord> {
+      const storedNovel = novels.find((item) => item.tenantId === input.context.tenantId && item.id === input.novel.id);
+      const storedCandidate = creativeVersions.find((item) =>
+        item.tenantId === input.context.tenantId
+        && item.novelId === input.novel.id
+        && item.id === input.candidate.id
+        && item.objectType === 'direction'
+      );
+      if (!storedNovel || !storedCandidate) throw new BusinessError(ErrorCode.NotFound, '小说或方向候选不存在');
+
+      const replayDecision = assetDecisionRecords.find((item) => {
+        const metadata = item.metadata && typeof item.metadata === 'object' && !Array.isArray(item.metadata)
+          ? item.metadata as Record<string, unknown>
+          : {};
+        return metadata.adoptionIdempotencyToken === input.idempotencyToken;
+      });
+      if (replayDecision) {
+        const metadata = replayDecision.metadata as Record<string, unknown>;
+        if (metadata.adoptionRequestHash !== input.requestHash) {
+          throw new BusinessError(ErrorCode.IdempotencyConflict, '同一个幂等键已绑定到不同的方向采用请求');
+        }
+        if (storedNovel.currentDirectionVersionId !== replayDecision.candidateVersionId) {
+          throw new BusinessError(ErrorCode.VersionConflict, '原方向采用结果已不再是当前版本，请刷新后重试');
+        }
+        const replayOperationLog = operationLogs.find((item) =>
+          item.tenantId === input.context.tenantId
+          && item.novelId === input.novel.id
+          && item.action === 'adopt_direction'
+          && item.objectId === replayDecision.candidateVersionId
+        );
+        if (!replayOperationLog) throw new BusinessError(ErrorCode.InternalError, '方向采用审计记录不完整');
+        return {
+          novel: cloneNovel(storedNovel.id),
+          currentDirection: storedCandidate,
+          versions: await this.listDirectionVersions(input.context.tenantId, input.novel.id),
+          decisionRecord: replayDecision,
+          operationLog: replayOperationLog
+        };
+      }
+
       assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id);
-      const currentVersionIdBefore = input.novel.currentDirectionVersionId;
+      if (storedNovel.currentDirectionVersionId !== input.expectedCurrentVersionId) {
+        throw new BusinessError(ErrorCode.VersionConflict, '当前方向版本已变化，请刷新后重试');
+      }
+      if (storedCandidate.status !== VersionStatus.Candidate || storedCandidate.staleLevel === StaleLevel.HardStale) {
+        throw new BusinessError(ErrorCode.VersionConflict, '该方向候选当前不可采用');
+      }
+
+      const currentVersionIdBefore = storedNovel.currentDirectionVersionId;
+      const creationStageBefore = storedNovel.creationStage;
+      const stageStatusBefore = storedNovel.stageStatus;
       const decisionRecord: AssetDecisionRecord = {
         id: nextId('decision'),
         tenantId: input.context.tenantId,
@@ -858,25 +921,43 @@ export function createInMemoryNovelRepository(): NovelRepository & {
         decisionReason: input.reason,
         isForced: input.isForced,
         riskSummary: input.isForced ? '低分方向采用，已记录用户确认原因。' : '方向评分满足采用门槛。',
-        impactSummary: '当前方向切换为正式方向，小说进入设定阶段；其他方向候选转为历史。',
+        impactSummary: '当前方向切换为正式方向，小说进入设定阶段；其他方向候选转为历史，下游正式资产失效并等待重新生成。',
         pageVersionSnapshot: input.pageVersionSnapshot ?? null,
         sourceTaskId: input.candidate.sourceTaskId,
         createdBy: input.context.userId,
-        createdAt: input.now
+        createdAt: input.now,
+        metadata: {
+          adoptionIdempotencyToken: input.idempotencyToken,
+          adoptionRequestHash: input.requestHash
+        }
       };
 
+      const invalidatedDownstreamVersionIds = new Set<string>();
       for (const version of creativeVersions) {
-        if (version.tenantId !== input.context.tenantId || version.novelId !== input.novel.id || version.objectType !== 'direction') continue;
-        if (version.id === input.candidate.id) {
-          version.status = VersionStatus.Current;
-          version.decisionRecordId = decisionRecord.id;
-        } else if (version.status === VersionStatus.Candidate || version.status === VersionStatus.Current) {
-          version.status = VersionStatus.Historical;
+        if (version.tenantId !== input.context.tenantId || version.novelId !== input.novel.id) continue;
+        if (version.objectType === 'direction') {
+          if (version.id === input.candidate.id) {
+            version.status = VersionStatus.Current;
+            version.staleLevel = StaleLevel.None;
+            version.decisionRecordId = decisionRecord.id;
+          } else if (version.status === VersionStatus.Candidate || version.status === VersionStatus.Current) {
+            version.status = VersionStatus.Historical;
+          }
+        } else if (['setting', 'outline', 'stage_outline', 'chapter_plan'].includes(version.objectType)) {
+          invalidatedDownstreamVersionIds.add(version.id);
+          if (version.status === VersionStatus.Candidate || version.status === VersionStatus.Current) {
+            version.status = VersionStatus.Stale;
+            version.staleLevel = StaleLevel.HardStale;
+          }
         }
       }
 
       mutateNovel(input.novel.id, {
         currentDirectionVersionId: input.candidate.id,
+        currentSettingVersionId: null,
+        currentOutlineVersionId: null,
+        currentStageOutlineVersionId: null,
+        currentChapterPlanVersionId: null,
         creationStage: NovelCreationStage.Setting,
         stageStatus: StageStatus.NotStarted,
         updatedBy: input.context.userId,
@@ -884,22 +965,53 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       });
 
       for (const task of generationTasks) {
-        if (
-          task.tenantId === input.context.tenantId &&
-          task.novelId === input.novel.id &&
-          task.objectType === 'direction' &&
-          task.status === TaskStatus.WaitingConfirmation
-        ) {
+        if (task.tenantId !== input.context.tenantId || task.novelId !== input.novel.id) continue;
+        if (task.objectType === 'direction' && task.status === TaskStatus.WaitingConfirmation) {
+          const acceptedResult = task.resultVersionIds.includes(input.candidate.id);
           task.status = TaskStatus.Completed;
           task.activeClaimKey = null;
-          task.statusNote = '用户已采用方向';
-          task.currentStep = '方向已采用';
-          task.userAcceptedResult = true;
+          task.statusNote = acceptedResult ? '用户已采用方向' : '本任务方向候选未采用，已归档';
+          task.currentStep = acceptedResult ? '方向已采用' : '方向候选未采用，已归档';
+          task.userAcceptedResult = acceptedResult;
           task.finishedAt = input.now;
           task.updatedAt = input.now;
           appendTaskEvent(task, {
             eventType: 'task_completed',
-            message: '方向已采用，任务完成。',
+            message: acceptedResult ? '方向已采用，任务完成。' : '本任务方向候选未采用，已转为历史版本。',
+            progress: 100,
+            requestId: input.context.requestId,
+            createdAt: input.now
+          });
+        } else if (
+          task.status === TaskStatus.WaitingConfirmation
+          && task.resultVersionIds.some((versionId) => invalidatedDownstreamVersionIds.has(versionId))
+        ) {
+          task.status = TaskStatus.Completed;
+          task.activeClaimKey = null;
+          task.statusNote = '上游方向已变更，本任务候选已过期并归档';
+          task.currentStep = '候选因方向变更已过期并归档';
+          task.userAcceptedResult = false;
+          task.finishedAt = input.now;
+          task.updatedAt = input.now;
+          appendTaskEvent(task, {
+            eventType: 'task_completed',
+            message: '上游方向已变更，本任务候选已过期，待确认入口已归档。',
+            progress: 100,
+            requestId: input.context.requestId,
+            createdAt: input.now
+          });
+        } else if (
+          task.status === TaskStatus.Completed
+          && task.userAcceptedResult
+          && task.currentStep !== '历史采用结果已失效（上游方向变更）'
+          && task.resultVersionIds.some((versionId) => invalidatedDownstreamVersionIds.has(versionId))
+        ) {
+          task.statusNote = '上游方向已变更，本任务曾采用的结果现已失效';
+          task.currentStep = '历史采用结果已失效（上游方向变更）';
+          task.updatedAt = input.now;
+          appendTaskEvent(task, {
+            eventType: 'task_result_invalidated',
+            message: '上游方向已变更，本任务曾采用的结果已转为失效历史；原采用事实保留。',
             progress: 100,
             requestId: input.context.requestId,
             createdAt: input.now
@@ -917,8 +1029,8 @@ export function createInMemoryNovelRepository(): NovelRepository & {
         objectId: input.candidate.id,
         beforeSnapshot: {
           currentDirectionVersionId: currentVersionIdBefore,
-          creationStage: input.novel.creationStage,
-          stageStatus: input.novel.stageStatus
+          creationStage: creationStageBefore,
+          stageStatus: stageStatusBefore
         },
         afterSnapshot: {
           currentDirectionVersionId: input.candidate.id,
@@ -1120,16 +1232,19 @@ export function createInMemoryNovelRepository(): NovelRepository & {
           task.objectType === input.objectType &&
           task.status === TaskStatus.WaitingConfirmation
         ) {
+          const acceptedResult = task.resultVersionIds.includes(input.candidate.id);
           task.status = TaskStatus.Completed;
           task.activeClaimKey = null;
-          task.statusNote = '用户已采用结构资产';
-          task.currentStep = getStructureAdoptStep(input.objectType);
-          task.userAcceptedResult = true;
+          task.statusNote = acceptedResult ? '用户已采用结构资产' : '本任务结构候选未采用，已归档';
+          task.currentStep = acceptedResult ? getStructureAdoptStep(input.objectType) : `${getStructureObjectText(input.objectType)}候选未采用，已归档`;
+          task.userAcceptedResult = acceptedResult;
           task.finishedAt = input.now;
           task.updatedAt = input.now;
           appendTaskEvent(task, {
             eventType: 'task_completed',
-            message: `${getStructureObjectText(input.objectType)}已采用，任务完成。`,
+            message: acceptedResult
+              ? `${getStructureObjectText(input.objectType)}已采用，任务完成。`
+              : `本任务${getStructureObjectText(input.objectType)}候选未采用，已转为历史版本。`,
             progress: 100,
             requestId: input.context.requestId,
             createdAt: input.now

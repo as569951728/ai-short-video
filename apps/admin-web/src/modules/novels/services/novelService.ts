@@ -160,7 +160,7 @@ export async function fuseDirections(
 export async function optimizeDirection(
   novelId: string,
   versionId: string,
-  request: OptimizeDirectionRequest = {},
+  request: OptimizeDirectionRequest,
   mode: ApiMode = getApiMode(),
 ): Promise<DirectionActionResultDTO> {
   if (mode === 'mock') {
@@ -742,6 +742,8 @@ export function toDirectionCandidateRow(candidate: DirectionCandidateDTO): Direc
     videoPotential: candidate.content.videoPotential,
     sellingPoints: candidate.content.sellingPoints,
     primaryReason: candidate.recommendedReason,
+    sourceVersionIds: candidate.sourceVersionIds,
+    changeReason: candidate.changeReason?.trim() ?? '',
     lowScoreRequiresConfirm: candidate.score < 70,
     canAdopt: candidate.status === VersionStatus.Candidate && candidate.staleLevel !== StaleLevel.HardStale,
   }
@@ -762,8 +764,11 @@ export function toStructureAssetRow(asset: StructureAssetDTO): StructureAssetRow
     summary: asset.summary,
     sections: asset.content.sections,
     stages: asset.content.stages,
+    chapters: asset.content.chapters,
     chapterCount: asset.content.chapters.length,
     primaryReason: asset.recommendedReason,
+    sourceVersionIds: asset.sourceVersionIds,
+    changeReason: asset.changeReason?.trim() ?? '',
     canAdopt: asset.status === VersionStatus.Candidate && asset.staleLevel !== StaleLevel.HardStale,
     highRiskRequiresConfirm: asset.riskLevel === RiskLevel.High || asset.riskLevel === RiskLevel.Blocking,
   }
@@ -1431,6 +1436,8 @@ function createMockDirectionCandidate(overrides: Partial<DirectionCandidateDTO> 
     recommendedReason: '题材、爽点和视频化表达都比较稳。',
     createdAt: new Date().toISOString(),
     ...overrides,
+    sourceVersionIds: overrides.sourceVersionIds ?? [],
+    changeReason: overrides.changeReason ?? null,
   }
 }
 
@@ -1569,6 +1576,8 @@ function createMockStructureAsset(overrides: Partial<StructureAssetDTO> = {}): S
     recommendedReason: '字段完整，适合继续推进结构链路。',
     createdAt: new Date().toISOString(),
     ...overrides,
+    sourceVersionIds: overrides.sourceVersionIds ?? [],
+    changeReason: overrides.changeReason ?? null,
   }
 }
 

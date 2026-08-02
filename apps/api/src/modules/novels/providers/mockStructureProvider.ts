@@ -10,11 +10,28 @@ export interface StructureProvider {
 
 export class MockStructureProvider implements StructureProvider {
   async generateAsset(input: StructureProviderInput) {
-    if (input.objectType === 'setting') return createSettingAsset(input.novel, input.preferences);
-    if (input.objectType === 'outline') return createOutlineAsset(input.novel, input.preferences);
-    if (input.objectType === 'stage_outline') return createStageOutlineAsset(input.novel, input.preferences);
-    return createChapterPlanAsset(input.novel, input.preferences);
+    const asset = input.objectType === 'setting' ? createSettingAsset(input.novel, input.preferences)
+      : input.objectType === 'outline' ? createOutlineAsset(input.novel, input.preferences)
+        : input.objectType === 'stage_outline' ? createStageOutlineAsset(input.novel, input.preferences)
+          : createChapterPlanAsset(input.novel, input.preferences);
+    return input.optimization ? applyMockOptimization(asset, input.optimization) : asset;
   }
+}
+
+function applyMockOptimization(
+  asset: StructureAssetDraft,
+  optimization: NonNullable<StructureProviderInput['optimization']>
+): StructureAssetDraft {
+  const instruction = optimization.instruction.slice(0, 160);
+  const sourceLabel = optimization.source.title ?? optimization.source.id;
+  const summary = `${asset.summary} 本候选基于“${sourceLabel}”按要求优化：${instruction}`;
+  return {
+    ...asset,
+    title: `${asset.title}（优化候选）`,
+    summary,
+    content: { ...asset.content, title: `${asset.content.title}（优化候选）`, summary },
+    recommendedReason: `已基于来源候选 ${optimization.source.id} 执行指定优化。`
+  };
 }
 
 function createSettingAsset(novel: NovelProviderInputV1, preferences: NovelPreferencesProviderInputV1): StructureAssetDraft {

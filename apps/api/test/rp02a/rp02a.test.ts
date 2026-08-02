@@ -440,6 +440,8 @@ describe('RP-02A generation task SSOT and provider preclaim', () => {
       method: 'POST',
       url: `/novels/${novelId}/directions/${candidateId}/adopt`,
       payload: {
+        currentVersionId: null,
+        idempotencyKey: 'rp02a-adopt-direction-token',
         reason: 'adopt before replay',
         pageVersionSnapshot: { seenCandidateVersionId: candidateId }
       }

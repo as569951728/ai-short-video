@@ -229,18 +229,28 @@
                 <el-button type="primary" :loading="generatingDirection" @click="handleGenerateDirection">生成 3-5 个方向候选</el-button>
               </el-empty>
 
-              <div v-else class="direction-grid">
+              <div v-else class="direction-grid" data-result-section="direction">
                 <article
                   v-for="candidate in directionRows"
+                  :id="`direction-candidate-${candidate.id}`"
                   :key="candidate.id"
-                  :class="['direction-card', { selected: selectedCandidateIds.includes(candidate.id) }]"
+                  :class="['direction-card', {
+                    selected: isCandidateDirection(candidate) && selectedCandidateIds.includes(candidate.id),
+                    'result-focus-card': focusedDirectionCandidateId === candidate.id,
+                  }]"
                 >
                   <div class="direction-card-head">
                     <h3>{{ candidate.title }}</h3>
-                    <el-checkbox :model-value="selectedCandidateIds.includes(candidate.id)" @change="toggleCandidate(candidate.id)" />
+                    <el-checkbox
+                      v-if="isCandidateDirection(candidate)"
+                      :model-value="selectedCandidateIds.includes(candidate.id)"
+                      aria-label="选择方向候选"
+                      @change="toggleCandidate(candidate.id)"
+                    />
                   </div>
                   <div class="tag-row">
                     <el-tag effect="plain">{{ candidate.versionLabel }}</el-tag>
+                    <el-tag :type="getDirectionStatusTagType(candidate)" effect="plain">{{ getDirectionStatusText(candidate) }}</el-tag>
                     <el-tag :type="candidate.lowScoreRequiresConfirm ? 'warning' : 'success'" effect="plain">评分 {{ candidate.scoreText }}</el-tag>
                     <el-tag :type="candidate.riskLevelText.includes('高') ? 'danger' : 'info'" effect="plain">{{ candidate.riskLevelText }}</el-tag>
                   </div>
@@ -253,15 +263,35 @@
                     <dd>{{ candidate.primaryReason }}</dd>
                     <dt>视频化表达</dt>
                     <dd>{{ candidate.videoPotential }}</dd>
+                    <template v-if="candidate.sourceVersionIds.length">
+                      <dt>来源版本</dt>
+                      <dd>
+                        <ul class="version-reference-list">
+                          <li v-for="sourceVersionId in candidate.sourceVersionIds" :key="sourceVersionId">{{ formatDirectionSourceVersion(sourceVersionId) }}</li>
+                        </ul>
+                      </dd>
+                    </template>
+                    <template v-if="candidate.changeReason">
+                      <dt>变更原因</dt>
+                      <dd>{{ candidate.changeReason }}</dd>
+                    </template>
                   </dl>
                   <div class="issue-list">
                     <el-tag v-for="tag in candidate.riskTags" :key="tag" type="warning" effect="plain">{{ tag }}</el-tag>
                   </div>
+                  <p v-if="isCurrentDirection(candidate)" class="structure-card-note success">这是唯一的当前正式方向，后续设定会基于它继续推进。</p>
+                  <p v-else-if="isBlockedCandidateDirection(candidate)" class="structure-card-note">这个候选已失效，不能再采用或编辑；请重新生成或基于当前正式方向优化。</p>
+                  <p v-else-if="isStaleDirection(candidate)" class="structure-card-note">这是已过期版本，基于旧内容生成，不能再采用或编辑。</p>
+                  <p v-else-if="isDiscardedDirection(candidate)" class="structure-card-note">这个候选已放弃，仅保留操作记录，不会参与采用或编辑。</p>
+                  <p v-else-if="isHistoricalDirection(candidate)" class="structure-card-note">这是历史版本，仅用于追溯，不会参与采用或编辑。</p>
                   <div class="split-actions">
                     <el-button size="small" @click="openDirectionDetail(candidate)">详情</el-button>
-                    <el-button size="small" @click="openEditDirectionDialog(candidate)">编辑</el-button>
-                    <el-button size="small" :disabled="!candidate.canAdopt" :loading="adoptingDirectionId === candidate.id" @click="openAdoptDialog(candidate)">采用</el-button>
-                    <el-button size="small" :loading="optimizingId === candidate.id" @click="openOptimizeDialog(candidate)">按要求优化</el-button>
+                    <template v-if="isCandidateDirection(candidate)">
+                      <el-button size="small" @click="openEditDirectionDialog(candidate)">编辑</el-button>
+                      <el-button size="small" :loading="adoptingDirectionId === candidate.id" @click="openAdoptDialog(candidate)">采用</el-button>
+                      <el-button size="small" :loading="optimizingId === candidate.id" @click="openOptimizeDialog(candidate)">按要求优化</el-button>
+                    </template>
+                    <el-button v-else-if="isCurrentDirection(candidate)" size="small" :loading="optimizingId === candidate.id" @click="openOptimizeDialog(candidate)">基于当前优化</el-button>
                   </div>
                 </article>
               </div>
@@ -310,7 +340,7 @@
                   <div class="tag-row">
                     <el-tag effect="plain">{{ asset.versionLabel }}</el-tag>
                     <el-tag :type="asset.highRiskRequiresConfirm ? 'danger' : 'success'" effect="plain">评分 {{ asset.scoreText }}</el-tag>
-                    <el-tag :type="asset.status.includes('过期') ? 'danger' : 'info'" effect="plain">{{ asset.status }}</el-tag>
+                    <el-tag :type="getStructureStatusTagType(asset)" effect="plain">{{ getStructureStatusText(asset) }}</el-tag>
                   </div>
                   <p class="structure-summary">{{ asset.summary }}</p>
                   <dl>
@@ -318,12 +348,31 @@
                     <dd>{{ asset.primaryReason }}</dd>
                     <dt>结构内容</dt>
                     <dd>{{ asset.sections[0]?.body || '暂无结构摘要' }}</dd>
+                    <template v-if="asset.sourceVersionIds.length">
+                      <dt>来源版本</dt>
+                      <dd>
+                        <ul class="version-reference-list">
+                          <li v-for="sourceVersionId in asset.sourceVersionIds" :key="sourceVersionId">{{ formatStructureSourceVersion(sourceVersionId) }}</li>
+                        </ul>
+                      </dd>
+                      <dt>优化目标</dt>
+                      <dd>{{ asset.changeReason || '未记录优化目标' }}</dd>
+                      <dt>与来源差异</dt>
+                      <dd>
+                        <ul class="structure-difference-list">
+                          <li v-for="difference in getStructureSourceDifferences(asset)" :key="difference">{{ difference }}</li>
+                        </ul>
+                      </dd>
+                    </template>
                   </dl>
                   <div class="issue-list">
                     <el-tag v-for="tag in asset.riskTags" :key="tag" type="warning" effect="plain">{{ tag }}</el-tag>
                   </div>
                   <p v-if="isCurrentStructureAsset(asset)" class="structure-card-note success">这是当前正式版本，后续生成会基于它继续推进。</p>
-                  <p v-else-if="isArchivedStructureAsset(asset)" class="structure-card-note">这是历史版本，仅用于追溯，不会参与后续生成。</p>
+                  <p v-else-if="isHardStaleStructureAsset(asset)" class="structure-card-note">这个候选已失效，不能再采用、编辑或继续优化。</p>
+                  <p v-else-if="isStaleStructureAsset(asset)" class="structure-card-note">这是已过期版本，基于旧上游内容生成，不能再参与后续生成。</p>
+                  <p v-else-if="isDiscardedStructureAsset(asset)" class="structure-card-note">这个候选已放弃，仅保留操作记录，不会参与后续生成。</p>
+                  <p v-else-if="isHistoricalStructureAsset(asset)" class="structure-card-note">这是历史版本，仅用于追溯，不会参与后续生成。</p>
                   <div class="split-actions">
                     <template v-if="isCandidateStructureAsset(asset)">
                       <el-button size="small" @click="openEditStructureDialog(asset)">编辑</el-button>
@@ -416,7 +465,7 @@
                   <div class="tag-row">
                     <el-tag effect="plain">{{ asset.versionLabel }}</el-tag>
                     <el-tag :type="asset.highRiskRequiresConfirm ? 'danger' : 'success'" effect="plain">评分 {{ asset.scoreText }}</el-tag>
-                    <el-tag :type="asset.status.includes('过期') ? 'danger' : 'info'" effect="plain">{{ asset.status }}</el-tag>
+                    <el-tag :type="getStructureStatusTagType(asset)" effect="plain">{{ getStructureStatusText(asset) }}</el-tag>
                   </div>
                   <p class="structure-summary">{{ asset.summary }}</p>
                   <dl>
@@ -424,12 +473,31 @@
                     <dd>{{ asset.primaryReason }}</dd>
                     <dt>结构内容</dt>
                     <dd>{{ asset.sections[0]?.body || asset.stages[0]?.goal || '暂无结构摘要' }}</dd>
+                    <template v-if="asset.sourceVersionIds.length">
+                      <dt>来源版本</dt>
+                      <dd>
+                        <ul class="version-reference-list">
+                          <li v-for="sourceVersionId in asset.sourceVersionIds" :key="sourceVersionId">{{ formatStructureSourceVersion(sourceVersionId) }}</li>
+                        </ul>
+                      </dd>
+                      <dt>优化目标</dt>
+                      <dd>{{ asset.changeReason || '未记录优化目标' }}</dd>
+                      <dt>与来源差异</dt>
+                      <dd>
+                        <ul class="structure-difference-list">
+                          <li v-for="difference in getStructureSourceDifferences(asset)" :key="difference">{{ difference }}</li>
+                        </ul>
+                      </dd>
+                    </template>
                   </dl>
                   <div class="issue-list">
                     <el-tag v-for="tag in asset.riskTags" :key="tag" type="warning" effect="plain">{{ tag }}</el-tag>
                   </div>
                   <p v-if="isCurrentStructureAsset(asset)" class="structure-card-note success">这是当前正式版本，后续生成会基于它继续推进。</p>
-                  <p v-else-if="isArchivedStructureAsset(asset)" class="structure-card-note">这是历史版本，仅用于追溯，不会参与后续生成。</p>
+                  <p v-else-if="isHardStaleStructureAsset(asset)" class="structure-card-note">这个候选已失效，不能再采用、编辑或继续优化。</p>
+                  <p v-else-if="isStaleStructureAsset(asset)" class="structure-card-note">这是已过期版本，基于旧上游内容生成，不能再参与后续生成。</p>
+                  <p v-else-if="isDiscardedStructureAsset(asset)" class="structure-card-note">这个候选已放弃，仅保留操作记录，不会参与后续生成。</p>
+                  <p v-else-if="isHistoricalStructureAsset(asset)" class="structure-card-note">这是历史版本，仅用于追溯，不会参与后续生成。</p>
                   <div class="split-actions">
                     <template v-if="isCandidateStructureAsset(asset)">
                       <el-button size="small" @click="openEditStructureDialog(asset)">编辑</el-button>
@@ -503,7 +571,7 @@
                     <el-tag effect="plain">{{ asset.versionLabel }}</el-tag>
                     <el-tag :type="asset.highRiskRequiresConfirm ? 'danger' : 'success'" effect="plain">评分 {{ asset.scoreText }}</el-tag>
                     <el-tag type="info" effect="plain">{{ asset.chapterCount }} 章</el-tag>
-                    <el-tag :type="asset.status.includes('过期') ? 'danger' : 'info'" effect="plain">{{ asset.status }}</el-tag>
+                    <el-tag :type="getStructureStatusTagType(asset)" effect="plain">{{ getStructureStatusText(asset) }}</el-tag>
                   </div>
                   <p class="structure-summary">{{ asset.summary }}</p>
                   <dl>
@@ -511,9 +579,28 @@
                     <dd>{{ asset.primaryReason }}</dd>
                     <dt>章节规划</dt>
                     <dd>{{ asset.sections[0]?.body || asset.stages[0]?.goal || `已生成 ${asset.chapterCount} 章目录候选` }}</dd>
+                    <template v-if="asset.sourceVersionIds.length">
+                      <dt>来源版本</dt>
+                      <dd>
+                        <ul class="version-reference-list">
+                          <li v-for="sourceVersionId in asset.sourceVersionIds" :key="sourceVersionId">{{ formatStructureSourceVersion(sourceVersionId) }}</li>
+                        </ul>
+                      </dd>
+                      <dt>优化目标</dt>
+                      <dd>{{ asset.changeReason || '未记录优化目标' }}</dd>
+                      <dt>与来源差异</dt>
+                      <dd>
+                        <ul class="structure-difference-list">
+                          <li v-for="difference in getStructureSourceDifferences(asset)" :key="difference">{{ difference }}</li>
+                        </ul>
+                      </dd>
+                    </template>
                   </dl>
                   <p v-if="isCurrentStructureAsset(asset)" class="structure-card-note success">这是当前正式版本，后续试写会基于它继续推进。</p>
-                  <p v-else-if="isArchivedStructureAsset(asset)" class="structure-card-note">这是历史版本，仅用于追溯，不会参与后续生成。</p>
+                  <p v-else-if="isHardStaleStructureAsset(asset)" class="structure-card-note">这个候选已失效，不能再采用、编辑或继续优化。</p>
+                  <p v-else-if="isStaleStructureAsset(asset)" class="structure-card-note">这是已过期版本，基于旧上游内容生成，不能再参与后续生成。</p>
+                  <p v-else-if="isDiscardedStructureAsset(asset)" class="structure-card-note">这个候选已放弃，仅保留操作记录，不会参与后续生成。</p>
+                  <p v-else-if="isHistoricalStructureAsset(asset)" class="structure-card-note">这是历史版本，仅用于追溯，不会参与后续生成。</p>
                   <div class="split-actions">
                     <template v-if="isCandidateStructureAsset(asset)">
                       <el-button size="small" @click="openEditStructureDialog(asset)">编辑</el-button>
@@ -565,7 +652,7 @@
             </template>
 
             <template v-else-if="activeStep.key === 'trial'">
-              <div class="section-title nested-title">
+              <div class="section-title nested-title" data-result-section="trial">
                 <div>
                   <h3>试写与开篇调试</h3>
                   <p class="muted">先比较第 1 章候选，选定后才继续生成第 2-3 章和试写总评。</p>
@@ -604,7 +691,12 @@
                 />
 
                 <div class="trial-candidate-grid">
-                  <article v-for="candidate in trialCandidateRows" :key="candidate.id" :class="['trial-candidate-card', { recommended: candidate.isAiRecommended, selected: candidate.isSelected }]">
+                  <article
+                    v-for="candidate in trialCandidateRows"
+                    :id="`trial-candidate-${candidate.id}`"
+                    :key="candidate.id"
+                    :class="['trial-candidate-card', { recommended: candidate.isAiRecommended, selected: candidate.isSelected, 'result-focus-card': focusedTrialCandidateId === candidate.id }]"
+                  >
                     <div class="direction-card-head">
                       <h3>{{ candidate.title }}</h3>
                       <el-tag v-if="candidate.isAiRecommended" type="success">AI 推荐</el-tag>
@@ -1028,9 +1120,12 @@
       </template>
       <template #footer>
         <el-button @click="directionDetailDialog.open = false">关闭</el-button>
-        <el-button v-if="directionDetailDialog.candidate" @click="openEditDirectionDialog(directionDetailDialog.candidate)">编辑</el-button>
-        <el-button v-if="directionDetailDialog.candidate" @click="openOptimizeDialog(directionDetailDialog.candidate)">按要求优化</el-button>
-        <el-button v-if="directionDetailDialog.candidate" type="primary" :disabled="!directionDetailDialog.candidate.canAdopt" @click="openAdoptDialog(directionDetailDialog.candidate)">采用</el-button>
+        <template v-if="directionDetailDialog.candidate && isCandidateDirection(directionDetailDialog.candidate)">
+          <el-button @click="openEditDirectionDialog(directionDetailDialog.candidate)">编辑</el-button>
+          <el-button @click="openOptimizeDialog(directionDetailDialog.candidate)">按要求优化</el-button>
+          <el-button type="primary" @click="openAdoptDialog(directionDetailDialog.candidate)">采用</el-button>
+        </template>
+        <el-button v-else-if="directionDetailDialog.candidate && isCurrentDirection(directionDetailDialog.candidate)" @click="openOptimizeDialog(directionDetailDialog.candidate)">基于当前优化</el-button>
       </template>
     </el-dialog>
 
@@ -1228,7 +1323,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { NovelCreationStage, StageStatus, TaskStatus, VersionStatus, type StructureAssetType, type TaskDetailDTO } from '@ai-shortvideo/shared'
+import { NovelCreationStage, StageStatus, TaskStatus, VersionStatus, type RecentTaskSummaryDTO, type StructureAssetType, type TaskDetailDTO } from '@ai-shortvideo/shared'
 import { ApiClientError } from '../shared/services/http'
 import TaskProgressPanel from '../modules/novels/components/TaskProgressPanel.vue'
 import {
@@ -1270,6 +1365,7 @@ import {
   createNovelActionPendingTask,
   createLocalPendingTaskDetail,
   getDirectionDraftSubStepState,
+  getTaskResultPlacement,
   getVideoReadyEntryAction,
   getWorkbenchStepLockedReason,
   resolveNovelWorkbenchLocation,
@@ -1317,7 +1413,9 @@ const selectingTrialCandidateId = ref('')
 const confirmingTrial = ref(false)
 const apiError = ref('')
 const selectedCandidateIds = ref<string[]>([])
+const focusedDirectionCandidateId = ref('')
 const focusedStructureCandidateId = ref('')
+const focusedTrialCandidateId = ref('')
 const bodyBatchIdempotencyKey = ref('')
 const batchWordTarget = ref(2200)
 const updatingChapterWordTargets = ref(false)
@@ -1409,6 +1507,7 @@ const structureOptimizeDialog = reactive<{
 const adoptDialog = reactive({
   open: false,
   candidateId: '',
+  idempotencyKey: '',
   lowScore: false,
   reason: '',
 })
@@ -1589,12 +1688,105 @@ function isCurrentStructureAsset(asset: StructureAssetRow) {
   return asset.statusKey === VersionStatus.Current
 }
 
+function isCurrentDirection(candidate: DirectionCandidateRow) {
+  return candidate.statusKey === VersionStatus.Current
+}
+
+function isCandidateDirection(candidate: DirectionCandidateRow) {
+  return candidate.statusKey === VersionStatus.Candidate && candidate.canAdopt
+}
+
+function isHistoricalDirection(candidate: DirectionCandidateRow) {
+  return candidate.statusKey === VersionStatus.Historical
+}
+
+function isBlockedCandidateDirection(candidate: DirectionCandidateRow) {
+  return candidate.statusKey === VersionStatus.Candidate && !candidate.canAdopt
+}
+
+function isStaleDirection(candidate: DirectionCandidateRow) {
+  return candidate.statusKey === VersionStatus.Stale
+}
+
+function isDiscardedDirection(candidate: DirectionCandidateRow) {
+  return candidate.statusKey === VersionStatus.Discarded
+}
+
+function getDirectionStatusText(candidate: DirectionCandidateRow) {
+  if (isBlockedCandidateDirection(candidate)) return '失效候选'
+  return candidate.status
+}
+
+function getDirectionStatusTagType(candidate: DirectionCandidateRow): '' | 'success' | 'warning' | 'danger' | 'info' {
+  if (isCurrentDirection(candidate)) return 'success'
+  if (isCandidateDirection(candidate)) return 'warning'
+  if (isBlockedCandidateDirection(candidate) || isStaleDirection(candidate)) return 'danger'
+  return 'info'
+}
+
+function formatDirectionSourceVersion(sourceVersionId: string) {
+  const source = directionRows.value.find((candidate) => candidate.id === sourceVersionId)
+  if (source) return `${source.title} ${source.versionLabel}`
+  return sourceVersionId.length > 12 ? `…${sourceVersionId.slice(-8)}` : sourceVersionId
+}
+
+function findStructureSourceVersion(sourceVersionId: string) {
+  return structureRows.value.find((asset) => asset.id === sourceVersionId)
+}
+
+function formatStructureSourceVersion(sourceVersionId: string) {
+  const source = findStructureSourceVersion(sourceVersionId)
+  if (source) return `${source.title} ${source.versionLabel}`
+  return sourceVersionId.length > 12 ? `…${sourceVersionId.slice(-8)}` : sourceVersionId
+}
+
+function getStructureSourceDifferences(asset: StructureAssetRow) {
+  const source = asset.sourceVersionIds.map(findStructureSourceVersion).find((item): item is StructureAssetRow => Boolean(item))
+  if (!source) return ['来源版本不在当前候选列表中，暂时无法进行字段级对比。']
+
+  const differences: string[] = []
+  if (asset.title !== source.title) differences.push(`标题：${source.title} -> ${asset.title}`)
+  if (asset.summary !== source.summary) differences.push('摘要内容已调整')
+  if (asset.sections.length !== source.sections.length) differences.push(`结构段落：${source.sections.length} -> ${asset.sections.length}`)
+  else if (JSON.stringify(asset.sections) !== JSON.stringify(source.sections)) differences.push('结构段落内容已调整')
+  if (asset.stages.length !== source.stages.length) differences.push(`阶段数量：${source.stages.length} -> ${asset.stages.length}`)
+  else if (JSON.stringify(asset.stages) !== JSON.stringify(source.stages)) differences.push('阶段目标与冲突内容已调整')
+  if (asset.chapterCount !== source.chapterCount) differences.push(`章节数量：${source.chapterCount} -> ${asset.chapterCount}`)
+  else if (JSON.stringify(asset.chapters) !== JSON.stringify(source.chapters)) differences.push('章节标题、目标或钩子内容已调整')
+  if (differences.length === 0) differences.push('未检测到可展示字段变化，请人工核对详细内容。')
+  return differences
+}
+
 function isCandidateStructureAsset(asset: StructureAssetRow) {
   return asset.statusKey === VersionStatus.Candidate && asset.canAdopt
 }
 
-function isArchivedStructureAsset(asset: StructureAssetRow) {
-  return !isCurrentStructureAsset(asset) && !isCandidateStructureAsset(asset)
+function isHardStaleStructureAsset(asset: StructureAssetRow) {
+  return asset.statusKey === VersionStatus.Candidate && !asset.canAdopt
+}
+
+function isStaleStructureAsset(asset: StructureAssetRow) {
+  return asset.statusKey === VersionStatus.Stale
+}
+
+function isDiscardedStructureAsset(asset: StructureAssetRow) {
+  return asset.statusKey === VersionStatus.Discarded
+}
+
+function isHistoricalStructureAsset(asset: StructureAssetRow) {
+  return asset.statusKey === VersionStatus.Historical
+}
+
+function getStructureStatusText(asset: StructureAssetRow) {
+  if (isHardStaleStructureAsset(asset)) return '失效候选'
+  return asset.status
+}
+
+function getStructureStatusTagType(asset: StructureAssetRow): '' | 'success' | 'warning' | 'danger' | 'info' {
+  if (isCurrentStructureAsset(asset)) return 'success'
+  if (isCandidateStructureAsset(asset)) return 'warning'
+  if (isHardStaleStructureAsset(asset) || isStaleStructureAsset(asset)) return 'danger'
+  return 'info'
 }
 
 const statusTagType = computed(() => {
@@ -1962,11 +2154,11 @@ function syncActiveSubStep(stepKey: NovelWorkbenchStepKey) {
   activeSubStepKey.value = suggestedSubStep?.key ?? ''
 }
 
-function openStep(stepKey: NovelWorkbenchStepKey) {
+async function openStep(stepKey: NovelWorkbenchStepKey) {
   activeStepKey.value = stepKey
   syncActiveSubStep(stepKey)
   workbenchMode.value = 'step'
-  router.push({
+  await router.push({
     path: route.path,
     query: {
       ...route.query,
@@ -1976,26 +2168,83 @@ function openStep(stepKey: NovelWorkbenchStepKey) {
 }
 
 async function openTaskResult(stepKey: NovelWorkbenchStepKey) {
+  const selectedTask = taskDrawer.open ? taskDrawer.task : null
+  const resultTask = findRecentTaskForResult(stepKey, selectedTask)
   taskDrawer.open = false
-  openStep(stepKey)
+  await openStep(stepKey)
+  syncTaskResultSubStep(stepKey, resultTask)
   await nextTick()
-  focusFirstResultCandidate(stepKey)
+  focusTaskResultCandidate(stepKey, resultTask)
 }
 
-function focusFirstResultCandidate(stepKey: NovelWorkbenchStepKey) {
+function focusTaskResultCandidate(stepKey: NovelWorkbenchStepKey, resultTask: RecentTaskSummaryDTO | null) {
+  const resultVersionIds = resultTask ? getTaskResultVersionIds(resultTask) : []
+  if (focusResultVersion(stepKey, resultVersionIds)) return
+
+  const section = document.querySelector(`[data-result-section="${stepKey}"]`)
+  section?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
+function findRecentTaskForResult(stepKey: NovelWorkbenchStepKey, selectedTask: TaskDetailDTO | null) {
+  if (selectedTask && getTaskResultPlacement(selectedTask)?.stepKey === stepKey && selectedTask.resultVersionIds.length > 0) {
+    return selectedTask
+  }
+
+  const tasks = [detail.value?.recentTask, ...(detail.value?.recentTasks ?? [])]
+    .filter((task): task is RecentTaskSummaryDTO => Boolean(task))
+  return tasks.find((item) => getTaskResultPlacement(item)?.stepKey === stepKey && getTaskResultVersionIds(item).length > 0) ?? null
+}
+
+function syncTaskResultSubStep(stepKey: NovelWorkbenchStepKey, task: RecentTaskSummaryDTO | null) {
+  if (stepKey !== 'outline' || !task?.taskType) return
+  const taskType = task.taskType.toLowerCase()
+  if (taskType.includes('stage_outline')) {
+    setActiveSubStep('stages')
+    return
+  }
+  if (taskType.includes('outline')) setActiveSubStep(taskType.includes('adopt') ? 'stages' : 'mainline')
+}
+
+function getTaskResultVersionIds(task: RecentTaskSummaryDTO) {
+  return task.resultVersionIds
+}
+
+function focusResultVersion(stepKey: NovelWorkbenchStepKey, resultVersionIds: string[]) {
+  if (stepKey === 'direction') {
+    const candidateId = resultVersionIds.find((id) => directionRows.value.some((candidate) => candidate.id === id))
+    if (candidateId) {
+      focusDirectionCandidate(candidateId)
+      return true
+    }
+  }
+
+  if (stepKey === 'trial') {
+    const candidateId = resultVersionIds.find((id) => trialCandidateRows.value.some((candidate) => candidate.id === id))
+    if (candidateId) {
+      focusTrialCandidate(candidateId)
+      return true
+    }
+  }
+
   const structureRowsByStep: Partial<Record<NovelWorkbenchStepKey, StructureAssetRow[]>> = {
     setting: settingRows.value,
     outline: outlineRows.value,
     chapterPlan: chapterPlanRows.value,
   }
-  const firstStructure = structureRowsByStep[stepKey]?.[0]
-  if (firstStructure) {
-    focusStructureCandidate(firstStructure.id)
-    return
-  }
+  const candidate = structureRowsByStep[stepKey]?.find((asset) => resultVersionIds.includes(asset.id))
+  if (!candidate) return false
+  if (candidate.objectType === 'stage_outline') setActiveSubStep('stages')
+  if (candidate.objectType === 'outline') setActiveSubStep('mainline')
+  void nextTick(() => focusStructureCandidate(candidate.id))
+  return true
+}
 
-  const section = document.querySelector(`[data-result-section="${stepKey}"]`)
-  section?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+function focusDirectionCandidate(candidateId: string) {
+  focusedDirectionCandidateId.value = candidateId
+  document.getElementById(`direction-candidate-${candidateId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  window.setTimeout(() => {
+    if (focusedDirectionCandidateId.value === candidateId) focusedDirectionCandidateId.value = ''
+  }, 2200)
 }
 
 function focusStructureCandidate(candidateId: string) {
@@ -2003,6 +2252,14 @@ function focusStructureCandidate(candidateId: string) {
   document.getElementById(`structure-candidate-${candidateId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
   window.setTimeout(() => {
     if (focusedStructureCandidateId.value === candidateId) focusedStructureCandidateId.value = ''
+  }, 2200)
+}
+
+function focusTrialCandidate(candidateId: string) {
+  focusedTrialCandidateId.value = candidateId
+  document.getElementById(`trial-candidate-${candidateId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  window.setTimeout(() => {
+    if (focusedTrialCandidateId.value === candidateId) focusedTrialCandidateId.value = ''
   }, 2200)
 }
 
@@ -2258,9 +2515,11 @@ async function handleGenerateDirection() {
   const pendingTaskId = pendingTask.value?.id
 
   try {
-    await generateDirections(novelId.value)
+    const result = await generateDirections(novelId.value)
     ElMessage.success('方向候选已生成')
     await loadDetail()
+    await nextTick()
+    focusResultVersion('direction', result.task.resultVersionIds)
   } catch (error) {
     apiError.value = formatApiError(error)
     await loadDetail(true)
@@ -2270,7 +2529,11 @@ async function handleGenerateDirection() {
   }
 }
 
-async function handleGenerateStructure(objectType: StructureAssetType, regenerateReason?: string) {
+async function handleGenerateStructure(
+  objectType: StructureAssetType,
+  regenerateReason?: string,
+  optimization?: { sourceVersionId: string; instruction: string },
+) {
   if (hasLocalPendingWait.value) {
     ElMessage.info('已有生成任务在等待中，请先查看最近任务或取消等待。')
     return false
@@ -2282,18 +2545,28 @@ async function handleGenerateStructure(objectType: StructureAssetType, regenerat
   const pendingTaskId = pendingTask.value?.id
 
   try {
-    const request = regenerateReason ? { regenerateReason } : {}
-    if (objectType === 'setting') await generateSetting(novelId.value, request)
-    if (objectType === 'outline') await generateOutline(novelId.value, request)
-    if (objectType === 'stage_outline') await generateStageOutline(novelId.value, request)
-    if (objectType === 'chapter_plan') await generateChapterPlan(novelId.value, request)
+    const request = {
+      ...(regenerateReason ? { regenerateReason } : {}),
+      ...(optimization ? { optimization } : {}),
+    }
+    const result = objectType === 'setting'
+      ? await generateSetting(novelId.value, request)
+      : objectType === 'outline'
+        ? await generateOutline(novelId.value, request)
+        : objectType === 'stage_outline'
+          ? await generateStageOutline(novelId.value, request)
+          : await generateChapterPlan(novelId.value, request)
     ElMessage.success(`${getStructureAssetTypeText(objectType)}候选已生成`)
     await loadDetail()
-    return true
+    showStructureResultLocation(objectType)
+    await nextTick()
+    const resultVersionIds = result.task.resultVersionIds.length ? result.task.resultVersionIds : result.candidate ? [result.candidate.id] : []
+    focusResultVersion(getStructureStepKey(objectType), resultVersionIds)
+    return result
   } catch (error) {
     apiError.value = formatApiError(error)
     await loadDetail(true)
-    return false
+    return null
   } finally {
     structureGeneratingType.value = ''
     clearLocalPendingTask(pendingTaskId)
@@ -2354,12 +2627,14 @@ async function handleGenerateTrial(regenerateReason?: string) {
   const pendingTaskId = pendingTask.value?.id
 
   try {
-    await generateTrial(novelId.value, {
+    const result = await generateTrial(novelId.value, {
       chapterCount: 3,
       regenerateReason,
     })
     ElMessage.success('试写候选已生成')
     await loadDetail()
+    await nextTick()
+    focusResultVersion('trial', result.task.resultVersionIds)
   } catch (error) {
     apiError.value = formatApiError(error)
     await loadDetail(true)
@@ -2894,7 +3169,7 @@ async function confirmFuseDirections() {
   const pendingTaskId = pendingTask.value?.id
 
   try {
-    await fuseDirections(novelId.value, {
+    const result = await fuseDirections(novelId.value, {
       versionIds: selectedCandidateIds.value,
       reason: fuseDialog.reason.trim() || '融合所选方向的爽点和视频化钩子',
     })
@@ -2902,6 +3177,8 @@ async function confirmFuseDirections() {
     fuseDialog.open = false
     selectedCandidateIds.value = []
     await loadDetail()
+    await nextTick()
+    focusResultVersion('direction', result.task.resultVersionIds)
   } catch (error) {
     apiError.value = formatApiError(error)
     await loadDetail(true)
@@ -2950,7 +3227,7 @@ async function confirmEditDirection() {
   apiError.value = ''
 
   try {
-    await editDirectionCandidate(novelId.value, candidate.id, {
+    const result = await editDirectionCandidate(novelId.value, candidate.id, {
       title: editDirectionDialog.form.title.trim(),
       logline: editDirectionDialog.form.logline.trim(),
       coreHook: editDirectionDialog.form.coreHook.trim(),
@@ -2964,6 +3241,8 @@ async function confirmEditDirection() {
     ElMessage.success('已保存为新的方向候选，请在候选池中对比后再采用')
     editDirectionDialog.open = false
     await loadDetail()
+    await nextTick()
+    focusResultVersion('direction', result.task.resultVersionIds)
   } catch (error) {
     apiError.value = formatApiError(error)
     await loadDetail(true)
@@ -3047,12 +3326,14 @@ async function confirmOptimizeDirection() {
   const pendingTaskId = pendingTask.value?.id
 
   try {
-    await optimizeDirection(novelId.value, versionId, {
+    const result = await optimizeDirection(novelId.value, versionId, {
       instruction,
     })
     ElMessage.success('优化候选已生成，请在候选池中对比后再采用')
     optimizeDialog.open = false
     await loadDetail()
+    await nextTick()
+    focusResultVersion('direction', result.task.resultVersionIds)
   } catch (error) {
     apiError.value = formatApiError(error)
     await loadDetail(true)
@@ -3085,7 +3366,10 @@ async function confirmStructureOptimize() {
     return
   }
 
-  const generated = await handleGenerateStructure(asset.objectType, `基于候选「${asset.title}」继续优化：${instruction}`)
+  const generated = await handleGenerateStructure(asset.objectType, undefined, {
+    sourceVersionId: asset.id,
+    instruction,
+  })
   if (generated) structureOptimizeDialog.open = false
 }
 
@@ -3096,6 +3380,7 @@ function handleDiscardCandidate(asset: StructureAssetRow) {
 function openAdoptDialog(candidate: DirectionCandidateRow) {
   adoptDialog.open = true
   adoptDialog.candidateId = candidate.id
+  adoptDialog.idempotencyKey = `direction-adopt-${crypto.randomUUID()}`
   adoptDialog.lowScore = candidate.lowScoreRequiresConfirm
   adoptDialog.reason = candidate.lowScoreRequiresConfirm ? '' : '采用该方向作为后续设定输入。'
 }
@@ -3126,10 +3411,12 @@ async function confirmAdopt() {
         seenAt: new Date().toISOString(),
       },
       currentVersionId: detail.value?.currentAssets.direction?.id ?? null,
+      idempotencyKey: adoptDialog.idempotencyKey,
     })
     ElMessage.success('方向已采用，小说进入设定阶段')
     adoptDialog.open = false
     await loadDetail()
+    openStep('setting')
   } catch (error) {
     apiError.value = formatApiError(error)
   } finally {
@@ -3181,6 +3468,7 @@ function navigateAfterStructureAdopt(objectType: StructureAssetType) {
 
   if (objectType === 'outline') {
     openStep('outline')
+    setActiveSubStep('stages')
     return
   }
 
@@ -3190,6 +3478,19 @@ function navigateAfterStructureAdopt(objectType: StructureAssetType) {
   }
 
   openStep('trial')
+}
+
+function getStructureStepKey(objectType: StructureAssetType): NovelWorkbenchStepKey {
+  if (objectType === 'setting') return 'setting'
+  if (objectType === 'chapter_plan') return 'chapterPlan'
+  return 'outline'
+}
+
+function showStructureResultLocation(objectType: StructureAssetType) {
+  const stepKey = getStructureStepKey(objectType)
+  openStep(stepKey)
+  if (objectType === 'stage_outline') setActiveSubStep('stages')
+  if (objectType === 'outline') setActiveSubStep('mainline')
 }
 
 function toggleCandidate(candidateId: string) {
