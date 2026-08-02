@@ -65,11 +65,14 @@ conclusion: approved | needs_revision | blocked
 | NOV-CANDIDATE-01 | 编辑候选生成新版本，原版本保留，刷新后内容保持 | E4/E6 | 静默覆盖、刷新丢失 |
 | NOV-CANDIDATE-02 | 优化必须填写 instruction；保存 baseVersionId；结果回显目标与差异 | E4 | 空指令可提交、无法追溯来源 |
 | NOV-CANDIDATE-03 | 融合返回 resultId；页面自动滚动、高亮并展示来源版本 | E4 | 只 toast/刷新，用户找不到结果 |
-| NOV-CANDIDATE-04 | 采用后同类型只有一个 current，旧版历史化 | E4 + NOV-CURRENT-01 | 两个当前版本或视觉混淆 |
+| NOV-CANDIDATE-04 | API/持久层采用后同类型只有一个 current，旧版历史化 | E4 + NOV-CURRENT-01 | 数据层出现两个当前版本；只证明页面投影 |
+| NOV-CANDIDATE-UI-01 | 页面只把一个已采用候选投影为正式版本，旧版明确历史化且不再提供误导动作；刷新后展示一致 | E4 | 两张卡片同时像已采用；历史版本仍可采用；刷新后回退 |
 | NOV-CANDIDATE-05 | 采用后自动进入正确下一子步骤，刷新后路由与推荐动作一致 | E4 | 成功后无下一步或回到旧阶段 |
 | NOV-CANDIDATE-06 | “查看结果”改变 URL/步骤/目标 ID/滚动位置，高亮至少 2 秒 | E4 | 点击无可观察效果 |
 | NOV-AI-CTA-01 | 章节目录、生成第 1 章、继续试写等主 CTA 点击后立即出现 taskId/任务态，完成后定位结果并给出下一步 | E4 | 点击无效果、只有本地 loading、完成后无结果/下一步 |
 | NOV-PREFERENCE-01 | 题材/爽点可配置或自定义；停用值保留历史；模型读取权威配置 | E3/E4 | 新选项必须改前端代码、历史值损坏 |
+
+关闭检查点：`NOV-CANDIDATE-01` 至 `NOV-CANDIDATE-03`、`NOV-CANDIDATE-UI-01`、`NOV-CANDIDATE-05`、`NOV-CANDIDATE-06` 与 `NOV-AI-CTA-01` 已由 RP-05B1 第七候选、真实浏览器原事故复验、三方独立代码门禁和 PR #61 merge `91751dd` 达到 E4；`NOV-CANDIDATE-04` 连同 `NOV-CURRENT-01` 的真实 MySQL 约束完整保留给 `RMD-NOV-VERSION-001`，本检查点也不覆盖真实 provider 质量或 `NOV-PREFERENCE-01`。
 
 ## 5. 统一任务平台
 

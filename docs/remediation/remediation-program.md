@@ -32,7 +32,8 @@
 - 当前没有活动实现包；`RP-02B2a3` 未自动授权。
 - 最近完成的 `RP-02B2a2` 只形成 E3 限定证据，`RMD-TASK-002=partial`、`RMD-TASK-003=open`；不因本轮治理关闭而改变。
 - PR #58/#59 已完成状态单源、进度门禁和主干 push 路由回归修复；`RMD-GOV-STATUS-001` 重新关闭，停工计数在本关闭检查点归零。
-- 下一动作固定为 `select_result_linked_package`：只选择能够明确推进 PB/P0 或 RB/P0/P1 的纵向包，并在授权前写明 `target_issue_ids`、`expected_ledger_transition`、用户结果和证据桶。
+- RP-05B1 已以 PR #61 merge `91751dd` 完成候选结果承接 E4，关闭 `RMD-NOV-UX-001`；真实 MySQL current 唯一性、真实 provider 和偏好管理继续由各自问题 ID 承担。
+- 下一动作保持 `select_result_linked_package`：只选择能够明确推进 PB/P0 或 RB/P0/P1 的纵向包，并在授权前写明 `target_issue_ids`、`expected_ledger_transition`、用户结果和证据桶。
 - 当前机器状态由 `docs/remediation/execution-scoreboard.json` 投影，`npm run governance:progress` 校验其与总账和主控状态一致。
 
 ## 3. 依赖图

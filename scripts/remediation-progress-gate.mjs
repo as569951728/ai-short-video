@@ -77,6 +77,21 @@ export const REPOSITORY_FLOW_POLICY = {
       issueId: 'RMD-GOV-STATUS-001',
       closureHead: 'e3cdc9a2474750c28110e6b83b0e39a43bf80cb6',
       closedCountAfterEvent: 10
+    },
+    {
+      id: 'pr-61-merged',
+      type: 'pull_request_merged',
+      pullRequest: 61,
+      mergeSha: '91751dd1f4d08d3b4eb38971cd2f060836b98cfe',
+      authorityEventId: 'MCE-20260802-RP05B1-NOV-UX-CLOSED'
+    },
+    {
+      id: 'ledger-closure-rmd-nov-ux-001-2026-08-02',
+      type: 'ledger_closure',
+      authorityEventId: 'MCE-20260802-RP05B1-NOV-UX-CLOSED',
+      issueId: 'RMD-NOV-UX-001',
+      closureHead: '91751dd1f4d08d3b4eb38971cd2f060836b98cfe',
+      closedCountAfterEvent: 11
     }
   ]
 };
@@ -120,6 +135,24 @@ export function parseIssueLedger(markdown) {
     fail('issue ledger total summary does not match issue rows');
   }
   return { total: issues.length, closed, openOrPending: issues.length - closed, byCategory };
+}
+
+export function validateNovelCandidateAcceptanceOwnership(markdown) {
+  const rows = markdown.split('\n');
+  const uxRow = rows.find((line) => /^\|\s*RMD-NOV-UX-001\s*\|/.test(line));
+  const versionRow = rows.find((line) => /^\|\s*RMD-NOV-VERSION-001\s*\|/.test(line));
+  if (!uxRow && !versionRow) return;
+  if (!uxRow || !versionRow) fail('novel candidate acceptance ownership requires both UX and VERSION rows');
+  if (
+    !uxRow.includes('NOV-CANDIDATE-UI-01') ||
+    uxRow.includes('NOV-CANDIDATE-04') ||
+    uxRow.includes('NOV-CURRENT-01')
+  ) {
+    fail('RMD-NOV-UX-001 must own only the E4 current-version UI projection acceptance');
+  }
+  if (!versionRow.includes('NOV-CANDIDATE-04') || !versionRow.includes('NOV-CURRENT-01')) {
+    fail('RMD-NOV-VERSION-001 must retain candidate current uniqueness and MySQL acceptance');
+  }
 }
 
 function parseEventBlocks(markdown) {
@@ -210,6 +243,7 @@ export function validateProgressState({
   scoreboard
 }) {
   const ledger = parseIssueLedger(ledgerMarkdown);
+  validateNovelCandidateAcceptanceOwnership(ledgerMarkdown);
   if (scoreboard.schemaVersion !== 1) fail('scoreboard schemaVersion must be 1');
   assertJsonEqual(scoreboard.ledger, ledger, 'scoreboard ledger');
 

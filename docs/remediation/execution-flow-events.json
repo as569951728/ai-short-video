@@ -65,6 +65,21 @@
       "issueId": "RMD-GOV-STATUS-001",
       "closureHead": "e3cdc9a2474750c28110e6b83b0e39a43bf80cb6",
       "closedCountAfterEvent": 10
+    },
+    {
+      "id": "pr-61-merged",
+      "type": "pull_request_merged",
+      "pullRequest": 61,
+      "mergeSha": "91751dd1f4d08d3b4eb38971cd2f060836b98cfe",
+      "authorityEventId": "MCE-20260802-RP05B1-NOV-UX-CLOSED"
+    },
+    {
+      "id": "ledger-closure-rmd-nov-ux-001-2026-08-02",
+      "type": "ledger_closure",
+      "authorityEventId": "MCE-20260802-RP05B1-NOV-UX-CLOSED",
+      "issueId": "RMD-NOV-UX-001",
+      "closureHead": "91751dd1f4d08d3b4eb38971cd2f060836b98cfe",
+      "closedCountAfterEvent": 11
     }
   ]
 }

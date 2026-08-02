@@ -4,20 +4,20 @@
   "mode": "execution_reset",
   "ledger": {
     "total": 43,
-    "closed": 10,
-    "openOrPending": 33,
+    "closed": 11,
+    "openOrPending": 32,
     "byCategory": {
       "PB": { "total": 7, "closed": 0 },
-      "RB": { "total": 12, "closed": 0 },
+      "RB": { "total": 12, "closed": 1 },
       "QG": { "total": 22, "closed": 9 },
       "DEBT": { "total": 2, "closed": 1 }
     }
   },
   "delivery": {
     "activeImplementationPackage": null,
-    "lastCompletedPackage": "RP-02B2a2",
-    "lastCompletedStage": "E3",
-    "lastResult": "verified_partial_issue_impact"
+    "lastCompletedPackage": "RP-05B1",
+    "lastCompletedStage": "E4",
+    "lastResult": "closed_rmd_nov_ux_001"
   },
   "acceptance": {
     "activePackage": null,
@@ -25,8 +25,8 @@
   },
   "productOutcome": {
     "pbClosed": 0,
-    "rbClosed": 0,
-    "status": "not_proven"
+    "rbClosed": 1,
+    "status": "partial"
   },
   "worktreeAttribution": {
     "status": "classified_no_mutation",

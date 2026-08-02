@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   parseIssueLedger,
+  validateNovelCandidateAcceptanceOwnership,
   validateProgressFiles,
   validateProgressState
 } from './remediation-progress-gate.mjs';
@@ -118,6 +119,29 @@ const validate = (overrides = {}) => validateProgressState({
 
 test('parses ledger counts by category and state', () => {
   assert.deepEqual(parseIssueLedger(ledger), scoreboard.ledger);
+});
+
+test('keeps UI projection acceptance separate from MySQL current uniqueness', () => {
+  const ownership = `
+| RMD-NOV-VERSION-001 | RB/P1 | version | partial | evidence | owner | package | NOV-CURRENT-01, NOV-CANDIDATE-04 |
+| RMD-NOV-UX-001 | RB/P1 | ux | closed | evidence | owner | package | NOV-CANDIDATE-UI-01 |
+`;
+  assert.doesNotThrow(() => validateNovelCandidateAcceptanceOwnership(ownership));
+  assert.throws(
+    () => validateNovelCandidateAcceptanceOwnership(ownership.replace('NOV-CANDIDATE-UI-01', 'NOV-CANDIDATE-04')),
+    /must own only the E4 current-version UI projection/
+  );
+  assert.throws(
+    () =>
+      validateNovelCandidateAcceptanceOwnership(
+        ownership.replace('NOV-CANDIDATE-UI-01 |', 'NOV-CANDIDATE-UI-01, NOV-CURRENT-01 |')
+      ),
+    /must own only the E4 current-version UI projection/
+  );
+  assert.throws(
+    () => validateNovelCandidateAcceptanceOwnership(ownership.replace('NOV-CURRENT-01, NOV-CANDIDATE-04', 'NOV-CURRENT-01')),
+    /must retain candidate current uniqueness and MySQL acceptance/
+  );
 });
 
 test('accepts a result-oriented execution reset snapshot', () => {

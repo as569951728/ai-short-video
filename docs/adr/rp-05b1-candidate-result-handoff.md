@@ -41,7 +41,7 @@ valid_until: 2026-08-31
 | NOV-CANDIDATE-01 | 编辑创建新候选、旧候选保留、刷新可见 | MySQL 并发唯一性 |
 | NOV-CANDIDATE-02 | 优化必须有 instruction，返回并展示来源与变更原因 | 真实 provider 输出质量 |
 | NOV-CANDIDATE-03 | 融合返回并定位精确候选，展示多个来源版本 | 真实模型融合质量 |
-| NOV-CANDIDATE-04 | API/页面同一资产只展示一个正式 current，旧版历史化 | `NOV-CURRENT-01` 的 E6 数据库约束仍由 `RMD-NOV-VERSION-001` 承担 |
+| NOV-CANDIDATE-UI-01 | 页面同一资产只展示一个正式 current，旧版历史化且不再提供误导动作 | API/数据库唯一 current 的 `NOV-CANDIDATE-04 + NOV-CURRENT-01` E6 约束仍由 `RMD-NOV-VERSION-001` 承担 |
 | NOV-CANDIDATE-05 | 采用后进入正确下一步骤，刷新后状态一致 | 后续步骤内容质量 |
 | NOV-CANDIDATE-06 | 查看结果改变步骤并滚动、高亮精确目标至少 2 秒 | 跨设备恢复 |
 | NOV-AI-CTA-01 | 章节目录/试写动作沿用可观察任务和精确结果承接合同 | 长任务 checkpoint、真实 provider 稳定性 |
