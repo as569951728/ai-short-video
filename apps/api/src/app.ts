@@ -11,6 +11,7 @@ import type { AiProviderEnv } from './modules/ai/modelRouting.js';
 import type { NovelRepository, RequestContextResolver } from './modules/novels/domain/novelDomain.js';
 import type { VideoRepository } from './modules/videos/domain/videoDomain.js';
 import { createNovelProvidersFromEnv } from './modules/novels/providers/providerFactory.js';
+import type { FullReviewProvider } from './modules/novels/providers/mockFullReviewProvider.js';
 import type { HotspotReferenceGateway } from './modules/novels/integrations/hotspotReferenceGateway.js';
 import { createInMemoryNovelRepository } from './modules/novels/repositories/inMemoryNovelRepository.js';
 import { createInMemoryVideoRepository } from './modules/videos/repositories/inMemoryVideoRepository.js';
@@ -24,6 +25,7 @@ interface BuildAppOptions {
   videoRepository?: VideoRepository;
   aiProviderEnv?: AiProviderEnv;
   llmClient?: LlmClient;
+  fullReviewProvider?: FullReviewProvider;
   hotspotReferenceGateway?: HotspotReferenceGateway;
   now?: () => Date;
   requestContextResolver?: RequestContextResolver | null;
@@ -74,6 +76,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   await registerNovelRoutes(app, {
     repository: novelRepository,
     ...novelProviders,
+    fullReviewProvider: options.fullReviewProvider ?? novelProviders.fullReviewProvider,
     hotspotReferenceGateway: options.hotspotReferenceGateway,
     now: options.now,
     requestContextResolver: options.requestContextResolver ?? undefined

@@ -18,6 +18,7 @@ import {
   executeNovelProviderAction,
   listActionExecutionPlans,
   type CreativeAssetProviderInputV1,
+  type FullReviewEvidenceProviderInputV1,
   type NovelProviderSet,
   type StructureCurrentAssetsProviderInputV1,
   type StructureProviderAction
@@ -30,6 +31,7 @@ import { MockFullReviewProvider } from './providers/mockFullReviewProvider.js';
 import { MockStructureProvider } from './providers/mockStructureProvider.js';
 import { MockTrialProvider } from './providers/mockTrialProvider.js';
 import { DeepSeekNovelProvider } from './providers/deepseekNovelProvider.js';
+import { createFullReviewEvidenceFixture } from './testSupport/fullReviewEvidenceFixture.js';
 type MockBodyChapter = Awaited<ReturnType<MockBodyProvider['generateBodyChapter']>>;
 type MockTrialFollowup = Awaited<ReturnType<MockTrialProvider['generateFollowup']>>;
 const buildApp = (options: Parameters<typeof buildBaseApp>[0] = {}) => buildBaseApp({
@@ -2940,6 +2942,32 @@ describe('novel package 6 body generation routes', () => {
 });
 
 describe('novel package 7 full review and video readiness routes', () => {
+  it('creates a non-production 12-chapter full-review acceptance seed without starting review', async () => {
+    const repository = createInMemoryNovelRepository();
+    const app = await buildApp({
+      logger: false,
+      novelRepository: repository,
+      now: () => new Date('2026-06-17T16:55:00.000Z')
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/dev/novels/acceptance-seeds/full-review',
+      payload: { title: 'RP-04C 浏览器验收夹具' }
+    });
+
+    assert.equal(response.statusCode, 201, response.body);
+    const seed = response.json().data;
+    assert.equal(seed.acceptanceStep, 'fullReview');
+    assert.equal(seed.chapterCount, 12);
+    assert.equal(seed.pendingChapterCount, 0);
+    assert.equal(seed.fullReviewTaskCreated, false);
+    assert.equal(repository.getNovelChapters().filter((chapter) => chapter.novelId === seed.novelId).length, 12);
+    assert.equal(repository.getGenerationTasks().some((task) => task.novelId === seed.novelId && task.taskType === 'novel_full_review'), false);
+
+    await app.close();
+  });
+
   it('blocks full review when body chapters are not all completed and creates no review task', async () => {
     const repository = createInMemoryNovelRepository();
     const app = await buildApp({
@@ -2968,11 +2996,56 @@ describe('novel package 7 full review and video readiness routes', () => {
     await app.close();
   });
 
-  it('runs full review, confirms completion, then confirms video readiness as two separate actions', async () => {
+  it('fails closed before claim and provider when the authoritative final memory is missing', async () => {
     const repository = createInMemoryNovelRepository();
+    let providerCalls = 0;
     const app = await buildApp({
       logger: false,
       novelRepository: repository,
+      fullReviewProvider: {
+        async generateFullReview() {
+          providerCalls += 1;
+          throw new Error('provider must not be called');
+        }
+      },
+      now: () => new Date('2026-06-17T17:05:00.000Z')
+    });
+    const { novelId, strategySnapshot } = await createNovelReadyForBody(app, '全书审稿记忆缺失门禁测试', 8);
+    await postBodyBatch(app, novelId, strategySnapshot);
+    repository.getLongTermMemories().splice(0);
+    const detail = (await app.inject({ method: 'GET', url: `/novels/${novelId}` })).json().data;
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/full-review`,
+      payload: {
+        idempotencyKey: 'full-review-memory-missing-1',
+        expectedNovelVersion: detail.updatedAt
+      }
+    });
+
+    assert.equal(response.statusCode, 409, response.body);
+    assert.equal(response.json().error.code, ErrorCode.VersionConflict);
+    assert.equal(response.json().error.details.code, 'SOURCE_STALE');
+    assert.equal(providerCalls, 0);
+    assert.equal(repository.getGenerationTasks().some((task) => task.taskType === 'novel_full_review'), false);
+    assert.equal(repository.getReviewReports().some((report) => report.objectType === 'novel'), false);
+    await app.close();
+  });
+
+  it('runs full review, confirms completion, then confirms video readiness as two separate actions', async () => {
+    const repository = createInMemoryNovelRepository();
+    const fullReviewInputs: FullReviewEvidenceProviderInputV1[] = [];
+    const mockFullReviewProvider = new MockFullReviewProvider();
+    const app = await buildApp({
+      logger: false,
+      novelRepository: repository,
+      fullReviewProvider: {
+        async generateFullReview(input) {
+          fullReviewInputs.push(structuredClone(input));
+          return mockFullReviewProvider.generateFullReview(input);
+        }
+      },
       now: () => new Date('2026-06-17T17:10:00.000Z')
     });
     const { novelId, strategySnapshot } = await createNovelReadyForBody(app, '全书审稿待视频化通过测试', 8);
@@ -2996,6 +3069,20 @@ describe('novel package 7 full review and video readiness routes', () => {
     assert.equal(reviewResult.statusSummary.creationStage, 'completion_confirm');
     assert.equal(reviewResult.statusSummary.stageStatus, 'waiting_user');
     assert.equal(reviewResult.statusSummary.recommendedAction.label, '确认小说完成');
+    assert.equal(fullReviewInputs.length, 1);
+    assert.equal(fullReviewInputs[0].coverageManifest.chapterCount, 8);
+    assert.deepEqual(fullReviewInputs[0].coverageManifest.coveredChapterNos, [1, 2, 3, 4, 5, 6, 7, 8]);
+    assert.equal(fullReviewInputs[0].chapterEvidence.length, 8);
+    assert.equal(new Set(fullReviewInputs[0].chapterEvidence.map((item) => item.chapter.id)).size, 8);
+    assert.equal(fullReviewInputs[0].chapterEvidence.every((item) => Boolean(
+      item.content.excerpts.opening && item.featureCard.featureCardVersionId && item.review.reviewReportId
+    )), true);
+    assert.equal(fullReviewInputs[0].memory.sourceContentVersionId, fullReviewInputs[0].chapterEvidence.at(-1)?.content.contentVersionId);
+    const fullReviewTask = repository.getGenerationTasks().find((task) => task.id === reviewResult.task.id)!;
+    const taskEnvelopeRefs = (fullReviewTask.executionEnvelopeJson as any).sourceVersionRefs;
+    assert.equal(taskEnvelopeRefs.evidenceManifestHash, fullReviewInputs[0].coverageManifest.manifestHash);
+    const persistedFullReview = repository.getReviewReports().find((report) => report.id === reviewResult.fullReview.id)!;
+    assert.equal((persistedFullReview.metadata as any).sourceVersionRefs.evidenceManifestHash, fullReviewInputs[0].coverageManifest.manifestHash);
 
     const reviewReplayResponse = await app.inject({
       method: 'POST',
@@ -3009,6 +3096,7 @@ describe('novel package 7 full review and video readiness routes', () => {
     assert.equal(reviewReplayResponse.json().data.task.id, reviewResult.task.id);
     assert.equal(reviewReplayResponse.json().data.fullReview.id, reviewResult.fullReview.id);
     assert.deepEqual(reviewReplayResponse.json().data.affectedObjects, []);
+    assert.equal(fullReviewInputs.length, 1);
 
     const reviewConflictResponse = await app.inject({
       method: 'POST',
@@ -4213,7 +4301,10 @@ describe('RP-02B2a1 registry and strict provider ABI', () => {
     await executeNovelProviderAction(providers, { action: 'chapter_rewrite', novel, chapter, currentContent: content, instruction: '重写' });
     await executeNovelProviderAction(providers, { action: 'chapter_impact_assess', novel, chapter, oldContent: content, newContent: content });
     await executeNovelProviderAction(providers, { action: 'chapter_adopt_impact_assess', novel, chapter, oldContent: null, newContent: content });
-    await executeNovelProviderAction(providers, { action: 'novel_full_review', novel, chapters: [chapter], sourceVersionRefs: { directionVersionId: null, settingVersionId: null, outlineVersionId: null, stageOutlineVersionId: null, chapterPlanVersionId: null, bodyStrategySnapshotId: null, chapterContentVersionIds: [] } });
+    await executeNovelProviderAction(providers, createFullReviewEvidenceFixture({
+      novel: { ...novel, chapterLimit: 1 },
+      chapter
+    }));
     assert.throws(() => Reflect.apply(executeNovelProviderAction, undefined, [providers, { action: 'unknown_action' }]),
       (error) => error instanceof BusinessError && error.code === ErrorCode.ConfigMissing);
     const unknownKey = 'PROMPT_CANARY';
@@ -4221,7 +4312,7 @@ describe('RP-02B2a1 registry and strict provider ABI', () => {
       const input = structuredClone(item.payload) as Record<string, unknown>;
       input[unknownKey] = unknownKey;
       assert.throws(() => Reflect.apply(executeNovelProviderAction, undefined, [providers, input]), /invalid keys/);
-      for (const [key, canary] of [[unknownKey, unknownKey], ['SECRET_API_KEY_CANARY', 'secret'], ['rawEntityCanary', RAW_ENTITY_CANARY]] as const) { const nested = structuredClone(item.payload) as Record<string, unknown>, value = Object.values(nested).find((candidate) => candidate && typeof candidate === 'object'), target = (Array.isArray(value) ? value[0] : value) as Record<string, unknown>; target[key] = canary; assert.throws(() => Reflect.apply(executeNovelProviderAction, undefined, [providers, nested]), /invalid keys/); }
+      for (const [key, canary] of [[unknownKey, unknownKey], ['SECRET_API_KEY_CANARY', 'secret'], ['rawEntityCanary', RAW_ENTITY_CANARY]] as const) { const nested = structuredClone(item.payload) as Record<string, unknown>, value = Object.values(nested).find((candidate) => candidate && typeof candidate === 'object'), target = (Array.isArray(value) ? value[0] : value) as Record<string, unknown>; target[key] = canary; assert.throws(() => Reflect.apply(executeNovelProviderAction, undefined, [providers, nested]), item.action === 'novel_full_review' ? /hash|invalid keys|字段不符合 full-review evidence ABI/ : /invalid keys/); }
       assert.equal(calls.length, 15, `${item.action} nested canary provider=0`);
     }
     const missingRequired = structuredClone(calls.find((item) => item.action === 'direction_fuse')!.payload) as Record<string, unknown>; delete missingRequired.sources; assert.throws(() => Reflect.apply(executeNovelProviderAction, undefined, [providers, missingRequired]), /invalid keys/);
@@ -4374,7 +4465,13 @@ describe('RP-02B2a1 registry and strict provider ABI', () => {
     for (const { action, payload } of captured) {
       assert.deepEqual(exactKeys(payload), ACTION_INPUT_KEYS[action].filter((key) => key in payload || !((action === 'direction_fuse' && key === 'reason') || (action !== 'chapter_rewrite' && key === 'instruction'))));
       assertNestedProviderAbi(action, payload);
-      assert.doesNotMatch(JSON.stringify(payload), /tenantId|deletedAt|createdAt|updatedAt|rawEntityCanary|RAW_ENTITY_CANARY/);
+      const leakProbe = structuredClone(payload);
+      if (action === 'novel_full_review') {
+        const manifest = leakProbe.coverageManifest as Record<string, unknown>;
+        assert.equal(manifest.tenantId, 'tenant_test');
+        delete manifest.tenantId;
+      }
+      assert.doesNotMatch(JSON.stringify(leakProbe), /tenantId|deletedAt|createdAt|updatedAt|rawEntityCanary|RAW_ENTITY_CANARY/);
     }
     assert.equal((captured.find((item) => item.action === 'direction_generate')?.payload.novel as { policyProfileVersionId: string | null }).policyProfileVersionId, null);
     const mutatedNovelPayload = captured.find((item) => item.action === 'direction_generate')?.payload.novel as { title: string; genres: string[]; chapterLimit: number; chapterWordMin: number; chapterWordMax: number };
@@ -4509,7 +4606,17 @@ const nestedProviderKeys = {
   currentAssets: ['direction', 'outline', 'setting', 'stageOutline'],
   creativeAsset: ['content', 'id', 'objectType', 'riskLevel', 'riskTags', 'score', 'summary', 'title', 'versionNo'],
   sourceVersionRefs: ['bodyStrategySnapshotId', 'chapterContentVersionIds', 'chapterPlanVersionId', 'directionVersionId', 'outlineVersionId', 'settingVersionId', 'stageOutlineVersionId'],
-  previousMemory: ['characterStates', 'factsCannotContradict', 'previousSummary', 'relationshipStates', 'unresolvedConflicts']
+  previousMemory: ['characterStates', 'factsCannotContradict', 'previousSummary', 'relationshipStates', 'unresolvedConflicts'],
+  fullReviewCoverageManifest: ['chapterCount', 'chapterPlanVersionId', 'chapters', 'coveredChapterNos', 'manifestHash', 'manifestVersion', 'memory', 'novelId', 'policyProfileVersionId', 'tenantId'],
+  fullReviewCoverageChapter: ['chapterId', 'chapterNo', 'contentHash', 'contentRevision', 'contentVersionId', 'featureCardHash', 'featureCardRevision', 'featureCardVersionId', 'reviewHash', 'reviewReportId', 'reviewRevision'],
+  fullReviewCoverageMemory: ['memoryHash', 'memoryId', 'memoryRevision'],
+  fullReviewChapterEvidence: ['chapter', 'content', 'evidenceHash', 'featureCard', 'review'],
+  fullReviewContentEvidence: ['contentHash', 'contentVersionId', 'excerpts', 'revision', 'summary', 'wordCount'],
+  fullReviewExcerpts: ['ending', 'middle', 'opening'],
+  fullReviewFeatureEvidence: ['appealPoint', 'characterChanges', 'coreTask', 'emotionKeywords', 'endingHook', 'factsCannotChange', 'featureCardHash', 'featureCardVersionId', 'featuresToStrengthen', 'foreshadowingOperation', 'keyInformation', 'mainConflict', 'oneLineSummary', 'relationshipChanges', 'revision'],
+  fullReviewEvidenceMemory: ['characterStates', 'factsCannotContradict', 'items', 'locations', 'memoryHash', 'memoryId', 'newSettings', 'organizations', 'plantedForeshadowing', 'previousSummary', 'relationshipStates', 'resolvedForeshadowing', 'revision', 'sourceContentVersionId', 'unresolvedConflicts'],
+  fullReviewReviewEvidence: ['allowNextStep', 'blockingIssueCount', 'issues', 'policyProfileVersionId', 'problems', 'rating', 'recommendedAction', 'resolvedStatus', 'reviewHash', 'reviewReportId', 'revision', 'suggestions', 'summary', 'totalScore'],
+  fullReviewIssue: ['dimension', 'message', 'severity', 'suggestion']
 };
 function assertNestedProviderAbi(action: string, payload: Record<string, unknown>) {
   if ('novel' in payload) assert.deepEqual(exactKeys(payload.novel), nestedProviderKeys.novel, `${action}.novel`);
@@ -4541,6 +4648,26 @@ function assertNestedProviderAbi(action: string, payload: Record<string, unknown
     }
   }
   if ('sourceVersionRefs' in payload) assert.deepEqual(exactKeys(payload.sourceVersionRefs), nestedProviderKeys.sourceVersionRefs, `${action}.sourceVersionRefs`);
+  if (action === 'novel_full_review') {
+    const manifest = payload.coverageManifest as FullReviewEvidenceProviderInputV1['coverageManifest'];
+    assert.deepEqual(exactKeys(manifest), nestedProviderKeys.fullReviewCoverageManifest, `${action}.coverageManifest`);
+    assert.deepEqual(exactKeys(manifest.memory), nestedProviderKeys.fullReviewCoverageMemory, `${action}.coverageManifest.memory`);
+    for (const item of manifest.chapters) {
+      assert.deepEqual(exactKeys(item), nestedProviderKeys.fullReviewCoverageChapter, `${action}.coverageManifest.chapters[]`);
+    }
+    for (const item of payload.chapterEvidence as FullReviewEvidenceProviderInputV1['chapterEvidence']) {
+      assert.deepEqual(exactKeys(item), nestedProviderKeys.fullReviewChapterEvidence, `${action}.chapterEvidence[]`);
+      assert.deepEqual(exactKeys(item.chapter), nestedProviderKeys.chapter, `${action}.chapterEvidence[].chapter`);
+      assert.deepEqual(exactKeys(item.content), nestedProviderKeys.fullReviewContentEvidence, `${action}.chapterEvidence[].content`);
+      assert.deepEqual(exactKeys(item.content.excerpts), nestedProviderKeys.fullReviewExcerpts, `${action}.chapterEvidence[].content.excerpts`);
+      assert.deepEqual(exactKeys(item.featureCard), nestedProviderKeys.fullReviewFeatureEvidence, `${action}.chapterEvidence[].featureCard`);
+      assert.deepEqual(exactKeys(item.review), nestedProviderKeys.fullReviewReviewEvidence, `${action}.chapterEvidence[].review`);
+      for (const issue of item.review.issues) {
+        assert.deepEqual(exactKeys(issue), nestedProviderKeys.fullReviewIssue, `${action}.chapterEvidence[].review.issues[]`);
+      }
+    }
+    assert.deepEqual(exactKeys(payload.memory), nestedProviderKeys.fullReviewEvidenceMemory, `${action}.memory`);
+  }
 }
 function assertDirectionDraftProviderAbi(value: unknown, path: string) {
   assert.deepEqual(exactKeys(value), nestedProviderKeys.directionDraft, path);

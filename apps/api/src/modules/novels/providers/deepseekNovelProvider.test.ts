@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { LlmProviderError, type ChatCompletionRequest, type LlmClient } from '../../ai/llmClient.js';
+import { createFullReviewEvidenceFixture } from '../testSupport/fullReviewEvidenceFixture.js';
 import { DeepSeekNovelProvider } from './deepseekNovelProvider.js';
 
 describe('DeepSeek novel provider', () => {
@@ -15,6 +16,7 @@ describe('DeepSeek novel provider', () => {
     assert.equal(provider.getModelRoutingVersion('direction_generate'), 'deepseek:deepseek-general-test:route-v1');
     assert.equal(provider.getModelRoutingVersion('chapter_plan_generate'), 'deepseek:deepseek-structure-test:route-v1');
     assert.equal(provider.getModelRoutingVersion('chapter_impact_assess'), 'deepseek:deepseek-reasoner-test:route-v1');
+    assert.equal(provider.getModelRoutingVersion('novel_full_review'), 'deepseek:deepseek-reasoner-test:route-v3');
   });
 
   it('maps fake DeepSeek JSON into direction, structure, trial, body, impact, and full-review drafts', async () => {
@@ -220,7 +222,17 @@ describe('DeepSeek novel provider', () => {
     });
     assert.equal(impact.impactLevel, 'minor');
 
-    const review = await provider.generateFullReview({ novel, chapters: [createChapter(1)], sourceVersionRefs: {} });
+    const review = await provider.generateFullReview(createFullReviewEvidenceFixture({
+      novel: {
+        id: novel.id,
+        title: novel.title,
+        genres: novel.genres,
+        chapterLimit: 1,
+        chapterWordMin: novel.chapterWordRange.min,
+        chapterWordMax: novel.chapterWordRange.max,
+        policyProfileVersionId: null
+      }
+    }));
     assert.equal(review.gateResult, 'pass');
     assert.equal(review.firstVideoSuggestion.titleHook, '被误解的他，反手拿出证据');
   });

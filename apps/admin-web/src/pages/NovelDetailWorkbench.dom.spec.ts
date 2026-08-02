@@ -742,6 +742,64 @@ describe('NovelDetailWorkbench DOM behavior', () => {
     expect(mocks.generateTrial).toHaveBeenCalledTimes(secretCanaries.length)
     promptSpy.mockRestore()
   })
+
+  it('renders authoritative chapter locations for full-review issues without exposing internal ids', async () => {
+    mocks.route.query = { step: 'fullReview' }
+    mocks.getNovelDetail.mockResolvedValue(createNovelDetail({
+      creationStage: NovelCreationStage.FullReview,
+      stageStatus: StageStatus.WaitingUser,
+      statusSummary: {
+        displayStatusText: '全书审稿',
+        recommendedAction: { type: 'resolve_full_review_issue', label: '处理问题', reason: '先处理阻塞问题' },
+      },
+      chapters: [
+        { id: 'chapter-authority-002', chapterNo: 2, title: '第二章' },
+        { id: 'chapter-authority-008', chapterNo: 8, title: '第八章' },
+      ],
+      latestFullReview: {
+        id: 'review-001',
+        version: 1,
+        totalScore: 68,
+        rating: 'C',
+        summary: '存在跨章一致性冲突。',
+        suggestions: ['先修复阻塞问题'],
+        videoSuggestion: '',
+        firstVideoSuggestion: { chapterRange: '', narrationHook: '' },
+        issues: [{
+          issueId: 'issue-001',
+          title: '人物生死状态冲突',
+          plainDescription: '人物状态前后矛盾。',
+          severity: 'blocking',
+          scopeType: 'chapter',
+          scopeRefs: ['chapter-authority-002', 'chapter-authority-008'],
+          dimension: 'character_continuity',
+          blocking: true,
+          recommendedTarget: '第 2、8 章',
+          recommendedAction: '统一人物状态。',
+          status: 'open',
+          acceptedReason: null,
+        }],
+        gate: {
+          id: 'gate-001',
+          gateResultText: '阻断',
+          allowCompletion: false,
+          forcePassAllowed: false,
+          forcePassReason: null,
+        },
+      },
+    }))
+
+    wrapper = mount(NovelDetailWorkbench, {
+      attachTo: document.body,
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+
+    const scope = wrapper.find('.full-review-issue-scope')
+    expect(scope.text()).toBe('涉及章节：第 2 章、第 8 章')
+    expect(wrapper.text()).not.toContain('chapter-authority-002')
+    expect(wrapper.text()).not.toContain('chapter-authority-008')
+  })
 })
 
 function createNovelDetail(overrides: Record<string, unknown> = {}) {

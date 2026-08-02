@@ -141,7 +141,6 @@ import {
   projectChapterProviderInput,
   projectCreativeAssetProviderInput,
   projectDirectionDraftProviderInput,
-  projectFullReviewSourceVersionRefsProviderInput,
   projectLongTermMemoryProviderInput,
   projectNovelProviderInput,
   projectPreferencesProviderInput,
@@ -1599,12 +1598,6 @@ export class NovelService {
 
     const chapters = await this.ensureFullReviewGate(novel, context);
     const sourceVersionRefs = createFullReviewSourceRefs(novel, chapters);
-    const providerInput = {
-      action: 'novel_full_review' as const,
-      novel: projectNovelProviderInput(novel),
-      chapters: chapters.map(projectChapterProviderInput),
-      sourceVersionRefs: projectFullReviewSourceVersionRefsProviderInput(sourceVersionRefs)
-    };
     const execution = await executeClaimedGeneration({
       action: 'novel_full_review',
       repository: this.options.repository,
@@ -1615,21 +1608,30 @@ export class NovelService {
       context,
       now: this.now,
       providerCapability: this.fullReviewProvider,
-      provider: (authoritativeInput) => executeNovelProviderAction(this.getProviderSet(), authoritativeInput as typeof providerInput),
-      finalize: (task, draft) => this.options.repository.createFullReview({
-        novel,
-        task,
-        chapters,
-        draft: {
-          ...draft,
-          reviewPolicyVersionId: requestFingerprint.reviewPolicyVersionId
-        },
-        idempotencyKey,
-        requestFingerprint,
-        sourceVersionRefs,
-        context,
-        now: this.now()
-      })
+      provider: (authoritativeInput) => executeNovelProviderAction(
+        this.getProviderSet(),
+        authoritativeInput as NovelProviderActionInputFor<'novel_full_review'>
+      ),
+      finalize: (task, draft) => {
+        const executionEnvelope = toRecord(task.executionEnvelopeJson);
+        const authoritativeSourceVersionRefs = toRecord(executionEnvelope.sourceVersionRefs);
+        return this.options.repository.createFullReview({
+          novel,
+          task,
+          chapters,
+          draft: {
+            ...draft,
+            reviewPolicyVersionId: requestFingerprint.reviewPolicyVersionId
+          },
+          idempotencyKey,
+          requestFingerprint,
+          sourceVersionRefs: Object.keys(authoritativeSourceVersionRefs).length
+            ? authoritativeSourceVersionRefs
+            : sourceVersionRefs,
+          context,
+          now: this.now()
+        });
+      }
     });
     if (execution.reused) {
       const existing = await this.options.repository.findFullReviewByIdempotencyKey(context.tenantId, novelId, idempotencyToken);
@@ -3667,9 +3669,21 @@ function ensureFullReviewSourceRefsFresh(gate: FullReviewGateRecord, expectedRef
   if (gate.isStale) {
     throw new BusinessError(ErrorCode.CandidateStale, gate.staleReason ?? '全书审稿来源已过期，请重新审稿');
   }
-  if (!isSameFingerprint(gate.sourceVersionRefs, expectedRefs)) {
+  if (!isSameFingerprint(pickFullReviewFreshnessRefs(gate.sourceVersionRefs), pickFullReviewFreshnessRefs(expectedRefs))) {
     throw new BusinessError(ErrorCode.CandidateStale, '方向、设定、大纲、章节目录或章节正文版本已变化，旧全书审稿不能继续确认');
   }
+}
+
+function pickFullReviewFreshnessRefs(value: unknown) {
+  const refs = toRecord(value);
+  return Object.fromEntries([
+    'currentDirectionVersionId',
+    'currentSettingVersionId',
+    'currentOutlineVersionId',
+    'currentStageOutlineVersionId',
+    'currentChapterPlanVersionId',
+    'chapterContentVersionIds'
+  ].map((key) => [key, refs[key]]));
 }
 
 function isEnhancedReviewEnabled(strategySnapshot: CreativeVersionRecord) {

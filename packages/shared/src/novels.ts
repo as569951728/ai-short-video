@@ -117,7 +117,8 @@ export interface PreviousBatchAuthorityIdentityV1 {
 }
 export const AUTHORITY_SOURCE_TYPES = [
   'novel', 'preferences', 'direction', 'setting', 'outline', 'stage_outline', 'chapter_plan',
-  'trial_run', 'chapter', 'chapter_content', 'body_strategy_snapshot', 'long_term_memory', 'body_batch'
+  'trial_run', 'chapter', 'chapter_content', 'chapter_feature_card', 'chapter_review_report',
+  'body_strategy_snapshot', 'long_term_memory', 'body_batch'
 ] as const;
 export type AuthoritySourceType = (typeof AUTHORITY_SOURCE_TYPES)[number];
 export interface AuthoritySourceIdentityV1 {
@@ -139,6 +140,7 @@ export interface AuthoritySourceVersionRefsV1 {
   longTermMemoryIdentity?: LongTermMemoryAuthorityIdentityV1 | null;
   previousBatchIdentity?: PreviousBatchAuthorityIdentityV1 | null;
   strategyProviderInputSnapshotHash?: string;
+  evidenceManifestHash?: string;
 }
 export type ExecutionEnvelopeV1_1 = ExecutionEnvelopeV1 extends infer TEnvelope
   ? TEnvelope extends ExecutionEnvelopeV1
@@ -165,7 +167,8 @@ const EXECUTION_AUTHORITY_REF_KEYS = [
   'authoritySnapshotHash', 'providerInputSnapshotHash', 'sourceIdentitySchemaVersion',
   'sourceIdentities', 'novelProviderInputSnapshotHash', 'preferencesSnapshotHash', 'chapterProviderInputSnapshotHash',
   'chapterRefs', 'chapterInputSnapshotHash', 'targetChapterRefs', 'previousContentVersionId',
-  'longTermMemoryIdentity', 'previousBatchIdentity', 'strategyProviderInputSnapshotHash'
+  'longTermMemoryIdentity', 'previousBatchIdentity', 'strategyProviderInputSnapshotHash',
+  'evidenceManifestHash'
 ] as const;
 const EXECUTION_REQUIRED_AUTHORITY_REF_KEYS = [
   'authoritySnapshotHash', 'providerInputSnapshotHash', 'sourceIdentitySchemaVersion',
@@ -411,6 +414,10 @@ function executionActionAuthorityRefs(action: NovelProviderAction, refs: Record<
   if (action === 'body_batch_generate' || action === 'chapter_body_generate') {
     for (const key of ['targetChapterRefs', 'previousContentVersionId', 'longTermMemoryIdentity', 'previousBatchIdentity', 'strategyProviderInputSnapshotHash']) required.add(key);
   }
+  if (action === 'novel_full_review') {
+    required.add('longTermMemoryIdentity');
+    required.add('evidenceManifestHash');
+  }
   for (const key of required) if (!(key in refs)) executionUnsupported(`sourceVersionRefs.${key} is required for ${action}`);
   for (const key of EXECUTION_AUTHORITY_REF_KEYS.slice(4)) {
     if (key in refs && !required.has(key)) executionUnsupported(`sourceVersionRefs.${key} is not allowed for ${action}`);
@@ -429,6 +436,7 @@ function executionActionAuthorityRefs(action: NovelProviderAction, refs: Record<
   if (required.has('longTermMemoryIdentity')) result.longTermMemoryIdentity = executionLongTermMemoryIdentity(refs.longTermMemoryIdentity);
   if (required.has('previousBatchIdentity')) result.previousBatchIdentity = executionPreviousBatchIdentity(refs.previousBatchIdentity);
   if (required.has('strategyProviderInputSnapshotHash')) result.strategyProviderInputSnapshotHash = executionSha256(refs.strategyProviderInputSnapshotHash, 'sourceVersionRefs.strategyProviderInputSnapshotHash');
+  if (required.has('evidenceManifestHash')) result.evidenceManifestHash = executionSha256(refs.evidenceManifestHash, 'sourceVersionRefs.evidenceManifestHash');
   return result;
 }
 function executionAuthoritySourceIdentities(value: unknown): AuthoritySourceIdentityV1[] {
@@ -560,6 +568,8 @@ function assertAuthoritySourceIdentityCoverage(envelope: ExecutionEnvelopeV1_1):
       const row = item as FullReviewChapterSourceRefV1;
       requireIdentity('chapter', row.chapterId, `sourceVersionRefs.chapterContentVersionIds[${index}].chapterId`);
       requireIdentity('chapter_content', row.currentContentVersionId, `sourceVersionRefs.chapterContentVersionIds[${index}].currentContentVersionId`);
+      requireIdentity('chapter_feature_card', row.currentFeatureCardVersionId, `sourceVersionRefs.chapterContentVersionIds[${index}].currentFeatureCardVersionId`);
+      requireIdentity('chapter_review_report', row.currentReviewReportId, `sourceVersionRefs.chapterContentVersionIds[${index}].currentReviewReportId`);
     }
   }
   if (expectedKeys.size !== identities.length || identities.some((identity) => !expectedKeys.has(`${identity.sourceType}\u0000${identity.sourceId}`))) {

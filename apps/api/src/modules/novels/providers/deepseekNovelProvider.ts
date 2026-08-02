@@ -19,9 +19,12 @@ import type {
   TrialReviewDraft
 } from '../domain/novelDomain.js';
 import {
+  FullReviewEvidenceValidationError,
   projectStructureCurrentAssetsPrompt,
+  validateFullReviewEvidenceProviderInput,
   type BodyChapterProviderDraft,
   type ChapterProviderInputV1,
+  type FullReviewEvidenceProviderInputV1,
   type NovelProviderActionInputFor,
   type NovelProviderInputV1,
   type TrialFollowupChapterProviderDraft
@@ -79,7 +82,8 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
       : reasonerActions.has(action)
         ? this.reasonerModel
         : this.model;
-    return `deepseek:${model}:route-v1`;
+    const routeVersion = action === 'novel_full_review' ? 'route-v3' : 'route-v1';
+    return `deepseek:${model}:${routeVersion}`;
   }
 
   async generateCandidates(input: DirectionGenerateInput): Promise<DirectionCandidateDraft[]> {
@@ -285,16 +289,117 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
   }
 
   async generateFullReview(input: FullReviewProviderInput): Promise<FullReviewDraft> {
+    const evidencePayload = createFullReviewEvidencePayload(input);
+    const chapterIdByNo = new Map(
+      evidencePayload.chapterEvidence.map((item) => [item.chapter.chapterNo, item.chapter.id] as const)
+    );
     return requestJsonOutput(this.options.client, {
       taskName: 'novel_full_review',
       model: this.reasonerModel,
-      messages: createMessages('生成全书审稿报告、门禁结论和首条视频建议，只返回 JSON。', input.novel, {
-        chapters: input.chapters.map(pickChapter),
-        sourceVersionRefs: input.sourceVersionRefs
-      }, M1_OUTPUT_SCHEMA_HINT.fullReview),
-      validate: toFullReviewDraft
+      messages: createFullReviewMessages(input.novel, evidencePayload),
+      maxTokens: FULL_REVIEW_MAX_OUTPUT_TOKENS,
+      outputRepairRetries: 0,
+      validate: (value) => toFullReviewDraft(value, chapterIdByNo)
     });
   }
+}
+
+const FULL_REVIEW_MAX_CHAPTERS = 80;
+const FULL_REVIEW_MAX_STRING_LENGTH = 4_000;
+const FULL_REVIEW_MAX_ARRAY_LENGTH = 100;
+const FULL_REVIEW_MAX_OBJECT_KEYS = 100;
+const FULL_REVIEW_MAX_DEPTH = 8;
+const FULL_REVIEW_MAX_PROMPT_CHARACTERS = 240_000;
+const FULL_REVIEW_MAX_OUTPUT_TOKENS = 7_000;
+
+type FullReviewEvidencePayload = Pick<
+  FullReviewEvidenceProviderInputV1,
+  'coverageManifest' | 'chapterEvidence' | 'memory' | 'sourceVersionRefs' | 'evidenceHash'
+>;
+
+function createFullReviewMessages(novel: NovelProviderInputV1, payload: FullReviewEvidencePayload) {
+  const prompt = {
+    instruction: [
+      '基于 coverage manifest 与每个计划章节的完整有界证据，生成全书审稿报告、门禁结论和首条视频建议。',
+      '必须逐章检查人物生死与状态、时间线、同一合同或关键事实、伏笔和因果连续性，不得忽略、合并或臆测任何章节。',
+      '每个跨章问题必须单独写入 issues；scopeType 必须为 chapter，scopeChapterNos 必须列出冲突涉及的全部章节号整数。禁止输出 scopeRefs，服务端会将章节号映射为权威 chapter.id。',
+      'severity=blocking 的问题会由服务端转换为未解决阻断项；存在 blocking 问题时 gateResult 必须为 blocked。',
+      '只返回 JSON。'
+    ].join(''),
+    chapterIdCatalog: payload.chapterEvidence.map((item) => ({ id: item.chapter.id, chapterNo: item.chapter.chapterNo })),
+    outputSchemaHint: M1_OUTPUT_SCHEMA_HINT.fullReview,
+    novel: { id: novel.id, title: novel.title, genres: novel.genres, chapterLimit: novel.chapterLimit },
+    payload
+  };
+  const content = JSON.stringify(prompt);
+  if (content.length > FULL_REVIEW_MAX_PROMPT_CHARACTERS) {
+    throw invalidFullReviewEvidence('request_capacity_exceeded');
+  }
+  return [
+    {
+      role: 'system' as const,
+      content: '你是小说创作系统的结构化 JSON 输出模型。只输出满足约定的 JSON，不输出解释。'
+    },
+    { role: 'user' as const, content }
+  ];
+}
+
+function createFullReviewEvidencePayload(input: FullReviewProviderInput): FullReviewEvidencePayload {
+  let validated: FullReviewEvidenceProviderInputV1;
+  try {
+    validated = validateFullReviewEvidenceProviderInput(input as FullReviewEvidenceProviderInputV1);
+  } catch (error) {
+    if (error instanceof FullReviewEvidenceValidationError) throw invalidFullReviewEvidence(error.code);
+    throw invalidFullReviewEvidence('evidence_incomplete');
+  }
+  if (validated.chapterEvidence.length > FULL_REVIEW_MAX_CHAPTERS) {
+    throw invalidFullReviewEvidence('request_capacity_exceeded');
+  }
+  for (const evidence of validated.chapterEvidence) {
+    if (
+      evidence.content.summary.trim().length === 0
+      || evidence.content.excerpts.opening.trim().length === 0
+      || evidence.content.excerpts.middle.trim().length === 0
+      || evidence.content.excerpts.ending.trim().length === 0
+    ) {
+      throw invalidFullReviewEvidence('evidence_incomplete');
+    }
+  }
+  assertBoundedFullReviewValue(validated.coverageManifest);
+  assertBoundedFullReviewValue(validated.chapterEvidence);
+  assertBoundedFullReviewValue(validated.memory);
+  return {
+    coverageManifest: validated.coverageManifest,
+    chapterEvidence: validated.chapterEvidence,
+    memory: validated.memory,
+    sourceVersionRefs: validated.sourceVersionRefs,
+    evidenceHash: validated.evidenceHash
+  };
+}
+
+function assertBoundedFullReviewValue(value: unknown, depth = 0): void {
+  if (typeof value === 'string') {
+    if (value.length > FULL_REVIEW_MAX_STRING_LENGTH) throw invalidFullReviewEvidence('request_capacity_exceeded');
+    return;
+  }
+  if (value === null || typeof value === 'number' || typeof value === 'boolean') return;
+  if (depth >= FULL_REVIEW_MAX_DEPTH) throw invalidFullReviewEvidence('request_capacity_exceeded');
+  if (Array.isArray(value)) {
+    if (value.length > FULL_REVIEW_MAX_ARRAY_LENGTH) throw invalidFullReviewEvidence('request_capacity_exceeded');
+    for (const item of value) assertBoundedFullReviewValue(item, depth + 1);
+    return;
+  }
+  if (typeof value !== 'object') throw invalidFullReviewEvidence('evidence_incomplete');
+  const entries = Object.entries(value);
+  if (entries.length > FULL_REVIEW_MAX_OBJECT_KEYS) throw invalidFullReviewEvidence('request_capacity_exceeded');
+  for (const [, item] of entries) assertBoundedFullReviewValue(item, depth + 1);
+}
+
+function invalidFullReviewEvidence(code: string): LlmProviderError {
+  return new LlmProviderError('configuration_error', '全书审稿证据不完整或超出受控请求容量，未调用模型。', {
+    taskName: 'novel_full_review',
+    code
+  });
 }
 
 function createMessages(instruction: string, novel: NovelProviderInputV1 | null, payload: unknown, outputSchemaHint: string) {
@@ -331,7 +436,7 @@ const M1_OUTPUT_SCHEMA_HINT = {
   impact:
     '影响评估返回 {"impactLevel":"none|minor|medium|severe","summary","changedFacts":[],"affectedChapterIds":[],"affectedVideoReferenceIds":[],"recommendedHandling","suggestedActions":[],"blocksFullReview":false}',
   fullReview:
-    '全书审稿返回 {"totalScore":0-100,"rating":"A|B|C","gateResult":"pass|warning|blocked","summary","strengths":[],"problems":[],"suggestions":[],"dimensionScores":[{"key","label","score","weight","evidence","penaltyPoints"}],"issues":[],"videoSuggestion","firstVideoSuggestion":{"chapterRange","openingSlice","narrationHook","firstScreenSubtitle","titleHook","endingSuspense","suggestedFormat","riskTips":[]},"platformRisks":[],"originalityRisks":[],"aiFlavorRisks":[],"lowScoreContinueRisks":[],"reviewPolicyVersionId":"deepseek-full-review-v1"}'
+    '全书审稿返回 {"totalScore":0-100,"rating":"A|B|C","gateResult":"pass|warning|blocked","summary","strengths":[],"problems":[],"suggestions":[],"dimensionScores":[{"key","label","score","weight","evidence","penaltyPoints"}],"issues":[{"issueId","title","plainDescription","severity":"info|warning|blocking","scopeChapterNos":[1,2],"dimension","recommendedTarget","recommendedAction"}],"videoSuggestion","firstVideoSuggestion":{"chapterRange","openingSlice","narrationHook","firstScreenSubtitle","titleHook","endingSuspense","suggestedFormat","riskTips":[]},"platformRisks":[],"originalityRisks":[],"aiFlavorRisks":[],"lowScoreContinueRisks":[],"reviewPolicyVersionId":"deepseek-full-review-v1"}'
 };
 
 function toDirectionDraft(value: unknown): DirectionCandidateDraft {
@@ -734,20 +839,32 @@ function toImpactDraft(value: unknown): ImpactAssessmentDraft {
   };
 }
 
-function toFullReviewDraft(value: unknown): FullReviewDraft {
+function toFullReviewDraft(value: unknown, chapterIdByNo: ReadonlyMap<number, string>): FullReviewDraft {
   const item = asRecord(value);
   const reviewPolicyVersionId = readString(item, 'reviewPolicyVersionId');
   if (!['deepseek-full-review-v1', 'policy-full-review-v1'].includes(reviewPolicyVersionId)) throw new Error('reviewPolicyVersionId is invalid');
+  const gateResult = readEnum(item, 'gateResult', ['pass', 'warning', 'blocked', 'forced_pass'], 'blocked') as FullReviewGateResult;
+  const issues = readPlainArray(item, 'issues').map((issue, index) => toFullReviewIssue(issue, index, chapterIdByNo));
+  if (new Set(issues.map((issue) => issue.issueId)).size !== issues.length) {
+    throw new Error('full review issueId must be unique');
+  }
+  const hasOpenBlockingIssue = issues.some((issue) => issue.status === 'open' && issue.blocking && issue.severity === 'blocking');
+  if (gateResult === 'blocked' && !hasOpenBlockingIssue) {
+    throw new Error('blocked full review must include a blocking issue with authoritative scopeRefs');
+  }
+  if (gateResult !== 'blocked' && hasOpenBlockingIssue) {
+    throw new Error('open blocking issue requires blocked full review gate');
+  }
   return {
     totalScore: readNumber(item, 'totalScore'),
     rating: readString(item, 'rating'),
-    gateResult: readEnum(item, 'gateResult', ['pass', 'warning', 'blocked', 'forced_pass'], 'blocked') as FullReviewGateResult,
+    gateResult,
     summary: readString(item, 'summary'),
     strengths: readStringArray(item, 'strengths'),
     problems: readStringArray(item, 'problems'),
     suggestions: readStringArray(item, 'suggestions'),
     dimensionScores: readPlainArray(item, 'dimensionScores').map((dimension, index) => toDimension(dimension, index)),
-    issues: readPlainArray(item, 'issues') as FullReviewDraft['issues'],
+    issues,
     videoSuggestion: readString(item, 'videoSuggestion'),
     firstVideoSuggestion: toFirstVideoSuggestion(readObject(item, 'firstVideoSuggestion')),
     platformRisks: readStringArray(item, 'platformRisks'),
@@ -757,6 +874,67 @@ function toFullReviewDraft(value: unknown): FullReviewDraft {
     reviewPolicyVersionId
   };
 }
+
+function toFullReviewIssue(
+  value: unknown,
+  index: number,
+  chapterIdByNo: ReadonlyMap<number, string>
+): FullReviewDraft['issues'][number] {
+  const item = exactFullReviewModelRecord(value, [
+    'issueId', 'title', 'plainDescription', 'severity', 'scopeChapterNos', 'dimension',
+    'recommendedTarget', 'recommendedAction'
+  ], `full review issue ${index + 1}`);
+  const severity = strictFullReviewEnum(item.severity, ['info', 'warning', 'blocking'] as const, 'severity');
+  if (!Array.isArray(item.scopeChapterNos)
+    || item.scopeChapterNos.length === 0
+    || item.scopeChapterNos.some((chapterNo) => !Number.isInteger(chapterNo))) {
+    throw new Error(`full review issue ${index + 1} has invalid scopeChapterNos`);
+  }
+  const chapterNos = [...new Set(item.scopeChapterNos as number[])].sort((left, right) => left - right);
+  if (chapterNos.length !== item.scopeChapterNos.length || chapterNos.some((chapterNo) => !chapterIdByNo.has(chapterNo))) {
+    throw new Error(`full review issue ${index + 1} has non-authoritative scopeChapterNos`);
+  }
+  const scopeRefs = chapterNos.map((chapterNo) => chapterIdByNo.get(chapterNo)!);
+  return {
+    issueId: readString(item, 'issueId'),
+    title: readString(item, 'title'),
+    plainDescription: readString(item, 'plainDescription'),
+    severity,
+    scopeType: 'chapter',
+    scopeRefs,
+    dimension: readString(item, 'dimension'),
+    blocking: severity === 'blocking',
+    recommendedTarget: readString(item, 'recommendedTarget'),
+    recommendedAction: readString(item, 'recommendedAction'),
+    status: 'open',
+    acceptedReason: null
+  };
+}
+
+function exactFullReviewModelRecord(
+  value: unknown,
+  keys: readonly string[],
+  label: string
+): Record<string, unknown> {
+  const item = asRecord(value);
+  const actualKeys = Object.keys(item);
+  if (actualKeys.length !== keys.length
+    || actualKeys.some((key) => !keys.includes(key))
+    || keys.some((key) => !actualKeys.includes(key))) {
+    throw new Error(`${label} has invalid keys`);
+  }
+  return item;
+}
+
+function strictFullReviewEnum<const T extends readonly string[]>(
+  value: unknown,
+  allowed: T,
+  label: string
+): T[number] {
+  if (typeof value !== 'string' || !allowed.includes(value)) throw new Error(`full review ${label} is invalid`);
+  return value as T[number];
+}
+
 
 function toScoring(value: unknown, version: string, fallbackScore?: number, hardFailure = false): QualityScoringDTO {
   const item = asRecord(value ?? {});

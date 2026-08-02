@@ -914,6 +914,7 @@
                       <el-tag :type="issue.blocking ? 'danger' : 'warning'">{{ issue.status }}</el-tag>
                     </div>
                     <p>{{ issue.plainDescription || '审稿返回了待处理项，但没有提供详细说明。' }}</p>
+                    <p class="full-review-issue-scope">{{ fullReviewIssueScopeText(issue) }}</p>
                     <p class="muted">{{ issue.recommendedAction || '请查看章节内容并决定标记解决或接受风险。' }}</p>
                     <div class="task-notice-actions">
                       <el-button size="small" :loading="resolvingFullReviewIssueId === issue.issueId" @click="handleResolveFullReviewIssue(issue.issueId, 'resolve')">标记解决</el-button>
@@ -1323,7 +1324,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { NovelCreationStage, StageStatus, TaskStatus, VersionStatus, type RecentTaskSummaryDTO, type StructureAssetType, type TaskDetailDTO } from '@ai-shortvideo/shared'
+import { NovelCreationStage, StageStatus, TaskStatus, VersionStatus, type FullReviewIssueDTO, type RecentTaskSummaryDTO, type StructureAssetType, type TaskDetailDTO } from '@ai-shortvideo/shared'
 import { ApiClientError } from '../shared/services/http'
 import TaskProgressPanel from '../modules/novels/components/TaskProgressPanel.vue'
 import {
@@ -1586,6 +1587,9 @@ const stageOutlineRows = computed(() => structureRows.value.filter((asset) => as
 const visibleOutlineRows = computed(() => (activeSubStep.value.key === 'stages' ? stageOutlineRows.value : fullOutlineRows.value))
 const chapterPlanRows = computed(() => structureRows.value.filter((asset) => asset.objectType === 'chapter_plan'))
 const chapterRows = computed(() => (detail.value?.chapters ?? []).map(toNovelChapterPlanRow))
+const chapterLabelById = computed(() => new Map(
+  (detail.value?.chapters ?? []).map((chapter) => [chapter.id, `第 ${chapter.chapterNo} 章`] as const),
+))
 const chapterWordTargetSummary = computed(() => {
   const numericTargets = (detail.value?.chapters ?? []).map((chapter) => chapter.wordTarget ?? 0).filter((target) => target > 0)
   const average = numericTargets.length ? Math.round(numericTargets.reduce((sum, target) => sum + target, 0) / numericTargets.length) : 0
@@ -1619,6 +1623,19 @@ const canStartBodyBatch = computed(() => Boolean(
 const canStartFullReview = computed(() => detail.value?.creationStage === NovelCreationStage.Body && detail.value.stageStatus === StageStatus.Completed)
 const canConfirmCompletion = computed(() => Boolean(latestFullReview.value?.gate.allowCompletion && detail.value?.creationStage === NovelCreationStage.CompletionConfirm && detail.value.stageStatus === StageStatus.WaitingUser))
 const canConfirmVideoReady = computed(() => Boolean(videoReadiness.value?.check && videoReadiness.value.status === 'candidate' && detail.value?.completionDecision))
+
+function fullReviewIssueScopeText(issue: FullReviewIssueDTO) {
+  if (issue.scopeType === 'novel') return '影响范围：全书'
+  if (issue.scopeType !== 'chapter') return `影响范围：${issue.recommendedTarget || '结构范围待确认'}`
+  const chapterLabels = issue.scopeRefs
+    .flatMap((scopeRef) => {
+      const label = chapterLabelById.value.get(scopeRef)
+      return label ? [label] : []
+    })
+  return chapterLabels.length
+    ? `涉及章节：${chapterLabels.join('、')}`
+    : '涉及章节：定位信息待同步'
+}
 const activeRecentTask = computed(() => resolveVisibleTaskSummary(pendingTask.value, detail.value))
 const chapterPlanGenerationTask = computed(() => resolveTaskSummaryForAction(pendingTask.value, detail.value, 'chapter_plan_generate'))
 const isChapterPlanGenerating = computed(() =>
