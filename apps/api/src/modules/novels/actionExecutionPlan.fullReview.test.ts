@@ -7,18 +7,23 @@ import {
   StaleLevel,
   VersionStatus
 } from '@ai-shortvideo/shared';
+import { buildApp } from '../../app.js';
 import type {
   ChapterContentVersionRecord,
   ChapterFeatureCardRecord,
   LongTermMemoryRecord,
   NovelChapterRecord,
   NovelRecord,
-  ReviewReportRecord
+  ReviewReportRecord,
+  FullReviewDraft
 } from './domain/novelDomain.js';
 import { hashCanonicalJson } from './domain/executionContract.js';
+import { createInMemoryNovelRepository } from './repositories/inMemoryNovelRepository.js';
 import {
   buildFullReviewEvidenceProviderInput,
+  FULL_REVIEW_CANONICAL_DIMENSION_KEYS,
   FullReviewEvidenceValidationError,
+  validateFullReviewDraftForPersistence,
   validateFullReviewEvidenceProviderInput,
   type FullReviewAuthorityFactsV1,
   type FullReviewEvidenceFailureCode
@@ -132,6 +137,165 @@ test('fails closed for soft, risk, and hard stale chapter or memory evidence', (
     }
   }
 });
+
+test('validates exact full-review persistence ABI against canonical dimensions and authority', () => {
+  const draft = createCanonicalFullReviewDraft();
+  const result = validateFullReviewDraftForPersistence(draft, persistenceAuthority());
+
+  assert.deepEqual(result, draft);
+  assert.notEqual(result, draft);
+});
+
+test('rejects extra top-level and nested full-review persistence fields', () => {
+  const topLevel = createCanonicalFullReviewDraft() as FullReviewDraft & { providerExplanation?: string };
+  topLevel.providerExplanation = 'not authoritative';
+  assert.throws(
+    () => validateFullReviewDraftForPersistence(topLevel, persistenceAuthority()),
+    /full review draft has invalid keys/
+  );
+
+  const nested = createCanonicalFullReviewDraft();
+  Object.assign(nested.dimensionScores[0]!, { rawEvidence: 'not allowed' });
+  assert.throws(
+    () => validateFullReviewDraftForPersistence(nested, persistenceAuthority()),
+    /dimensionScores\[0\] has invalid keys/
+  );
+});
+
+test('requires the complete canonical dimension set before persistence', () => {
+  const draft = createCanonicalFullReviewDraft();
+  draft.dimensionScores = draft.dimensionScores.slice(0, -1);
+  draft.dimensionScores.forEach((dimension) => { dimension.weight = 0.2; });
+
+  assert.throws(
+    () => validateFullReviewDraftForPersistence(draft, persistenceAuthority()),
+    /canonical dimension set is incomplete/
+  );
+});
+
+test('rejects provider policy forgery and scopeRefs outside the authoritative chapter manifest', () => {
+  const forgedPolicy = createCanonicalFullReviewDraft();
+  forgedPolicy.reviewPolicyVersionId = 'provider-policy-alias';
+  assert.throws(
+    () => validateFullReviewDraftForPersistence(forgedPolicy, persistenceAuthority()),
+    /reviewPolicyVersionId does not match authority/
+  );
+
+  const forgedScope = createCanonicalFullReviewDraft();
+  forgedScope.issues = [{
+    issueId: 'issue-unknown-chapter',
+    title: '引用未知章节',
+    plainDescription: '模型返回了不属于权威 manifest 的章节引用。',
+    severity: 'warning',
+    scopeType: 'chapter',
+    scopeRefs: ['chapter-999'],
+    dimension: 'fact_consistency',
+    blocking: false,
+    recommendedTarget: '第 1 章',
+    recommendedAction: '使用权威章节 ID。',
+    status: 'open',
+    acceptedReason: null
+  }];
+  assert.throws(
+    () => validateFullReviewDraftForPersistence(forgedScope, persistenceAuthority()),
+    /full review issue is invalid/
+  );
+});
+
+test('novel service does not mask a forged provider policy before persistence', async () => {
+  const repository = createInMemoryNovelRepository();
+  let providerCalls = 0;
+  const app = await buildApp({
+    logger: false,
+    novelRepository: repository,
+    enableAcceptanceSeeds: true,
+    requestContextResolver: async () => ({ tenantId: 'tenant_test', userId: 'user_test' }),
+    fullReviewProvider: {
+      async generateFullReview() {
+        providerCalls += 1;
+        return {
+          ...createCanonicalFullReviewDraft(),
+          reviewPolicyVersionId: 'provider-forged-policy'
+        };
+      }
+    }
+  });
+
+  try {
+    const seedResponse = await app.inject({
+      method: 'POST',
+      url: '/dev/novels/acceptance-seeds/full-review',
+      payload: { title: '持久化 policy 权威校验' }
+    });
+    assert.equal(seedResponse.statusCode, 201, seedResponse.body);
+    const novelId = seedResponse.json().data.novelId as string;
+    const detailResponse = await app.inject({ method: 'GET', url: `/novels/${novelId}` });
+    assert.equal(detailResponse.statusCode, 200, detailResponse.body);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/full-review`,
+      payload: {
+        idempotencyKey: 'forged-provider-policy',
+        expectedNovelVersion: detailResponse.json().data.updatedAt
+      }
+    });
+
+    assert.equal(response.statusCode, 500, response.body);
+    assert.equal(providerCalls, 1);
+    assert.equal(repository.getReviewReports().some((report) => report.novelId === novelId && report.objectType === 'novel'), false);
+    assert.equal(repository.getFullReviewGates().some((gate) => gate.novelId === novelId), false);
+  } finally {
+    await app.close();
+  }
+});
+
+function createCanonicalFullReviewDraft(): FullReviewDraft {
+  return {
+    totalScore: 84,
+    rating: 'A',
+    gateResult: 'pass',
+    summary: '全书结构与事实证据完整。',
+    strengths: ['主线完整'],
+    problems: [],
+    suggestions: [],
+    dimensionScores: FULL_REVIEW_CANONICAL_DIMENSION_KEYS.map((key, index) => ({
+      key,
+      label: `维度 ${index + 1}`,
+      score: 84,
+      weight: index < 2 ? 0.16 : 0.17,
+      evidence: `第 1 章 ${key} 证据。`,
+      penaltyPoints: 0
+    })),
+    issues: [],
+    videoSuggestion: '从第 1 章切入。',
+    firstVideoSuggestion: {
+      chapterRange: '1-1',
+      openingSlice: '开场冲突',
+      narrationHook: '主角开始反击',
+      firstScreenSubtitle: '反击开始',
+      titleHook: '主角翻盘',
+      endingSuspense: '幕后人出现',
+      suggestedFormat: '旁白加字幕',
+      riskTips: []
+    },
+    platformRisks: [],
+    originalityRisks: [],
+    aiFlavorRisks: [],
+    lowScoreContinueRisks: [],
+    reviewPolicyVersionId: 'policy-1'
+  };
+}
+
+function persistenceAuthority() {
+  return {
+    expectedReviewPolicyVersionId: 'policy-1',
+    chapterManifest: [
+      { chapterId: 'chapter-1', chapterNo: 1 },
+      { chapterId: 'chapter-2', chapterNo: 2 }
+    ]
+  };
+}
 
 function createAuthorityFacts(chapterNos: number[]): FullReviewAuthorityFactsV1 {
   const novel: NovelRecord = {

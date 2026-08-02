@@ -3,7 +3,10 @@ import { describe, it } from 'node:test';
 import { LlmProviderError, type ChatCompletionRequest, type LlmClient } from '../ai/llmClient.js';
 import { hashCanonicalJson } from './domain/executionContract.js';
 import { DeepSeekNovelProvider } from './providers/deepseekNovelProvider.js';
-import type { FullReviewEvidenceProviderInputV1 } from './services/actionExecutionPlan.js';
+import {
+  FULL_REVIEW_CANONICAL_DIMENSION_KEYS,
+  type FullReviewEvidenceProviderInputV1
+} from './services/actionExecutionPlan.js';
 
 describe('DeepSeek full-review evidence boundary', () => {
   it('does not call the client when a chapter has no substantive body evidence', async () => {
@@ -166,6 +169,7 @@ describe('DeepSeek full-review evidence boundary', () => {
       { label: 'missing top-level field', mutate: (response) => { delete response.gateResult; } },
       { label: 'extra top-level field', mutate: (response) => { response.explanation = 'not allowed'; } },
       { label: 'invalid top-level enum', mutate: (response) => { response.gateResult = 'forced_pass'; } },
+      { label: 'provider policy alias', mutate: (response) => { response.reviewPolicyVersionId = 'deepseek-full-review-v1'; } },
       { label: 'missing dimension field', mutate: (response) => { delete response.dimensionScores[0].evidence; } },
       { label: 'extra dimension field', mutate: (response) => { response.dimensionScores[0].rawEvidence = 'not allowed'; } },
       { label: 'invalid dimension score', mutate: (response) => { response.dimensionScores[0].score = 101; } },
@@ -436,9 +440,14 @@ function createFullReviewResponse() {
     strengths: ['主线稳定'],
     problems: [],
     suggestions: [],
-    dimensionScores: [
-      { key: 'overall', label: '综合质量', score: 88, weight: 1, evidence: '全章结构证据完整。', penaltyPoints: 0 }
-    ],
+    dimensionScores: FULL_REVIEW_CANONICAL_DIMENSION_KEYS.map((key, index) => ({
+      key,
+      label: `审稿维度 ${index + 1}`,
+      score: 88,
+      weight: index < 2 ? 0.16 : 0.17,
+      evidence: `第1章 ${key} 结构证据完整。`,
+      penaltyPoints: 0
+    })),
     issues: [],
     videoSuggestion: '从第1章切入。',
     firstVideoSuggestion: {

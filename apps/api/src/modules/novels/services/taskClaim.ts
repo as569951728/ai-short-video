@@ -11,6 +11,7 @@ import {
   type NovelProviderAction
 } from '@ai-shortvideo/shared';
 import { BusinessError } from '../../../shared/errors.js';
+import { LlmProviderError } from '../../ai/llmClient.js';
 import {
   hashCanonicalJson,
   matchGenerationAuthority,
@@ -309,7 +310,7 @@ export async function executeClaimedGeneration<TProviderResult, TFinalResult>(
     providerResult = await input.provider(finalProviderInput);
   } catch (error) {
     await failClaimedTask(input, claim.task, error, 'provider_error');
-    throw error;
+    throw error instanceof BusinessError ? error : createPublicProviderFailure(error);
   }
 
   const latestTask = await input.repository.findTaskById(input.context.tenantId, claim.task.id);
@@ -963,15 +964,78 @@ async function failClaimedTask<TProviderResult, TFinalResult>(
   error: unknown,
   category: 'provider_error' | 'save_failed' | 'source_stale'
 ) {
-  const sourceChanged = category === 'source_stale';
+  const failure = getPublicClaimFailure(error, category);
   await input.repository.failTask({
     task,
-    errorCode: sourceChanged ? 'SOURCE_STALE' : category === 'provider_error' ? 'PROVIDER_ERROR' : 'SAVE_FAILED',
-    errorMessage: sourceChanged ? '生成所依赖的权威内容已变化。' : category === 'provider_error' ? '模型服务调用失败。' : '生成结果保存失败。',
-    failureCategory: category,
-    statusNote: sourceChanged ? '权威内容已变化，任务已在模型调用前终止。' : category === 'provider_error' ? '模型服务调用失败，请稍后重试。' : '生成结果保存失败，请联系管理员处理。',
+    ...failure,
     context: input.context,
     now: input.now()
   });
-  void error;
+}
+
+function getPublicClaimFailure(
+  error: unknown,
+  category: 'provider_error' | 'save_failed' | 'source_stale'
+) {
+  if (category === 'source_stale') {
+    return {
+      errorCode: 'SOURCE_STALE',
+      errorMessage: '生成所依赖的权威内容已变化。',
+      failureCategory: 'source_stale',
+      statusNote: '权威内容已变化，任务已在模型调用前终止。'
+    };
+  }
+
+  if (category === 'save_failed') {
+    return {
+      errorCode: 'SAVE_FAILED',
+      errorMessage: '生成结果保存失败。',
+      failureCategory: 'save_failed',
+      statusNote: '生成结果保存失败，请联系管理员处理。'
+    };
+  }
+
+  if (isPublicOutputFormatFailure(error)) {
+    return {
+      errorCode: 'PROVIDER_ERROR',
+      errorMessage: '模型输出格式不符合约定，本次未生成报告。',
+      failureCategory: 'output_parse_failed',
+      statusNote: '模型输出格式不符合约定，本次未生成结果。'
+    };
+  }
+
+  return {
+    errorCode: 'PROVIDER_ERROR',
+    errorMessage: '模型服务调用失败。',
+    failureCategory: 'provider_error',
+    statusNote: '模型服务调用失败，请稍后重试。'
+  };
+}
+
+function isPublicOutputFormatFailure(error: unknown) {
+  return getPublicOutputKind(error) !== null;
+}
+
+function createPublicProviderFailure(error: unknown) {
+  const outputKind = getPublicOutputKind(error);
+  if (outputKind) {
+    return new BusinessError(
+      ErrorCode.InternalError,
+      '模型输出格式不符合约定，本次未生成报告。',
+      { category: 'output_parse_failed', outputKind }
+    );
+  }
+
+  return new BusinessError(
+    ErrorCode.InternalError,
+    '模型服务调用失败。',
+    { category: 'provider_error' }
+  );
+}
+
+function getPublicOutputKind(error: unknown): 'schema_invalid' | 'non_json' | null {
+  if (!(error instanceof LlmProviderError) || error.category !== 'output_parse_failed') return null;
+
+  const outputKind = error.details?.outputKind;
+  return outputKind === 'schema_invalid' || outputKind === 'non_json' ? outputKind : null;
 }

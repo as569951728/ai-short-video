@@ -877,9 +877,25 @@ function validateFullReviewContinuityEvidence(
 }
 
 export function validateFullReviewDraftForPersistence(
-  draft: FullReviewDraft
+  draft: FullReviewDraft,
+  authority: FullReviewDraftPersistenceAuthority
 ): FullReviewDraft {
-  if (!draft || typeof draft !== 'object') throw new Error('full review draft is required');
+  exactRecord(draft, 'full review draft', FULL_REVIEW_DRAFT_KEYS);
+  const expectedReviewPolicyVersionId = authority?.expectedReviewPolicyVersionId?.trim();
+  if (!expectedReviewPolicyVersionId) throw new Error('full review expected policy is required');
+  if (!Array.isArray(authority.chapterManifest) || authority.chapterManifest.length === 0) {
+    throw new Error('full review authoritative chapter manifest is required');
+  }
+  const allowedChapterIds = new Set<string>();
+  authority.chapterManifest.forEach((chapter, index) => {
+    if (!chapter || typeof chapter !== 'object'
+      || typeof chapter.chapterId !== 'string' || !chapter.chapterId.trim()
+      || !Number.isInteger(chapter.chapterNo) || chapter.chapterNo !== index + 1
+      || allowedChapterIds.has(chapter.chapterId)) {
+      throw new Error('full review authoritative chapter manifest is invalid');
+    }
+    allowedChapterIds.add(chapter.chapterId);
+  });
   if (!Number.isFinite(draft.totalScore) || draft.totalScore < 0 || draft.totalScore > 100) {
     throw new Error('full review totalScore is invalid');
   }
@@ -894,6 +910,9 @@ export function validateFullReviewDraftForPersistence(
     ['reviewPolicyVersionId', draft.reviewPolicyVersionId]
   ] as const) {
     if (typeof value !== 'string' || !value.trim()) throw new Error(`full review ${label} is invalid`);
+  }
+  if (draft.reviewPolicyVersionId !== expectedReviewPolicyVersionId) {
+    throw new Error('full review reviewPolicyVersionId does not match authority');
   }
   for (const [label, values] of [
     ['strengths', draft.strengths],
@@ -911,7 +930,8 @@ export function validateFullReviewDraftForPersistence(
   const dimensionKeys = new Set<string>();
   let weightedScore = 0;
   let totalWeight = 0;
-  for (const dimension of draft.dimensionScores) {
+  for (const [index, dimension] of draft.dimensionScores.entries()) {
+    exactRecord(dimension, `full review dimensionScores[${index}]`, FULL_REVIEW_DIMENSION_KEYS);
     if (!dimension || typeof dimension !== 'object'
       || typeof dimension.key !== 'string' || !dimension.key.trim()
       || typeof dimension.label !== 'string' || !dimension.label.trim()
@@ -926,6 +946,10 @@ export function validateFullReviewDraftForPersistence(
     weightedScore += dimension.score * dimension.weight;
     totalWeight += dimension.weight;
   }
+  if (dimensionKeys.size !== FULL_REVIEW_CANONICAL_DIMENSION_KEYS.length
+    || FULL_REVIEW_CANONICAL_DIMENSION_KEYS.some((key) => !dimensionKeys.has(key))) {
+    throw new Error('full review canonical dimension set is incomplete');
+  }
   if (totalWeight < 0.95 || totalWeight > 1.05) throw new Error('full review dimension weights are invalid');
   if (Math.abs(weightedScore / totalWeight - draft.totalScore) > 5) {
     throw new Error('full review totalScore is inconsistent with dimensions');
@@ -934,16 +958,18 @@ export function validateFullReviewDraftForPersistence(
   if (!Array.isArray(draft.issues)) throw new Error('full review issues must be an array');
   const issueIds = new Set<string>();
   let hasBlockingIssue = false;
-  for (const issue of draft.issues) {
+  for (const [index, issue] of draft.issues.entries()) {
+    exactRecord(issue, `full review issues[${index}]`, FULL_REVIEW_ISSUE_KEYS);
     if (!issue || typeof issue !== 'object'
       || typeof issue.issueId !== 'string' || !issue.issueId.trim()
       || typeof issue.title !== 'string' || !issue.title.trim()
       || typeof issue.plainDescription !== 'string' || !issue.plainDescription.trim()
       || !['info', 'warning', 'blocking'].includes(issue.severity)
-      || !['novel', 'chapter', 'stage', 'structure'].includes(issue.scopeType)
+      || issue.scopeType !== 'chapter'
       || !Array.isArray(issue.scopeRefs) || issue.scopeRefs.length === 0
       || issue.scopeRefs.some((ref) => typeof ref !== 'string' || !ref.trim())
       || new Set(issue.scopeRefs).size !== issue.scopeRefs.length
+      || issue.scopeRefs.some((ref) => !allowedChapterIds.has(ref))
       || typeof issue.dimension !== 'string' || !issue.dimension.trim()
       || typeof issue.recommendedTarget !== 'string' || !issue.recommendedTarget.trim()
       || typeof issue.recommendedAction !== 'string' || !issue.recommendedAction.trim()
@@ -968,6 +994,38 @@ export function validateFullReviewDraftForPersistence(
   return structuredClone(draft);
 }
 
+export const FULL_REVIEW_CANONICAL_DIMENSION_KEYS = [
+  'stage_continuity',
+  'character_continuity',
+  'timeline_continuity',
+  'fact_consistency',
+  'foreshadowing',
+  'evidence_grounding'
+] as const;
+
+export interface FullReviewDraftPersistenceAuthority {
+  expectedReviewPolicyVersionId: string;
+  chapterManifest: readonly {
+    chapterId: string;
+    chapterNo: number;
+  }[];
+}
+
+const FULL_REVIEW_DRAFT_KEYS = [
+  'totalScore', 'rating', 'gateResult', 'summary', 'strengths', 'problems', 'suggestions',
+  'dimensionScores', 'issues', 'videoSuggestion', 'firstVideoSuggestion', 'platformRisks',
+  'originalityRisks', 'aiFlavorRisks', 'lowScoreContinueRisks', 'reviewPolicyVersionId'
+] as const;
+const FULL_REVIEW_DIMENSION_KEYS = ['key', 'label', 'score', 'weight', 'evidence', 'penaltyPoints'] as const;
+const FULL_REVIEW_ISSUE_KEYS = [
+  'issueId', 'title', 'plainDescription', 'severity', 'scopeType', 'scopeRefs', 'dimension',
+  'blocking', 'recommendedTarget', 'recommendedAction', 'status', 'acceptedReason'
+] as const;
+const FULL_REVIEW_FIRST_VIDEO_KEYS = [
+  'chapterRange', 'openingSlice', 'narrationHook', 'firstScreenSubtitle', 'titleHook',
+  'endingSuspense', 'suggestedFormat', 'riskTips'
+] as const;
+
 function validateDraftStringList(value: unknown, label: string): void {
   if (!Array.isArray(value) || value.some((item) => typeof item !== 'string' || !item.trim())) {
     throw new Error(`full review ${label} is invalid`);
@@ -975,7 +1033,7 @@ function validateDraftStringList(value: unknown, label: string): void {
 }
 
 function validateFirstVideoSuggestion(value: FullReviewDraft['firstVideoSuggestion']): void {
-  if (!value || typeof value !== 'object') throw new Error('full review firstVideoSuggestion is invalid');
+  exactRecord(value, 'full review firstVideoSuggestion', FULL_REVIEW_FIRST_VIDEO_KEYS);
   for (const field of ['chapterRange', 'openingSlice', 'narrationHook', 'firstScreenSubtitle', 'titleHook', 'endingSuspense', 'suggestedFormat'] as const) {
     if (typeof value[field] !== 'string' || !value[field].trim()) {
       throw new Error(`full review firstVideoSuggestion.${field} is invalid`);

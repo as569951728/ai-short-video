@@ -89,9 +89,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     now: options.now,
     requestContextResolver: options.requestContextResolver ?? undefined,
     acceptanceSeeds: {
-      enabled: acceptanceSeedsEnabled,
-      inMemoryRepository: inMemoryNovelRepository,
-      databaseUrlPresent
+      enabled: acceptanceSeedsEnabled
     }
   });
   await registerTaskRoutes(app, {

@@ -146,6 +146,7 @@ import {
   projectPreferencesProviderInput,
   validateFullReviewDraftForPersistence,
   type BodyChapterProviderDraft,
+  type FullReviewDraftPersistenceAuthority,
   type NovelProviderActionInputFor,
   type NovelProviderSet,
   type TrialFollowupChapterProviderDraft
@@ -1599,6 +1600,7 @@ export class NovelService {
 
     const chapters = await this.ensureFullReviewGate(novel, context);
     const sourceVersionRefs = createFullReviewSourceRefs(novel, chapters);
+    let persistenceAuthority: FullReviewDraftPersistenceAuthority | null = null;
     const execution = await executeClaimedGeneration({
       action: 'novel_full_review',
       repository: this.options.repository,
@@ -1609,17 +1611,26 @@ export class NovelService {
       context,
       now: this.now,
       providerCapability: this.fullReviewProvider,
-      provider: (authoritativeInput) => executeNovelProviderAction(
-        this.getProviderSet(),
-        authoritativeInput as NovelProviderActionInputFor<'novel_full_review'>
-      ),
+      provider: (authoritativeInput) => {
+        const input = authoritativeInput as NovelProviderActionInputFor<'novel_full_review'>;
+        const authoritativePolicyVersionId = input.coverageManifest.policyProfileVersionId?.trim()
+          || DEFAULT_POLICY_PROFILE_VERSION_ID;
+        if (authoritativePolicyVersionId !== requestFingerprint.reviewPolicyVersionId) {
+          throw new BusinessError(ErrorCode.VersionConflict, '全书审稿策略版本已变化，请刷新后重试。', {
+            code: 'SOURCE_STALE'
+          });
+        }
+        persistenceAuthority = {
+          expectedReviewPolicyVersionId: authoritativePolicyVersionId,
+          chapterManifest: input.coverageManifest.chapters.map(({ chapterId, chapterNo }) => ({ chapterId, chapterNo }))
+        };
+        return executeNovelProviderAction(this.getProviderSet(), input);
+      },
       finalize: (task, draft) => {
+        if (!persistenceAuthority) throw new Error('full review persistence authority is missing');
         const executionEnvelope = toRecord(task.executionEnvelopeJson);
         const authoritativeSourceVersionRefs = toRecord(executionEnvelope.sourceVersionRefs);
-        const validatedDraft = validateFullReviewDraftForPersistence({
-          ...draft,
-          reviewPolicyVersionId: requestFingerprint.reviewPolicyVersionId
-        });
+        const validatedDraft = validateFullReviewDraftForPersistence(draft, persistenceAuthority);
         return this.options.repository.createFullReview({
           novel,
           task,

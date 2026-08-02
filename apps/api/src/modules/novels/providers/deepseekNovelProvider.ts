@@ -17,6 +17,7 @@ import type {
   TrialChapterCandidateDraft,
   TrialReviewDraft
 } from '../domain/novelDomain.js';
+import { DEFAULT_POLICY_PROFILE_VERSION_ID } from '../domain/novelDomain.js';
 import {
   FullReviewEvidenceValidationError,
   projectStructureCurrentAssetsPrompt,
@@ -290,16 +291,23 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
 
   async generateFullReview(input: FullReviewProviderInput): Promise<FullReviewDraft> {
     const evidencePayload = createFullReviewEvidencePayload(input);
+    const expectedReviewPolicyVersionId = input.novel.policyProfileVersionId?.trim()
+      || DEFAULT_POLICY_PROFILE_VERSION_ID;
     const chapterIdByNo = new Map(
       evidencePayload.chapterEvidence.map((item) => [item.chapter.chapterNo, item.chapter.id] as const)
     );
     return requestJsonOutput(this.options.client, {
       taskName: 'novel_full_review',
       model: this.reasonerModel,
-      messages: createFullReviewMessages(input.novel, evidencePayload),
+      messages: createFullReviewMessages(input.novel, evidencePayload, expectedReviewPolicyVersionId),
       maxTokens: FULL_REVIEW_MAX_OUTPUT_TOKENS,
       outputRepairRetries: 0,
-      validate: (value) => toFullReviewDraft(value, chapterIdByNo)
+      validate: (value) => toFullReviewDraft(
+        value,
+        chapterIdByNo,
+        expectedReviewPolicyVersionId,
+        evidencePayload.coverageManifest.chapters
+      )
     });
   }
 }
@@ -317,7 +325,11 @@ type FullReviewEvidencePayload = Pick<
   'coverageManifest' | 'chapterEvidence' | 'memory' | 'sourceVersionRefs' | 'evidenceHash'
 >;
 
-function createFullReviewMessages(novel: NovelProviderInputV1, payload: FullReviewEvidencePayload) {
+function createFullReviewMessages(
+  novel: NovelProviderInputV1,
+  payload: FullReviewEvidencePayload,
+  expectedReviewPolicyVersionId: string
+) {
   const prompt = {
     instruction: [
       '基于 coverage manifest 与每个计划章节的完整有界证据，生成全书审稿报告、门禁结论和首条视频建议。',
@@ -329,7 +341,11 @@ function createFullReviewMessages(novel: NovelProviderInputV1, payload: FullRevi
       '只返回 JSON。'
     ].join(''),
     chapterIdCatalog: payload.chapterEvidence.map((item) => ({ id: item.chapter.id, chapterNo: item.chapter.chapterNo })),
-    outputSchemaHint: M1_OUTPUT_SCHEMA_HINT.fullReview,
+    expectedReviewPolicyVersionId,
+    outputSchemaHint: M1_OUTPUT_SCHEMA_HINT.fullReview.replace(
+      'deepseek-full-review-v1',
+      expectedReviewPolicyVersionId
+    ),
     novel: { id: novel.id, title: novel.title, genres: novel.genres, chapterLimit: novel.chapterLimit },
     payload
   };
@@ -843,14 +859,19 @@ function toImpactDraft(value: unknown): ImpactAssessmentDraft {
   };
 }
 
-function toFullReviewDraft(value: unknown, chapterIdByNo: ReadonlyMap<number, string>): FullReviewDraft {
+function toFullReviewDraft(
+  value: unknown,
+  chapterIdByNo: ReadonlyMap<number, string>,
+  expectedReviewPolicyVersionId: string,
+  chapterManifest: FullReviewEvidenceProviderInputV1['coverageManifest']['chapters']
+): FullReviewDraft {
   const item = exactFullReviewModelRecord(value, [
     'totalScore', 'rating', 'gateResult', 'summary', 'strengths', 'problems', 'suggestions',
     'dimensionScores', 'issues', 'videoSuggestion', 'firstVideoSuggestion', 'platformRisks',
     'originalityRisks', 'aiFlavorRisks', 'lowScoreContinueRisks', 'reviewPolicyVersionId'
   ], 'full review');
   const reviewPolicyVersionId = strictFullReviewString(item.reviewPolicyVersionId, 'reviewPolicyVersionId');
-  if (!['deepseek-full-review-v1', 'policy-full-review-v1'].includes(reviewPolicyVersionId)) throw new Error('reviewPolicyVersionId is invalid');
+  if (reviewPolicyVersionId !== expectedReviewPolicyVersionId) throw new Error('reviewPolicyVersionId is invalid');
   const gateResult = strictFullReviewEnum(item.gateResult, ['pass', 'warning', 'blocked'] as const, 'gateResult');
   const dimensionScores = strictFullReviewArray(item.dimensionScores, 'dimensionScores', false)
     .map((dimension, index) => toStrictFullReviewDimension(dimension, index));
@@ -882,7 +903,10 @@ function toFullReviewDraft(value: unknown, chapterIdByNo: ReadonlyMap<number, st
     lowScoreContinueRisks: strictFullReviewStringArray(item.lowScoreContinueRisks, 'lowScoreContinueRisks'),
     reviewPolicyVersionId
   };
-  return validateFullReviewDraftForPersistence(draft);
+  return validateFullReviewDraftForPersistence(draft, {
+    expectedReviewPolicyVersionId,
+    chapterManifest
+  });
 }
 
 function toFullReviewIssue(

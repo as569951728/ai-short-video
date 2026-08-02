@@ -179,6 +179,7 @@ test('RP-04C M-01..M-11 full-review browser acceptance', async ({ page, context,
         m06AfterObservationWindow.providerActive
       ].every(Boolean),
       fullReviewPostCount: 1,
+      providerCallCount: m06AfterObservationWindow.providerCallCount,
       startActionDisabledInOriginalTab: originalPageStartDisabled,
       startActionDisabledAfterRefresh: firstReloadStartDisabled,
       startActionDisabledInSecondTab: secondTabStartDisabled,
@@ -371,9 +372,14 @@ async function assertTaskStillProcessing(page, taskId) {
   expect(observer.status).toBe(200);
   expect(observer.data.providerActive).toBe(true);
   expect(observer.data.providerCompleted).toBe(false);
+  expect(observer.data.providerCallCount).toBe(1);
   const task = observer.data.fullReviewTasks.find((candidate) => candidate.id === taskId);
   expect(task?.status).toBe('processing');
-  return { taskStatus: task.status, providerActive: observer.data.providerActive };
+  return {
+    taskStatus: task.status,
+    providerActive: observer.data.providerActive,
+    providerCallCount: observer.data.providerCallCount
+  };
 }
 
 function createTelemetry() {

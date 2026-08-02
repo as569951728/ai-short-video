@@ -246,9 +246,12 @@ function createBlockingReviewResponse() {
     problems: ['人物状态、时间线和合同金额冲突'],
     suggestions: ['修复后重新全书审稿'],
     dimensionScores: [
-      { key: 'character_continuity', label: '人物连续性', score: 42, weight: 1 / 3, evidence: '第3章与第7章人物状态冲突。', penaltyPoints: 38 },
-      { key: 'timeline_continuity', label: '时间线连续性', score: 42, weight: 1 / 3, evidence: '第4章与第8章日期冲突。', penaltyPoints: 38 },
-      { key: 'fact_consistency', label: '事实一致性', score: 42, weight: 1 / 3, evidence: '第5章与第9章合同金额冲突。', penaltyPoints: 38 }
+      { key: 'stage_continuity', label: '阶段连续性', score: 42, weight: 1 / 6, evidence: '十二章阶段证据完整。', penaltyPoints: 38 },
+      { key: 'character_continuity', label: '人物连续性', score: 42, weight: 1 / 6, evidence: '第3章与第7章人物状态冲突。', penaltyPoints: 38 },
+      { key: 'timeline_continuity', label: '时间线连续性', score: 42, weight: 1 / 6, evidence: '第4章与第8章日期冲突。', penaltyPoints: 38 },
+      { key: 'fact_consistency', label: '事实一致性', score: 42, weight: 1 / 6, evidence: '第5章与第9章合同金额冲突。', penaltyPoints: 38 },
+      { key: 'foreshadowing', label: '伏笔回收', score: 42, weight: 1 / 6, evidence: '十二章伏笔证据完整。', penaltyPoints: 38 },
+      { key: 'evidence_grounding', label: '证据定位', score: 42, weight: 1 / 6, evidence: '每章三段摘录位置完整。', penaltyPoints: 38 }
     ],
     issues: [
       issue(

@@ -5,10 +5,10 @@ import { Writable } from 'node:stream';
 import { ErrorCode, NOVEL_PROVIDER_ACTIONS, RiskLevel, StaleLevel, TaskStatus, VersionStatus, type NovelProviderAction } from '@ai-shortvideo/shared';
 import Fastify from 'fastify';
 import { buildApp as buildBaseApp } from '../../app.js';
-import type { LlmClient } from '../ai/llmClient.js';
+import { LlmProviderError, type LlmClient } from '../ai/llmClient.js';
 import { createInMemoryNovelRepository, isInMemoryNovelRepository } from './repositories/inMemoryNovelRepository.js';
 import { PrismaNovelRepository } from './repositories/prismaNovelRepository.js';
-import type { NovelRepository } from './domain/novelDomain.js';
+import { DEFAULT_POLICY_PROFILE_VERSION_ID, type NovelRepository } from './domain/novelDomain.js';
 import type { HotspotReferenceGateway, HotspotReferenceValidationInput } from './integrations/hotspotReferenceGateway.js';
 import { BusinessError, toErrorResponse } from '../../shared/errors.js';
 import { registerNovelRoutes } from './routes/novelRoutes.js';
@@ -16,6 +16,7 @@ import { toRecentTaskSummaryDTO } from '../tasks/services/taskService.js';
 import {
   ACTION_EXECUTION_PLANS,
   ACTION_INPUT_KEYS,
+  FULL_REVIEW_CANONICAL_DIMENSION_KEYS,
   executeNovelProviderAction,
   listActionExecutionPlans,
   type CreativeAssetProviderInputV1,
@@ -51,6 +52,16 @@ function makeMockFullReviewDraftFinalizerCompatible(draft: MockFullReviewDraft):
     if (!draft.firstVideoSuggestion[field].trim()) draft.firstVideoSuggestion[field] = `test-${field}`;
   }
   return draft;
+}
+function createCanonicalFullReviewDimensions(totalScore: number) {
+  return FULL_REVIEW_CANONICAL_DIMENSION_KEYS.map((key) => ({
+    key,
+    label: key,
+    score: totalScore,
+    weight: 1 / FULL_REVIEW_CANONICAL_DIMENSION_KEYS.length,
+    evidence: `${key} 的权威章节证据完整。`,
+    penaltyPoints: Math.max(0, 80 - totalScore)
+  }));
 }
 it('rejects default, legacy, synthetic, and placeholder actor identities before any write', async () => {
   for (const actor of [['tenant_default', 'user_test'], ['tenant_test', 'user_default'], ['legacy_actor', 'user_test'],
@@ -2997,6 +3008,24 @@ describe('novel package 7 full review and video readiness routes', () => {
     }
   });
 
+  it('derives acceptance-seed isolation at the direct route boundary instead of trusting caller flags', async () => {
+    const registeredRepository = createInMemoryNovelRepository();
+    const duckTypedRepository = { ...registeredRepository } as NovelRepository;
+    const app = Fastify({ logger: false });
+    await assert.rejects(
+      () => registerNovelRoutes(app, {
+        repository: duckTypedRepository,
+        acceptanceSeeds: {
+          enabled: true,
+          inMemoryRepository: true,
+          databaseUrlPresent: false
+        } as unknown as { enabled: boolean }
+      }),
+      /acceptance seeds require an explicit in-memory repository/
+    );
+    await app.close();
+  });
+
   it('creates a non-production 12-chapter full-review acceptance seed without starting review', async () => {
     const repository = createInMemoryNovelRepository();
     const app = await buildApp({
@@ -3022,6 +3051,151 @@ describe('novel package 7 full review and video readiness routes', () => {
     assert.equal(repository.getGenerationTasks().some((task) => task.novelId === seed.novelId && task.taskType === 'novel_full_review'), false);
 
     await app.close();
+  });
+
+  it('safely classifies full-review output format failures without leaking provider payloads', async () => {
+    const rawCanaries = [
+      'RAW_LLM_MESSAGE_CANARY',
+      'RAW_LLM_DETAILS_CANARY',
+      'RAW_LLM_PROMPT_CANARY',
+      'RAW_LLM_RESPONSE_CANARY'
+    ];
+    const cases = [
+      {
+        label: 'schema-invalid',
+        error: new LlmProviderError('output_parse_failed', `schema invalid ${rawCanaries[0]}`, {
+          outputKind: 'schema_invalid',
+          reason: rawCanaries[1],
+          prompt: rawCanaries[2],
+          rawResponse: rawCanaries[3]
+        }),
+        expectedFailureCategory: 'output_parse_failed',
+        expectedErrorCode: 'PROVIDER_ERROR',
+        expectedErrorMessage: '模型输出格式不符合约定，本次未生成报告。'
+      },
+      {
+        label: 'non-json',
+        error: new LlmProviderError('output_parse_failed', `non json ${rawCanaries[0]}`, {
+          outputKind: 'non_json',
+          reason: rawCanaries[1],
+          prompt: rawCanaries[2],
+          rawResponse: rawCanaries[3]
+        }),
+        expectedFailureCategory: 'output_parse_failed',
+        expectedErrorCode: 'PROVIDER_ERROR',
+        expectedErrorMessage: '模型输出格式不符合约定，本次未生成报告。'
+      },
+      {
+        label: 'timeout',
+        error: new LlmProviderError('timeout', `timeout ${rawCanaries[0]}`, {
+          reason: rawCanaries[1],
+          prompt: rawCanaries[2],
+          rawResponse: rawCanaries[3]
+        }),
+        expectedFailureCategory: 'provider_error',
+        expectedErrorCode: 'PROVIDER_ERROR',
+        expectedErrorMessage: '模型服务调用失败。'
+      }
+    ] as const;
+
+    for (const testCase of cases) {
+      const repository = createInMemoryNovelRepository();
+      const app = await buildApp({
+        logger: false,
+        novelRepository: repository,
+        enableAcceptanceSeeds: true,
+        fullReviewProvider: {
+          async generateFullReview() {
+            throw testCase.error;
+          }
+        },
+        now: () => new Date('2026-06-17T16:57:00.000Z')
+      });
+
+      try {
+        const seedResponse = await app.inject({
+          method: 'POST',
+          url: '/dev/novels/acceptance-seeds/full-review',
+          payload: { title: `RP-04C ${testCase.label} error projection` }
+        });
+        assert.equal(seedResponse.statusCode, 201, seedResponse.body);
+        const novelId = seedResponse.json().data.novelId as string;
+        const detailBefore = (await app.inject({ method: 'GET', url: `/novels/${novelId}` })).json().data;
+
+        const startResponse = await app.inject({
+          method: 'POST',
+          url: `/novels/${novelId}/full-review`,
+          headers: { 'x-request-id': `full-review-${testCase.label}-failure` },
+          payload: {
+            idempotencyKey: `full-review-${testCase.label}-failure`,
+            expectedNovelVersion: detailBefore.updatedAt
+          }
+        });
+        assert.equal(startResponse.statusCode, 500, `${testCase.label}: ${startResponse.body}`);
+        const startError = startResponse.json().error;
+        assert.equal(startError.code, ErrorCode.InternalError, testCase.label);
+        assert.equal(
+          startError.message,
+          testCase.expectedFailureCategory === 'output_parse_failed'
+            ? '模型输出格式不符合约定，本次未生成报告。'
+            : '模型服务调用失败。',
+          testCase.label
+        );
+        assert.deepEqual(
+          startError.details,
+          testCase.expectedFailureCategory === 'output_parse_failed'
+            ? { category: 'output_parse_failed', outputKind: testCase.error.details?.outputKind }
+            : { category: 'provider_error' },
+          testCase.label
+        );
+
+        const task = repository.getGenerationTasks().findLast((item) =>
+          item.novelId === novelId && item.taskType === 'novel_full_review'
+        );
+        assert.ok(task, testCase.label);
+        assert.deepEqual(
+          [task.status, task.failureCategory, task.errorCode, task.errorMessage, task.statusNote],
+          [
+            TaskStatus.Failed,
+            testCase.expectedFailureCategory,
+            testCase.expectedErrorCode,
+            testCase.expectedErrorMessage,
+            testCase.expectedFailureCategory === 'output_parse_failed'
+              ? '模型输出格式不符合约定，本次未生成结果。'
+              : '模型服务调用失败，请稍后重试。'
+          ],
+          testCase.label
+        );
+
+        const taskDetailResponse = await app.inject({ method: 'GET', url: `/tasks/${task.id}` });
+        assert.equal(taskDetailResponse.statusCode, 200, taskDetailResponse.body);
+        const taskDetail = taskDetailResponse.json().data;
+        assert.equal(taskDetail.failureCategory, testCase.expectedFailureCategory, testCase.label);
+        assert.equal(
+          taskDetail.failureCategoryText,
+          testCase.expectedFailureCategory === 'output_parse_failed' ? '模型输出解析失败' : '生成服务异常',
+          testCase.label
+        );
+
+        const novelDetailResponse = await app.inject({ method: 'GET', url: `/novels/${novelId}` });
+        assert.equal(novelDetailResponse.statusCode, 200, novelDetailResponse.body);
+        assert.equal(novelDetailResponse.json().data.recentTask.status, TaskStatus.Failed, testCase.label);
+
+        const publicAndStoredState = JSON.stringify({
+          startResponse: startResponse.body,
+          taskDetail: taskDetailResponse.body,
+          novelDetail: novelDetailResponse.body,
+          tasks: repository.getGenerationTasks(),
+          events: repository.getGenerationTaskEvents(),
+          operationLogs: repository.getOperationLogs()
+        });
+        for (const canary of rawCanaries) {
+          assert.doesNotMatch(publicAndStoredState, new RegExp(canary), `${testCase.label}: leaked ${canary}`);
+        }
+      } finally {
+        await app.close();
+      }
+    }
   });
 
   it('blocks full review when body chapters are not all completed and creates no review task', async () => {
@@ -3639,7 +3813,7 @@ describe('model integration M1 DeepSeek provider routes', () => {
     const detailBeforeReview = (await app.inject({ method: 'GET', url: `/novels/${novelId}` })).json().data;
     const reviewLogsBefore = repository.getOperationLogs().length;
     const rejectedReview = await app.inject({ method: 'POST', url: `/novels/${novelId}/full-review`, payload: { idempotencyKey: 'm1-fake-full-review-poison', expectedNovelVersion: detailBeforeReview.updatedAt } });
-    assert.equal(rejectedReview.statusCode, 500); const rejectedReviewTask = repository.getGenerationTasks().find((task) => task.idempotencyToken === testActorScopedIdempotencyToken('novel_full_review', novelId, 'm1-fake-full-review-poison')); assert.equal(rejectedReviewTask?.failureCategory, 'provider_error'); assert.equal(rejectedReviewTask?.resultReceiptHash, null); assert.equal(await repository.findLatestFullReview('tenant_test', novelId), null); assert.equal(repository.getOperationLogs().length, reviewLogsBefore);
+    assert.equal(rejectedReview.statusCode, 500); const rejectedReviewTask = repository.getGenerationTasks().find((task) => task.idempotencyToken === testActorScopedIdempotencyToken('novel_full_review', novelId, 'm1-fake-full-review-poison')); assert.equal(rejectedReviewTask?.failureCategory, 'output_parse_failed'); assert.equal(rejectedReviewTask?.errorCode, 'PROVIDER_ERROR'); assert.equal(rejectedReviewTask?.errorMessage, '模型输出格式不符合约定，本次未生成报告。'); assert.equal(rejectedReviewTask?.resultReceiptHash, null); assert.equal(await repository.findLatestFullReview('tenant_test', novelId), null); assert.equal(repository.getOperationLogs().length, reviewLogsBefore);
     fakeClient.allowFullReview();
     const reviewResponse = await app.inject({
       method: 'POST',
@@ -4241,10 +4415,7 @@ function createFakeDeepSeekPayload(taskName: string): Record<string, unknown> {
       strengths: ['前三秒冲突清楚', '章节节奏稳定'],
       problems: [],
       suggestions: ['首条视频突出误解和证据反转'],
-      dimensionScores: [
-        { key: 'continuity', label: '连续性', score: 88, weight: 0.5, evidence: '章节连续性证据完整。', penaltyPoints: 0 },
-        { key: 'video', label: '视频化', score: 88, weight: 0.5, evidence: '首条视频建议字段完整。', penaltyPoints: 0 }
-      ],
+      dimensionScores: createCanonicalFullReviewDimensions(88),
       issues: [],
       videoSuggestion: '建议首条视频覆盖第1章公开误解到证据出现。',
       firstVideoSuggestion: {
@@ -4261,7 +4432,7 @@ function createFakeDeepSeekPayload(taskName: string): Record<string, unknown> {
       originalityRisks: [],
       aiFlavorRisks: [],
       lowScoreContinueRisks: [],
-      reviewPolicyVersionId: 'deepseek-full-review-v1'
+      reviewPolicyVersionId: DEFAULT_POLICY_PROFILE_VERSION_ID
     };
   }
 
@@ -4410,7 +4581,7 @@ function createProviderSet(calls: Array<{ action: NovelProviderAction; keys: str
       assessImpact: (input) => record(input.action === 'chapter_adopt_impact_assess' ? 'chapter_adopt_impact_assess' : 'chapter_impact_assess', input, bodyProvider.assessImpact(input))
     },
     fullReviewProvider: {
-      generateFullReview: (input) => record('novel_full_review', input, { totalScore: 80, rating: 'A', gateResult: 'pass', summary: '通过', strengths: [], problems: [], suggestions: [], dimensionScores: [{ key: 'overall', label: '综合质量', score: 80, weight: 1, evidence: '权威章节证据完整。', penaltyPoints: 0 }], issues: [], videoSuggestion: '从第1章切入。', firstVideoSuggestion: { chapterRange: '1', openingSlice: '开篇冲突', narrationHook: '主角开始反击', firstScreenSubtitle: '反击开始', titleHook: '主角翻盘', endingSuspense: '幕后人出现', suggestedFormat: '旁白加字幕', riskTips: [] }, platformRisks: [], originalityRisks: [], aiFlavorRisks: [], lowScoreContinueRisks: [], reviewPolicyVersionId: 'deepseek-full-review-v1' })
+      generateFullReview: (input) => record('novel_full_review', input, { totalScore: 80, rating: 'A', gateResult: 'pass', summary: '通过', strengths: [], problems: [], suggestions: [], dimensionScores: createCanonicalFullReviewDimensions(80), issues: [], videoSuggestion: '从第1章切入。', firstVideoSuggestion: { chapterRange: '1', openingSlice: '开篇冲突', narrationHook: '主角开始反击', firstScreenSubtitle: '反击开始', titleHook: '主角翻盘', endingSuspense: '幕后人出现', suggestedFormat: '旁白加字幕', riskTips: [] }, platformRisks: [], originalityRisks: [], aiFlavorRisks: [], lowScoreContinueRisks: [], reviewPolicyVersionId: input.coverageManifest.policyProfileVersionId ?? DEFAULT_POLICY_PROFILE_VERSION_ID })
     }
   };
 }
@@ -4743,7 +4914,7 @@ describe('RP-02B2a1 registry and strict provider ABI', () => {
     const captured: Array<{ action: NovelProviderAction; payload: Record<string, unknown> }> = [], poison: ProviderPoison = {};
     const logs: string[] = []; const app = Fastify({ logger: { level: 'info', stream: { write: (chunk: unknown) => logs.push(String(chunk)) } } as any });
     app.setErrorHandler((error, request, reply) => { const { statusCode, body } = toErrorResponse(error, request.id); reply.status(statusCode).send(body); });
-    await registerNovelRoutes(app, { repository, acceptanceSeeds: { enabled: true, inMemoryRepository: true, databaseUrlPresent: false }, requestContextResolver: async () => ({ tenantId: 'tenant_test', userId: 'user_test' }), now: () => new Date('2026-07-14T00:00:00.000Z'), ...createRouteProviderSpies(captured, poison, repository) });
+    await registerNovelRoutes(app, { repository, acceptanceSeeds: { enabled: true }, requestContextResolver: async () => ({ tenantId: 'tenant_test', userId: 'user_test' }), now: () => new Date('2026-07-14T00:00:00.000Z'), ...createRouteProviderSpies(captured, poison, repository) });
     const seedOne = (await app.inject({ method: 'POST', url: '/dev/novels/acceptance-seeds/trial', payload: { title: 'chapter-one authority' } })).json().data, authoritativeChapterOne = repository.getNovelChapters().find((item) => item.novelId === seedOne.novelId && item.chapterNo === 1); assert.ok(authoritativeChapterOne);
     assert.deepEqual(seedOne.candidateIds.map((id: string) => repository.getChapterContentVersions().find((item) => item.id === id)?.chapterId), Array(seedOne.candidateIds.length).fill(authoritativeChapterOne.id), 'legal chapter-one candidates bind to the authoritative chapter');
     for (const mode of ['other_chapter', 'canary_id', 'wrong_chapter_no'] as const) {

@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { LlmProviderError, type ChatCompletionRequest, type LlmClient } from '../../ai/llmClient.js';
 import { hashCanonicalJson } from '../domain/executionContract.js';
+import { FULL_REVIEW_CANONICAL_DIMENSION_KEYS } from '../services/actionExecutionPlan.js';
 import { createFullReviewEvidenceFixture } from '../testSupport/fullReviewEvidenceFixture.js';
 import { DeepSeekNovelProvider } from './deepseekNovelProvider.js';
 
@@ -162,7 +163,14 @@ describe('DeepSeek novel provider', () => {
           strengths: ['节奏稳定'],
           problems: [],
           suggestions: ['视频化时突出前三秒冲突'],
-          dimensionScores: [{ key: 'continuity', label: '连续性', score: 86, weight: 1, evidence: '第1章三段摘录连续。', penaltyPoints: 0 }],
+          dimensionScores: FULL_REVIEW_CANONICAL_DIMENSION_KEYS.map((key, index) => ({
+            key,
+            label: `审稿维度 ${index + 1}`,
+            score: 86,
+            weight: index < 2 ? 0.16 : 0.17,
+            evidence: `第1章 ${key} 三段摘录连续。`,
+            penaltyPoints: 0
+          })),
           issues: [],
           videoSuggestion: '适合从第1章冲突切入。',
           firstVideoSuggestion: {
@@ -179,7 +187,7 @@ describe('DeepSeek novel provider', () => {
           originalityRisks: [],
           aiFlavorRisks: [],
           lowScoreContinueRisks: [],
-          reviewPolicyVersionId: 'policy-full-review-v1'
+          reviewPolicyVersionId: 'policy_default_v1'
         })
       ])
     });

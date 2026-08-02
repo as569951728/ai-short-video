@@ -4,6 +4,7 @@ import { BusinessError } from '../../../shared/errors.js';
 import { sendOk } from '../../../shared/reply.js';
 import { NovelService, type NovelServiceOptions } from '../services/novelService.js';
 import { resolveRequestIdempotencyKey } from '../services/taskClaim.js';
+import { isInMemoryNovelRepository } from '../repositories/inMemoryNovelRepository.js';
 import type {
   AdoptDirectionRequest,
   AdoptStructureAssetRequest,
@@ -124,8 +125,6 @@ const idempotencyKeySchema = { type: 'string', minLength: 8, maxLength: 120, pat
 
 interface AcceptanceSeedRouteAccess {
   enabled: boolean;
-  inMemoryRepository: boolean;
-  databaseUrlPresent: boolean;
 }
 
 type NovelRouteOptions = NovelServiceOptions & {
@@ -135,11 +134,12 @@ type NovelRouteOptions = NovelServiceOptions & {
 export async function registerNovelRoutes(app: FastifyInstance, options: NovelRouteOptions) {
   const novelService = new NovelService(options);
   const acceptanceSeeds = options.acceptanceSeeds ?? {
-    enabled: false,
-    inMemoryRepository: false,
-    databaseUrlPresent: Boolean(process.env.DATABASE_URL)
+    enabled: false
   };
-  if (acceptanceSeeds.enabled && (acceptanceSeeds.databaseUrlPresent || !acceptanceSeeds.inMemoryRepository)) {
+  if (
+    acceptanceSeeds.enabled
+    && (Boolean(process.env.DATABASE_URL) || !isInMemoryNovelRepository(options.repository))
+  ) {
     throw new Error('acceptance seeds require an explicit in-memory repository with no DATABASE_URL');
   }
 
