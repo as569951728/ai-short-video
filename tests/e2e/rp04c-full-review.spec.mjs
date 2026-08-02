@@ -7,6 +7,7 @@ const API_ORIGIN = process.env.RP04C_API_ORIGIN;
 const EVIDENCE_PATH = process.env.RP04C_EVIDENCE_PATH;
 const EXPECTED_CHAPTER_NOS = Array.from({ length: 12 }, (_, index) => index + 1);
 const SAFE_BODY_CANARY = '仓库后门的监控今晚会被清空';
+const RAW_MODEL_CANARY = 'RP04C_RAW_MODEL_CANARY';
 const SENSITIVE_KEYS = new Set([
   'apikey', 'authorization', 'cookie', 'databaseurl', 'messages', 'password', 'prompt',
   'providerbody', 'providerresponse', 'rawcontent', 'rawresponse', 'secret'
@@ -18,7 +19,7 @@ const SENSITIVE_VALUE_PATTERNS = [
   /rawResponse|providerResponse|providerBody/i
 ];
 
-test('RP-04C M-01..M-11 full-review browser acceptance', async ({ page, context, request }) => {
+test('RP-04C M-01..M-11 and failed-refresh recovery browser acceptance', async ({ page, context, request }) => {
   test.setTimeout(120_000);
   if (!API_ORIGIN || !EVIDENCE_PATH) throw new Error('RP-04C E2E environment is incomplete');
 
@@ -270,9 +271,55 @@ test('RP-04C M-01..M-11 full-review browser acceptance', async ({ page, context,
     expect(telemetry.completionPostCount).toBe(0);
     evidence.m['M-10'] = pass({ idsStableAfterRefresh: true, duplicatePostOrAsset: false, taskId, reportId: evidence.ids.reportId, gateId: evidence.ids.gateId });
 
+    currentStep = 'R-01';
+    const armFailure = await request.post(`${API_ORIGIN}/__e2e/rp04c/fail-next-output-parse`);
+    expect(armFailure.status()).toBe(200);
+    const failureSeedResponse = await request.post(`${API_ORIGIN}/dev/novels/acceptance-seeds/full-review`, {
+      data: { title: `RP-04C 失败恢复 ${runId.slice(-19)}` }
+    });
+    expect(failureSeedResponse.status()).toBe(201);
+    const failureSeed = unwrap(await failureSeedResponse.json());
+    const failurePage = await context.newPage();
+    attachPageTelemetry(failurePage, telemetry);
+    await failurePage.goto(`/novels/${failureSeed.novelId}?step=fullReview`);
+    await fullReviewButton(failurePage).click();
+    const failureResponsePromise = failurePage.waitForResponse(
+      (candidate) => candidate.request().method() === 'POST' && candidate.url() === `${API_ORIGIN}/novels/${failureSeed.novelId}/full-review`
+    );
+    await failurePage.locator('.el-message-box').getByRole('button', { name: '确认发起审稿' }).click();
+    expect((await failureResponsePromise).status()).toBe(500);
+    const failedDetail = await pollNovelDetail(failurePage, failureSeed.novelId, (detail) =>
+      detail.recentTasks?.some((task) => task.taskType === 'novel_full_review' && task.status === 'failed'));
+    const failedTask = failedDetail.recentTasks.find((task) => task.taskType === 'novel_full_review' && task.status === 'failed');
+    expect(failedTask).toBeTruthy();
+    expect(failedTask.failureCategory).toBe('output_parse_failed');
+    expect(failedTask.errorCode).toBe('PROVIDER_ERROR');
+    const failedTaskDetail = await browserGet(failurePage, `${API_ORIGIN}/tasks/${failedTask.id}`);
+    expect(failedTaskDetail.data.failureCategory).toBe('output_parse_failed');
+    expect(JSON.stringify(failedTaskDetail.data)).not.toContain(RAW_MODEL_CANARY);
+    await expect(failurePage.locator('main.step-main-content').getByRole('button', { name: '重新发起全书审稿' })).toBeVisible({ timeout: 10_000 });
+    const failureAlert = failurePage.locator('main.step-main-content .el-alert--error');
+    await expect(failureAlert.locator('.el-alert__title')).toHaveText('模型输出格式不符合约定，本次未生成报告');
+    await expect(failureAlert).toContainText('模型输出格式不符合约定，本次未生成报告。');
+    await expect(failureAlert).toContainText('错误代码：PROVIDER_ERROR');
+    await failurePage.reload();
+    await expect(failureAlert.locator('.el-alert__title')).toHaveText('模型输出格式不符合约定，本次未生成报告');
+    await expect(failureAlert).toContainText('错误代码：PROVIDER_ERROR');
+    const refreshedFailure = await browserGet(failurePage, `${API_ORIGIN}/novels/${failureSeed.novelId}`);
+    const refreshedTask = refreshedFailure.data.recentTasks.find((task) => task.id === failedTask.id);
+    expect(refreshedTask.failureCategory).toBe('output_parse_failed');
+    expect(refreshedTask.errorCode).toBe('PROVIDER_ERROR');
+    expect(JSON.stringify(refreshedFailure.data)).not.toContain(RAW_MODEL_CANARY);
+    const recoveryObserver = await browserGet(failurePage, `${API_ORIGIN}/__e2e/rp04c/state`);
+    expect(recoveryObserver.data.providerCallCount).toBe(1);
+    expect(recoveryObserver.data.outputParseFailureCallCount).toBe(1);
+    expect(refreshedFailure.data.latestFullReview).toBeNull();
+    await expect(completionButton(failurePage)).toBeDisabled();
+    evidence.recovery = pass({ taskId: failedTask.id, failureCategory: refreshedTask.failureCategory, errorCode: refreshedTask.errorCode, safeAfterRefresh: true, reportWritten: false, providerSuccessCallCount: 1, outputParseFailureCallCount: 1 });
+
     currentStep = 'M-11';
     await Promise.all(telemetry.pendingNetworkScans);
-    const surfaces = await Promise.all([scanBrowserSurfaces(page), scanBrowserSurfaces(secondPage)]);
+    const surfaces = await Promise.all([scanBrowserSurfaces(page), scanBrowserSurfaces(secondPage), scanBrowserSurfaces(failurePage)]);
     const domSensitiveHits = surfaces.reduce((sum, item) => sum + item.domSensitiveHits, 0);
     const storageSensitiveHits = surfaces.reduce((sum, item) => sum + item.storageSensitiveHits, 0);
     const cookieSensitiveHits = await scanCookies(context);
@@ -308,6 +355,10 @@ test('RP-04C M-01..M-11 full-review browser acceptance', async ({ page, context,
     }
     evidence.browserConclusion = 'candidate_for_independent_review';
   } catch (error) {
+    if (currentStep === 'R-01') {
+      evidence.recovery = { status: 'FAIL', evidence: { safeFailureClass: error instanceof Error ? error.name : 'UnknownFailure' } };
+      evidence.failures.push('R-01');
+    }
     if (evidence.m[currentStep] && evidence.m[currentStep].status !== 'PASS' && evidence.m[currentStep].status !== 'FAIL') {
       evidence.m[currentStep] = { status: 'FAIL', evidence: { safeFailureClass: error instanceof Error ? error.name : 'UnknownFailure' } };
       if (!evidence.failures.includes(currentStep)) evidence.failures.push(currentStep);
@@ -344,6 +395,7 @@ function createEvidence(runId, startedAt) {
       bodyCanaryVerified: false
     },
     ids: { taskId: null, requestId: null, reportId: null, gateId: null },
+    recovery: { status: 'NOT_RUN', evidence: {} },
     m: Object.fromEntries(EXPECTED_CHAPTER_NOS.slice(0, 11).map((_, index) => [`M-${String(index + 1).padStart(2, '0')}`, { status: 'NOT_RUN', evidence: {} }])),
     network: null,
     privacy: null,
@@ -460,7 +512,7 @@ function normalizeKey(key) {
 
 function sensitiveValueHit(value) {
   const text = String(value);
-  return text.includes(SAFE_BODY_CANARY) || SENSITIVE_VALUE_PATTERNS.some((pattern) => pattern.test(text));
+  return text.includes(SAFE_BODY_CANARY) || text.includes(RAW_MODEL_CANARY) || SENSITIVE_VALUE_PATTERNS.some((pattern) => pattern.test(text));
 }
 
 async function browserGet(page, url) {

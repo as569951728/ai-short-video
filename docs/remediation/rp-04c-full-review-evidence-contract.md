@@ -1,7 +1,6 @@
 # RP-04C 全书审稿证据合同
 
 ## 1. 合同定位
-
 | 字段 | 内容 |
 | --- | --- |
 | package_id | RP-04C |
@@ -13,7 +12,6 @@
 本文冻结 RP-04C 的输入证据、失败语义、付费幂等、真实模型 canary 和隐私边界。本文不是研发授权、关闭证据或总账状态变更；`RMD-NOV-REVIEW-001` 只有在本合同全部验收项通过并取得独立 TEST、PRODUCT、QUALITY 结论后才可申请关闭。
 
 ## 2. 核心原则
-
 1. **全章节覆盖**：正式目录中的每个计划章节必须且只能出现一次，章节号连续，且全部指向当前正式正文、当前 feature card 和当前单章 review。
 2. **证据优先于结论**：模型输入必须包含正文分层证据、feature/review/memory 证据和 coverage manifest；只有章节标题、字数、状态等元数据时禁止调用 provider。
 3. **来源可追溯**：每条送模证据都必须绑定稳定对象 ID、版本或 revision、内容摘要哈希和章节号；审稿报告必须回写同一份 manifest 的摘要引用。
@@ -24,7 +22,6 @@
 ## 3. 全章节覆盖合同
 
 ### 3.1 权威章节集合
-
 权威章节集合以当前已采用章节目录为基准，按 `chapterNo` 升序生成。每章必须同时满足：
 
 - `chapterId` 唯一且属于当前 tenant 和 novel。
@@ -37,77 +34,29 @@
 计划章节总数、正文总数、feature card 总数、review 总数必须完全相等。任何集合数量不相等、章节映射一对多或多对一，都属于 `coverage_incomplete`，不得调用 provider。
 
 ### 3.2 Coverage manifest
-
 每次全书审稿必须先生成不可变 `coverageManifest`，至少包含：
 
-```text
-manifestVersion
-tenantId
-novelId
-chapterPlanVersionId
-policyProfileVersionId
-chapterCount
-coveredChapterNos
-chapters[]:
-  chapterId
-  chapterNo
-  contentVersionId
-  contentRevision
-  contentHash
-  featureCardVersionId
-  featureCardRevision
-  featureCardHash
-  reviewReportId
-  reviewRevision
-  reviewHash
-memory:
-  memoryId
-  memoryRevision
-  memoryHash
-manifestHash
-```
+| 层级 | 必需字段 |
+| --- | --- |
+| 根 | `manifestVersion`, `tenantId`, `novelId`, `chapterPlanVersionId`, `policyProfileVersionId`, `chapterCount`, `coveredChapterNos`, `manifestHash` |
+| `chapters[]` | `chapterId`, `chapterNo`, content/feature/review 各自的当前 ID、revision 与 hash |
+| `memory` | `memoryId`, `memoryRevision`, `memoryHash` |
 
 `manifestHash` 必须由规范化后的完整 manifest 计算，不能包含当前时间、随机数或请求 ID。provider 输入、任务 authority snapshot、结果 provenance 和关闭证据必须引用同一个 `manifestHash`。
 
 ## 4. 正文分层证据合同
+每章送模证据必须包含章节身份与正文版本、目标/起止状态/关键事件/承接点摘要、人物/关系/地点/时间线/物件/数量/承诺/伏笔事实断言、带章内定位的最小证据片段，以及原文/摘要字符数、片段数和内容哈希。
 
-### 4.1 每章证据
-
-每章送模证据至少包含：
-
-- 章节身份：`chapterId`、`chapterNo`、标题和正文版本。
-- 正文摘要：章节目标、开端状态、关键事件、结尾状态和下一章承接点。
-- 事实断言：人物状态、人物关系、地点、时间线、关键物件、金额或数量、承诺和未回收伏笔。
-- 证据片段：支撑关键事实或潜在冲突的最小必要正文片段，并带章节内定位。
-- 正文完整性：原始字符数、摘要字符数、证据片段数和内容哈希。
-
-### 4.2 跨章分层
-
-全书证据不能简单把全部正文拼接后截断。必须按确定性规则生成：
-
-1. 章级证据。
-2. 阶段级摘要与阶段内事实变化。
-3. 全书级人物弧线、主线事件、时间线和伏笔闭环。
-4. coverage manifest 与各层摘要之间的覆盖映射。
+全书证据按确定性规则生成章级证据、阶段摘要与事实变化、全书人物弧线/主线/时间线/伏笔闭环，并保留与 manifest 的覆盖映射；禁止简单拼接全文后截断。
 
 达到上下文预算上限时，应减少证据片段冗余或分阶段审稿，不能静默删除尾部章节。任一章节没有进入最终审稿上下文时，整体审稿必须失败为 `coverage_incomplete`。
 
 ## 5. Feature、Review 与 Memory 证据
-
-### 5.1 Feature card
-
-每章当前 feature card 至少投影：核心冲突、人物状态变化、事实新增或修改、伏笔、风险标签和与正文版本的绑定信息。feature card 不能替代正文证据。
-
-### 5.2 单章 review
-
-每章当前 review 至少投影：评分、已发现问题、严重级别、证据定位、处理状态和审稿策略版本。已解决问题与未解决问题必须可区分；全书审稿不得把未解决阻塞问题当作已通过。
-
-### 5.3 长期 memory
-
-全书审稿必须使用与当前正文范围匹配的最新长期 memory，至少覆盖人物、关系、时间线、关键事实、未回收伏笔和已接受风险。memory 必须有稳定 ID、revision 和 hash；缺失或落后于当前正文范围时，不得使用旧 memory 假装完整审稿。
+- Feature card 投影核心冲突、人物状态变化、事实变更、伏笔、风险和正文版本绑定，但不得替代正文证据。
+- 单章 review 投影评分、问题、级别、证据定位、处理状态和策略版本，并区分已解决与未解决阻塞。
+- 长期 memory 覆盖人物、关系、时间线、关键事实、未回收伏笔和已接受风险，必须与当前正文范围匹配且具有稳定 ID、revision 和 hash。
 
 ## 6. Provider 前 fail-closed 门禁
-
 以下检查必须发生在真实 provider 调用前，并可用 provider spy 证明调用增量为 0：
 
 | 场景 | 受控结果 | provider 增量 | 资产/结果增量 |
@@ -124,22 +73,7 @@ manifestHash
 门禁至少执行两次：claim 或预占前一次，provider 调用前按权威仓储重新读取并验证一次。失败后禁止通过补默认值、跳过章节、复用旧 memory 或缩减到元数据模式继续调用。
 
 ## 7. 单次幂等付费合同
-
-付费调用身份由以下字段共同确定：
-
-```text
-tenantId + userId + novelId + action + idempotencyKey
-+ manifestHash + reviewPolicyVersionId + providerRouteFingerprint
-```
-
-必须满足：
-
-1. 首次有效请求最多进入 provider 一次。
-2. 同身份的 waiting、processing 或 terminal 重放复用同一 taskId，不新增 provider 调用。
-3. 同幂等键但 manifest、策略或 provider 路由变化时返回冲突，不调用 provider。
-4. 客户端超时、刷新、多标签重复点击和网络重放不能触发第二次付费调用。
-5. provider 返回未知结果时不得自动付费重试；必须保留未知状态并走后续受控恢复合同。
-6. 测试必须同时断言 provider 调用次数、task 数、审稿资产数、事件数和费用记录数。
+调用身份为 `tenantId + userId + novelId + action + idempotencyKey + manifestHash + reviewPolicyVersionId + providerRouteFingerprint`。首次有效请求最多调用 provider 一次；同身份 waiting/processing/terminal 重放复用 taskId；同键但 manifest/策略/路由变化时返回冲突且不调用 provider。超时、刷新、多标签和网络重放均不得触发第二次付费调用；未知结果不得自动付费重试。测试同时断言 provider 调用、task、审稿资产、事件和费用记录计数。
 
 ## 8. 固定冲突 Fixture
 

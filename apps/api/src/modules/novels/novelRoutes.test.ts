@@ -3073,11 +3073,9 @@ describe('novel package 7 full review and video readiness routes', () => {
     const cases = [
       {
         label: 'schema-invalid',
-        error: new LlmProviderError('output_parse_failed', `schema invalid ${rawCanaries[0]}`, {
-          outputKind: 'schema_invalid',
-          reason: rawCanaries[1],
-          prompt: rawCanaries[2],
-          rawResponse: rawCanaries[3]
+        error: Object.assign(new Error(`schema invalid ${rawCanaries[0]}`), {
+          name: 'LlmProviderError', category: 'output_parse_failed' as const,
+          details: { outputKind: 'schema_invalid', reason: rawCanaries[1], prompt: rawCanaries[2], rawResponse: rawCanaries[3] }
         }),
         expectedFailureCategory: 'output_parse_failed',
         expectedErrorCode: 'PROVIDER_ERROR',

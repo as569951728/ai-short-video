@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { LlmProviderError } from '../../apps/api/src/modules/ai/llmClient.js';
 import type { FullReviewDraft } from '../../apps/api/src/modules/novels/domain/novelDomain.js';
 import type { FullReviewProvider } from '../../apps/api/src/modules/novels/providers/mockFullReviewProvider.js';
 import type { NovelProviderActionInputFor } from '../../apps/api/src/modules/novels/services/actionExecutionPlan.js';
@@ -76,6 +77,10 @@ async function main() {
     },
     requestId: 'rp04c-safe-observer'
   }));
+  app.post('/__e2e/rp04c/fail-next-output-parse', async () => {
+    observer.failNextOutputParse = true;
+    return { success: true, data: { armed: true }, requestId: 'rp04c-safe-observer' };
+  });
 
   const port = Number(process.env.PORT ?? 0);
   await app.listen({ host: '127.0.0.1', port });
@@ -95,6 +100,8 @@ interface Rp04cObserver {
   modelRouteSafeName: 'deterministic-delay-provider';
   providerDelayMs: number;
   providerCallCount: number;
+  outputParseFailureCallCount: number;
+  failNextOutputParse: boolean;
   providerActive: boolean;
   providerCompleted: boolean;
   chapterCount: number;
@@ -113,6 +120,8 @@ function createObserver(delayMs: number): Rp04cObserver {
     modelRouteSafeName: 'deterministic-delay-provider',
     providerDelayMs: delayMs,
     providerCallCount: 0,
+    outputParseFailureCallCount: 0,
+    failNextOutputParse: false,
     providerActive: false,
     providerCompleted: false,
     chapterCount: 0,
@@ -129,6 +138,14 @@ function createObserver(delayMs: number): Rp04cObserver {
 function createRp04cFullReviewProvider(delayMs: number, observer: Rp04cObserver): FullReviewProvider {
   return {
     async generateFullReview(input): Promise<FullReviewDraft> {
+      if (observer.failNextOutputParse) {
+        observer.failNextOutputParse = false;
+        observer.outputParseFailureCallCount += 1;
+        throw new LlmProviderError('output_parse_failed', 'schema invalid RP04C_RAW_MODEL_CANARY', {
+          outputKind: 'schema_invalid',
+          reason: 'schema_invalid'
+        });
+      }
       recordAndAssertEvidence(input, observer);
       await new Promise((resolve) => setTimeout(resolve, delayMs));
       const chapterId = (chapterNo: number) => {

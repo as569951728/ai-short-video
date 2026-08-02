@@ -1034,8 +1034,8 @@ function createPublicProviderFailure(error: unknown) {
 }
 
 function getPublicOutputKind(error: unknown): 'schema_invalid' | 'non_json' | null {
-  if (!(error instanceof LlmProviderError) || error.category !== 'output_parse_failed') return null;
-
-  const outputKind = error.details?.outputKind;
+  const candidate = error instanceof LlmProviderError ? error : toRecord(error);
+  if (candidate.name !== 'LlmProviderError' || candidate.category !== 'output_parse_failed') return null;
+  const outputKind = toRecord(candidate.details).outputKind;
   return outputKind === 'schema_invalid' || outputKind === 'non_json' ? outputKind : null;
 }
