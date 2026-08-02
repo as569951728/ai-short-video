@@ -76,18 +76,18 @@ test('RP-04C M-01..M-11 full-review browser acceptance', async ({ page, context,
     currentStep = 'M-03';
     await fullReviewButton(page).click();
     const requestPromise = page.waitForRequest((candidate) => candidate.method() === 'POST' && candidate.url() === `${API_ORIGIN}/novels/${seed.novelId}/full-review`);
-    const responsePromise = page.waitForResponse((candidate) => candidate.request().method() === 'POST' && candidate.url() === `${API_ORIGIN}/novels/${seed.novelId}/full-review`);
+    const responsePromise = page.waitForResponse(
+      (candidate) => candidate.request().method() === 'POST' && candidate.url() === `${API_ORIGIN}/novels/${seed.novelId}/full-review`,
+      { timeout: 70_000 }
+    );
     await page.locator('.el-message-box').getByRole('button', { name: '确认发起审稿' }).click();
-    const [fullReviewRequest, fullReviewResponse] = await Promise.all([requestPromise, responsePromise]);
-    expect(fullReviewResponse.status()).toBe(200);
-    telemetry.fullReviewResponseStatus = fullReviewResponse.status();
+    const fullReviewRequest = await requestPromise;
     const requestPayload = fullReviewRequest.postDataJSON();
     expect(Object.keys(requestPayload).sort()).toEqual(['expectedNovelVersion', 'idempotencyKey']);
     expect(requestPayload.idempotencyKey).toBeTruthy();
     await expect(page.locator('.step-side-panel .task-progress-label')).toHaveText('生成中');
     await expect(fullReviewButton(page)).toBeDisabled();
     expect(telemetry.fullReviewPosts).toHaveLength(1);
-    evidence.m['M-03'] = pass({ fullReviewPostCount: 1, responseStatus: fullReviewResponse.status(), requestKeys: Object.keys(requestPayload).sort(), waitingStateVisible: true });
 
     currentStep = 'M-04';
     const processingStartedAt = Date.now();
@@ -191,6 +191,10 @@ test('RP-04C M-01..M-11 full-review browser acceptance', async ({ page, context,
 
     currentStep = 'M-07';
     await expect(secondPage.getByText('68 / C')).toBeVisible({ timeout: 30_000 });
+    const fullReviewResponse = await responsePromise;
+    expect(fullReviewResponse.status()).toBe(200);
+    telemetry.fullReviewResponseStatus = fullReviewResponse.status();
+    evidence.m['M-03'] = pass({ fullReviewPostCount: 1, responseStatus: fullReviewResponse.status(), requestKeys: Object.keys(requestPayload).sort(), waitingStateVisible: true });
     const terminalDetail = await pollNovelDetail(secondPage, seed.novelId, (detail) => detail.latestFullReview?.gate?.gateResult === 'blocked');
     const latest = await browserGet(secondPage, `${API_ORIGIN}/novels/${seed.novelId}/full-review/latest`);
     const observer = await browserGet(secondPage, `${API_ORIGIN}/__e2e/rp04c/state`);
