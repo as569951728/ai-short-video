@@ -122,15 +122,32 @@ const fullReviewParamsSchema = {
 
 const idempotencyKeySchema = { type: 'string', minLength: 8, maxLength: 120, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{7,119}$' } as const;
 
-type NovelRouteOptions = NovelServiceOptions & { requestContextResolver?: RequestContextResolver };
+interface AcceptanceSeedRouteAccess {
+  enabled: boolean;
+  inMemoryRepository: boolean;
+  databaseUrlPresent: boolean;
+}
+
+type NovelRouteOptions = NovelServiceOptions & {
+  requestContextResolver?: RequestContextResolver;
+  acceptanceSeeds?: AcceptanceSeedRouteAccess;
+};
 export async function registerNovelRoutes(app: FastifyInstance, options: NovelRouteOptions) {
   const novelService = new NovelService(options);
-  const devSeedNovelService = new NovelService({
-    repository: options.repository,
-    now: options.now
-  });
+  const acceptanceSeeds = options.acceptanceSeeds ?? {
+    enabled: false,
+    inMemoryRepository: false,
+    databaseUrlPresent: Boolean(process.env.DATABASE_URL)
+  };
+  if (acceptanceSeeds.enabled && (acceptanceSeeds.databaseUrlPresent || !acceptanceSeeds.inMemoryRepository)) {
+    throw new Error('acceptance seeds require an explicit in-memory repository with no DATABASE_URL');
+  }
 
-  if (process.env.NODE_ENV !== 'production') {
+  if (acceptanceSeeds.enabled) {
+    const devSeedNovelService = new NovelService({
+      repository: options.repository,
+      now: options.now
+    });
     app.post(
       '/dev/novels/acceptance-seeds/outline',
       {

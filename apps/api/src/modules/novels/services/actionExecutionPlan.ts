@@ -186,6 +186,33 @@ export interface FullReviewChapterEvidenceProviderInputV1 {
     policyProfileVersionId: string | null;
     reviewHash: string;
   };
+  continuity?: {
+    stage: {
+      stageIndex: number | null;
+      isStageOpening: boolean;
+      isStageEnding: boolean;
+      previousChapterId: string | null;
+      nextChapterId: string | null;
+    };
+    characterArc: {
+      characterChanges: string[];
+      relationshipChanges: string[];
+    };
+    timeline: {
+      chapterNo: number;
+      factAnchors: string[];
+    };
+    foreshadowing: {
+      operation: string | null;
+      endingHook: string | null;
+    };
+    excerptLocations: Array<{
+      kind: 'opening' | 'middle' | 'ending';
+      startChar: number;
+      endChar: number;
+      excerptHash: string;
+    }>;
+  };
   evidenceHash: string;
 }
 
@@ -658,12 +685,19 @@ export function buildFullReviewEvidenceProviderInput(
     evidenceFail('source_stale', '正文版本引用与当前章节不一致。');
   }
 
-  const chapterEvidence = chapters.map((chapter) => {
+  const chapterEvidence = chapters.map((chapter, index) => {
     const content = contents.get(chapter.id)!;
     const featureCard = featureCards.get(chapter.id)!;
     const review = reviews.get(chapter.id)!;
     assertChapterEvidenceAuthority(tenantId, novel.id, chapter, content, featureCard, review);
-    return projectFullReviewChapterEvidence(chapter, content, featureCard, review);
+    return projectFullReviewChapterEvidence(
+      chapter,
+      content,
+      featureCard,
+      review,
+      chapters[index - 1] ?? null,
+      chapters[index + 1] ?? null
+    );
   });
 
   const memory = projectFullReviewMemoryEvidence(
@@ -747,6 +781,7 @@ export function validateFullReviewEvidenceProviderInput(
     for (const [layer, excerpt] of Object.entries(item.content.excerpts)) {
       validateBoundedEvidenceText(excerpt, `正文${layer}片段`, FULL_REVIEW_EXCERPT_CHARS);
     }
+    if (item.continuity) validateFullReviewContinuityEvidence(input.chapterEvidence, index);
     const { featureCardHash, ...featureCore } = item.featureCard;
     if (hashCanonicalJson(featureCore) !== featureCardHash) evidenceFail('source_stale', '章节特征卡 hash 不一致。');
     const { reviewHash, ...reviewCore } = item.review;
@@ -799,9 +834,159 @@ export function validateFullReviewEvidenceProviderInput(
   return structuredClone(input);
 }
 
+function validateFullReviewContinuityEvidence(
+  chapterEvidence: FullReviewChapterEvidenceProviderInputV1[],
+  index: number
+): void {
+  const item = chapterEvidence[index]!;
+  const continuity = item.continuity!;
+  const previous = chapterEvidence[index - 1] ?? null;
+  const next = chapterEvidence[index + 1] ?? null;
+  if ((continuity.stage.stageIndex !== null && !Number.isInteger(continuity.stage.stageIndex))
+    || typeof continuity.stage.isStageOpening !== 'boolean'
+    || typeof continuity.stage.isStageEnding !== 'boolean'
+    || (continuity.stage.previousChapterId !== null && typeof continuity.stage.previousChapterId !== 'string')
+      || (continuity.stage.nextChapterId !== null && typeof continuity.stage.nextChapterId !== 'string')) {
+    evidenceFail('evidence_incomplete', `第 ${index + 1} 章阶段证据无效。`);
+  }
+  if (continuity.stage.previousChapterId !== (previous?.chapter.id ?? null)
+    || continuity.stage.nextChapterId !== (next?.chapter.id ?? null)
+    || continuity.stage.isStageOpening !== (previous === null || previous.continuity?.stage.stageIndex !== continuity.stage.stageIndex)
+    || continuity.stage.isStageEnding !== (next === null || next.continuity?.stage.stageIndex !== continuity.stage.stageIndex)) {
+    evidenceFail('source_stale', `第 ${index + 1} 章阶段边界与相邻章节不一致。`);
+  }
+  if (continuity.timeline.chapterNo !== item.chapter.chapterNo) {
+    evidenceFail('source_stale', `第 ${index + 1} 章时间线证据与章节号不一致。`);
+  }
+  const expectedKinds = ['opening', 'middle', 'ending'] as const;
+  if (continuity.excerptLocations.length !== expectedKinds.length) {
+    evidenceFail('evidence_incomplete', `第 ${index + 1} 章摘录位置证据不完整。`);
+  }
+  continuity.excerptLocations.forEach((location, locationIndex) => {
+    const kind = expectedKinds[locationIndex]!;
+    const excerpt = item.content.excerpts[kind];
+    if (location.kind !== kind
+      || !Number.isInteger(location.startChar)
+      || !Number.isInteger(location.endChar)
+      || location.startChar < 0
+      || location.endChar !== location.startChar + excerpt.length
+      || location.excerptHash !== hashCanonicalJson({ kind, startChar: location.startChar, excerpt })) {
+      evidenceFail('source_stale', `第 ${index + 1} 章摘录位置证据无效。`);
+    }
+  });
+}
+
+export function validateFullReviewDraftForPersistence(
+  draft: FullReviewDraft
+): FullReviewDraft {
+  if (!draft || typeof draft !== 'object') throw new Error('full review draft is required');
+  if (!Number.isFinite(draft.totalScore) || draft.totalScore < 0 || draft.totalScore > 100) {
+    throw new Error('full review totalScore is invalid');
+  }
+  const expectedRating = draft.totalScore >= 80 ? 'A' : draft.totalScore >= 70 ? 'B' : 'C';
+  if (draft.rating !== expectedRating) throw new Error('full review rating is inconsistent with totalScore');
+  if (!['pass', 'warning', 'blocked'].includes(draft.gateResult)) {
+    throw new Error('full review provider gateResult is invalid');
+  }
+  for (const [label, value] of [
+    ['summary', draft.summary],
+    ['videoSuggestion', draft.videoSuggestion],
+    ['reviewPolicyVersionId', draft.reviewPolicyVersionId]
+  ] as const) {
+    if (typeof value !== 'string' || !value.trim()) throw new Error(`full review ${label} is invalid`);
+  }
+  for (const [label, values] of [
+    ['strengths', draft.strengths],
+    ['problems', draft.problems],
+    ['suggestions', draft.suggestions],
+    ['platformRisks', draft.platformRisks],
+    ['originalityRisks', draft.originalityRisks],
+    ['aiFlavorRisks', draft.aiFlavorRisks],
+    ['lowScoreContinueRisks', draft.lowScoreContinueRisks]
+  ] as const) validateDraftStringList(values, label);
+
+  if (!Array.isArray(draft.dimensionScores) || draft.dimensionScores.length === 0) {
+    throw new Error('full review dimensionScores must not be empty');
+  }
+  const dimensionKeys = new Set<string>();
+  let weightedScore = 0;
+  let totalWeight = 0;
+  for (const dimension of draft.dimensionScores) {
+    if (!dimension || typeof dimension !== 'object'
+      || typeof dimension.key !== 'string' || !dimension.key.trim()
+      || typeof dimension.label !== 'string' || !dimension.label.trim()
+      || typeof dimension.evidence !== 'string' || !dimension.evidence.trim()
+      || !Number.isFinite(dimension.score) || dimension.score < 0 || dimension.score > 100
+      || !Number.isFinite(dimension.weight) || dimension.weight <= 0 || dimension.weight > 1
+      || !Number.isFinite(dimension.penaltyPoints) || dimension.penaltyPoints < 0 || dimension.penaltyPoints > 100) {
+      throw new Error('full review dimension is invalid');
+    }
+    if (dimensionKeys.has(dimension.key)) throw new Error('full review dimension key must be unique');
+    dimensionKeys.add(dimension.key);
+    weightedScore += dimension.score * dimension.weight;
+    totalWeight += dimension.weight;
+  }
+  if (totalWeight < 0.95 || totalWeight > 1.05) throw new Error('full review dimension weights are invalid');
+  if (Math.abs(weightedScore / totalWeight - draft.totalScore) > 5) {
+    throw new Error('full review totalScore is inconsistent with dimensions');
+  }
+
+  if (!Array.isArray(draft.issues)) throw new Error('full review issues must be an array');
+  const issueIds = new Set<string>();
+  let hasBlockingIssue = false;
+  for (const issue of draft.issues) {
+    if (!issue || typeof issue !== 'object'
+      || typeof issue.issueId !== 'string' || !issue.issueId.trim()
+      || typeof issue.title !== 'string' || !issue.title.trim()
+      || typeof issue.plainDescription !== 'string' || !issue.plainDescription.trim()
+      || !['info', 'warning', 'blocking'].includes(issue.severity)
+      || !['novel', 'chapter', 'stage', 'structure'].includes(issue.scopeType)
+      || !Array.isArray(issue.scopeRefs) || issue.scopeRefs.length === 0
+      || issue.scopeRefs.some((ref) => typeof ref !== 'string' || !ref.trim())
+      || new Set(issue.scopeRefs).size !== issue.scopeRefs.length
+      || typeof issue.dimension !== 'string' || !issue.dimension.trim()
+      || typeof issue.recommendedTarget !== 'string' || !issue.recommendedTarget.trim()
+      || typeof issue.recommendedAction !== 'string' || !issue.recommendedAction.trim()
+      || issue.status !== 'open'
+      || issue.acceptedReason !== null
+      || issue.blocking !== (issue.severity === 'blocking')) {
+      throw new Error('full review issue is invalid');
+    }
+    if (issueIds.has(issue.issueId)) throw new Error('full review issueId must be unique');
+    if (!dimensionKeys.has(issue.dimension)) throw new Error('full review issue dimension is not declared');
+    issueIds.add(issue.issueId);
+    hasBlockingIssue ||= issue.blocking;
+  }
+
+  const expectedGate = hasBlockingIssue || draft.totalScore < 70
+    ? 'blocked'
+    : draft.totalScore < 80
+      ? 'warning'
+      : 'pass';
+  if (draft.gateResult !== expectedGate) throw new Error('full review gate is inconsistent with score or issues');
+  validateFirstVideoSuggestion(draft.firstVideoSuggestion);
+  return structuredClone(draft);
+}
+
+function validateDraftStringList(value: unknown, label: string): void {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string' || !item.trim())) {
+    throw new Error(`full review ${label} is invalid`);
+  }
+}
+
+function validateFirstVideoSuggestion(value: FullReviewDraft['firstVideoSuggestion']): void {
+  if (!value || typeof value !== 'object') throw new Error('full review firstVideoSuggestion is invalid');
+  for (const field of ['chapterRange', 'openingSlice', 'narrationHook', 'firstScreenSubtitle', 'titleHook', 'endingSuspense', 'suggestedFormat'] as const) {
+    if (typeof value[field] !== 'string' || !value[field].trim()) {
+      throw new Error(`full review firstVideoSuggestion.${field} is invalid`);
+    }
+  }
+  validateDraftStringList(value.riskTips, 'firstVideoSuggestion.riskTips');
+}
+
 const FULL_REVIEW_MANIFEST_KEYS = ['manifestVersion', 'tenantId', 'novelId', 'chapterPlanVersionId', 'policyProfileVersionId', 'chapterCount', 'coveredChapterNos', 'chapters', 'memory', 'manifestHash'] as const;
 const FULL_REVIEW_MANIFEST_CHAPTER_KEYS = ['chapterId', 'chapterNo', 'contentVersionId', 'contentRevision', 'contentHash', 'featureCardVersionId', 'featureCardRevision', 'featureCardHash', 'reviewReportId', 'reviewRevision', 'reviewHash'] as const;
-const FULL_REVIEW_CHAPTER_EVIDENCE_KEYS = ['chapter', 'content', 'featureCard', 'review', 'evidenceHash'] as const;
+const FULL_REVIEW_CHAPTER_EVIDENCE_KEYS = ['chapter', 'content', 'featureCard', 'review', 'continuity', 'evidenceHash'] as const;
 const FULL_REVIEW_CONTENT_KEYS = ['contentVersionId', 'revision', 'wordCount', 'summary', 'excerpts', 'contentHash'] as const;
 const FULL_REVIEW_FEATURE_KEYS = ['featureCardVersionId', 'revision', 'oneLineSummary', 'coreTask', 'mainConflict', 'appealPoint', 'emotionKeywords', 'characterChanges', 'relationshipChanges', 'keyInformation', 'foreshadowingOperation', 'endingHook', 'factsCannotChange', 'featuresToStrengthen', 'featureCardHash'] as const;
 const FULL_REVIEW_REVIEW_KEYS = ['reviewReportId', 'revision', 'totalScore', 'rating', 'summary', 'problems', 'suggestions', 'issues', 'recommendedAction', 'allowNextStep', 'blockingIssueCount', 'resolvedStatus', 'policyProfileVersionId', 'reviewHash'] as const;
@@ -816,7 +1001,7 @@ function assertFullReviewEvidenceShape(input: FullReviewEvidenceProviderInputV1)
     exactEvidenceRecord(row, `coverageManifest.chapters[${index}]`, FULL_REVIEW_MANIFEST_CHAPTER_KEYS);
   }
   for (const [index, item] of strictEvidenceList(input.chapterEvidence, 'chapterEvidence').entries()) {
-    const evidence = exactEvidenceRecord(item, `chapterEvidence[${index}]`, FULL_REVIEW_CHAPTER_EVIDENCE_KEYS);
+    const evidence = exactEvidenceRecord(item, `chapterEvidence[${index}]`, FULL_REVIEW_CHAPTER_EVIDENCE_KEYS, ['continuity']);
     exactEvidenceRecord(evidence.chapter, `chapterEvidence[${index}].chapter`, ['id', 'chapterNo', 'title', 'wordTarget', 'statusNote'] as const);
     const content = exactEvidenceRecord(evidence.content, `chapterEvidence[${index}].content`, FULL_REVIEW_CONTENT_KEYS);
     exactEvidenceRecord(content.excerpts, `chapterEvidence[${index}].content.excerpts`, ['opening', 'middle', 'ending'] as const);
@@ -830,6 +1015,19 @@ function assertFullReviewEvidenceShape(input: FullReviewEvidenceProviderInputV1)
     for (const [issueIndex, issue] of strictEvidenceList(review.issues, `chapterEvidence[${index}].review.issues`).entries()) {
       exactEvidenceRecord(issue, `chapterEvidence[${index}].review.issues[${issueIndex}]`, ['severity', 'dimension', 'message', 'suggestion'] as const);
     }
+    if (evidence.continuity !== undefined) {
+      const continuity = exactEvidenceRecord(evidence.continuity, `chapterEvidence[${index}].continuity`, ['stage', 'characterArc', 'timeline', 'foreshadowing', 'excerptLocations'] as const);
+      exactEvidenceRecord(continuity.stage, `chapterEvidence[${index}].continuity.stage`, ['stageIndex', 'isStageOpening', 'isStageEnding', 'previousChapterId', 'nextChapterId'] as const);
+      const characterArc = exactEvidenceRecord(continuity.characterArc, `chapterEvidence[${index}].continuity.characterArc`, ['characterChanges', 'relationshipChanges'] as const);
+      assertBoundedEvidenceList(characterArc.characterChanges, `chapterEvidence[${index}].continuity.characterArc.characterChanges`);
+      assertBoundedEvidenceList(characterArc.relationshipChanges, `chapterEvidence[${index}].continuity.characterArc.relationshipChanges`);
+      const timeline = exactEvidenceRecord(continuity.timeline, `chapterEvidence[${index}].continuity.timeline`, ['chapterNo', 'factAnchors'] as const);
+      assertBoundedEvidenceList(timeline.factAnchors, `chapterEvidence[${index}].continuity.timeline.factAnchors`);
+      exactEvidenceRecord(continuity.foreshadowing, `chapterEvidence[${index}].continuity.foreshadowing`, ['operation', 'endingHook'] as const);
+      for (const [locationIndex, location] of strictEvidenceList(continuity.excerptLocations, `chapterEvidence[${index}].continuity.excerptLocations`).entries()) {
+        exactEvidenceRecord(location, `chapterEvidence[${index}].continuity.excerptLocations[${locationIndex}]`, ['kind', 'startChar', 'endChar', 'excerptHash'] as const);
+      }
+    }
   }
   const memory = exactEvidenceRecord(input.memory, 'memory', FULL_REVIEW_MEMORY_KEYS);
   for (const key of ['characterStates', 'relationshipStates', 'locations', 'organizations', 'items', 'plantedForeshadowing', 'resolvedForeshadowing', 'unresolvedConflicts', 'newSettings', 'factsCannotContradict'] as const) {
@@ -838,9 +1036,14 @@ function assertFullReviewEvidenceShape(input: FullReviewEvidenceProviderInputV1)
   exactEvidenceRecord(input.sourceVersionRefs, 'sourceVersionRefs', ['directionVersionId', 'settingVersionId', 'outlineVersionId', 'stageOutlineVersionId', 'chapterPlanVersionId', 'bodyStrategySnapshotId', 'chapterContentVersionIds'] as const);
 }
 
-function exactEvidenceRecord<const K extends readonly string[]>(value: unknown, label: string, keys: K): Record<K[number], unknown> {
+function exactEvidenceRecord<const K extends readonly string[]>(
+  value: unknown,
+  label: string,
+  keys: K,
+  optional: readonly string[] = []
+): Record<K[number], unknown> {
   try {
-    return exactRecord(value, label, keys);
+    return exactRecord(value, label, keys, optional);
   } catch {
     evidenceFail('evidence_incomplete', `${label} 字段不符合 full-review evidence ABI。`);
   }
@@ -874,7 +1077,9 @@ function projectFullReviewChapterEvidence(
   chapter: NovelChapterRecord,
   content: ChapterContentVersionRecord,
   featureCard: ChapterFeatureCardRecord,
-  review: ReviewReportRecord
+  review: ReviewReportRecord,
+  previousChapter: NovelChapterRecord | null,
+  nextChapter: NovelChapterRecord | null
 ): FullReviewChapterEvidenceProviderInputV1 {
   const normalizedContent = normalizeEvidenceText(content.content);
   if (!normalizedContent) evidenceFail('evidence_incomplete', `第 ${chapter.chapterNo} 章正文为空。`);
@@ -922,6 +1127,7 @@ function projectFullReviewChapterEvidence(
   });
   const bodyLength = normalizedContent.length;
   const middleStart = Math.max(0, Math.floor((bodyLength - FULL_REVIEW_EXCERPT_CHARS) / 2));
+  const endingStart = Math.max(0, bodyLength - FULL_REVIEW_EXCERPT_CHARS);
   const contentEvidence = {
     contentVersionId: content.id,
     revision: content.versionNo,
@@ -930,17 +1136,58 @@ function projectFullReviewChapterEvidence(
     excerpts: {
       opening: normalizedContent.slice(0, FULL_REVIEW_EXCERPT_CHARS),
       middle: normalizedContent.slice(middleStart, middleStart + FULL_REVIEW_EXCERPT_CHARS),
-      ending: normalizedContent.slice(Math.max(0, bodyLength - FULL_REVIEW_EXCERPT_CHARS))
+      ending: normalizedContent.slice(endingStart)
     },
     contentHash
+  };
+  const excerptLocations: NonNullable<FullReviewChapterEvidenceProviderInputV1['continuity']>['excerptLocations'] = [
+    createExcerptLocation('opening', 0, contentEvidence.excerpts.opening),
+    createExcerptLocation('middle', middleStart, contentEvidence.excerpts.middle),
+    createExcerptLocation('ending', endingStart, contentEvidence.excerpts.ending)
+  ];
+  const continuity = {
+    stage: {
+      stageIndex: chapter.stageIndex,
+      isStageOpening: previousChapter === null || previousChapter.stageIndex !== chapter.stageIndex,
+      isStageEnding: nextChapter === null || nextChapter.stageIndex !== chapter.stageIndex,
+      previousChapterId: previousChapter?.id ?? null,
+      nextChapterId: nextChapter?.id ?? null
+    },
+    characterArc: {
+      characterChanges: boundedEvidenceList(featureCard.characterChanges),
+      relationshipChanges: boundedEvidenceList(featureCard.relationshipChanges)
+    },
+    timeline: {
+      chapterNo: chapter.chapterNo,
+      factAnchors: boundedEvidenceList([...featureCard.keyInformation, ...featureCard.factsCannotChange])
+    },
+    foreshadowing: {
+      operation: optionalEvidenceText(featureCard.foreshadowingOperation, FULL_REVIEW_SUMMARY_CHARS),
+      endingHook: optionalEvidenceText(featureCard.endingHook, FULL_REVIEW_SUMMARY_CHARS)
+    },
+    excerptLocations
   };
   const chapterCore = {
     chapter: projectChapterProviderInput(chapter),
     content: contentEvidence,
     featureCard: { ...featureCore, featureCardHash: hashCanonicalJson(featureCore) },
-    review: { ...reviewCore, reviewHash: hashCanonicalJson(reviewCore) }
+    review: { ...reviewCore, reviewHash: hashCanonicalJson(reviewCore) },
+    continuity
   };
   return { ...chapterCore, evidenceHash: hashCanonicalJson(chapterCore) };
+}
+
+function createExcerptLocation(
+  kind: 'opening' | 'middle' | 'ending',
+  startChar: number,
+  excerpt: string
+): NonNullable<FullReviewChapterEvidenceProviderInputV1['continuity']>['excerptLocations'][number] {
+  return {
+    kind,
+    startChar,
+    endChar: startChar + excerpt.length,
+    excerptHash: hashCanonicalJson({ kind, startChar, excerpt })
+  };
 }
 
 function projectFullReviewMemoryEvidence(
@@ -955,7 +1202,7 @@ function projectFullReviewMemoryEvidence(
     || memory.chapterId !== finalChapter.id
     || memory.sourceContentVersionId !== finalContentVersionId
     || memory.status === 'discarded'
-    || memory.staleLevel === 'hard_stale') {
+    || memory.staleLevel !== 'none') {
     evidenceFail('memory_stale', '长期记忆未覆盖当前最终章节正文。');
   }
   const memoryCore = {
@@ -986,11 +1233,11 @@ function assertChapterEvidenceAuthority(
   review: ReviewReportRecord
 ): void {
   if (content.tenantId !== tenantId || content.novelId !== novelId || content.chapterId !== chapter.id
-    || content.id !== chapter.currentContentVersionId || content.status === 'discarded' || content.staleLevel === 'hard_stale') {
+    || content.id !== chapter.currentContentVersionId || content.status === 'discarded' || content.staleLevel !== 'none') {
     evidenceFail('source_stale', `第 ${chapter.chapterNo} 章正文不是当前权威版本。`);
   }
   if (featureCard.tenantId !== tenantId || featureCard.novelId !== novelId || featureCard.chapterId !== chapter.id
-    || featureCard.id !== chapter.currentFeatureCardVersionId || featureCard.status === 'discarded' || featureCard.staleLevel === 'hard_stale') {
+    || featureCard.id !== chapter.currentFeatureCardVersionId || featureCard.status === 'discarded' || featureCard.staleLevel !== 'none') {
     evidenceFail('source_stale', `第 ${chapter.chapterNo} 章特征卡不是当前权威版本。`);
   }
   if (review.tenantId !== tenantId || review.novelId !== novelId || review.objectType !== 'chapter'

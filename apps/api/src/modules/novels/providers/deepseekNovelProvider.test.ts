@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { LlmProviderError, type ChatCompletionRequest, type LlmClient } from '../../ai/llmClient.js';
+import { hashCanonicalJson } from '../domain/executionContract.js';
 import { createFullReviewEvidenceFixture } from '../testSupport/fullReviewEvidenceFixture.js';
 import { DeepSeekNovelProvider } from './deepseekNovelProvider.js';
 
@@ -16,7 +17,7 @@ describe('DeepSeek novel provider', () => {
     assert.equal(provider.getModelRoutingVersion('direction_generate'), 'deepseek:deepseek-general-test:route-v1');
     assert.equal(provider.getModelRoutingVersion('chapter_plan_generate'), 'deepseek:deepseek-structure-test:route-v1');
     assert.equal(provider.getModelRoutingVersion('chapter_impact_assess'), 'deepseek:deepseek-reasoner-test:route-v1');
-    assert.equal(provider.getModelRoutingVersion('novel_full_review'), 'deepseek:deepseek-reasoner-test:route-v3');
+    assert.equal(provider.getModelRoutingVersion('novel_full_review'), 'deepseek:deepseek-reasoner-test:route-v4');
   });
 
   it('maps fake DeepSeek JSON into direction, structure, trial, body, impact, and full-review drafts', async () => {
@@ -161,15 +162,18 @@ describe('DeepSeek novel provider', () => {
           strengths: ['节奏稳定'],
           problems: [],
           suggestions: ['视频化时突出前三秒冲突'],
-          dimensionScores: [{ key: 'continuity', label: '连续性', score: 86, weight: 0.4 }],
+          dimensionScores: [{ key: 'continuity', label: '连续性', score: 86, weight: 1, evidence: '第1章三段摘录连续。', penaltyPoints: 0 }],
           issues: [],
           videoSuggestion: '适合从第1章冲突切入。',
           firstVideoSuggestion: {
             chapterRange: '1-1',
-            firstThreeSecondVoiceover: '所有人都以为他完了。',
+            openingSlice: '主角被误解的开场片段。',
+            narrationHook: '所有人都以为他完了。',
             firstScreenSubtitle: '全网误解后，他用证据翻盘',
             titleHook: '被误解的他，反手拿出证据',
-            endingSuspense: '备份里还有更大的秘密'
+            endingSuspense: '备份里还有更大的秘密',
+            suggestedFormat: '旁白加字幕',
+            riskTips: []
           },
           platformRisks: [],
           originalityRisks: [],
@@ -222,7 +226,7 @@ describe('DeepSeek novel provider', () => {
     });
     assert.equal(impact.impactLevel, 'minor');
 
-    const review = await provider.generateFullReview(createFullReviewEvidenceFixture({
+    const review = await provider.generateFullReview(withFullReviewContinuity(createFullReviewEvidenceFixture({
       novel: {
         id: novel.id,
         title: novel.title,
@@ -232,7 +236,7 @@ describe('DeepSeek novel provider', () => {
         chapterWordMax: novel.chapterWordRange.max,
         policyProfileVersionId: null
       }
-    }));
+    })));
     assert.equal(review.gateResult, 'pass');
     assert.equal(review.firstVideoSuggestion.titleHook, '被误解的他，反手拿出证据');
   });
@@ -666,6 +670,44 @@ describe('DeepSeek novel provider', () => {
     );
   });
 });
+
+function withFullReviewContinuity<T extends ReturnType<typeof createFullReviewEvidenceFixture>>(input: T): T {
+  input.chapterEvidence.forEach((item, index) => {
+    const starts = { opening: 0, middle: 300, ending: 600 } as const;
+    const continuity = {
+      stage: {
+        stageIndex: 1,
+        isStageOpening: index === 0,
+        isStageEnding: index === input.chapterEvidence.length - 1,
+        previousChapterId: input.chapterEvidence[index - 1]?.chapter.id ?? null,
+        nextChapterId: input.chapterEvidence[index + 1]?.chapter.id ?? null
+      },
+      characterArc: {
+        characterChanges: [...item.featureCard.characterChanges],
+        relationshipChanges: [...item.featureCard.relationshipChanges]
+      },
+      timeline: {
+        chapterNo: item.chapter.chapterNo,
+        factAnchors: [...item.featureCard.keyInformation, ...item.featureCard.factsCannotChange]
+      },
+      foreshadowing: {
+        operation: item.featureCard.foreshadowingOperation,
+        endingHook: item.featureCard.endingHook
+      },
+      excerptLocations: (['opening', 'middle', 'ending'] as const).map((kind) => ({
+        kind,
+        startChar: starts[kind],
+        endChar: starts[kind] + item.content.excerpts[kind].length,
+        excerptHash: hashCanonicalJson({ kind, startChar: starts[kind], excerpt: item.content.excerpts[kind] })
+      }))
+    };
+    const { evidenceHash: _oldHash, ...chapterCore } = item;
+    input.chapterEvidence[index] = { ...chapterCore, continuity, evidenceHash: hashCanonicalJson({ ...chapterCore, continuity }) };
+  });
+  const { evidenceHash: _oldInputHash, ...inputCore } = input;
+  input.evidenceHash = hashCanonicalJson(inputCore);
+  return input;
+}
 
 function createQueueClient(responses: string[]): LlmClient {
   return {

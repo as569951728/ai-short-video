@@ -34,6 +34,7 @@ import {
 export const FULL_REVIEW_CONFLICT_FIXTURE_VERSION = 'rp-04c-e5-conflicts-v1';
 export const FULL_REVIEW_PROMPT_VERSION = 'deepseek-full-review-evidence-v3';
 export const FULL_REVIEW_EVIDENCE_PRIVACY_CANARY = 'PRIVATE_FULL_REVIEW_BODY_CANARY_RP04C_E5';
+export const FULL_REVIEW_E5_SUMMARY_VERSION = 'full-review-e5-summary-v1';
 
 export const FULL_REVIEW_CONFLICT_SCOPES = {
   characterDeathResurrection: ['rp04c-chapter-03', 'rp04c-chapter-07'],
@@ -55,6 +56,8 @@ interface SmokeHit {
 }
 
 export interface FullReviewEvidenceSmokeSummary {
+  summaryVersion: typeof FULL_REVIEW_E5_SUMMARY_VERSION;
+  outcome: 'success' | 'failure';
   success: boolean;
   gitSha: string;
   fixtureVersion: string;
@@ -76,6 +79,12 @@ export interface FullReviewEvidenceSmokeSummary {
   };
   controlFalsePositive: boolean;
   gateResult: FullReviewDraft['gateResult'];
+  failure: {
+    errorCode: string;
+    outputKind: string | null;
+    validationCode: string | null;
+    failureCodes: string[];
+  } | null;
 }
 
 export interface FullReviewEvidenceSmokeOptions {
@@ -90,7 +99,8 @@ export interface FullReviewEvidenceSmokeOptions {
 export class FullReviewEvidenceSmokeFailure extends Error {
   constructor(
     readonly code: string,
-    readonly failureCodes: string[] = []
+    readonly failureCodes: string[] = [],
+    readonly safeSummary?: Record<string, unknown>
   ) {
     super(code);
     this.name = 'FullReviewEvidenceSmokeFailure';
@@ -110,14 +120,20 @@ export async function executeFullReviewEvidenceSmoke(
     DEEPSEEK_MAX_RETRIES: '0'
   };
   const config = resolveDeepSeekConfig(forcedEnv);
+  const input = createFullReviewConflictFixture();
+  const gitSha = options.gitSha ?? readGitSha();
+  const model = options.model ?? config.reasonerModel;
   const baseClient = options.client ?? createDeepSeekLlmClient(config);
   if (!baseClient) {
-    throw new FullReviewEvidenceSmokeFailure('deepseek_api_key_missing');
+    const safeSummary = createSafeSmokeErrorSummary(
+      new FullReviewEvidenceSmokeFailure('deepseek_api_key_missing'),
+      createSmokeSummaryContext(input, gitSha, model, {}, 0, 0)
+    );
+    options.writeSummary?.(JSON.stringify(safeSummary));
+    throw new FullReviewEvidenceSmokeFailure('deepseek_api_key_missing', [], safeSummary);
   }
 
-  const input = createFullReviewConflictFixture();
   const now = options.now ?? Date.now;
-  const model = options.model ?? config.reasonerModel;
   let callCount = 0;
   let usage: ChatCompletionUsage = {};
   let responseModel = model;
@@ -136,22 +152,40 @@ export async function executeFullReviewEvidenceSmoke(
   });
 
   const startedAt = now();
-  const draft = await provider.generateFullReview(input);
+  let draft: FullReviewDraft;
+  try {
+    draft = await provider.generateFullReview(input);
+  } catch (error) {
+    const elapsedMs = Math.max(0, now() - startedAt);
+    const safeSummary = createSafeSmokeErrorSummary(
+      error,
+      createSmokeSummaryContext(input, gitSha, responseModel, usage, elapsedMs, callCount)
+    );
+    options.writeSummary?.(JSON.stringify(safeSummary));
+    const failure = safeSummary.failure as { validationCode?: string | null } | null;
+    throw new FullReviewEvidenceSmokeFailure(
+      'full_review_evidence_provider_failed',
+      failure?.validationCode ? [failure.validationCode] : [],
+      safeSummary
+    );
+  }
   const elapsedMs = Math.max(0, now() - startedAt);
-  const summary = createSafeSmokeSummary({
-    input,
-    draft,
-    gitSha: options.gitSha ?? readGitSha(),
-    model: responseModel,
-    usage,
-    elapsedMs,
-    callCount
-  });
-
-  options.writeSummary?.(JSON.stringify(summary));
+  let summary = createSafeSmokeSummary({ input, draft, gitSha, model: responseModel, usage, elapsedMs, callCount });
   const failureCodes = evaluateSmokeGate(summary);
+  summary = {
+    ...summary,
+    outcome: failureCodes.length === 0 ? 'success' : 'failure',
+    success: failureCodes.length === 0,
+    failure: failureCodes.length === 0 ? null : {
+      errorCode: 'full_review_evidence_gate_failed',
+      outputKind: null,
+      validationCode: null,
+      failureCodes
+    }
+  };
+  options.writeSummary?.(JSON.stringify(summary));
   if (failureCodes.length > 0) {
-    throw new FullReviewEvidenceSmokeFailure('full_review_evidence_gate_failed', failureCodes);
+    throw new FullReviewEvidenceSmokeFailure('full_review_evidence_gate_failed', failureCodes, summary as unknown as Record<string, unknown>);
   }
   return summary;
 }
@@ -172,6 +206,8 @@ function createSafeSmokeSummary(input: {
   const coveredChapterNos = [...input.input.coverageManifest.coveredChapterNos];
 
   return {
+    summaryVersion: FULL_REVIEW_E5_SUMMARY_VERSION,
+    outcome: 'success',
     success: coveredChapterNos.length === 12
       && coveredChapterNos.every((chapterNo, index) => chapterNo === index + 1)
       && Boolean(characterIssue && timelineIssue && amountIssue)
@@ -198,7 +234,8 @@ function createSafeSmokeSummary(input: {
       contractAmount: toSmokeHit(amountIssue)
     },
     controlFalsePositive: Boolean(controlIssue),
-    gateResult: input.draft.gateResult
+    gateResult: input.draft.gateResult,
+    failure: null
   };
 }
 
@@ -513,25 +550,93 @@ function isDirectExecution(): boolean {
 
 if (isDirectExecution()) {
   executeFullReviewEvidenceSmoke({ writeSummary: (line) => console.log(line) }).catch((error: unknown) => {
-    const payload = createSafeSmokeErrorSummary(error);
-    console.error(JSON.stringify(payload));
+    if (!(error instanceof FullReviewEvidenceSmokeFailure && error.safeSummary)) {
+      console.error(JSON.stringify(createSafeSmokeErrorSummary(error)));
+    }
     process.exitCode = 1;
   });
 }
 
-export function createSafeSmokeErrorSummary(error: unknown): Record<string, unknown> {
-  if (error instanceof FullReviewEvidenceSmokeFailure) {
-    return { success: false, errorCode: error.code, failureCodes: error.failureCodes };
+interface SmokeSummaryContext {
+  gitSha: string | null;
+  fixtureVersion: string;
+  manifestHash: string | null;
+  model: string | null;
+  promptVersion: string;
+  coverage: FullReviewEvidenceSmokeSummary['coverage'];
+  usage: ChatCompletionUsage;
+  elapsedMs: number;
+  callCount: number;
+}
+
+function createSmokeSummaryContext(
+  input: FullReviewEvidenceProviderInputV1,
+  gitSha: string,
+  model: string,
+  usage: ChatCompletionUsage,
+  elapsedMs: number,
+  callCount: number
+): SmokeSummaryContext {
+  const coveredChapterNos = [...input.coverageManifest.coveredChapterNos];
+  return {
+    gitSha,
+    fixtureVersion: FULL_REVIEW_CONFLICT_FIXTURE_VERSION,
+    manifestHash: input.coverageManifest.manifestHash,
+    model,
+    promptVersion: FULL_REVIEW_PROMPT_VERSION,
+    coverage: {
+      chapterCount: input.coverageManifest.chapterCount,
+      coveredChapterNos,
+      complete: coveredChapterNos.length === input.coverageManifest.chapterCount
+        && coveredChapterNos.every((chapterNo, index) => chapterNo === index + 1)
+    },
+    usage: { ...usage },
+    elapsedMs,
+    callCount
+  };
+}
+
+export function createSafeSmokeErrorSummary(
+  error: unknown,
+  context: SmokeSummaryContext = {
+    gitSha: null,
+    fixtureVersion: FULL_REVIEW_CONFLICT_FIXTURE_VERSION,
+    manifestHash: null,
+    model: null,
+    promptVersion: FULL_REVIEW_PROMPT_VERSION,
+    coverage: { chapterCount: 0, coveredChapterNos: [], complete: false },
+    usage: {},
+    elapsedMs: 0,
+    callCount: 0
   }
-  if (isLlmProviderError(error)) {
-    return {
-      success: false,
+): Record<string, unknown> {
+  let failure: FullReviewEvidenceSmokeSummary['failure'];
+  if (error instanceof FullReviewEvidenceSmokeFailure) {
+    failure = { errorCode: error.code, outputKind: null, validationCode: null, failureCodes: [...error.failureCodes] };
+  } else if (isLlmProviderError(error)) {
+    failure = {
       errorCode: `llm_${error.category}`,
       outputKind: typeof error.details?.outputKind === 'string' ? error.details.outputKind : null,
-      validationCode: classifyValidationFailure(error.details?.reason)
+      validationCode: classifyValidationFailure(error.details?.reason),
+      failureCodes: []
     };
+  } else {
+    failure = { errorCode: 'unexpected_smoke_failure', outputKind: null, validationCode: null, failureCodes: [] };
   }
-  return { success: false, errorCode: 'unexpected_smoke_failure' };
+  return {
+    summaryVersion: FULL_REVIEW_E5_SUMMARY_VERSION,
+    outcome: 'failure',
+    success: false,
+    ...context,
+    hits: {
+      characterDeathResurrection: { hit: false, scopeRefs: [] },
+      timeline: { hit: false, scopeRefs: [] },
+      contractAmount: { hit: false, scopeRefs: [] }
+    },
+    controlFalsePositive: false,
+    gateResult: null,
+    failure
+  };
 }
 
 function classifyValidationFailure(reason: unknown): string | null {

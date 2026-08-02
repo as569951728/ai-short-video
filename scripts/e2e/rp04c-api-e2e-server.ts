@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { FullReviewDraft } from '../../apps/api/src/modules/novels/domain/novelDomain.js';
 import type { FullReviewProvider } from '../../apps/api/src/modules/novels/providers/mockFullReviewProvider.js';
+import type { NovelProviderActionInputFor } from '../../apps/api/src/modules/novels/services/actionExecutionPlan.js';
 
 const FORBIDDEN_ENV_KEYS = [
   'DATABASE_URL',
@@ -41,13 +42,16 @@ async function main() {
     import('../../apps/api/src/modules/videos/repositories/inMemoryVideoRepository.js')
   ]);
 
-  const delayMs = Math.max(0, Number(process.env.RP04C_PROVIDER_DELAY_MS ?? 20_000));
+  const delayMs = Math.max(45_000, Number(process.env.RP04C_PROVIDER_DELAY_MS ?? 45_000));
+  const observer = createObserver(delayMs);
+  const novelRepository = createInMemoryNovelRepository();
   const app: FastifyInstance = await buildApp({
     logger: false,
-    novelRepository: createInMemoryNovelRepository(),
+    enableAcceptanceSeeds: true,
+    novelRepository,
     videoRepository: createInMemoryVideoRepository(),
     aiProviderEnv: { AI_PROVIDER_MODE: 'mock' },
-    fullReviewProvider: createRp04cFullReviewProvider(delayMs),
+    fullReviewProvider: createRp04cFullReviewProvider(delayMs, observer),
     requestContextResolver: async (request) => ({
       tenantId: 'tenant_rp04c_e2e',
       userId: 'user_rp04c_e2e',
@@ -56,6 +60,22 @@ async function main() {
       userAgent: request.headers['user-agent']
     })
   });
+
+  app.get('/__e2e/rp04c/state', async () => ({
+    success: true,
+    data: {
+      ...observer,
+      fullReviewTasks: novelRepository.getGenerationTasks()
+        .filter((task) => task.taskType === 'novel_full_review')
+        .map((task) => ({
+          id: task.id,
+          status: task.status,
+          createdAt: task.createdAt.toISOString(),
+          updatedAt: task.updatedAt.toISOString()
+        }))
+    },
+    requestId: 'rp04c-safe-observer'
+  }));
 
   const port = Number(process.env.PORT ?? 0);
   await app.listen({ host: '127.0.0.1', port });
@@ -68,9 +88,48 @@ async function main() {
   process.once('SIGINT', () => close().finally(() => process.exit(0)));
 }
 
-function createRp04cFullReviewProvider(delayMs: number): FullReviewProvider {
+type FullReviewInput = NovelProviderActionInputFor<'novel_full_review'>;
+
+interface Rp04cObserver {
+  fixtureVersion: 'rp04c-browser-12ch-v1';
+  modelRouteSafeName: 'deterministic-delay-provider';
+  providerDelayMs: number;
+  providerCallCount: number;
+  providerActive: boolean;
+  providerCompleted: boolean;
+  chapterCount: number;
+  coveredChapterNos: number[];
+  contentEvidenceCount: number;
+  featureEvidenceCount: number;
+  reviewEvidenceCount: number;
+  memoryEvidenceCount: number;
+  manifestHash: string | null;
+  evidenceHash: string | null;
+}
+
+function createObserver(delayMs: number): Rp04cObserver {
+  return {
+    fixtureVersion: 'rp04c-browser-12ch-v1',
+    modelRouteSafeName: 'deterministic-delay-provider',
+    providerDelayMs: delayMs,
+    providerCallCount: 0,
+    providerActive: false,
+    providerCompleted: false,
+    chapterCount: 0,
+    coveredChapterNos: [],
+    contentEvidenceCount: 0,
+    featureEvidenceCount: 0,
+    reviewEvidenceCount: 0,
+    memoryEvidenceCount: 0,
+    manifestHash: null,
+    evidenceHash: null
+  };
+}
+
+function createRp04cFullReviewProvider(delayMs: number, observer: Rp04cObserver): FullReviewProvider {
   return {
     async generateFullReview(input): Promise<FullReviewDraft> {
+      recordAndAssertEvidence(input, observer);
       await new Promise((resolve) => setTimeout(resolve, delayMs));
       const chapterId = (chapterNo: number) => {
         const id = input.chapterEvidence.find((item) => item.chapter.chapterNo === chapterNo)?.chapter.id;
@@ -78,7 +137,7 @@ function createRp04cFullReviewProvider(delayMs: number): FullReviewProvider {
         return id;
       };
 
-      return {
+      const result: FullReviewDraft = {
         totalScore: 68,
         rating: 'C',
         gateResult: 'blocked',
@@ -87,9 +146,9 @@ function createRp04cFullReviewProvider(delayMs: number): FullReviewProvider {
         problems: ['人物状态冲突', '时间线冲突', '关键事实冲突'],
         suggestions: ['按问题卡定位章节并修复后重新审稿'],
         dimensionScores: [
-          { key: 'continuity', label: '长篇连贯性', score: 62, weight: 0.4, evidence: '三类跨章节冲突', penaltyPoints: 18 },
-          { key: 'completion', label: '全书完成度', score: 88, weight: 0.3, evidence: '12 章证据完整', penaltyPoints: 0 },
-          { key: 'video_fit', label: '视频化适配', score: 76, weight: 0.3, evidence: '需先解决一致性问题', penaltyPoints: 4 }
+          { key: 'character_continuity', label: '人物状态连续性', score: 60, weight: 0.34, evidence: '第 2 章与第 8 章人物状态冲突', penaltyPoints: 18 },
+          { key: 'timeline_continuity', label: '时间线连续性', score: 68, weight: 0.33, evidence: '第 4 章与第 9 章事件顺序冲突', penaltyPoints: 12 },
+          { key: 'fact_consistency', label: '关键事实一致性', score: 76, weight: 0.33, evidence: '第 6 章与第 11 章合同金额冲突', penaltyPoints: 8 }
         ],
         issues: [
           createBlockingIssue('rp04c-character', '人物状态冲突', '角色在前文确认死亡，后文却无解释重新出现。', [chapterId(2), chapterId(8)], 'character_continuity'),
@@ -113,8 +172,39 @@ function createRp04cFullReviewProvider(delayMs: number): FullReviewProvider {
         lowScoreContinueRisks: ['强制通过会把已知连续性错误带入后续视频化。'],
         reviewPolicyVersionId: 'rp04c-browser-policy-v1'
       };
+      observer.providerActive = false;
+      observer.providerCompleted = true;
+      return result;
     }
   };
+}
+
+function recordAndAssertEvidence(input: FullReviewInput, observer: Rp04cObserver) {
+  observer.providerCallCount += 1;
+  observer.providerActive = true;
+  observer.providerCompleted = false;
+  observer.chapterCount = input.coverageManifest.chapterCount;
+  observer.coveredChapterNos = [...input.coverageManifest.coveredChapterNos];
+  observer.contentEvidenceCount = input.chapterEvidence.filter((item) => Boolean(item.content.contentVersionId && item.content.contentHash)).length;
+  observer.featureEvidenceCount = input.chapterEvidence.filter((item) => Boolean(item.featureCard.featureCardVersionId && item.featureCard.featureCardHash)).length;
+  observer.reviewEvidenceCount = input.chapterEvidence.filter((item) => Boolean(item.review.reviewReportId && item.review.reviewHash)).length;
+  observer.memoryEvidenceCount = input.memory.memoryId && input.memory.memoryHash ? 1 : 0;
+  observer.manifestHash = input.coverageManifest.manifestHash;
+  observer.evidenceHash = input.evidenceHash;
+
+  const expected = Array.from({ length: 12 }, (_, index) => index + 1);
+  const uniqueChapterNos = new Set(observer.coveredChapterNos);
+  if (observer.providerCallCount !== 1) throw new Error('RP-04C E2E provider was called more than once');
+  if (observer.chapterCount !== 12 || input.chapterEvidence.length !== 12) throw new Error('RP-04C E2E requires exactly 12 chapters');
+  if (uniqueChapterNos.size !== 12 || expected.some((chapterNo, index) => observer.coveredChapterNos[index] !== chapterNo)) {
+    throw new Error('RP-04C E2E chapter coverage must be unique and ordered 1-12');
+  }
+  if ([observer.contentEvidenceCount, observer.featureEvidenceCount, observer.reviewEvidenceCount].some((count) => count !== 12)) {
+    throw new Error('RP-04C E2E requires content, feature, and review evidence for every chapter');
+  }
+  if (observer.memoryEvidenceCount !== 1 || !observer.manifestHash || !observer.evidenceHash) {
+    throw new Error('RP-04C E2E requires memory and evidence hashes');
+  }
 }
 
 function createBlockingIssue(

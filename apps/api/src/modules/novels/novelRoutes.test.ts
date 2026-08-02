@@ -6,7 +6,8 @@ import { ErrorCode, NOVEL_PROVIDER_ACTIONS, RiskLevel, StaleLevel, TaskStatus, V
 import Fastify from 'fastify';
 import { buildApp as buildBaseApp } from '../../app.js';
 import type { LlmClient } from '../ai/llmClient.js';
-import { createInMemoryNovelRepository } from './repositories/inMemoryNovelRepository.js';
+import { createInMemoryNovelRepository, isInMemoryNovelRepository } from './repositories/inMemoryNovelRepository.js';
+import { PrismaNovelRepository } from './repositories/prismaNovelRepository.js';
 import type { NovelRepository } from './domain/novelDomain.js';
 import type { HotspotReferenceGateway, HotspotReferenceValidationInput } from './integrations/hotspotReferenceGateway.js';
 import { BusinessError, toErrorResponse } from '../../shared/errors.js';
@@ -34,10 +35,23 @@ import { DeepSeekNovelProvider } from './providers/deepseekNovelProvider.js';
 import { createFullReviewEvidenceFixture } from './testSupport/fullReviewEvidenceFixture.js';
 type MockBodyChapter = Awaited<ReturnType<MockBodyProvider['generateBodyChapter']>>;
 type MockTrialFollowup = Awaited<ReturnType<MockTrialProvider['generateFollowup']>>;
+type MockFullReviewDraft = Awaited<ReturnType<MockFullReviewProvider['generateFullReview']>>;
 const buildApp = (options: Parameters<typeof buildBaseApp>[0] = {}) => buildBaseApp({
   requestContextResolver: async () => ({ tenantId: 'tenant_test', userId: 'user_test' }),
   ...options
 });
+function makeMockFullReviewDraftFinalizerCompatible(draft: MockFullReviewDraft): MockFullReviewDraft {
+  const dimensionKeys = new Set(draft.dimensionScores.map((dimension) => dimension.key));
+  const fallbackDimension = draft.dimensionScores[0]!.key;
+  draft.issues = draft.issues.map((issue) => ({
+    ...issue,
+    dimension: dimensionKeys.has(issue.dimension) ? issue.dimension : fallbackDimension
+  }));
+  for (const field of ['chapterRange', 'openingSlice', 'narrationHook', 'firstScreenSubtitle', 'titleHook', 'endingSuspense', 'suggestedFormat'] as const) {
+    if (!draft.firstVideoSuggestion[field].trim()) draft.firstVideoSuggestion[field] = `test-${field}`;
+  }
+  return draft;
+}
 it('rejects default, legacy, synthetic, and placeholder actor identities before any write', async () => {
   for (const actor of [['tenant_default', 'user_test'], ['tenant_test', 'user_default'], ['legacy_actor', 'user_test'],
     ['tenant_test', 'placeholder_actor'], ['synthetic_actor', 'user_test'], ['tenant_test', 'mock_actor'], ['tenant_test', 'policy_default_v1']]
@@ -2942,11 +2956,53 @@ describe('novel package 6 body generation routes', () => {
 });
 
 describe('novel package 7 full review and video readiness routes', () => {
+  it('does not expose acceptance seeds unless the explicit switch is enabled', async () => {
+    const app = await buildApp({ logger: false, novelRepository: createInMemoryNovelRepository() });
+    const response = await app.inject({ method: 'POST', url: '/dev/novels/acceptance-seeds/full-review', payload: {} });
+    assert.equal(response.statusCode, 404);
+    await app.close();
+  });
+
+  it('rejects a duck-typed repository that copies in-memory test helpers', async () => {
+    const registeredRepository = createInMemoryNovelRepository();
+    const duckTypedRepository = { ...registeredRepository } as NovelRepository;
+    assert.equal(typeof (duckTypedRepository as NovelRepository & { getGenerationTasks?: unknown }).getGenerationTasks, 'function');
+    assert.equal(isInMemoryNovelRepository(registeredRepository), true);
+    assert.equal(isInMemoryNovelRepository(duckTypedRepository), false);
+    await assert.rejects(
+      () => buildApp({ logger: false, novelRepository: duckTypedRepository, enableAcceptanceSeeds: true }),
+      /acceptance seeds require an explicit in-memory repository/
+    );
+  });
+
+  it('rejects acceptance seeds when DATABASE_URL or a Prisma repository is present', async () => {
+    const previousDatabaseUrl = process.env.DATABASE_URL;
+    process.env.DATABASE_URL = 'mysql://acceptance-seed-must-not-connect';
+    try {
+      await assert.rejects(
+        () => buildApp({ logger: false, novelRepository: createInMemoryNovelRepository(), enableAcceptanceSeeds: true }),
+        /acceptance seeds require an explicit in-memory repository/
+      );
+      await assert.rejects(
+        () => buildApp({
+          logger: false,
+          novelRepository: Object.create(PrismaNovelRepository.prototype) as PrismaNovelRepository,
+          enableAcceptanceSeeds: true
+        }),
+        /acceptance seeds require an explicit in-memory repository/
+      );
+    } finally {
+      if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+      else process.env.DATABASE_URL = previousDatabaseUrl;
+    }
+  });
+
   it('creates a non-production 12-chapter full-review acceptance seed without starting review', async () => {
     const repository = createInMemoryNovelRepository();
     const app = await buildApp({
       logger: false,
       novelRepository: repository,
+      enableAcceptanceSeeds: true,
       now: () => new Date('2026-06-17T16:55:00.000Z')
     });
 
@@ -3033,6 +3089,126 @@ describe('novel package 7 full review and video readiness routes', () => {
     await app.close();
   });
 
+  it('fails closed with provider=0 for soft, risk, and hard stale full-review sources', async () => {
+    const cases = [
+      { label: 'soft content', staleLevel: StaleLevel.SoftStale, source: 'content' as const },
+      { label: 'risk feature', staleLevel: StaleLevel.RiskStale, source: 'feature' as const },
+      { label: 'hard memory', staleLevel: StaleLevel.HardStale, source: 'memory' as const }
+    ];
+    for (const testCase of cases) {
+      const repository = createInMemoryNovelRepository();
+      let providerCalls = 0;
+      const app = await buildApp({
+        logger: false,
+        novelRepository: repository,
+        fullReviewProvider: {
+          async generateFullReview() {
+            providerCalls += 1;
+            throw new Error('provider must not be called');
+          }
+        },
+        now: () => new Date('2026-06-17T17:07:00.000Z')
+      });
+      const { novelId, strategySnapshot } = await createNovelReadyForBody(app, `全书审稿 ${testCase.label}`, 8);
+      await postBodyBatch(app, novelId, strategySnapshot);
+      if (testCase.source === 'content') {
+        const content = repository.getChapterContentVersions().find((item) => item.novelId === novelId && item.status === VersionStatus.Current)!;
+        content.staleLevel = testCase.staleLevel;
+      } else if (testCase.source === 'feature') {
+        const feature = repository.getChapterFeatureCards().find((item) => item.novelId === novelId && item.status === VersionStatus.Current)!;
+        feature.staleLevel = testCase.staleLevel;
+      } else {
+        repository.getLongTermMemories().find((item) => item.novelId === novelId)!.staleLevel = testCase.staleLevel;
+      }
+      const detail = (await app.inject({ method: 'GET', url: `/novels/${novelId}` })).json().data;
+      const response = await app.inject({
+        method: 'POST',
+        url: `/novels/${novelId}/full-review`,
+        payload: { idempotencyKey: `stale-${testCase.source}-review`, expectedNovelVersion: detail.updatedAt }
+      });
+      assert.equal(response.statusCode, 409, `${testCase.label}: ${response.body}`);
+      assert.equal(response.json().error.code, ErrorCode.VersionConflict, testCase.label);
+      assert.equal(response.json().error.details.code, 'SOURCE_STALE', testCase.label);
+      assert.equal(providerCalls, 0, testCase.label);
+      assert.equal(repository.getGenerationTasks().some((task) => task.novelId === novelId && task.taskType === 'novel_full_review'), false, testCase.label);
+      assert.equal(repository.getReviewReports().some((report) => report.novelId === novelId && report.objectType === 'novel'), false, testCase.label);
+      await app.close();
+    }
+  });
+
+  it('rejects custom-provider dimension and first-video inconsistencies before report or gate persistence', async () => {
+    const cases: Array<{
+      label: string;
+      mutate: (draft: MockFullReviewDraft, input: FullReviewEvidenceProviderInputV1) => void;
+    }> = [
+      {
+        label: 'undeclared-dimension',
+        mutate(draft, input) {
+          draft.issues.push({
+            issueId: 'custom-provider-undeclared-dimension',
+            title: '维度引用不存在',
+            plainDescription: '此 issue 引用了未声明维度。',
+            severity: 'warning',
+            scopeType: 'chapter',
+            scopeRefs: [input.chapterEvidence[0]!.chapter.id],
+            dimension: 'model_authored_alias_dimension',
+            recommendedTarget: '第 1 章',
+            recommendedAction: '改用已声明维度。',
+            status: 'open',
+            acceptedReason: null,
+            blocking: false
+          });
+        }
+      },
+      {
+        label: 'blank-first-video-field',
+        mutate(draft) {
+          draft.firstVideoSuggestion.titleHook = '   ';
+        }
+      }
+    ];
+
+    for (const testCase of cases) {
+      const repository = createInMemoryNovelRepository();
+      const mockProvider = new MockFullReviewProvider();
+      let providerCalls = 0;
+      const app = await buildApp({
+        logger: false,
+        novelRepository: repository,
+        fullReviewProvider: {
+          async generateFullReview(input) {
+            providerCalls += 1;
+            const draft = makeMockFullReviewDraftFinalizerCompatible(await mockProvider.generateFullReview(input));
+            testCase.mutate(draft, input);
+            return draft;
+          }
+        },
+        now: () => new Date('2026-06-17T17:08:00.000Z')
+      });
+      const { novelId, strategySnapshot } = await createNovelReadyForBody(app, `finalizer-${testCase.label}`, 8);
+      await postBodyBatch(app, novelId, strategySnapshot);
+      const detail = (await app.inject({ method: 'GET', url: `/novels/${novelId}` })).json().data;
+      const reportCountBefore = repository.getReviewReports().length;
+      const gateCountBefore = repository.getFullReviewGates().length;
+
+      const response = await app.inject({
+        method: 'POST',
+        url: `/novels/${novelId}/full-review`,
+        payload: {
+          idempotencyKey: `finalizer-${testCase.label}`,
+          expectedNovelVersion: detail.updatedAt
+        }
+      });
+
+      assert.ok(response.statusCode >= 400, `${testCase.label}: ${response.body}`);
+      assert.equal(providerCalls, 1, testCase.label);
+      assert.equal(repository.getReviewReports().length, reportCountBefore, testCase.label);
+      assert.equal(repository.getFullReviewGates().length, gateCountBefore, testCase.label);
+      assert.equal(await repository.findLatestFullReview('tenant_test', novelId), null, testCase.label);
+      await app.close();
+    }
+  });
+
   it('runs full review, confirms completion, then confirms video readiness as two separate actions', async () => {
     const repository = createInMemoryNovelRepository();
     const fullReviewInputs: FullReviewEvidenceProviderInputV1[] = [];
@@ -3043,7 +3219,7 @@ describe('novel package 7 full review and video readiness routes', () => {
       fullReviewProvider: {
         async generateFullReview(input) {
           fullReviewInputs.push(structuredClone(input));
-          return mockFullReviewProvider.generateFullReview(input);
+          return makeMockFullReviewDraftFinalizerCompatible(await mockFullReviewProvider.generateFullReview(input));
         }
       },
       now: () => new Date('2026-06-17T17:10:00.000Z')
@@ -3084,6 +3260,14 @@ describe('novel package 7 full review and video readiness routes', () => {
     const persistedFullReview = repository.getReviewReports().find((report) => report.id === reviewResult.fullReview.id)!;
     assert.equal((persistedFullReview.metadata as any).sourceVersionRefs.evidenceManifestHash, fullReviewInputs[0].coverageManifest.manifestHash);
 
+    const sideEffectsBeforeReplay = {
+      taskCount: repository.getGenerationTasks().length,
+      reportCount: repository.getReviewReports().length,
+      eventCount: repository.getGenerationTaskEvents().length,
+      usageCount: repository.getGenerationTasks().reduce((sum, task) => sum + (task.providerCallBudgetUsed ?? 0), 0),
+      costMicros: repository.getGenerationTasks().reduce((sum, task) => sum + Number(task.costBudgetMicrosUsed ?? 0), 0)
+    };
+
     const reviewReplayResponse = await app.inject({
       method: 'POST',
       url: `/novels/${novelId}/full-review`,
@@ -3097,6 +3281,13 @@ describe('novel package 7 full review and video readiness routes', () => {
     assert.equal(reviewReplayResponse.json().data.fullReview.id, reviewResult.fullReview.id);
     assert.deepEqual(reviewReplayResponse.json().data.affectedObjects, []);
     assert.equal(fullReviewInputs.length, 1);
+    assert.deepEqual({
+      taskCount: repository.getGenerationTasks().length,
+      reportCount: repository.getReviewReports().length,
+      eventCount: repository.getGenerationTaskEvents().length,
+      usageCount: repository.getGenerationTasks().reduce((sum, task) => sum + (task.providerCallBudgetUsed ?? 0), 0),
+      costMicros: repository.getGenerationTasks().reduce((sum, task) => sum + Number(task.costBudgetMicrosUsed ?? 0), 0)
+    }, sideEffectsBeforeReplay);
 
     const reviewConflictResponse = await app.inject({
       method: 'POST',
@@ -3283,9 +3474,19 @@ describe('novel package 7 full review and video readiness routes', () => {
 
   it('keeps completion confirmed when video readiness fails and blocks video-ready confirmation', async () => {
     const repository = createInMemoryNovelRepository();
+    const mockFullReviewProvider = new MockFullReviewProvider();
     const app = await buildApp({
       logger: false,
       novelRepository: repository,
+      fullReviewProvider: {
+        async generateFullReview(input) {
+          const draft = makeMockFullReviewDraftFinalizerCompatible(await mockFullReviewProvider.generateFullReview(input));
+          return {
+            ...draft,
+            issues: draft.issues.map((issue) => ({ ...issue, severity: 'warning' as const, blocking: false }))
+          };
+        }
+      },
       now: () => new Date('2026-06-17T17:30:00.000Z')
     });
     const { novelId, strategySnapshot } = await createNovelReadyForBody(app, '视频化检查失败不回滚测试', 8);
@@ -3301,6 +3502,9 @@ describe('novel package 7 full review and video readiness routes', () => {
     });
     assert.equal(reviewResponse.statusCode, 200);
     const reviewResult = reviewResponse.json().data;
+    const persistedReview = repository.getReviewReports().find((report) => report.id === reviewResult.fullReview.id)!;
+    const persistedMetadata = persistedReview.metadata as { firstVideoSuggestion: Record<string, string> };
+    persistedMetadata.firstVideoSuggestion.titleHook = '';
     const completionResponse = await app.inject({
       method: 'POST',
       url: `/novels/${novelId}/completion/confirm`,
@@ -3735,12 +3939,10 @@ function createM1E2EFakeLlmClient(): { client: LlmClient; allowFullReview: () =>
   return { client: {
     async chat(request) {
       const payload = createFakeDeepSeekPayload(request.taskName ?? 'unknown_task');
-      if (request.taskName === 'novel_full_review' && poisonFullReview) payload.reviewPolicyVersionId = 'MODEL_REVIEW_POLICY_CANARY';
+      const poison = request.taskName === 'novel_full_review' && poisonFullReview;
+      if (poison) payload.reviewPolicyVersionId = 'MODEL_REVIEW_POLICY_CANARY';
       return {
-        content: JSON.stringify({
-          ...payload,
-          debugRaw: 'FULL_MODEL_RESPONSE_SHOULD_NOT_LEAK'
-        }),
+        content: JSON.stringify(poison ? { ...payload, debugRaw: 'FULL_MODEL_RESPONSE_SHOULD_NOT_LEAK' } : payload),
         model: request.model,
         usage: {
           promptTokens: 24,
@@ -4040,17 +4242,20 @@ function createFakeDeepSeekPayload(taskName: string): Record<string, unknown> {
       problems: [],
       suggestions: ['首条视频突出误解和证据反转'],
       dimensionScores: [
-        { key: 'continuity', label: '连续性', score: 88, weight: 0.4 },
-        { key: 'video', label: '视频化', score: 87, weight: 0.3 }
+        { key: 'continuity', label: '连续性', score: 88, weight: 0.5, evidence: '章节连续性证据完整。', penaltyPoints: 0 },
+        { key: 'video', label: '视频化', score: 88, weight: 0.5, evidence: '首条视频建议字段完整。', penaltyPoints: 0 }
       ],
       issues: [],
       videoSuggestion: '建议首条视频覆盖第1章公开误解到证据出现。',
       firstVideoSuggestion: {
         chapterRange: '1-1',
-        firstThreeSecondVoiceover: '所有人都以为他完了。',
+        openingSlice: '主角遭遇误解的开场片段。',
+        narrationHook: '所有人都以为他完了。',
         firstScreenSubtitle: '被全网误解后，他反手拿出证据',
         titleHook: '被误解的他，反手拿出关键证据',
-        endingSuspense: '监控备份里出现第二个人'
+        endingSuspense: '监控备份里出现第二个人',
+        suggestedFormat: '旁白加字幕',
+        riskTips: []
       },
       platformRisks: [],
       originalityRisks: [],
@@ -4205,7 +4410,7 @@ function createProviderSet(calls: Array<{ action: NovelProviderAction; keys: str
       assessImpact: (input) => record(input.action === 'chapter_adopt_impact_assess' ? 'chapter_adopt_impact_assess' : 'chapter_impact_assess', input, bodyProvider.assessImpact(input))
     },
     fullReviewProvider: {
-      generateFullReview: (input) => record('novel_full_review', input, { totalScore: 80, rating: 'B', gateResult: 'pass', summary: '通过', strengths: [], problems: [], suggestions: [], dimensionScores: [], issues: [], videoSuggestion: '', firstVideoSuggestion: { chapterRange: '1', openingSlice: '', narrationHook: '', firstScreenSubtitle: '', titleHook: '', endingSuspense: '', suggestedFormat: '', riskTips: [] }, platformRisks: [], originalityRisks: [], aiFlavorRisks: [], lowScoreContinueRisks: [], reviewPolicyVersionId: 'deepseek-full-review-v1' })
+      generateFullReview: (input) => record('novel_full_review', input, { totalScore: 80, rating: 'A', gateResult: 'pass', summary: '通过', strengths: [], problems: [], suggestions: [], dimensionScores: [{ key: 'overall', label: '综合质量', score: 80, weight: 1, evidence: '权威章节证据完整。', penaltyPoints: 0 }], issues: [], videoSuggestion: '从第1章切入。', firstVideoSuggestion: { chapterRange: '1', openingSlice: '开篇冲突', narrationHook: '主角开始反击', firstScreenSubtitle: '反击开始', titleHook: '主角翻盘', endingSuspense: '幕后人出现', suggestedFormat: '旁白加字幕', riskTips: [] }, platformRisks: [], originalityRisks: [], aiFlavorRisks: [], lowScoreContinueRisks: [], reviewPolicyVersionId: 'deepseek-full-review-v1' })
     }
   };
 }
@@ -4467,6 +4672,8 @@ describe('RP-02B2a1 registry and strict provider ABI', () => {
       assertNestedProviderAbi(action, payload);
       const leakProbe = structuredClone(payload);
       if (action === 'novel_full_review') {
+        const evidence = payload.chapterEvidence as FullReviewEvidenceProviderInputV1['chapterEvidence'];
+        assert.equal(evidence.every((item) => Boolean(item.continuity)), true, 'real-route full review must include continuity evidence');
         const manifest = leakProbe.coverageManifest as Record<string, unknown>;
         assert.equal(manifest.tenantId, 'tenant_test');
         delete manifest.tenantId;
@@ -4536,7 +4743,7 @@ describe('RP-02B2a1 registry and strict provider ABI', () => {
     const captured: Array<{ action: NovelProviderAction; payload: Record<string, unknown> }> = [], poison: ProviderPoison = {};
     const logs: string[] = []; const app = Fastify({ logger: { level: 'info', stream: { write: (chunk: unknown) => logs.push(String(chunk)) } } as any });
     app.setErrorHandler((error, request, reply) => { const { statusCode, body } = toErrorResponse(error, request.id); reply.status(statusCode).send(body); });
-    const nodeEnv = process.env.NODE_ENV; process.env.NODE_ENV = 'test'; await registerNovelRoutes(app, { repository, requestContextResolver: async () => ({ tenantId: 'tenant_test', userId: 'user_test' }), now: () => new Date('2026-07-14T00:00:00.000Z'), ...createRouteProviderSpies(captured, poison, repository) }); process.env.NODE_ENV = nodeEnv;
+    await registerNovelRoutes(app, { repository, acceptanceSeeds: { enabled: true, inMemoryRepository: true, databaseUrlPresent: false }, requestContextResolver: async () => ({ tenantId: 'tenant_test', userId: 'user_test' }), now: () => new Date('2026-07-14T00:00:00.000Z'), ...createRouteProviderSpies(captured, poison, repository) });
     const seedOne = (await app.inject({ method: 'POST', url: '/dev/novels/acceptance-seeds/trial', payload: { title: 'chapter-one authority' } })).json().data, authoritativeChapterOne = repository.getNovelChapters().find((item) => item.novelId === seedOne.novelId && item.chapterNo === 1); assert.ok(authoritativeChapterOne);
     assert.deepEqual(seedOne.candidateIds.map((id: string) => repository.getChapterContentVersions().find((item) => item.id === id)?.chapterId), Array(seedOne.candidateIds.length).fill(authoritativeChapterOne.id), 'legal chapter-one candidates bind to the authoritative chapter');
     for (const mode of ['other_chapter', 'canary_id', 'wrong_chapter_no'] as const) {
@@ -4610,9 +4817,15 @@ const nestedProviderKeys = {
   fullReviewCoverageManifest: ['chapterCount', 'chapterPlanVersionId', 'chapters', 'coveredChapterNos', 'manifestHash', 'manifestVersion', 'memory', 'novelId', 'policyProfileVersionId', 'tenantId'],
   fullReviewCoverageChapter: ['chapterId', 'chapterNo', 'contentHash', 'contentRevision', 'contentVersionId', 'featureCardHash', 'featureCardRevision', 'featureCardVersionId', 'reviewHash', 'reviewReportId', 'reviewRevision'],
   fullReviewCoverageMemory: ['memoryHash', 'memoryId', 'memoryRevision'],
-  fullReviewChapterEvidence: ['chapter', 'content', 'evidenceHash', 'featureCard', 'review'],
+  fullReviewChapterEvidence: ['chapter', 'content', 'continuity', 'evidenceHash', 'featureCard', 'review'],
   fullReviewContentEvidence: ['contentHash', 'contentVersionId', 'excerpts', 'revision', 'summary', 'wordCount'],
   fullReviewExcerpts: ['ending', 'middle', 'opening'],
+  fullReviewContinuity: ['characterArc', 'excerptLocations', 'foreshadowing', 'stage', 'timeline'],
+  fullReviewContinuityStage: ['isStageEnding', 'isStageOpening', 'nextChapterId', 'previousChapterId', 'stageIndex'],
+  fullReviewCharacterArc: ['characterChanges', 'relationshipChanges'],
+  fullReviewTimeline: ['chapterNo', 'factAnchors'],
+  fullReviewForeshadowing: ['endingHook', 'operation'],
+  fullReviewExcerptLocation: ['endChar', 'excerptHash', 'kind', 'startChar'],
   fullReviewFeatureEvidence: ['appealPoint', 'characterChanges', 'coreTask', 'emotionKeywords', 'endingHook', 'factsCannotChange', 'featureCardHash', 'featureCardVersionId', 'featuresToStrengthen', 'foreshadowingOperation', 'keyInformation', 'mainConflict', 'oneLineSummary', 'relationshipChanges', 'revision'],
   fullReviewEvidenceMemory: ['characterStates', 'factsCannotContradict', 'items', 'locations', 'memoryHash', 'memoryId', 'newSettings', 'organizations', 'plantedForeshadowing', 'previousSummary', 'relationshipStates', 'resolvedForeshadowing', 'revision', 'sourceContentVersionId', 'unresolvedConflicts'],
   fullReviewReviewEvidence: ['allowNextStep', 'blockingIssueCount', 'issues', 'policyProfileVersionId', 'problems', 'rating', 'recommendedAction', 'resolvedStatus', 'reviewHash', 'reviewReportId', 'revision', 'suggestions', 'summary', 'totalScore'],
@@ -4656,12 +4869,28 @@ function assertNestedProviderAbi(action: string, payload: Record<string, unknown
       assert.deepEqual(exactKeys(item), nestedProviderKeys.fullReviewCoverageChapter, `${action}.coverageManifest.chapters[]`);
     }
     for (const item of payload.chapterEvidence as FullReviewEvidenceProviderInputV1['chapterEvidence']) {
-      assert.deepEqual(exactKeys(item), nestedProviderKeys.fullReviewChapterEvidence, `${action}.chapterEvidence[]`);
+      assert.deepEqual(
+        exactKeys(item),
+        item.continuity
+          ? nestedProviderKeys.fullReviewChapterEvidence
+          : nestedProviderKeys.fullReviewChapterEvidence.filter((key) => key !== 'continuity'),
+        `${action}.chapterEvidence[]`
+      );
       assert.deepEqual(exactKeys(item.chapter), nestedProviderKeys.chapter, `${action}.chapterEvidence[].chapter`);
       assert.deepEqual(exactKeys(item.content), nestedProviderKeys.fullReviewContentEvidence, `${action}.chapterEvidence[].content`);
       assert.deepEqual(exactKeys(item.content.excerpts), nestedProviderKeys.fullReviewExcerpts, `${action}.chapterEvidence[].content.excerpts`);
       assert.deepEqual(exactKeys(item.featureCard), nestedProviderKeys.fullReviewFeatureEvidence, `${action}.chapterEvidence[].featureCard`);
       assert.deepEqual(exactKeys(item.review), nestedProviderKeys.fullReviewReviewEvidence, `${action}.chapterEvidence[].review`);
+      if (item.continuity) {
+        assert.deepEqual(exactKeys(item.continuity), nestedProviderKeys.fullReviewContinuity, `${action}.chapterEvidence[].continuity`);
+        assert.deepEqual(exactKeys(item.continuity.stage), nestedProviderKeys.fullReviewContinuityStage, `${action}.chapterEvidence[].continuity.stage`);
+        assert.deepEqual(exactKeys(item.continuity.characterArc), nestedProviderKeys.fullReviewCharacterArc, `${action}.chapterEvidence[].continuity.characterArc`);
+        assert.deepEqual(exactKeys(item.continuity.timeline), nestedProviderKeys.fullReviewTimeline, `${action}.chapterEvidence[].continuity.timeline`);
+        assert.deepEqual(exactKeys(item.continuity.foreshadowing), nestedProviderKeys.fullReviewForeshadowing, `${action}.chapterEvidence[].continuity.foreshadowing`);
+        for (const excerpt of item.continuity.excerptLocations) {
+          assert.deepEqual(exactKeys(excerpt), nestedProviderKeys.fullReviewExcerptLocation, `${action}.chapterEvidence[].continuity.excerptLocations[]`);
+        }
+      }
       for (const issue of item.review.issues) {
         assert.deepEqual(exactKeys(issue), nestedProviderKeys.fullReviewIssue, `${action}.chapterEvidence[].review.issues[]`);
       }
@@ -4971,7 +5200,7 @@ function createRouteProviderSpies(captured: Array<{ action: NovelProviderAction;
     fullReviewProvider: {
       generateFullReview: async (input: Parameters<typeof fullReviewProvider.generateFullReview>[0]) => {
         record('novel_full_review', input);
-        return fullReviewProvider.generateFullReview(input);
+        return makeMockFullReviewDraftFinalizerCompatible(await fullReviewProvider.generateFullReview(input));
       }
     }
   };

@@ -13,7 +13,7 @@ import type { VideoRepository } from './modules/videos/domain/videoDomain.js';
 import { createNovelProvidersFromEnv } from './modules/novels/providers/providerFactory.js';
 import type { FullReviewProvider } from './modules/novels/providers/mockFullReviewProvider.js';
 import type { HotspotReferenceGateway } from './modules/novels/integrations/hotspotReferenceGateway.js';
-import { createInMemoryNovelRepository } from './modules/novels/repositories/inMemoryNovelRepository.js';
+import { createInMemoryNovelRepository, isInMemoryNovelRepository } from './modules/novels/repositories/inMemoryNovelRepository.js';
 import { createInMemoryVideoRepository } from './modules/videos/repositories/inMemoryVideoRepository.js';
 import { PrismaNovelRepository } from './modules/novels/repositories/prismaNovelRepository.js';
 import { PrismaVideoRepository } from './modules/videos/repositories/prismaVideoRepository.js';
@@ -29,6 +29,7 @@ interface BuildAppOptions {
   hotspotReferenceGateway?: HotspotReferenceGateway;
   now?: () => Date;
   requestContextResolver?: RequestContextResolver | null;
+  enableAcceptanceSeeds?: boolean;
 }
 
 export async function buildApp(options: BuildAppOptions = {}) {
@@ -69,6 +70,13 @@ export async function buildApp(options: BuildAppOptions = {}) {
   await registerContractRoutes(app);
   const novelRepository = options.novelRepository ?? createDefaultNovelRepository();
   const videoRepository = options.videoRepository ?? createDefaultVideoRepository();
+  const acceptanceSeedsEnabled = options.enableAcceptanceSeeds
+    ?? process.env.ENABLE_ACCEPTANCE_SEEDS === 'true';
+  const databaseUrlPresent = Boolean(env.DATABASE_URL || process.env.DATABASE_URL);
+  const inMemoryNovelRepository = isInMemoryNovelRepository(novelRepository);
+  if (acceptanceSeedsEnabled && (databaseUrlPresent || !inMemoryNovelRepository)) {
+    throw new Error('acceptance seeds require an explicit in-memory repository with no DATABASE_URL');
+  }
   const novelProviders = createNovelProvidersFromEnv({
     env: options.aiProviderEnv,
     llmClient: options.llmClient
@@ -79,7 +87,12 @@ export async function buildApp(options: BuildAppOptions = {}) {
     fullReviewProvider: options.fullReviewProvider ?? novelProviders.fullReviewProvider,
     hotspotReferenceGateway: options.hotspotReferenceGateway,
     now: options.now,
-    requestContextResolver: options.requestContextResolver ?? undefined
+    requestContextResolver: options.requestContextResolver ?? undefined,
+    acceptanceSeeds: {
+      enabled: acceptanceSeedsEnabled,
+      inMemoryRepository: inMemoryNovelRepository,
+      databaseUrlPresent
+    }
   });
   await registerTaskRoutes(app, {
     repository: novelRepository,

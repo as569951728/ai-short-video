@@ -45,6 +45,15 @@ test('builds deterministic bounded full-review evidence with complete coverage',
   assert.equal(first.chapterEvidence[0]?.content.excerpts.opening.length, 180);
   assert.equal(first.chapterEvidence[0]?.content.excerpts.middle.length, 180);
   assert.equal(first.chapterEvidence[0]?.content.excerpts.ending.length, 180);
+  assert.deepEqual(first.chapterEvidence[0]?.continuity?.stage, {
+    stageIndex: 1,
+    isStageOpening: true,
+    isStageEnding: false,
+    previousChapterId: null,
+    nextChapterId: 'chapter-2'
+  });
+  assert.deepEqual(first.chapterEvidence[1]?.continuity?.excerptLocations.map((item) => item.kind), ['opening', 'middle', 'ending']);
+  assert.equal(first.chapterEvidence[1]?.continuity?.timeline.chapterNo, 2);
   assert.ok(first.chapterEvidence.every((item) => JSON.stringify(item).length < 5_000));
   assert.doesNotMatch(JSON.stringify(first), /FULL_BODY_1_[x]{600}/);
   assert.deepEqual(validateFullReviewEvidenceProviderInput(first), first);
@@ -110,6 +119,18 @@ test('fails closed when the latest memory does not cover the final chapter conte
     ...facts,
     memory: { ...facts.memory!, sourceContentVersionId: 'content-1', chapterId: 'chapter-1' }
   }));
+});
+
+test('fails closed for soft, risk, and hard stale chapter or memory evidence', () => {
+  for (const staleLevel of [StaleLevel.SoftStale, StaleLevel.RiskStale, StaleLevel.HardStale]) {
+    for (const source of ['content', 'feature', 'memory'] as const) {
+      const facts = createAuthorityFacts([1, 2]);
+      if (source === 'content') facts.contents[0] = { ...facts.contents[0]!, staleLevel };
+      if (source === 'feature') facts.featureCards[0] = { ...facts.featureCards[0]!, staleLevel };
+      if (source === 'memory') facts.memory = { ...facts.memory!, staleLevel };
+      assertFailure(source === 'memory' ? 'memory_stale' : 'source_stale', () => buildFullReviewEvidenceProviderInput(facts));
+    }
+  }
 });
 
 function createAuthorityFacts(chapterNos: number[]): FullReviewAuthorityFactsV1 {

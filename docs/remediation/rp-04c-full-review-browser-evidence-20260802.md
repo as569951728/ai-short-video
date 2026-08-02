@@ -6,56 +6,98 @@
 | --- | --- |
 | package_id | `RP-04C` |
 | target_issue_id | `RMD-NOV-REVIEW-001` |
-| browser_result | `PASS` |
-| deterministic_result | `PASS` |
-| real_model_e5 | `BLOCKED` |
+| acceptance_id | `RP-04C_BROWSER_ACCEPTANCE_M01_M11` |
+| browser_result | `candidate_for_independent_review` |
+| failing_step | 无，M-01 至 M-11 全部 `PASS` |
+| real_model_e5 | `BLOCKED`（本轮未执行） |
+| e6 | `NOT_PROVEN` |
 | package_result | `blocked` |
-| ledger_action | 不关闭、不调整总账进度 |
+| approval | `NOT_ISSUED` |
+| ledger_action | 不关闭、不调整总账进度；ADR 文件数与净增量由主控更新 |
 
-浏览器和确定性 provider 已证明：全书审稿使用 12 章权威证据、任务刷新可恢复、付费入口单次触发、固定冲突可定位、blocking gate 不允许完结，并且页面不暴露整章正文或敏感字段。受控真实 DeepSeek E5 第三次安全失败为 `llm_output_parse_failed / schema_invalid`，因此本包仍然阻塞，不得以 mock 或浏览器成功替代真实模型证据。
+指定安全摘要显示 Playwright 1/1 通过，M-01 至 M-11 全部 `PASS`，`failures=[]`。浏览器结论提升为 `candidate_for_independent_review`；该结论只覆盖本地内存仓储与确定性 provider 的浏览器旅程，不替代 E5/E6，也不形成整包批准。
 
-## 2. 受控环境
+## 2. 运行身份与安全边界
 
-- Admin：`http://127.0.0.1:5184`
-- API：`http://127.0.0.1:3014`
-- 数据：本地 in-memory acceptance seed，不连接 MySQL。
-- Provider：deterministic local provider，45 秒延迟；不连接真实模型。
-- Fixture：12 章正式正文，固定冲突为人物状态 2/8 章、时间线 4/9 章、关键事实 6/11 章。
-- 安全边界：启动脚本拒绝数据库、模型、对象存储和媒体密钥环境变量。
+| 字段 | 值 |
+| --- | --- |
+| run_id | `rp04c-2026-08-02T22-01-40-932Z` |
+| git_sha | `3252a937b3daedc0f775354b3d22fdffe85db0f7` |
+| git_tree | `a4cea5eb0d649ec147b3183a3452bb35d493203e` |
+| worktree_dirty | `true` |
+| executable_scope_hash | `afa98622575ead7d20da2dd17ee4529406d61688b5a239f486c5d46c906757e3` |
+| fixture_version | `rp04c-browser-12ch-v1` |
+| provider | `deterministic-delay-provider`，45 秒延迟 |
+| evidence_hash | `bca65468c69bef51359acb70f0ba67039955c87542e7ba41c60a7c54b1d6b90f` |
+| safe_summary | `output/playwright/rp-04c/rp04c-2026-08-02T22-01-40-932Z/safe-evidence.json` |
 
-## 3. 浏览器必须项
+说明：安全摘要明确记录 `worktree.dirty=true`。`git_sha` 与 `git_tree` 仅表示运行时 HEAD 身份，不得作为最终候选或干净树声明；`executable_scope_hash` 绑定本次浏览器验收可执行资产。证据不包含文件正文或 diff。
+
+运行使用随机本地端口、in-memory repository 和确定性 provider。启动器拒绝或移除数据库、真实模型、对象存储与媒体密钥；本轮未调用真实 MySQL、真实模型、对象存储、TTS、视频渲染或发布接口。
+
+## 3. M-01 至 M-11 结果
 
 | 编号 | 结果 | 安全证据摘要 |
 | --- | --- | --- |
-| M-01 | PASS | 后端 fixture 正确加载；12/12 正文完成；完结入口禁用。 |
-| M-02 | PASS | 确认框明确只生成报告、问题卡和 gate；取消后未创建审稿任务。 |
-| M-03 | PASS | 单次确认只产生一个 full-review POST；请求字段仅为 `idempotencyKey`、`expectedNovelVersion`。 |
-| M-04 | PASS | 运行中显示不定进度、当前动作和 1–3 分钟提示，不伪造精确百分比。 |
-| M-05 | PASS | 运行中任务详情为真实 `task_000175`，显示 request ID 和事件时间线。 |
-| M-06 | PASS | 运行中刷新和第二标签页均恢复 `task_000175`；任务总数仍为 1。 |
-| M-07 | PASS | 终态为报告 `review_000177`、68/C、blocked；未自动完结或进入视频化。 |
-| M-08 | PASS | 页面显示人物 2/8、时间线 4/9、关键事实 6/11 章，并给出处理动作；无对照误报。 |
-| M-09 | PASS | `allowCompletion=false`；完结按钮禁用；未产生 completion POST。 |
-| M-10 | PASS | 刷新和双标签页保持同一 task/report/gate 终态，没有重放 POST。 |
-| M-11 | PASS | DOM、Console、localStorage、sessionStorage 无密钥、认证头或 raw response；12 章详情行不携带正文。 |
+| M-01 | PASS | 后端 fixture 加载成功；正式章节 12；完结入口禁用。 |
+| M-02 | PASS | 取消确认后 full-review POST 为 0；确认框显示 12 章且明确不会自动完结。 |
+| M-03 | PASS | 单次确认只产生 1 个 full-review POST；请求字段仅 `expectedNovelVersion`、`idempotencyKey`。 |
+| M-04 | PASS | 0/5/15 秒均显示生成中、不定进度与 1-3 分钟提示；未出现伪造百分比。 |
+| M-05 | PASS | 运行中后端 task 为 `task_000175`；任务详情与事件接口可用，事件数 1。 |
+| M-06 | PASS | 五个采样点均为 `task_000175 / processing`，provider 全程 active，POST 仍为 1；同页刷新、第二标签页、第二标签页再次刷新后的发起入口均为 disabled。 |
+| M-07 | PASS | 报告 `review_000177`、gate `fullGate_000178` 到达；问题数 3，没有 completion decision，视频化状态为 `not_ready`。 |
+| M-08 | PASS | 人物 2/8、时间线 4/9、关键事实 6/11 章 scope 正确；固定对照误报为 0。 |
+| M-09 | PASS | `allowCompletion=false`、blocking 数 3；完结入口禁用，completion POST 为 0。 |
+| M-10 | PASS | 终态刷新后 task/report/gate ID 稳定，没有重复 POST 或重复资产。 |
+| M-11 | PASS | DOM、Console、local/sessionStorage、Cookie、相关 Network JSON 敏感命中均为 0；页面错误为 0。 |
 
-## 4. 非浏览器证据边界
+## 4. 本轮覆盖与隐私摘要
 
-- API provider spy、权威版本引用、完整覆盖 manifest、hash、stale fail-closed 和模型 scope 到权威 chapter ID 的服务端映射由确定性测试覆盖。
-- 浏览器详情响应约 65 KB，包含结构、试写和任务摘要；`chapters[]`、`bodyGeneration`、`latestFullReview` 不携带本 fixture 的整章正式正文。
-- 页面只展示冲突所需的标题、最小摘要、处理建议和章节号，不展示 provider 输入证据或完整原始响应。
-- 本轮未连接 MySQL，不能证明服务重启后的数据库恢复；该证据仍属于后续 E6。
+- `coveredChapterNos` 为 1 至 12，连续、无重复。
+- 正文版本、feature card、单章 review 证据计数均为 12；长期 memory 计数为 1。
+- `manifestHash=d2264571b0e14ecbd8d396946a5d3f62fec587683dcf0db23d759e172eb4c3d9`。
+- 浏览器 full-review POST 为 1，completion POST 为 0；同一 task ID 始终为 `task_000175`。
+- M-06 三个 `startActionDisabled*` 均为 `true`，五个 task 状态均为 `processing`，`providerActiveThroughout=true`。
+- M-11 扫描 41 个相关 Network JSON 对象；DOM/Console/Storage/Cookie/Network 敏感命中和页面错误均为 0。
+- 未保存 HAR、trace、截图、视频、完整 prompt、完整正文、raw response、认证头或密钥。
+- `rawArtifactsSaved=false`、`harSaved=false`、`traceSaved=false`；安全摘要文本禁止内容命中为 0。
 
-## 5. 真实模型 E5 阻塞
+## 5. 浏览器结论
 
-受控真实模型最多三次、禁止自动重试：
+### 已验证修复：M-06 authoritative server task in-flight
 
-1. 第一次返回可解析 JSON，但固定冲突 scope 未全部命中。
-2. 第二次输出未通过解析/校验。
-3. 第三次安全失败：`llm_output_parse_failed`，`outputKind=schema_invalid`，`validationCode=schema_invalid`。
+独立证据：
 
-未保存完整 prompt、完整正文或 raw provider response。当前不得继续付费重试，不得关闭 `RMD-NOV-REVIEW-001`；下一次真实模型调用必须先调整 schema 可靠性方案并重新取得明确的费用调用决策。
+1. 发起全书审稿并确认后端已持久化 `task_000175`，状态 `processing`。
+2. 同页刷新、新开第二标签页、第二标签页再次刷新均恢复同一 task。
+3. 五个采样点均为 `processing`，provider 全程 active。
+4. 三个恢复场景的“全书 AI 审稿”入口均为 disabled，累计 POST 为 1。
 
-## 6. 候选状态
+### 已验证修复：M-07 终态报告链路
 
-本实现可进入固定 SHA 的 PRODUCT/TEST/QUALITY 独立复核，但复核结论最高只能是 `blocked` 或 `needs_revision`。只有真实模型 E5、独立复核和 required checks 全部通过后，才可申请合并并关闭总账项。
+确定性 provider 维度契约修正后，终态报告、gate 与问题列表均成功进入页面和 latest API，M-07 至 M-11 全部通过。浏览器路径当前没有剩余 M 级失败项。
+
+浏览器证据只达到 `candidate_for_independent_review`。由于运行来自 dirty worktree，后续形成最终候选时仍需由主控绑定干净候选 SHA/tree 并重新执行相应准入检查。
+
+## 6. 非 UI 边界
+
+本轮仍未证明或仍被阻塞：
+
+- `E5`：受控真实模型 canary 仍为 `BLOCKED`，本轮未调用真实模型。
+- `E6`：仍为 `NOT_PROVEN`，不得由本轮确定性浏览器证据替代。
+- `N-01`：多版本候选报告池与采用/废弃治理。
+- `N-05`：真实付费 provider 调用数和费用记录数。
+- `N-06`：固定真实模型 E5。既有 E5 仍为 `BLOCKED`，本轮没有重新付费调用。
+- `N-08`：直接 API/并发/真实仓储层完结阻断。
+- `N-09`：进程重启、worker 恢复和未知 provider 结果下的去重。
+- 本轮未连接 MySQL，不能证明数据库持久化和服务重启恢复。
+
+浏览器步骤虽已全绿，RP-04C 仍不得批准或关闭，直至 E5、E6、真实数据库边界和独立 TEST/PRODUCT/QUALITY 证据齐备。
+
+## 7. 复现命令
+
+```bash
+npm run e2e:rp04c
+```
+
+当前结果：M-01 至 M-11 全部 `PASS`；安全摘要中 `failures=[]`、`browserConclusion=candidate_for_independent_review`、`approval=NOT_ISSUED`。

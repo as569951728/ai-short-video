@@ -144,6 +144,7 @@ import {
   projectLongTermMemoryProviderInput,
   projectNovelProviderInput,
   projectPreferencesProviderInput,
+  validateFullReviewDraftForPersistence,
   type BodyChapterProviderDraft,
   type NovelProviderActionInputFor,
   type NovelProviderSet,
@@ -1615,14 +1616,15 @@ export class NovelService {
       finalize: (task, draft) => {
         const executionEnvelope = toRecord(task.executionEnvelopeJson);
         const authoritativeSourceVersionRefs = toRecord(executionEnvelope.sourceVersionRefs);
+        const validatedDraft = validateFullReviewDraftForPersistence({
+          ...draft,
+          reviewPolicyVersionId: requestFingerprint.reviewPolicyVersionId
+        });
         return this.options.repository.createFullReview({
           novel,
           task,
           chapters,
-          draft: {
-            ...draft,
-            reviewPolicyVersionId: requestFingerprint.reviewPolicyVersionId
-          },
+          draft: validatedDraft,
           idempotencyKey,
           requestFingerprint,
           sourceVersionRefs: Object.keys(authoritativeSourceVersionRefs).length
@@ -1949,6 +1951,51 @@ export class NovelService {
       throw new BusinessError(ErrorCode.GateBlocked, '仍有章节缺少正式正文、章节特性卡或单章审稿，不能发起全书审稿', {
         chapterId: invalidChapter.id,
         chapterNo: invalidChapter.chapterNo
+      });
+    }
+    const authoritativeChapters = await Promise.all(chapters.map(async (chapter) => {
+      const [content, featureCard, reviewReport] = await Promise.all([
+        this.options.repository.findChapterContentVersionById(context.tenantId, novel.id, chapter.currentContentVersionId!),
+        this.options.repository.findFeatureCardById(context.tenantId, chapter.currentFeatureCardVersionId!),
+        this.options.repository.findReviewReportById(context.tenantId, chapter.currentReviewReportId!)
+      ]);
+      if (
+        !content
+        || content.chapterId !== chapter.id
+        || content.status !== VersionStatus.Current
+        || content.staleLevel !== StaleLevel.None
+        || !featureCard
+        || featureCard.novelId !== novel.id
+        || featureCard.chapterId !== chapter.id
+        || featureCard.status !== VersionStatus.Current
+        || featureCard.staleLevel !== StaleLevel.None
+        || !reviewReport
+        || reviewReport.novelId !== novel.id
+        || reviewReport.objectType !== 'chapter'
+        || reviewReport.objectId !== chapter.id
+        || reviewReport.objectVersionId !== content.id
+      ) {
+        throw new BusinessError(ErrorCode.VersionConflict, '全书审稿来源已变化，请刷新后重试', {
+          code: 'SOURCE_STALE',
+          chapterId: chapter.id,
+          chapterNo: chapter.chapterNo
+        });
+      }
+      return { chapter, content };
+    }));
+    const finalChapter = [...authoritativeChapters].sort((left, right) => left.chapter.chapterNo - right.chapter.chapterNo).at(-1)!;
+    const finalMemory = await this.options.repository.findLatestLongTermMemory(context.tenantId, novel.id, null);
+    if (
+      !finalMemory
+      || finalMemory.chapterId !== finalChapter.chapter.id
+      || finalMemory.sourceContentVersionId !== finalChapter.content.id
+      || finalMemory.status !== VersionStatus.Current
+      || finalMemory.staleLevel !== StaleLevel.None
+    ) {
+      throw new BusinessError(ErrorCode.VersionConflict, '全书审稿来源已变化，请刷新后重试', {
+        code: 'SOURCE_STALE',
+        chapterId: finalChapter.chapter.id,
+        chapterNo: finalChapter.chapter.chapterNo
       });
     }
     const openImpactCases = await this.options.repository.listOpenBlockingImpactCases(context.tenantId, novel.id);

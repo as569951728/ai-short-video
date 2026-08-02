@@ -8,8 +8,8 @@
 | contract | `docs/remediation/rp-04c-full-review-evidence-contract.md` |
 | target_issue_id | RMD-NOV-REVIEW-001 |
 | acceptance_surface | 现有管理端 UI、浏览器 Network、Console、Storage |
-| execution_mode | 人工浏览器验收，可由主控按本文转写为 Playwright |
-| current_status | `not_run` |
+| execution_mode | 人工清单 + 可重复 Playwright（本地内存仓储、确定性延迟 provider） |
+| current_status | `candidate_for_independent_review` |
 
 本文只把已冻结的 RP-04C 证据合同转换成可执行的浏览器验收步骤，不修改代码，不扩大本包范围，也不形成 `approved` 结论。浏览器验收只能证明浏览器可观察到的行为；合同要求但当前 UI 无法证明的内容必须保留为 `NOT_PROVEN`，由 API、确定性测试、provider spy、受控真实模型 canary 或独立复核补证。
 
@@ -52,6 +52,25 @@ MAX_PAID_CALLS=1
 5. 本轮若使用真实模型，已固定模型、prompt 版本、策略版本和费用上限，且禁止自动付费重试。
 6. fixture 初始状态未完结，并且没有其他互斥小说任务正在运行。
 7. 能识别本轮 provider 调用计数和费用记录；这两项不是 UI 证据，但必须留给后续非 UI 补证。
+
+### 3.1 可重复自动化入口
+
+在仓库根目录执行：
+
+```bash
+npm run e2e:rp04c
+```
+
+该命令必须满足以下边界：
+
+1. 启动独立随机端口的 API 与 Admin，不复用开发者已有服务。
+2. API 使用本地 in-memory repository 与 deterministic delay provider；禁止连接真实 MySQL、真实模型、对象存储或媒体服务。
+3. 串行执行 M-01 至 M-11，任一断言失败时进程非零退出。
+4. 不生成 HAR、trace、截图或视频；只写入 `output/playwright/rp-04c/<runId>/safe-evidence.json`。
+5. 安全摘要只包含 Git 身份、fixture 版本、计数、ID、hash、状态与隐私命中数，不包含正文、prompt、raw response、认证头或密钥。
+6. 自动化全通过时浏览器结论最高为 `candidate_for_independent_review`；真实 E5、真实数据库与独立复核仍按非 UI 边界单独验收。
+
+最新成功运行 `rp04c-2026-08-02T22-01-40-932Z` 使用 45 秒确定性延迟 provider，Playwright 1/1 通过，M-01 至 M-11 全部 `PASS`。安全摘要记录 `worktree.dirty=true`，因此 HEAD SHA/tree 不能作为最终候选身份；本轮浏览器结论最高为 `candidate_for_independent_review`。E5 仍为 `BLOCKED`，E6 仍为 `NOT_PROVEN`，`approval=NOT_ISSUED`。安全摘要与边界见 `docs/remediation/rp-04c-full-review-browser-evidence-20260802.md`。
 
 ## 4. 浏览器证据采集约束
 

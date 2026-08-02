@@ -2,7 +2,6 @@ import {
   RiskLevel,
   type ChapterSummaryCompareDTO,
   type FirstVideoSuggestionDTO,
-  type FullReviewGateResult,
   type QualityScoringDTO,
   type ScoringDimensionDTO,
   type StructureAssetContentDTO,
@@ -21,6 +20,7 @@ import type {
 import {
   FullReviewEvidenceValidationError,
   projectStructureCurrentAssetsPrompt,
+  validateFullReviewDraftForPersistence,
   validateFullReviewEvidenceProviderInput,
   type BodyChapterProviderDraft,
   type ChapterProviderInputV1,
@@ -82,7 +82,7 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
       : reasonerActions.has(action)
         ? this.reasonerModel
         : this.model;
-    const routeVersion = action === 'novel_full_review' ? 'route-v3' : 'route-v1';
+    const routeVersion = action === 'novel_full_review' ? 'route-v4' : 'route-v1';
     return `deepseek:${model}:${routeVersion}`;
   }
 
@@ -324,6 +324,8 @@ function createFullReviewMessages(novel: NovelProviderInputV1, payload: FullRevi
       '必须逐章检查人物生死与状态、时间线、同一合同或关键事实、伏笔和因果连续性，不得忽略、合并或臆测任何章节。',
       '每个跨章问题必须单独写入 issues；scopeType 必须为 chapter，scopeChapterNos 必须列出冲突涉及的全部章节号整数。禁止输出 scopeRefs，服务端会将章节号映射为权威 chapter.id。',
       'severity=blocking 的问题会由服务端转换为未解决阻断项；存在 blocking 问题时 gateResult 必须为 blocked。',
+      'dimensionScores 必须覆盖阶段连续性、人物弧、时间线、事实一致性、伏笔回收和证据定位；每个 issue.dimension 必须引用一个已返回的 dimensionScores.key。',
+      '顶层及所有嵌套对象只能包含 schema 中列出的字段；不得省略字段、使用别名、输出 null 或添加说明字段。',
       '只返回 JSON。'
     ].join(''),
     chapterIdCatalog: payload.chapterEvidence.map((item) => ({ id: item.chapter.id, chapterNo: item.chapter.chapterNo })),
@@ -357,7 +359,9 @@ function createFullReviewEvidencePayload(input: FullReviewProviderInput): FullRe
   }
   for (const evidence of validated.chapterEvidence) {
     if (
-      evidence.content.summary.trim().length === 0
+      !evidence.continuity
+      || evidence.continuity.excerptLocations.length !== 3
+      || evidence.content.summary.trim().length === 0
       || evidence.content.excerpts.opening.trim().length === 0
       || evidence.content.excerpts.middle.trim().length === 0
       || evidence.content.excerpts.ending.trim().length === 0
@@ -436,7 +440,7 @@ const M1_OUTPUT_SCHEMA_HINT = {
   impact:
     '影响评估返回 {"impactLevel":"none|minor|medium|severe","summary","changedFacts":[],"affectedChapterIds":[],"affectedVideoReferenceIds":[],"recommendedHandling","suggestedActions":[],"blocksFullReview":false}',
   fullReview:
-    '全书审稿返回 {"totalScore":0-100,"rating":"A|B|C","gateResult":"pass|warning|blocked","summary","strengths":[],"problems":[],"suggestions":[],"dimensionScores":[{"key","label","score","weight","evidence","penaltyPoints"}],"issues":[{"issueId","title","plainDescription","severity":"info|warning|blocking","scopeChapterNos":[1,2],"dimension","recommendedTarget","recommendedAction"}],"videoSuggestion","firstVideoSuggestion":{"chapterRange","openingSlice","narrationHook","firstScreenSubtitle","titleHook","endingSuspense","suggestedFormat","riskTips":[]},"platformRisks":[],"originalityRisks":[],"aiFlavorRisks":[],"lowScoreContinueRisks":[],"reviewPolicyVersionId":"deepseek-full-review-v1"}'
+    '全书审稿严格返回且仅返回 {"totalScore":0-100,"rating":"A|B|C","gateResult":"pass|warning|blocked","summary":"非空字符串","strengths":["字符串"],"problems":["字符串"],"suggestions":["字符串"],"dimensionScores":[{"key":"stage_continuity|character_continuity|timeline_continuity|fact_consistency|foreshadowing|evidence_grounding","label":"非空字符串","score":0-100,"weight":0-1,"evidence":"含章节和摘录位置的非空证据","penaltyPoints":0-100}],"issues":[{"issueId":"非空唯一字符串","title":"非空字符串","plainDescription":"非空字符串","severity":"info|warning|blocking","scopeChapterNos":[1,2],"dimension":"必须匹配 dimensionScores.key","recommendedTarget":"非空字符串","recommendedAction":"非空字符串"}],"videoSuggestion":"非空字符串","firstVideoSuggestion":{"chapterRange":"字符串","openingSlice":"字符串","narrationHook":"字符串","firstScreenSubtitle":"字符串","titleHook":"字符串","endingSuspense":"字符串","suggestedFormat":"字符串","riskTips":["字符串"]},"platformRisks":["字符串"],"originalityRisks":["字符串"],"aiFlavorRisks":["字符串"],"lowScoreContinueRisks":["字符串"],"reviewPolicyVersionId":"deepseek-full-review-v1"}。不得缺字段、不得增加字段、不得使用任何别名。'
 };
 
 function toDirectionDraft(value: unknown): DirectionCandidateDraft {
@@ -840,39 +844,45 @@ function toImpactDraft(value: unknown): ImpactAssessmentDraft {
 }
 
 function toFullReviewDraft(value: unknown, chapterIdByNo: ReadonlyMap<number, string>): FullReviewDraft {
-  const item = asRecord(value);
-  const reviewPolicyVersionId = readString(item, 'reviewPolicyVersionId');
+  const item = exactFullReviewModelRecord(value, [
+    'totalScore', 'rating', 'gateResult', 'summary', 'strengths', 'problems', 'suggestions',
+    'dimensionScores', 'issues', 'videoSuggestion', 'firstVideoSuggestion', 'platformRisks',
+    'originalityRisks', 'aiFlavorRisks', 'lowScoreContinueRisks', 'reviewPolicyVersionId'
+  ], 'full review');
+  const reviewPolicyVersionId = strictFullReviewString(item.reviewPolicyVersionId, 'reviewPolicyVersionId');
   if (!['deepseek-full-review-v1', 'policy-full-review-v1'].includes(reviewPolicyVersionId)) throw new Error('reviewPolicyVersionId is invalid');
-  const gateResult = readEnum(item, 'gateResult', ['pass', 'warning', 'blocked', 'forced_pass'], 'blocked') as FullReviewGateResult;
-  const issues = readPlainArray(item, 'issues').map((issue, index) => toFullReviewIssue(issue, index, chapterIdByNo));
+  const gateResult = strictFullReviewEnum(item.gateResult, ['pass', 'warning', 'blocked'] as const, 'gateResult');
+  const dimensionScores = strictFullReviewArray(item.dimensionScores, 'dimensionScores', false)
+    .map((dimension, index) => toStrictFullReviewDimension(dimension, index));
+  const dimensionKeys = new Set(dimensionScores.map((dimension) => dimension.key));
+  if (dimensionKeys.size !== dimensionScores.length) throw new Error('full review dimension key must be unique');
+  const issues = strictFullReviewArray(item.issues, 'issues')
+    .map((issue, index) => toFullReviewIssue(issue, index, chapterIdByNo));
   if (new Set(issues.map((issue) => issue.issueId)).size !== issues.length) {
     throw new Error('full review issueId must be unique');
   }
-  const hasOpenBlockingIssue = issues.some((issue) => issue.status === 'open' && issue.blocking && issue.severity === 'blocking');
-  if (gateResult === 'blocked' && !hasOpenBlockingIssue) {
-    throw new Error('blocked full review must include a blocking issue with authoritative scopeRefs');
+  if (issues.some((issue) => !dimensionKeys.has(issue.dimension))) {
+    throw new Error('full review issue dimension is not declared');
   }
-  if (gateResult !== 'blocked' && hasOpenBlockingIssue) {
-    throw new Error('open blocking issue requires blocked full review gate');
-  }
-  return {
-    totalScore: readNumber(item, 'totalScore'),
-    rating: readString(item, 'rating'),
+  const draft: FullReviewDraft = {
+    totalScore: strictFullReviewNumber(item.totalScore, 'totalScore', 0, 100),
+    rating: strictFullReviewEnum(item.rating, ['A', 'B', 'C'] as const, 'rating'),
     gateResult,
-    summary: readString(item, 'summary'),
-    strengths: readStringArray(item, 'strengths'),
-    problems: readStringArray(item, 'problems'),
-    suggestions: readStringArray(item, 'suggestions'),
-    dimensionScores: readPlainArray(item, 'dimensionScores').map((dimension, index) => toDimension(dimension, index)),
+    summary: strictFullReviewString(item.summary, 'summary'),
+    strengths: strictFullReviewStringArray(item.strengths, 'strengths'),
+    problems: strictFullReviewStringArray(item.problems, 'problems'),
+    suggestions: strictFullReviewStringArray(item.suggestions, 'suggestions'),
+    dimensionScores,
     issues,
-    videoSuggestion: readString(item, 'videoSuggestion'),
-    firstVideoSuggestion: toFirstVideoSuggestion(readObject(item, 'firstVideoSuggestion')),
-    platformRisks: readStringArray(item, 'platformRisks'),
-    originalityRisks: readStringArray(item, 'originalityRisks'),
-    aiFlavorRisks: readStringArray(item, 'aiFlavorRisks'),
-    lowScoreContinueRisks: readStringArray(item, 'lowScoreContinueRisks'),
+    videoSuggestion: strictFullReviewString(item.videoSuggestion, 'videoSuggestion'),
+    firstVideoSuggestion: toStrictFirstVideoSuggestion(item.firstVideoSuggestion),
+    platformRisks: strictFullReviewStringArray(item.platformRisks, 'platformRisks'),
+    originalityRisks: strictFullReviewStringArray(item.originalityRisks, 'originalityRisks'),
+    aiFlavorRisks: strictFullReviewStringArray(item.aiFlavorRisks, 'aiFlavorRisks'),
+    lowScoreContinueRisks: strictFullReviewStringArray(item.lowScoreContinueRisks, 'lowScoreContinueRisks'),
     reviewPolicyVersionId
   };
+  return validateFullReviewDraftForPersistence(draft);
 }
 
 function toFullReviewIssue(
@@ -887,7 +897,7 @@ function toFullReviewIssue(
   const severity = strictFullReviewEnum(item.severity, ['info', 'warning', 'blocking'] as const, 'severity');
   if (!Array.isArray(item.scopeChapterNos)
     || item.scopeChapterNos.length === 0
-    || item.scopeChapterNos.some((chapterNo) => !Number.isInteger(chapterNo))) {
+    || item.scopeChapterNos.some((chapterNo) => !Number.isInteger(chapterNo) || (chapterNo as number) < 1)) {
     throw new Error(`full review issue ${index + 1} has invalid scopeChapterNos`);
   }
   const chapterNos = [...new Set(item.scopeChapterNos as number[])].sort((left, right) => left - right);
@@ -908,6 +918,39 @@ function toFullReviewIssue(
     recommendedAction: readString(item, 'recommendedAction'),
     status: 'open',
     acceptedReason: null
+  };
+}
+
+function toStrictFullReviewDimension(value: unknown, index: number): ScoringDimensionDTO {
+  const item = exactFullReviewModelRecord(
+    value,
+    ['key', 'label', 'score', 'weight', 'evidence', 'penaltyPoints'],
+    `full review dimension ${index + 1}`
+  );
+  return {
+    key: strictFullReviewString(item.key, `dimensionScores[${index}].key`),
+    label: strictFullReviewString(item.label, `dimensionScores[${index}].label`),
+    score: strictFullReviewNumber(item.score, `dimensionScores[${index}].score`, 0, 100),
+    weight: strictFullReviewNumber(item.weight, `dimensionScores[${index}].weight`, Number.EPSILON, 1),
+    evidence: strictFullReviewString(item.evidence, `dimensionScores[${index}].evidence`),
+    penaltyPoints: strictFullReviewNumber(item.penaltyPoints, `dimensionScores[${index}].penaltyPoints`, 0, 100)
+  };
+}
+
+function toStrictFirstVideoSuggestion(value: unknown): FirstVideoSuggestionDTO {
+  const item = exactFullReviewModelRecord(value, [
+    'chapterRange', 'openingSlice', 'narrationHook', 'firstScreenSubtitle', 'titleHook',
+    'endingSuspense', 'suggestedFormat', 'riskTips'
+  ], 'full review firstVideoSuggestion');
+  return {
+    chapterRange: strictFullReviewString(item.chapterRange, 'firstVideoSuggestion.chapterRange'),
+    openingSlice: strictFullReviewString(item.openingSlice, 'firstVideoSuggestion.openingSlice'),
+    narrationHook: strictFullReviewString(item.narrationHook, 'firstVideoSuggestion.narrationHook'),
+    firstScreenSubtitle: strictFullReviewString(item.firstScreenSubtitle, 'firstVideoSuggestion.firstScreenSubtitle'),
+    titleHook: strictFullReviewString(item.titleHook, 'firstVideoSuggestion.titleHook'),
+    endingSuspense: strictFullReviewString(item.endingSuspense, 'firstVideoSuggestion.endingSuspense'),
+    suggestedFormat: strictFullReviewString(item.suggestedFormat, 'firstVideoSuggestion.suggestedFormat'),
+    riskTips: strictFullReviewStringArray(item.riskTips, 'firstVideoSuggestion.riskTips')
   };
 }
 
@@ -933,6 +976,32 @@ function strictFullReviewEnum<const T extends readonly string[]>(
 ): T[number] {
   if (typeof value !== 'string' || !allowed.includes(value)) throw new Error(`full review ${label} is invalid`);
   return value as T[number];
+}
+
+function strictFullReviewString(value: unknown, label: string): string {
+  if (typeof value !== 'string' || !value.trim()) throw new Error(`full review ${label} is invalid`);
+  return value.trim();
+}
+
+function strictFullReviewNumber(value: unknown, label: string, min: number, max: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < min || value > max) {
+    throw new Error(`full review ${label} is invalid`);
+  }
+  return value;
+}
+
+function strictFullReviewArray(value: unknown, label: string, allowEmpty = true): unknown[] {
+  if (!Array.isArray(value) || (!allowEmpty && value.length === 0)) {
+    throw new Error(`full review ${label} is invalid`);
+  }
+  return value;
+}
+
+function strictFullReviewStringArray(value: unknown, label: string): string[] {
+  return strictFullReviewArray(value, label).map((item, index) => {
+    if (typeof item !== 'string' || !item.trim()) throw new Error(`full review ${label}[${index}] is invalid`);
+    return item.trim();
+  });
 }
 
 

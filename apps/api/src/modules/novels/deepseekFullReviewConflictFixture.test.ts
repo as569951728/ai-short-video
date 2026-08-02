@@ -4,6 +4,7 @@ import { LlmProviderError, type ChatCompletionRequest, type LlmClient } from '..
 import {
   FULL_REVIEW_CONFLICT_FIXTURE_VERSION,
   FULL_REVIEW_CONFLICT_SCOPES,
+  FULL_REVIEW_E5_SUMMARY_VERSION,
   FULL_REVIEW_EVIDENCE_PRIVACY_CANARY,
   FullReviewEvidenceSmokeFailure,
   createSafeSmokeErrorSummary,
@@ -74,6 +75,9 @@ describe('RP-04C E5 full-review conflict evidence', () => {
 
     assert.equal(requests.length, 1);
     assert.equal(summary.success, true);
+    assert.equal(summary.summaryVersion, FULL_REVIEW_E5_SUMMARY_VERSION);
+    assert.equal(summary.outcome, 'success');
+    assert.equal(summary.failure, null);
     assert.equal(summary.fixtureVersion, FULL_REVIEW_CONFLICT_FIXTURE_VERSION);
     assert.equal(summary.manifestHash, fixture.coverageManifest.manifestHash);
     assert.equal(summary.callCount, 1);
@@ -121,7 +125,10 @@ describe('RP-04C E5 full-review conflict evidence', () => {
       }
     );
 
-    assert.equal(JSON.parse(safeLines[0]!).controlFalsePositive, true);
+    const failedSummary = JSON.parse(safeLines[0]!);
+    assert.equal(failedSummary.controlFalsePositive, true);
+    assert.equal(failedSummary.outcome, 'failure');
+    assert.deepEqual(failedSummary.failure.failureCodes, ['control_false_positive']);
     assert.doesNotMatch(safeLines.join('\n'), new RegExp(RAW_RESPONSE_CANARY));
     assert.doesNotMatch(safeLines.join('\n'), new RegExp(FULL_REVIEW_EVIDENCE_PRIVACY_CANARY));
   });
@@ -156,14 +163,64 @@ describe('RP-04C E5 full-review conflict evidence', () => {
       }
     ));
 
-    assert.deepEqual(summary, {
-      success: false,
+    assert.equal(summary.summaryVersion, FULL_REVIEW_E5_SUMMARY_VERSION);
+    assert.equal(summary.outcome, 'failure');
+    assert.equal(summary.success, false);
+    assert.deepEqual(summary.failure, {
       errorCode: 'llm_output_parse_failed',
       outputKind: 'schema_invalid',
-      validationCode: 'issue_keys_invalid'
+      validationCode: 'issue_keys_invalid',
+      failureCodes: []
     });
+    assert.equal(summary.fixtureVersion, FULL_REVIEW_CONFLICT_FIXTURE_VERSION);
+    assert.equal(summary.manifestHash, null);
+    assert.equal(summary.callCount, 0);
+    assert.deepEqual(summary.usage, {});
     assert.doesNotMatch(JSON.stringify(summary), new RegExp(RAW_RESPONSE_CANARY));
     assert.doesNotMatch(JSON.stringify(summary), new RegExp(FULL_REVIEW_EVIDENCE_PRIVACY_CANARY));
+  });
+
+  it('writes one complete safe failure summary when the live-smoke provider output is invalid', async () => {
+    const safeLines: string[] = [];
+    const client: LlmClient = {
+      async chat(request) {
+        return {
+          content: `{"gateResult":"blocked","raw":"${RAW_RESPONSE_CANARY}"`,
+          model: request.model,
+          usage: { promptTokens: 1_200, completionTokens: 20, totalTokens: 1_220 }
+        };
+      }
+    };
+
+    await assert.rejects(
+      () => executeFullReviewEvidenceSmoke({
+        client,
+        gitSha: '0123456789abcdef0123456789abcdef01234567',
+        model: 'deepseek-invalid-fixture',
+        writeSummary: (line) => safeLines.push(line)
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof FullReviewEvidenceSmokeFailure);
+        assert.equal(error.code, 'full_review_evidence_provider_failed');
+        return true;
+      }
+    );
+
+    assert.equal(safeLines.length, 1);
+    const summary = JSON.parse(safeLines[0]!);
+    assert.equal(summary.summaryVersion, FULL_REVIEW_E5_SUMMARY_VERSION);
+    assert.equal(summary.outcome, 'failure');
+    assert.equal(summary.success, false);
+    assert.equal(summary.fixtureVersion, FULL_REVIEW_CONFLICT_FIXTURE_VERSION);
+    assert.equal(summary.model, 'deepseek-invalid-fixture');
+    assert.equal(summary.callCount, 1);
+    assert.deepEqual(summary.coverage.chapterCount, 12);
+    assert.deepEqual(summary.usage, { promptTokens: 1_200, completionTokens: 20, totalTokens: 1_220 });
+    assert.equal(summary.failure.errorCode, 'llm_output_parse_failed');
+    assert.ok(['non_json', 'schema_invalid'].includes(summary.failure.outputKind));
+    assert.doesNotMatch(safeLines[0]!, new RegExp(RAW_RESPONSE_CANARY));
+    assert.doesNotMatch(safeLines[0]!, new RegExp(FULL_REVIEW_EVIDENCE_PRIVACY_CANARY));
+    assert.doesNotMatch(safeLines[0]!, /沈岚在仓库爆炸中确认死亡|XH-MAIN-001|system|user/);
   });
 });
 
@@ -188,7 +245,11 @@ function createBlockingReviewResponse() {
     strengths: ['证据覆盖完整'],
     problems: ['人物状态、时间线和合同金额冲突'],
     suggestions: ['修复后重新全书审稿'],
-    dimensionScores: [],
+    dimensionScores: [
+      { key: 'character_continuity', label: '人物连续性', score: 42, weight: 1 / 3, evidence: '第3章与第7章人物状态冲突。', penaltyPoints: 38 },
+      { key: 'timeline_continuity', label: '时间线连续性', score: 42, weight: 1 / 3, evidence: '第4章与第8章日期冲突。', penaltyPoints: 38 },
+      { key: 'fact_consistency', label: '事实一致性', score: 42, weight: 1 / 3, evidence: '第5章与第9章合同金额冲突。', penaltyPoints: 38 }
+    ],
     issues: [
       issue(
         'rp04c-character-death-resurrection',
@@ -224,8 +285,7 @@ function createBlockingReviewResponse() {
     originalityRisks: [],
     aiFlavorRisks: [],
     lowScoreContinueRisks: ['跨章硬冲突未修复'],
-    reviewPolicyVersionId: 'policy-full-review-v1',
-    rawResponseCanary: RAW_RESPONSE_CANARY
+    reviewPolicyVersionId: 'policy-full-review-v1'
   };
 }
 

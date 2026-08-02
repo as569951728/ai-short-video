@@ -112,7 +112,7 @@ import {
 } from '../domain/executionContract.js';
 import { BusinessError } from '../../../shared/errors.js';
 
-export function createInMemoryNovelRepository(): NovelRepository & {
+export interface InMemoryNovelRepository extends NovelRepository {
   getOperationLogs(): OperationLogRecord[];
   getGenerationTasks(): GenerationTaskRecord[];
   getGenerationTaskEvents(): GenerationTaskEventRecord[];
@@ -127,7 +127,16 @@ export function createInMemoryNovelRepository(): NovelRepository & {
   getPreferences(): NovelPreferencesRecord[];
   getChapterFeatureCards(): ChapterFeatureCardRecord[];
   getReviewReports(): ReviewReportRecord[];
-} {
+  getFullReviewGates(): FullReviewGateRecord[];
+}
+
+const inMemoryNovelRepositories = new WeakSet<NovelRepository>();
+
+export function isInMemoryNovelRepository(repository: NovelRepository): repository is InMemoryNovelRepository {
+  return inMemoryNovelRepositories.has(repository);
+}
+
+export function createInMemoryNovelRepository(): InMemoryNovelRepository {
   const novels: NovelRecord[] = [];
   const preferences: NovelPreferencesRecord[] = [];
   const operationLogs: OperationLogRecord[] = [];
@@ -348,7 +357,7 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       }
     };
   }
-  return {
+  const repository: InMemoryNovelRepository = {
     async createDraft(input: DraftCreationInput): Promise<CreatedDraftRecord> {
       const normalized = normalizeDraftRequest(input.request);
       const novelId = nextId('novel');
@@ -3129,8 +3138,12 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
     getPreferences() { return preferences; },
     getChapterFeatureCards() { return chapterFeatureCards; },
-    getReviewReports() { return reviewReports; }
+    getReviewReports() { return reviewReports; },
+    getFullReviewGates() { return fullReviewGates; }
   };
+
+  inMemoryNovelRepositories.add(repository);
+  return repository;
 
   function createTask(options: {
     input: DirectionCreationInput | DirectionRevisionInput | StructureCreationInput | StructureGenerationTaskCreationInput;

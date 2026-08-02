@@ -161,6 +161,48 @@ describe('DeepSeek full-review evidence boundary', () => {
     }
   });
 
+  it('rejects missing, extra, aliased, and invalid fields at every full-review output layer', async () => {
+    const cases: Array<{ label: string; mutate: (response: any) => void }> = [
+      { label: 'missing top-level field', mutate: (response) => { delete response.gateResult; } },
+      { label: 'extra top-level field', mutate: (response) => { response.explanation = 'not allowed'; } },
+      { label: 'invalid top-level enum', mutate: (response) => { response.gateResult = 'forced_pass'; } },
+      { label: 'missing dimension field', mutate: (response) => { delete response.dimensionScores[0].evidence; } },
+      { label: 'extra dimension field', mutate: (response) => { response.dimensionScores[0].rawEvidence = 'not allowed'; } },
+      { label: 'invalid dimension score', mutate: (response) => { response.dimensionScores[0].score = 101; } },
+      { label: 'aliased first-video field', mutate: (response) => {
+        delete response.firstVideoSuggestion.narrationHook;
+        response.firstVideoSuggestion.firstThreeSecondVoiceover = 'alias is forbidden';
+      } },
+      { label: 'extra first-video field', mutate: (response) => { response.firstVideoSuggestion.debug = true; } },
+      { label: 'invalid string list item', mutate: (response) => { response.strengths = ['']; } },
+      { label: 'missing issue field', mutate: (response) => {
+        response.gateResult = 'blocked'; response.totalScore = 60; response.rating = 'C';
+        response.dimensionScores = [{ key: 'fact_consistency', label: '事实一致性', score: 60, weight: 1, evidence: '第1章事实证据', penaltyPoints: 20 }];
+        response.issues = [createModelIssue()]; delete response.issues[0].recommendedAction;
+      } },
+      { label: 'extra issue field', mutate: (response) => {
+        response.gateResult = 'blocked'; response.totalScore = 60; response.rating = 'C';
+        response.dimensionScores = [{ key: 'fact_consistency', label: '事实一致性', score: 60, weight: 1, evidence: '第1章事实证据', penaltyPoints: 20 }];
+        response.issues = [createModelIssue({ scopeRefs: ['chapter-1'] })];
+      } }
+    ];
+
+    for (const testCase of cases) {
+      const response: any = createFullReviewResponse();
+      testCase.mutate(response);
+      const provider = new DeepSeekNovelProvider({
+        client: { async chat(request) { return { content: JSON.stringify(response), model: request.model }; } }
+      });
+      await assert.rejects(
+        () => provider.generateFullReview(createFullReviewInput(1)),
+        (error) => error instanceof LlmProviderError
+          && error.category === 'output_parse_failed'
+          && error.details?.outputKind === 'schema_invalid',
+        testCase.label
+      );
+    }
+  });
+
   it('does not write sensitive prompts or a complete invalid model response to logs or errors', async () => {
     const sensitiveResponse = 'FULL_MODEL_RESPONSE_SECRET_7H3X';
     const sensitivePromptEvidence = 'PRIVATE_NOVEL_EVIDENCE_9K2Q';
@@ -267,6 +309,21 @@ function createFullReviewInput(chapterCount: number): FullReviewEvidenceProvider
       resolvedStatus: 'resolved',
       policyProfileVersionId: 'policy-full-review-v1'
     };
+    const excerpts = {
+      opening: `开端证据-${chapter.chapterNo}`,
+      middle: `中段证据-${chapter.chapterNo}`,
+      ending: `结尾证据-${chapter.chapterNo}`
+    };
+    const excerptLocations = (['opening', 'middle', 'ending'] as const).map((kind) => ({
+      kind,
+      startChar: kind === 'opening' ? 0 : kind === 'middle' ? 500 : 1_000,
+      endChar: (kind === 'opening' ? 0 : kind === 'middle' ? 500 : 1_000) + excerpts[kind].length,
+      excerptHash: hashCanonicalJson({
+        kind,
+        startChar: kind === 'opening' ? 0 : kind === 'middle' ? 500 : 1_000,
+        excerpt: excerpts[kind]
+      })
+    }));
     const chapterCore = {
       chapter,
       content: {
@@ -274,15 +331,24 @@ function createFullReviewInput(chapterCount: number): FullReviewEvidenceProvider
         revision: 1,
         wordCount: 2_000,
         summary: `第${chapter.chapterNo}章目标、关键事件与结尾状态 BODY_EVIDENCE_${chapter.chapterNo}_END`,
-        excerpts: {
-          opening: `开端证据-${chapter.chapterNo}`,
-          middle: `中段证据-${chapter.chapterNo}`,
-          ending: `结尾证据-${chapter.chapterNo}`
-        },
+        excerpts,
         contentHash
       },
       featureCard: { ...featureCore, featureCardHash: hashCanonicalJson(featureCore) },
-      review: { ...reviewCore, reviewHash: hashCanonicalJson(reviewCore) }
+      review: { ...reviewCore, reviewHash: hashCanonicalJson(reviewCore) },
+      continuity: {
+        stage: {
+          stageIndex: 1,
+          isStageOpening: chapter.chapterNo === 1,
+          isStageEnding: chapter.chapterNo === chapterCount,
+          previousChapterId: chapter.chapterNo === 1 ? null : `chapter-${chapter.chapterNo - 1}`,
+          nextChapterId: chapter.chapterNo === chapterCount ? null : `chapter-${chapter.chapterNo + 1}`
+        },
+        characterArc: { characterChanges: [...featureCore.characterChanges], relationshipChanges: [] },
+        timeline: { chapterNo: chapter.chapterNo, factAnchors: [...featureCore.keyInformation, ...featureCore.factsCannotChange] },
+        foreshadowing: { operation: featureCore.foreshadowingOperation, endingHook: featureCore.endingHook },
+        excerptLocations
+      }
     };
     return { ...chapterCore, evidenceHash: hashCanonicalJson(chapterCore) };
   });
@@ -370,7 +436,9 @@ function createFullReviewResponse() {
     strengths: ['主线稳定'],
     problems: [],
     suggestions: [],
-    dimensionScores: [],
+    dimensionScores: [
+      { key: 'overall', label: '综合质量', score: 88, weight: 1, evidence: '全章结构证据完整。', penaltyPoints: 0 }
+    ],
     issues: [],
     videoSuggestion: '从第1章切入。',
     firstVideoSuggestion: {
