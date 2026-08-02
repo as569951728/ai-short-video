@@ -7,7 +7,7 @@ baseline_sha: 058071861598f58dbe33e1c4f4d2e3df8f2a55de
 hard_max_files: 24
 hard_max_net_additions: 3200
 actual_files: 24
-actual_net_additions: 1818
+actual_net_additions: 1919
 exceeded_budget: changed_files
 split_reason: Candidate result handoff, authority enforcement, exact-result UI behavior, and their regression evidence form one user-visible vertical closure package.
 owner: MC + DEV + PRODUCT + TEST + QUALITY
@@ -23,7 +23,7 @@ valid_until: 2026-08-31
 | expected_ledger_transition | 独立 E4 验收全部通过后 `implemented_pending_verification -> closed`；任一原事故未通过则保持原状态 |
 | user_result | 用户执行生成、融合、按要求优化、手动编辑、继续优化或查看任务结果后，页面进入正确步骤并定位、高亮精确新候选；候选展示非敏感来源和变更原因；采用后进入正确下一步 |
 | evidence_buckets | shared contract、admin mapping/unit、API integration、browser DOM、independent PRODUCT/TEST/QUALITY |
-| fixed_candidate | `pending`，实现冻结后回填 |
+| fixed_candidate | code SHA `01c9f949e51c800fdfdbd40e1cff85de3fc77327` / tree `9cae8dc92e6e10d2135745f18423ad47199a4d54`；后续只允许验收记录和账本证据提交 |
 
 ## 2. 实现合同
 
