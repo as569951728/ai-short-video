@@ -137,6 +137,20 @@ export function parseIssueLedger(markdown) {
   return { total: issues.length, closed, openOrPending: issues.length - closed, byCategory };
 }
 
+export function validateNovelCandidateAcceptanceOwnership(markdown) {
+  const rows = markdown.split('\n');
+  const uxRow = rows.find((line) => /^\|\s*RMD-NOV-UX-001\s*\|/.test(line));
+  const versionRow = rows.find((line) => /^\|\s*RMD-NOV-VERSION-001\s*\|/.test(line));
+  if (!uxRow && !versionRow) return;
+  if (!uxRow || !versionRow) fail('novel candidate acceptance ownership requires both UX and VERSION rows');
+  if (!uxRow.includes('NOV-CANDIDATE-UI-01') || uxRow.includes('NOV-CANDIDATE-04')) {
+    fail('RMD-NOV-UX-001 must own only the E4 current-version UI projection acceptance');
+  }
+  if (!versionRow.includes('NOV-CANDIDATE-04') || !versionRow.includes('NOV-CURRENT-01')) {
+    fail('RMD-NOV-VERSION-001 must retain candidate current uniqueness and MySQL acceptance');
+  }
+}
+
 function parseEventBlocks(markdown) {
   const events = new Map();
   for (const match of markdown.matchAll(/```text\r?\n([\s\S]*?)\r?\n```/g)) {
@@ -225,6 +239,7 @@ export function validateProgressState({
   scoreboard
 }) {
   const ledger = parseIssueLedger(ledgerMarkdown);
+  validateNovelCandidateAcceptanceOwnership(ledgerMarkdown);
   if (scoreboard.schemaVersion !== 1) fail('scoreboard schemaVersion must be 1');
   assertJsonEqual(scoreboard.ledger, ledger, 'scoreboard ledger');
 

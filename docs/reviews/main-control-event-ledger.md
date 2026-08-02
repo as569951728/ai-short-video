@@ -1508,13 +1508,13 @@ event_type: remediation_issue_closed
 source_thread: main-control with independent PRODUCT, TEST and QUALITY agents
 package_id: RP-05B1
 issue_ids: RMD-NOV-UX-001
-acceptance_ids: NOV-CANDIDATE-01, NOV-CANDIDATE-02, NOV-CANDIDATE-03, NOV-CANDIDATE-04, NOV-CANDIDATE-05, NOV-CANDIDATE-06, NOV-AI-CTA-01
+acceptance_ids: NOV-CANDIDATE-01, NOV-CANDIDATE-02, NOV-CANDIDATE-03, NOV-CANDIDATE-UI-01, NOV-CANDIDATE-05, NOV-CANDIDATE-06, NOV-AI-CTA-01
 merged_pr_61: 91751dd1f4d08d3b4eb38971cd2f060836b98cfe
 closure_issue_id: RMD-NOV-UX-001
 closure_head: 91751dd1f4d08d3b4eb38971cd2f060836b98cfe
 closure_ledger_closed: 11
 summary: RP-05B1 统一了候选编辑、优化、融合、精确结果定位、采用后导航和历史版本语义，并补齐 actor-scoped idempotency、锁内 CAS、成功重放优先级、审计前后快照和下游失效；真实浏览器串行复验覆盖方向、设定和全书大纲原事故链。
-evidence: fixed code d09b9aae/tree 26dfd802；final package tree ae968dcf；PRODUCT ACCEPT 0/0/2、TEST ACCEPT 0/0/1、QUALITY ACCEPT 0/0/2；shared 23/23、API 126/126、admin 78/78、DOM 21/21、root typecheck passed；PR #61 required checks governance/admin-dom/backend-e2e/rp01c-fixtures 全绿；squash merge tree 与验收包一致。
+evidence: fixed code d09b9aae/tree 26dfd802；final package tree ae968dcf；PRODUCT ACCEPT 0/0/2、TEST ACCEPT 0/0/1、QUALITY ACCEPT 0/0/2；shared 23/23、API 126/126、admin 78/78、DOM 21/21、root typecheck passed；PR #61 required checks governance/admin-dom/backend-e2e/rp01c-fixtures 全绿；squash merge tree 与验收包一致；关闭候选首轮因 NOV-CANDIDATE-04 依赖 NOV-CURRENT-01/E6 被三方拒绝，随后正式拆出 NOV-CANDIDATE-UI-01 并把数据库验收完整转交 RMD-NOV-VERSION-001。
 mc_decision: RMD-NOV-UX-001 从 implemented_pending_verification 转为 closed；总账更新为 11/43、RB 1/12，PB 0/7、QG 9/22、DEBT 1/2 不变。真实 MySQL current 唯一性、provider 输出和偏好配置未关闭，分别继续由 RMD-NOV-VERSION-001、RMD-NOV-PROVIDER-001、RMD-NOV-PREF-001 承担。
 next_action: 保持 execution_reset 且无活动实现包；从剩余 PB/P0 或 RB/P0/P1 中选择下一条结果链，重新走 target_issue_ids、expected_ledger_transition、用户结果和证据桶准入。
 ```

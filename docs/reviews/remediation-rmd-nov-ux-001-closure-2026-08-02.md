@@ -11,7 +11,7 @@
 | owner | DEV + PRODUCT |
 | dev_thread | 当前需求主控目标与实现工作树 |
 | test_thread | PRODUCT `019fc04a-ade5-7b93-a6d7-070dea2303b8`；TEST `019fc04a-f9fe-7f01-ad33-f9d8d5321a7a`；QUALITY `019fc04b-69cd-7dc3-9dce-8cdbb3b215c4` |
-| acceptance_ids | NOV-CANDIDATE-01 至 NOV-CANDIDATE-06；NOV-AI-CTA-01 |
+| acceptance_ids | NOV-CANDIDATE-01 至 03；NOV-CANDIDATE-UI-01；NOV-CANDIDATE-05 至 06；NOV-AI-CTA-01 |
 | environment | 真实 Vue 管理端 + Fastify API transport + in-memory repository；GitHub Actions clean checkout |
 | target_evidence_level | E4 |
 | actual_evidence_level | E4 |
@@ -43,7 +43,7 @@
 | contract | `npm test -w @ai-shortvideo/shared` | 23/23 passed | 无 |
 | unit | `NODE_ENV=production npm run test:dom:admin` 的 admin unit 部分 | 78/78 passed | 无 |
 | API | `npm test -w @ai-shortvideo/api` | 126/126 passed | 真实 MySQL 不在本桶 |
-| DB/MySQL/Prisma | Prisma 锁序、CAS 和 repository 静态/单测证据 | 设计与合同通过 | 真实 MySQL 事务隔离、锁等待和并发双请求 |
+| DB/MySQL/Prisma | N/A；本 issue 关闭 ID 不再包含数据库唯一性 | 不适用 | separate issue RMD-NOV-VERSION-001 retains NOV-CANDIDATE-04 + NOV-CURRENT-01 |
 | browser | 方向生成/优化/采用、设定采用、全书大纲生成/优化/采用的真实浏览器串行复验 | 原事故链 passed | 跨设备恢复 |
 | provider | mock provider 仅验证权威输入传递 | 合同 passed | 真实 provider 内容质量、时延、费用 |
 | media | N/A；候选交互包不产生媒体 | 不适用 | 视频媒体链 |
@@ -58,12 +58,12 @@
 user_goal_status: passed
 environment: real admin/API transport with in-memory persistence
 evidence_level: E4
-not_proven: real MySQL concurrency, real provider quality, media, cross-device recovery
+not_proven: outside-issue real MySQL concurrency/provider/media; cross-device recovery
 ```
 
 ## 5. 独立测试证据
 
-- 执行 acceptance ids：NOV-CANDIDATE-01 至 06；NOV-AI-CTA-01。
+- 执行 acceptance ids：NOV-CANDIDATE-01 至 03；NOV-CANDIDATE-UI-01；NOV-CANDIDATE-05 至 06；NOV-AI-CTA-01。
 - environment：固定代码候选 `d09b9aa` / tree `26dfd802`；最终包 tree `ae968dcf`。
 - evidence_level：E4。
 - 命令：shared 23/23；API 126/126；admin 78/78；DOM 21/21；root typecheck；RP-02B1 14/14。
@@ -72,7 +72,7 @@ not_proven: real MySQL concurrency, real provider quality, media, cross-device r
 - unit：视图模型、service payload、结果定位和候选动作回归通过。
 - API：生成、融合、优化、编辑、采用、成功重放、异指纹冲突、stale page 和下游失效通过。
 - 浏览器 trace：真实浏览器完成方向到设定、设定到大纲、精确查看结果、继续优化和唯一正式版本链。
-- DB/MySQL/Prisma：未连接真实 MySQL；不用于关闭 RMD-NOV-VERSION-001。
+- DB/MySQL/Prisma：N/A；关闭候选首轮已因 `NOV-CANDIDATE-04 + NOV-CURRENT-01/E6` 缺失被三方拒绝，现将其完整转交 `RMD-NOV-VERSION-001`，本 issue 仅绑定页面投影 E4。
 - API 请求/响应安全摘要：只返回非敏感来源、变更原因和候选标识；不返回密钥、完整 prompt 或原始模型响应。
 - 数据库证据：Prisma 行锁/CAS 静态与测试证据；无真实数据库动态证据。
 - provider 证据：只证明 mock provider ABI 获得权威输入；不证明真实输出质量。
@@ -88,7 +88,7 @@ conclusion: approved
 user_goal_status: passed
 environment: real admin/API transport with in-memory persistence
 evidence_level: E4
-not_proven: real MySQL concurrency, real provider quality, media, cross-device recovery
+not_proven: outside-issue real MySQL concurrency/provider/media; cross-device recovery
 ```
 
 ## 6. 产品与质量复核
@@ -128,11 +128,11 @@ not_proven: real MySQL concurrency, real provider quality, media, cross-device r
 ```text
 issue_id: RMD-NOV-UX-001
 final_status: closed
-closed_acceptance_ids: NOV-CANDIDATE-01,NOV-CANDIDATE-02,NOV-CANDIDATE-03,NOV-CANDIDATE-04,NOV-CANDIDATE-05,NOV-CANDIDATE-06,NOV-AI-CTA-01
+closed_acceptance_ids: NOV-CANDIDATE-01,NOV-CANDIDATE-02,NOV-CANDIDATE-03,NOV-CANDIDATE-UI-01,NOV-CANDIDATE-05,NOV-CANDIDATE-06,NOV-AI-CTA-01
 residual_risks: real MySQL concurrency; event dedupe tied to display text; stale-page dialog-local feedback; equal updatedAt ordering
 reopen_conditions: any original CTA is inert; exact result cannot be found; more than one formal current is shown; adoption replay duplicates decisions/logs; adoption does not reach the correct next step
 decided_by: MC after independent PRODUCT, TEST and QUALITY acceptance
 decided_at: 2026-08-02 CST
 ```
 
-关闭解释：本 issue 的关闭条件是 E4 候选交互和结果承接，不以 mock 页面替代真实浏览器或真实 API transport。in-memory persistence 没有被用于证明真实 MySQL 唯一性；该 E6 风险继续由 `RMD-NOV-VERSION-001` 承担，因此不阻塞本 issue 关闭，也不得被本关闭记录外推。
+关闭解释：本 issue 的关闭条件是 E4 候选交互和结果承接，不以 mock 页面替代真实浏览器或真实 API transport。关闭候选首轮错误绑定了 `NOV-CANDIDATE-04`，被 PRODUCT/TEST/QUALITY 一致以 P1 拒绝；修订后新增 `NOV-CANDIDATE-UI-01` 只验证页面唯一正式版本投影，并把 `NOV-CANDIDATE-04 + NOV-CURRENT-01/E6` 完整转交 `RMD-NOV-VERSION-001`。in-memory persistence 不再承担本 issue 的关闭条件，也未被用于证明真实 MySQL 唯一性。

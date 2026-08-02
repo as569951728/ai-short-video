@@ -19,7 +19,7 @@ target_issue: RMD-NOV-UX-001
 | NOV-CANDIDATE-01 | 方向和结构手动编辑均创建新版本；API 刷新后保留 `sourceVersionIds`、`changeReason`；旧版本不被覆盖 | passed_local |
 | NOV-CANDIDATE-02 | 优化请求必须携带明确 instruction；方向与结构新候选展示来源版本、优化目标和差异；provider ABI 收到同一权威输入 | passed_local |
 | NOV-CANDIDATE-03 | 融合使用动作返回的精确候选 ID，展示多个来源版本和融合原因；DOM 回归覆盖精确聚焦 | passed_local |
-| NOV-CANDIDATE-04 | 采用时只把包含实际采用版本的任务标记为接受；其他批次归档；页面只显示一个正式版本，旧版历史化 | passed_local |
+| NOV-CANDIDATE-UI-01 | 采用时只把包含实际采用版本的任务标记为接受；其他批次归档；页面只显示一个正式版本，旧版历史化且无误导动作 | passed_e4 |
 | NOV-CANDIDATE-05 | 方向采用进入设定；设定采用进入全书大纲；全书大纲采用进入阶段大纲；刷新保持一致 | passed_local |
 | NOV-CANDIDATE-06 | 最近任务使用 `resultVersionIds` 切换正确步骤并聚焦精确候选；跨步骤路由等待后再恢复子步骤 | passed_local |
 | NOV-AI-CTA-01 | 章节目录、试写候选沿用可观察任务和精确结果承接；不以按钮 loading 代替任务状态 | passed_local |
