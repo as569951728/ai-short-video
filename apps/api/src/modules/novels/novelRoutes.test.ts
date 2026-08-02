@@ -3024,6 +3024,16 @@ describe('novel package 7 full review and video readiness routes', () => {
       /acceptance seeds require an explicit in-memory repository/
     );
     await app.close();
+
+    const previousNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    await assert.rejects(
+      () => buildApp({ logger: false, novelRepository: registeredRepository, enableAcceptanceSeeds: true }),
+      /acceptance seeds require an explicit in-memory repository/
+    ).finally(() => {
+      if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previousNodeEnv;
+    });
   });
 
   it('creates a non-production 12-chapter full-review acceptance seed without starting review', async () => {
@@ -3176,10 +3186,15 @@ describe('novel package 7 full review and video readiness routes', () => {
           testCase.expectedFailureCategory === 'output_parse_failed' ? '模型输出解析失败' : '生成服务异常',
           testCase.label
         );
+        assert.equal(taskDetail.errorMessage, testCase.expectedFailureCategory === 'output_parse_failed' ? '模型输出格式不符合约定，本次未生成报告。' : '任务执行失败，未写入新的候选或正式内容。', testCase.label);
 
         const novelDetailResponse = await app.inject({ method: 'GET', url: `/novels/${novelId}` });
         assert.equal(novelDetailResponse.statusCode, 200, novelDetailResponse.body);
-        assert.equal(novelDetailResponse.json().data.recentTask.status, TaskStatus.Failed, testCase.label);
+        const recentTask = novelDetailResponse.json().data.recentTask;
+        assert.equal(recentTask.status, TaskStatus.Failed, testCase.label);
+        assert.equal(recentTask.failureCategory, testCase.expectedFailureCategory, testCase.label);
+        assert.equal(recentTask.errorCode, 'PROVIDER_ERROR', testCase.label);
+        assert.equal(recentTask.errorMessage, testCase.expectedFailureCategory === 'output_parse_failed' ? '模型输出格式不符合约定，本次未生成报告。' : '任务执行失败，未写入新的候选或正式内容。', testCase.label);
 
         const publicAndStoredState = JSON.stringify({
           startResponse: startResponse.body,

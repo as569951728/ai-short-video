@@ -825,8 +825,8 @@ describe('NovelDetailWorkbench DOM behavior', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('模型输出格式不符合约定，本次未生成报告')
-    expect(wrapper.text()).toContain('任务执行失败，未写入新的候选或正式内容。')
-    expect(wrapper.text()).toContain('错误代码：SCHEMA_INVALID')
+    expect(wrapper.text()).toContain('模型输出格式不符合约定，本次未生成报告。')
+    expect(wrapper.text()).toContain('错误代码：PROVIDER_ERROR')
     expect(wrapper.text()).toContain('Task ID：task-full-review-failed-001')
     const restartButtons = wrapper.findAll('button').filter((button) => button.text() === '重新发起全书审稿')
     expect(restartButtons.length).toBeGreaterThan(0)
@@ -844,6 +844,7 @@ describe('NovelDetailWorkbench DOM behavior', () => {
   it('uses the generic failed full-review title for a non-schema provider failure', async () => {
     mocks.route.query = { step: 'fullReview' }
     const failedTask = createFailedFullReviewTask({
+      failureCategory: 'provider_error',
       errorCode: 'PROVIDER_TIMEOUT',
       errorMessage: '模型调用超时，请稍后重试。',
       currentStep: '等待模型响应超时',
@@ -1061,10 +1062,12 @@ function createFailedFullReviewTask(overrides: Record<string, unknown> = {}) {
     status: TaskStatus.Failed,
     statusText: '失败',
     progress: 0,
-    currentStep: '生成任务失败，暂不支持直接重试',
+    currentStep: '模型输出格式不符合约定，本次未生成报告。',
     resultVersionIds: [],
-    errorCode: 'SCHEMA_INVALID',
-    errorMessage: '任务执行失败，未写入新的候选或正式内容。',
+    failureCategory: 'output_parse_failed',
+    failureCategoryText: '模型输出解析失败',
+    errorCode: 'PROVIDER_ERROR',
+    errorMessage: '模型输出格式不符合约定，本次未生成报告。',
     createdAt: '2026-08-03T01:00:00.000Z',
     updatedAt: '2026-08-03T01:01:00.000Z',
     ...overrides,

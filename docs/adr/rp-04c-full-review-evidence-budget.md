@@ -8,7 +8,7 @@ hard_max_files: 28
 hard_max_net_additions: 6000
 exceeded_budget: changed_files,net_additions
 actual_files: 28
-actual_net_additions: 5973
+actual_net_additions: 5999
 split_reason: Full-review evidence loading, authority validation, strict provider and persistence ABI validation, deterministic conflict fixtures, authoritative refresh recovery, replayable browser acceptance, actionable issue location, and privacy evidence form one fail-closed user result chain. Independent PRODUCT/TEST/QUALITY review added the failed-call recovery contract, explicit in-memory seed guard, stale-source rejection, safe E5 summaries, and M-01..M-11 runner; splitting those fixes would allow duplicate paid calls, unsafe acceptance writes, incomplete gates, or an unverified browser success path to land independently.
 owner: MC + DEV + PRODUCT + TEST + QUALITY
 valid_until: 2026-08-04
@@ -26,11 +26,7 @@ valid_until: 2026-08-04
 
 ## 2. 为什么不能拆分
 
-1. 仓储加载、执行计划和 task claim 必须共同校验同一组 source refs；只落一层会让陈旧引用在下一层被重新包装为有效输入。
-2. provider schema 与服务端 scope 映射必须和完整证据 ABI 同落；否则模型可自造 chapter identity，或完整证据无法被消费。
-3. 浏览器等待恢复、问题章节定位和 privacy scan 是用户结果的验收面；只提交后端会重复“代码通过但人工不可用”的历史问题。
-4. fixture、deterministic tests、live smoke 和验收文档是本包 fail-closed 合同的一部分，不是可延后的装饰性文件。
-5. 独立复核发现服务端任务刷新恢复、provider 最终校验和 acceptance seed 仓储身份都必须与本包同时落地，否则同一用户链仍可重复发起、错误入库或误写非内存环境。
+仓储、执行计划、task claim、provider schema、scope 映射、刷新恢复、问题定位、privacy scan、fixture、live smoke 和验收文档共同构成权威 source refs 与完整证据 ABI 的 fail-closed 用户结果链，不可拆分落地。
 
 ## 3. 硬边界
 

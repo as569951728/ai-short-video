@@ -1643,6 +1643,7 @@ const showTrialReviewConfirmAction = computed(() => shouldShowTrialReviewConfirm
 
 function isSchemaOrFormatFailure(task: typeof failedFullReviewTask.value) {
   if (!task) return false
+  if (task.failureCategory === 'output_parse_failed') return true
 
   const safeFailureText = [task.errorCode, task.errorMessage, task.currentStep]
     .filter(Boolean)

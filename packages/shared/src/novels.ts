@@ -631,6 +631,8 @@ export interface RecentTaskSummaryDTO {
   currentStep: string | null;
   resultVersionIds: string[];
   userAcceptedResult?: boolean;
+  failureCategory?: string | null;
+  failureCategoryText?: string | null;
   errorCode?: string | null;
   errorMessage?: string | null;
   createdAt?: string;

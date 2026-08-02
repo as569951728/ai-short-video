@@ -138,7 +138,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
   };
   if (
     acceptanceSeeds.enabled
-    && (Boolean(process.env.DATABASE_URL) || !isInMemoryNovelRepository(options.repository))
+    && (process.env.NODE_ENV === 'production' || Boolean(process.env.DATABASE_URL) || !isInMemoryNovelRepository(options.repository))
   ) {
     throw new Error('acceptance seeds require an explicit in-memory repository with no DATABASE_URL');
   }

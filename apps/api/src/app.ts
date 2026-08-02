@@ -74,7 +74,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     ?? process.env.ENABLE_ACCEPTANCE_SEEDS === 'true';
   const databaseUrlPresent = Boolean(env.DATABASE_URL || process.env.DATABASE_URL);
   const inMemoryNovelRepository = isInMemoryNovelRepository(novelRepository);
-  if (acceptanceSeedsEnabled && (databaseUrlPresent || !inMemoryNovelRepository)) {
+  if (acceptanceSeedsEnabled && (process.env.NODE_ENV === 'production' || databaseUrlPresent || !inMemoryNovelRepository)) {
     throw new Error('acceptance seeds require an explicit in-memory repository with no DATABASE_URL');
   }
   const novelProviders = createNovelProvidersFromEnv({
