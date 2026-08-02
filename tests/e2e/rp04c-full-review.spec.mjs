@@ -129,10 +129,7 @@ test('RP-04C M-01..M-11 full-review browser acceptance', async ({ page, context,
 
     currentStep = 'M-06';
     const m06BeforeRefresh = await assertTaskStillProcessing(page, taskId);
-    await page.reload();
-    await expect(page.locator('.step-side-panel .task-progress-label')).toHaveText('生成中');
-    const m06AfterRefresh = await assertTaskStillProcessing(page, taskId);
-    const firstReloadStartDisabled = await fullReviewButton(page).isDisabled();
+    const originalPageStartDisabled = await fullReviewButton(page).isDisabled();
     await expect(completionButton(page)).toBeDisabled();
     await page.locator('.step-side-panel').getByRole('button', { name: '查看详情' }).click();
     await expect(taskDrawer(page)).toContainText(taskId);
@@ -149,6 +146,10 @@ test('RP-04C M-01..M-11 full-review browser acceptance', async ({ page, context,
     await secondPage.keyboard.press('Escape');
     const secondBefore = await pollNovelDetail(secondPage, seed.novelId, (detail) =>
       detail.recentTasks?.some((task) => task.id === taskId));
+    await secondPage.reload();
+    await expect(secondPage.locator('.step-side-panel .task-progress-label')).toHaveText('生成中');
+    const m06AfterRefresh = await assertTaskStillProcessing(secondPage, taskId);
+    const firstReloadStartDisabled = await fullReviewButton(secondPage).isDisabled();
     await secondPage.reload();
     await expect(secondPage.locator('.step-side-panel .task-progress-label')).toHaveText('生成中');
     const m06AfterSecondReload = await assertTaskStillProcessing(secondPage, taskId);
@@ -178,11 +179,12 @@ test('RP-04C M-01..M-11 full-review browser acceptance', async ({ page, context,
         m06AfterObservationWindow.providerActive
       ].every(Boolean),
       fullReviewPostCount: 1,
+      startActionDisabledInOriginalTab: originalPageStartDisabled,
       startActionDisabledAfterRefresh: firstReloadStartDisabled,
       startActionDisabledInSecondTab: secondTabStartDisabled,
       startActionDisabledAfterSecondReload: secondReloadStartDisabled
     };
-    if (firstReloadStartDisabled && secondTabStartDisabled && secondReloadStartDisabled) {
+    if (originalPageStartDisabled && firstReloadStartDisabled && secondTabStartDisabled && secondReloadStartDisabled) {
       evidence.m['M-06'] = pass(m06Evidence);
     } else {
       evidence.m['M-06'] = { status: 'FAIL', evidence: m06Evidence };

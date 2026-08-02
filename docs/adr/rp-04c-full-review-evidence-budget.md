@@ -8,7 +8,7 @@ hard_max_files: 28
 hard_max_net_additions: 6000
 exceeded_budget: changed_files,net_additions
 actual_files: 28
-actual_net_additions: 5826
+actual_net_additions: 5828
 split_reason: Full-review evidence loading, authority validation, strict provider and persistence ABI validation, deterministic conflict fixtures, authoritative refresh recovery, replayable browser acceptance, actionable issue location, and privacy evidence form one fail-closed user result chain. Independent PRODUCT/TEST/QUALITY review added the failed-call recovery contract, explicit in-memory seed guard, stale-source rejection, safe E5 summaries, and M-01..M-11 runner; splitting those fixes would allow duplicate paid calls, unsafe acceptance writes, incomplete gates, or an unverified browser success path to land independently.
 owner: MC + DEV + PRODUCT + TEST + QUALITY
 valid_until: 2026-08-04
