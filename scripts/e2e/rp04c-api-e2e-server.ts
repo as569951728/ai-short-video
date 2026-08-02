@@ -146,9 +146,12 @@ function createRp04cFullReviewProvider(delayMs: number, observer: Rp04cObserver)
         problems: ['人物状态冲突', '时间线冲突', '关键事实冲突'],
         suggestions: ['按问题卡定位章节并修复后重新审稿'],
         dimensionScores: [
-          { key: 'character_continuity', label: '人物状态连续性', score: 60, weight: 0.34, evidence: '第 2 章与第 8 章人物状态冲突', penaltyPoints: 18 },
-          { key: 'timeline_continuity', label: '时间线连续性', score: 68, weight: 0.33, evidence: '第 4 章与第 9 章事件顺序冲突', penaltyPoints: 12 },
-          { key: 'fact_consistency', label: '关键事实一致性', score: 76, weight: 0.33, evidence: '第 6 章与第 11 章合同金额冲突', penaltyPoints: 8 }
+          { key: 'stage_continuity', label: '阶段连续性', score: 70, weight: 1 / 6, evidence: '十二章阶段目标证据完整', penaltyPoints: 10 },
+          { key: 'character_continuity', label: '人物状态连续性', score: 60, weight: 1 / 6, evidence: '第 2 章与第 8 章人物状态冲突', penaltyPoints: 18 },
+          { key: 'timeline_continuity', label: '时间线连续性', score: 68, weight: 1 / 6, evidence: '第 4 章与第 9 章事件顺序冲突', penaltyPoints: 12 },
+          { key: 'fact_consistency', label: '关键事实一致性', score: 76, weight: 1 / 6, evidence: '第 6 章与第 11 章合同金额冲突', penaltyPoints: 8 },
+          { key: 'foreshadowing', label: '伏笔回收', score: 68, weight: 1 / 6, evidence: '十二章伏笔证据已覆盖', penaltyPoints: 12 },
+          { key: 'evidence_grounding', label: '证据定位', score: 66, weight: 1 / 6, evidence: '每个问题均定位到权威章节', penaltyPoints: 14 }
         ],
         issues: [
           createBlockingIssue('rp04c-character', '人物状态冲突', '角色在前文确认死亡，后文却无解释重新出现。', [chapterId(2), chapterId(8)], 'character_continuity'),
@@ -170,7 +173,7 @@ function createRp04cFullReviewProvider(delayMs: number, observer: Rp04cObserver)
         originalityRisks: [],
         aiFlavorRisks: ['跨章节一致性需人工复核'],
         lowScoreContinueRisks: ['强制通过会把已知连续性错误带入后续视频化。'],
-        reviewPolicyVersionId: 'rp04c-browser-policy-v1'
+        reviewPolicyVersionId: input.coverageManifest.policyProfileVersionId!
       };
       observer.providerActive = false;
       observer.providerCompleted = true;
@@ -226,7 +229,6 @@ function createBlockingIssue(
     recommendedTarget: 'chapter',
     recommendedAction: '修复涉及章节后重新执行全书审稿。',
     status: 'open' as const,
-    acceptedReason: null,
-    sourceReviewReportId: ''
+    acceptedReason: null
   };
 }
