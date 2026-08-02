@@ -21,15 +21,15 @@
 
 | 字段 | 值 |
 | --- | --- |
-| run_id | `rp04c-2026-08-02T22-23-49-868Z` |
-| git_sha | `5a55f3ed6162fdcfdbd709ccb7f013b3732ded28` |
-| git_tree | `3eca4bbdf0968bac1f85aec420b19d24c39c307e` |
+| run_id | `rp04c-2026-08-02T22-58-51-613Z` |
+| git_sha | `928a392a43dd4296756f3bc3929333664cb4d388` |
+| git_tree | `494a4abff0de54681c11123c80cfe146a1972c3e` |
 | worktree_dirty | `false` |
-| executable_scope_hash | `afa98622575ead7d20da2dd17ee4529406d61688b5a239f486c5d46c906757e3` |
+| executable_scope_hash | `81874e0369f0f21686649f85313806306365108b4a93da9448ecfcab11ad44a2` |
 | fixture_version | `rp04c-browser-12ch-v1` |
 | provider | `deterministic-delay-provider`，45 秒延迟 |
-| evidence_hash | `8c2faa52bd0069be0da863b58dc0a2003748b0684a0e31633bf91363ab75b723` |
-| safe_summary | `output/playwright/rp-04c/rp04c-2026-08-02T22-23-49-868Z/safe-evidence.json` |
+| evidence_hash | `0d59efcc0d4414d4ccd70c33fd853b7872c543a7746ec2d9b267b689b7a277ad` |
+| safe_summary | `output/playwright/rp-04c/rp04c-2026-08-02T22-58-51-613Z/safe-evidence.json` |
 
 说明：安全摘要明确记录 `worktree.dirty=false`，并绑定上述 `git_sha`、`git_tree` 与 `executable_scope_hash`。该身份只证明本次本地确定性浏览器运行对应的干净候选，不替代远程 checks、E5/E6 或独立复核。证据不包含文件正文或 diff。
 
@@ -44,7 +44,7 @@
 | M-03 | PASS | 单次确认只产生 1 个 full-review POST；请求字段仅 `expectedNovelVersion`、`idempotencyKey`；长任务最终响应为 HTTP 200。 |
 | M-04 | PASS | 0/5/15 秒均显示生成中、不定进度与 1-3 分钟提示；未出现伪造百分比。 |
 | M-05 | PASS | 运行中后端 task 为 `task_000175`；任务详情与事件接口可用，事件数 1。 |
-| M-06 | PASS | 五个采样点均为 `task_000175 / processing`，provider 全程 active，POST 仍为 1；同页刷新、第二标签页、第二标签页再次刷新后的发起入口均为 disabled。 |
+| M-06 | PASS | 五个采样点均为 `task_000175 / processing`，provider 全程 active，POST 与 provider 调用均为 1；同页刷新、第二标签页、第二标签页再次刷新后的发起入口均为 disabled。 |
 | M-07 | PASS | 报告 `review_000177`、gate `fullGate_000178` 到达；问题数 3，没有 completion decision，视频化状态为 `not_ready`。 |
 | M-08 | PASS | 人物 2/8、时间线 4/9、关键事实 6/11 章 scope 正确；固定对照误报为 0。 |
 | M-09 | PASS | `allowCompletion=false`、blocking 数 3；完结入口禁用，completion POST 为 0。 |
@@ -55,9 +55,9 @@
 
 - `coveredChapterNos` 为 1 至 12，连续、无重复。
 - 正文版本、feature card、单章 review 证据计数均为 12；长期 memory 计数为 1。
-- `manifestHash=cd3ada1e4b9a46956229138873728f83624460650b9134da668c7422ead4f5f4`。
+- `manifestHash=f3e6c34870df8844ce36f7fd4aec05a69988a0097db8c3951bb331d7db6e6b06`。
 - 浏览器 full-review POST 为 1、最终响应 HTTP 200，completion POST 为 0；同一 task ID 始终为 `task_000175`。
-- M-06 四个 `startActionDisabled*` 均为 `true`，五个 task 状态均为 `processing`，`providerActiveThroughout=true`。
+- M-06 四个 `startActionDisabled*` 均为 `true`，五个 task 状态均为 `processing`，`providerActiveThroughout=true`，`providerCallCount=1`。
 - M-11 在源正文确认 canary 后扫描 42 个相关 Network JSON 对象；DOM/Console/Storage/Cookie/Network canary/敏感命中和页面错误均为 0。
 - 未保存 HAR、trace、截图、视频、完整 prompt、完整正文、raw response、认证头或密钥。
 - `rawArtifactsSaved=false`、`harSaved=false`、`traceSaved=false`；安全摘要文本禁止内容命中为 0。
