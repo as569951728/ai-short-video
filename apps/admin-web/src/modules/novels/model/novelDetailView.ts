@@ -188,8 +188,8 @@ export function getTaskResultPlacement(task: (Pick<RecentTaskSummaryDTO, 'status
 
   const taskType = task.taskType ?? ''
   const acceptedResult = task.userAcceptedResult ?? (task.currentStep?.includes('已采用') === true)
-  const archivedResult = task.currentStep?.includes('已归档') === true
-  if (archivedResult) return null
+  const unavailableHistoricalResult = task.currentStep?.includes('归档') === true || task.currentStep?.includes('已失效') === true
+  if (unavailableHistoricalResult) return null
 
   if (taskType.includes('direction')) {
     const adopted = taskType.includes('adopt') || acceptedResult

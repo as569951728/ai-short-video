@@ -1086,8 +1086,71 @@ export class PrismaNovelRepository implements NovelRepository {
 
   async adoptDirection(input: DirectionAdoptionInput): Promise<AdoptedDirectionRecord> {
     return this.prisma.$transaction(async (tx) => {
-      await assertNoActiveAuthorityClaim(tx, input.context.tenantId, input.novel.id);
-      const currentVersionIdBefore = input.novel.currentDirectionVersionId;
+      await lockNovelAuthorityRoot(tx, input.context.tenantId, input.novel.id);
+      const lockedNovel = await tx.novel.findFirst({
+        where: { id: input.novel.id, tenantId: input.context.tenantId }
+      });
+      const lockedCandidate = await tx.creativeVersion.findFirst({
+        where: {
+          id: input.candidate.id,
+          tenantId: input.context.tenantId,
+          novelId: input.novel.id,
+          objectType: 'direction'
+        }
+      });
+      if (!lockedNovel || !lockedCandidate) throw new BusinessError(ErrorCode.NotFound, '小说或方向候选不存在');
+
+      const priorDecisions = await tx.assetDecisionRecord.findMany({
+        where: {
+          tenantId: input.context.tenantId,
+          novelId: input.novel.id,
+          actionType: 'adopt_direction'
+        },
+        orderBy: { createdAt: 'desc' }
+      });
+      const replayDecision = priorDecisions.find((item) =>
+        toJsonObject(item.metadata).adoptionIdempotencyToken === input.idempotencyToken
+      );
+      if (replayDecision) {
+        const metadata = toJsonObject(replayDecision.metadata);
+        if (metadata.adoptionRequestHash !== input.requestHash) {
+          throw new BusinessError(ErrorCode.IdempotencyConflict, '同一个幂等键已绑定到不同的方向采用请求');
+        }
+        if (lockedNovel.currentDirectionVersionId !== replayDecision.candidateVersionId) {
+          throw new BusinessError(ErrorCode.VersionConflict, '原方向采用结果已不再是当前版本，请刷新后重试');
+        }
+        const replayOperationLog = await tx.operationLog.findFirst({
+          where: {
+            tenantId: input.context.tenantId,
+            novelId: input.novel.id,
+            action: 'adopt_direction',
+            objectId: replayDecision.candidateVersionId
+          },
+          orderBy: { createdAt: 'desc' }
+        });
+        if (!replayOperationLog) throw new BusinessError(ErrorCode.InternalError, '方向采用审计记录不完整');
+        const replayVersions = await tx.creativeVersion.findMany({
+          where: { tenantId: input.context.tenantId, novelId: input.novel.id, objectType: 'direction' },
+          orderBy: { versionNo: 'desc' }
+        });
+        return {
+          novel: mapNovel(lockedNovel),
+          currentDirection: mapCreativeVersion(lockedCandidate),
+          versions: replayVersions.map(mapCreativeVersion),
+          decisionRecord: mapAssetDecisionRecord(replayDecision),
+          operationLog: mapOperationLog(replayOperationLog)
+        };
+      }
+
+      await assertNoActiveAuthorityClaimAfterRootLock(tx, input.context.tenantId, input.novel.id);
+      if (lockedNovel.currentDirectionVersionId !== input.expectedCurrentVersionId) {
+        throw new BusinessError(ErrorCode.VersionConflict, '当前方向版本已变化，请刷新后重试');
+      }
+      if (lockedCandidate.status !== PrismaVersionStatus.CANDIDATE || lockedCandidate.staleLevel === PrismaStaleLevel.HARD_STALE) {
+        throw new BusinessError(ErrorCode.VersionConflict, '该方向候选当前不可采用');
+      }
+
+      const currentVersionIdBefore = lockedNovel.currentDirectionVersionId;
       const decisionRecord = await tx.assetDecisionRecord.create({
         data: {
           id: createId('decision'),
@@ -1106,7 +1169,11 @@ export class PrismaNovelRepository implements NovelRepository {
           pageVersionSnapshot: toJsonObject(input.pageVersionSnapshot ?? {}),
           sourceTaskId: input.candidate.sourceTaskId,
           createdBy: input.context.userId,
-          createdAt: input.now
+          createdAt: input.now,
+          metadata: {
+            adoptionIdempotencyToken: input.idempotencyToken,
+            adoptionRequestHash: input.requestHash
+          }
         }
       });
 
@@ -1114,8 +1181,7 @@ export class PrismaNovelRepository implements NovelRepository {
         where: {
           tenantId: input.context.tenantId,
           novelId: input.novel.id,
-          objectType: { in: ['setting', 'outline', 'stage_outline', 'chapter_plan'] },
-          status: { in: [PrismaVersionStatus.CANDIDATE, PrismaVersionStatus.CURRENT] }
+          objectType: { in: ['setting', 'outline', 'stage_outline', 'chapter_plan'] }
         },
         select: { id: true }
       });
@@ -1176,7 +1242,7 @@ export class PrismaNovelRepository implements NovelRepository {
           tenantId: input.context.tenantId,
           novelId: input.novel.id,
           objectType: { in: ['direction', 'setting', 'outline', 'stage_outline', 'chapter_plan'] },
-          status: PrismaTaskStatus.WAITING_CONFIRMATION
+          status: { in: [PrismaTaskStatus.WAITING_CONFIRMATION, PrismaTaskStatus.COMPLETED] }
         }
       });
 
@@ -1185,9 +1251,32 @@ export class PrismaNovelRepository implements NovelRepository {
           ? waitingTask.resultVersionIdsJson.filter((value): value is string => typeof value === 'string')
           : waitingTask.resultVersionId ? [waitingTask.resultVersionId] : [];
         const isDirectionTask = waitingTask.objectType === 'direction';
-        const acceptedResult = isDirectionTask && resultVersionIds.includes(input.candidate.id);
+        const isWaiting = waitingTask.status === PrismaTaskStatus.WAITING_CONFIRMATION;
+        const acceptedResult = isDirectionTask && isWaiting && resultVersionIds.includes(input.candidate.id);
         const invalidatedDownstreamResult = !isDirectionTask && resultVersionIds.some((versionId) => invalidatedDownstreamVersionIds.has(versionId));
+        if (isDirectionTask && !isWaiting) continue;
         if (!isDirectionTask && !invalidatedDownstreamResult) continue;
+        if (!isWaiting && !waitingTask.userAcceptedResult) continue;
+        if (!isWaiting) {
+          if (waitingTask.currentStep === '历史采用结果已失效（上游方向变更）') continue;
+          const invalidatedTask = await tx.generationTask.update({
+            where: { id: waitingTask.id },
+            data: {
+              statusNote: '上游方向已变更，本任务曾采用的结果现已失效',
+              currentStep: '历史采用结果已失效（上游方向变更）',
+              updatedAt: input.now
+            }
+          });
+          await createTaskEvent(tx, {
+            task: invalidatedTask,
+            eventType: 'task_result_invalidated',
+            message: '上游方向已变更，本任务曾采用的结果已转为失效历史；原采用事实保留。',
+            progress: 100,
+            requestId: input.context.requestId,
+            createdAt: input.now
+          });
+          continue;
+        }
         const statusNote = isDirectionTask
           ? acceptedResult ? '用户已采用方向' : '本任务方向候选未采用，已归档'
           : '上游方向已变更，本任务候选已过期并归档';
@@ -1229,8 +1318,8 @@ export class PrismaNovelRepository implements NovelRepository {
           objectId: input.candidate.id,
           beforeSnapshot: {
             currentDirectionVersionId: currentVersionIdBefore,
-            creationStage: input.novel.creationStage,
-            stageStatus: input.novel.stageStatus
+            creationStage: fromPrismaEnum<NovelCreationStage>(lockedNovel.creationStage),
+            stageStatus: fromPrismaEnum<StageStatus>(lockedNovel.stageStatus)
           },
           afterSnapshot: {
             currentDirectionVersionId: input.candidate.id,
@@ -2836,10 +2925,23 @@ async function assertNoActiveAuthorityClaim(
   novelId: string,
   allowedTask?: Pick<GenerationTaskRecord, 'id' | 'conflictScope' | 'conflictKey'>
 ) {
+  await lockNovelAuthorityRoot(tx, tenantId, novelId);
+  await assertNoActiveAuthorityClaimAfterRootLock(tx, tenantId, novelId, allowedTask);
+}
+
+async function lockNovelAuthorityRoot(tx: Prisma.TransactionClient, tenantId: string, novelId: string) {
   // The novel row is the shared lock root for claim, fences, finalizers, and authority-changing user writes.
   await tx.$queryRaw(
     Prisma.sql`SELECT id FROM novel WHERE tenant_id = ${tenantId} AND id = ${novelId} FOR UPDATE`
   );
+}
+
+async function assertNoActiveAuthorityClaimAfterRootLock(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  novelId: string,
+  allowedTask?: Pick<GenerationTaskRecord, 'id' | 'conflictScope' | 'conflictKey'>
+) {
   const activeTask = await tx.generationTask.findFirst({
     where: {
       tenantId,
@@ -3305,6 +3407,7 @@ function mapAssetDecisionRecord(record: {
   sourceTaskId: string | null;
   createdBy: string | null;
   createdAt: Date;
+  metadata?: unknown;
 }): AssetDecisionRecord {
   return record;
 }

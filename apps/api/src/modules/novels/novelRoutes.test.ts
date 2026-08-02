@@ -545,6 +545,8 @@ describe('novel package 2 direction routes', () => {
       url: `/novels/${novelId}/directions/${candidate.id}/adopt`,
       headers: { 'x-request-id': 'adopt-direction-1' },
       payload: {
+        currentVersionId: null,
+        idempotencyKey: 'adopt-direction-idempotent-1',
         reason: '方向评分高，适合作为设定输入。',
         pageVersionSnapshot: {
           seenCandidateVersionId: candidate.id
@@ -575,15 +577,91 @@ describe('novel package 2 direction routes', () => {
     assert.equal(decision.candidateVersionId, candidate.id);
     assert.equal(decision.decisionReason, '方向评分高，适合作为设定输入。');
     assert.equal(decision.isForced, false);
-    assert.equal(repository.getOperationLogs()[0]?.action, 'adopt_direction');
+    const adoptionLog = repository.getOperationLogs()[0];
+    assert.equal(adoptionLog?.action, 'adopt_direction');
+    assert.deepEqual(adoptionLog?.beforeSnapshot, {
+      currentDirectionVersionId: null,
+      creationStage: 'direction',
+      stageStatus: 'waiting_user'
+    });
+    assert.deepEqual(adoptionLog?.afterSnapshot, {
+      currentDirectionVersionId: candidate.id,
+      creationStage: 'setting',
+      stageStatus: 'not_started'
+    });
+
+    const replayResponse = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/directions/${candidate.id}/adopt`,
+      payload: {
+        currentVersionId: null,
+        idempotencyKey: 'adopt-direction-idempotent-1',
+        reason: '方向评分高，适合作为设定输入。',
+        pageVersionSnapshot: { seenCandidateVersionId: candidate.id }
+      }
+    });
+    assert.equal(replayResponse.statusCode, 200, replayResponse.body);
+    assert.equal((repository as any).getAssetDecisionRecords().length, 1);
+    assert.equal(repository.getOperationLogs().filter((item) => item.action === 'adopt_direction').length, 1);
+
+    const adoptedDirectionTask = repository.getGenerationTasks().find((task) => task.resultVersionIds.includes(candidate.id));
+    assert.ok(adoptedDirectionTask);
+    adoptedDirectionTask.status = TaskStatus.Processing;
+    adoptedDirectionTask.activeClaimKey = `active-setting:${novelId}`;
+    const replayWhileGenerationIsActive = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/directions/${candidate.id}/adopt`,
+      payload: {
+        currentVersionId: null,
+        idempotencyKey: 'adopt-direction-idempotent-1',
+        reason: '方向评分高，适合作为设定输入。',
+        pageVersionSnapshot: { seenCandidateVersionId: candidate.id }
+      }
+    });
+    assert.equal(replayWhileGenerationIsActive.statusCode, 200, replayWhileGenerationIsActive.body);
+    assert.equal((repository as any).getAssetDecisionRecords().length, 1);
+    assert.equal(repository.getOperationLogs().filter((item) => item.action === 'adopt_direction').length, 1);
+    adoptedDirectionTask.status = TaskStatus.Completed;
+    adoptedDirectionTask.activeClaimKey = null;
+
+    const reusedKeyConflict = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/directions/${candidate.id}/adopt`,
+      payload: {
+        currentVersionId: null,
+        idempotencyKey: 'adopt-direction-idempotent-1',
+        reason: '修改后的采用原因。'
+      }
+    });
+    assert.equal(reusedKeyConflict.statusCode, 409, reusedKeyConflict.body);
+    assert.equal(reusedKeyConflict.json().error.code, ErrorCode.IdempotencyConflict);
 
     const setting = await postStructure(app, novelId, 'settings', 'generate');
     await postStructure(app, novelId, 'settings', 'adopt', setting.candidate.id, {
       reason: '先形成下游正式设定，再验证更换方向后的失效语义。'
     });
-    const pendingSetting = await postStructure(app, novelId, 'settings', 'generate', undefined, {
+    const preStaleOutline = await postStructure(app, novelId, 'outlines', 'generate');
+    const replacementSetting = await postStructure(app, novelId, 'settings', 'generate', undefined, {
       optimization: {
         sourceVersionId: setting.candidate.id,
+        instruction: '替换正式设定，使待确认大纲先于方向变更进入 hard-stale。'
+      }
+    });
+    await postStructure(app, novelId, 'settings', 'adopt', replacementSetting.candidate.id, {
+      reason: '采用替换设定，制造已 stale 但任务仍待确认的大纲。'
+    });
+    const detailWithPreStaleOutline = (await app.inject({ method: 'GET', url: `/novels/${novelId}` })).json().data;
+    assert.equal(
+      detailWithPreStaleOutline.structureCandidates.find((item: any) => item.id === preStaleOutline.candidate.id)?.staleLevel,
+      'hard_stale'
+    );
+    assert.equal(
+      repository.getGenerationTasks().find((task) => task.id === preStaleOutline.task.id)?.status,
+      TaskStatus.WaitingConfirmation
+    );
+    const pendingSetting = await postStructure(app, novelId, 'settings', 'generate', undefined, {
+      optimization: {
+        sourceVersionId: replacementSetting.candidate.id,
         instruction: '保留为待确认候选，用于验证上游方向变更后的任务归档。'
       }
     });
@@ -607,30 +685,98 @@ describe('novel package 2 direction routes', () => {
     assert.equal(optimized.candidate.changeReason, optimizeInstruction);
     assert.equal(optimized.statusSummary.creationStage, stageBeforeDirectionOptimization);
     const detailBeforeReplace = (await app.inject({ method: 'GET', url: `/novels/${novelId}` })).json().data;
-    assert.equal(detailBeforeReplace.currentAssets.setting.id, setting.candidate.id);
+    assert.equal(detailBeforeReplace.currentAssets.setting.id, replacementSetting.candidate.id);
 
     const replaceDirection = await app.inject({
       method: 'POST',
       url: `/novels/${novelId}/directions/${optimized.candidate.id}/adopt`,
-      payload: { reason: '采用优化方向并重新生成下游资产。' }
+      payload: {
+        currentVersionId: candidate.id,
+        idempotencyKey: 'replace-direction-idempotent-1',
+        reason: '采用优化方向并重新生成下游资产。'
+      }
     });
     assert.equal(replaceDirection.statusCode, 200, replaceDirection.body);
     const replacedDetail = (await app.inject({ method: 'GET', url: `/novels/${novelId}` })).json().data;
     assert.equal(replacedDetail.currentAssets.direction.id, optimized.candidate.id);
     assert.equal(replacedDetail.currentAssets.setting, null);
     assert.equal(replacedDetail.creationStage, 'setting');
-    const staleSetting = replacedDetail.structureCandidates.find((item: any) => item.id === setting.candidate.id);
+    const staleSetting = replacedDetail.structureCandidates.find((item: any) => item.id === replacementSetting.candidate.id);
     assert.equal(staleSetting.status, 'stale');
     assert.equal(staleSetting.staleLevel, 'hard_stale');
     const adoptedSettingTask = repository.getGenerationTasks().find((task) => task.id === setting.task.id);
     assert.equal(adoptedSettingTask?.status, TaskStatus.Completed);
     assert.equal(adoptedSettingTask?.userAcceptedResult, true);
+    assert.match(adoptedSettingTask?.currentStep ?? '', /已失效/);
+    const replacementSettingTask = repository.getGenerationTasks().find((task) => task.id === replacementSetting.task.id);
+    assert.equal(replacementSettingTask?.status, TaskStatus.Completed);
+    assert.equal(replacementSettingTask?.userAcceptedResult, true);
+    assert.match(replacementSettingTask?.currentStep ?? '', /已失效/);
     const archivedSettingTask = repository.getGenerationTasks().find((task) => task.id === pendingSetting.task.id);
     assert.equal(archivedSettingTask?.status, TaskStatus.Completed);
     assert.equal(archivedSettingTask?.userAcceptedResult, false);
     assert.equal(archivedSettingTask?.currentStep, '候选因方向变更已过期并归档');
     assert.match(archivedSettingTask?.statusNote ?? '', /已过期并归档/);
+    const archivedPreStaleOutlineTask = repository.getGenerationTasks().find((task) => task.id === preStaleOutline.task.id);
+    assert.equal(archivedPreStaleOutlineTask?.status, TaskStatus.Completed);
+    assert.equal(archivedPreStaleOutlineTask?.userAcceptedResult, false);
+    assert.equal(archivedPreStaleOutlineTask?.currentStep, '候选因方向变更已过期并归档');
     assert.equal(replacedDetail.recentTasks.find((task: any) => task.id === pendingSetting.task.id)?.status, 'completed');
+
+    const secondOptimization = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/directions/${optimized.candidate.id}/optimize`,
+      payload: { instruction: '再次强化冲突节奏，验证重复上游变更不会重复追加失效事件。' }
+    });
+    assert.equal(secondOptimization.statusCode, 200, secondOptimization.body);
+    const secondOptimizedCandidate = secondOptimization.json().data.candidate;
+    const stalePageAdoption = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/directions/${secondOptimizedCandidate.id}/adopt`,
+      payload: {
+        currentVersionId: candidate.id,
+        idempotencyKey: 'replace-direction-stale-page',
+        reason: '旧页面不得覆盖后来采用的正式方向。'
+      }
+    });
+    assert.equal(stalePageAdoption.statusCode, 409, stalePageAdoption.body);
+    assert.equal(stalePageAdoption.json().error.code, ErrorCode.VersionConflict);
+
+    const secondReplacement = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/directions/${secondOptimizedCandidate.id}/adopt`,
+      payload: {
+        currentVersionId: optimized.candidate.id,
+        idempotencyKey: 'replace-direction-idempotent-2',
+        reason: '采用第二次优化方向，验证失效事件去重。'
+      }
+    });
+    assert.equal(secondReplacement.statusCode, 200, secondReplacement.body);
+    assert.equal(
+      repository.getGenerationTaskEvents().filter((event) =>
+        event.taskId === adoptedSettingTask?.id && event.eventType === 'task_result_invalidated'
+      ).length,
+      1
+    );
+    assert.equal(
+      repository.getGenerationTaskEvents().filter((event) =>
+        event.taskId === replacementSettingTask?.id && event.eventType === 'task_result_invalidated'
+      ).length,
+      1
+    );
+
+    const replayAfterReplacement = await app.inject({
+      method: 'POST',
+      url: `/novels/${novelId}/directions/${candidate.id}/adopt`,
+      payload: {
+        currentVersionId: null,
+        idempotencyKey: 'adopt-direction-idempotent-1',
+        reason: '方向评分高，适合作为设定输入。',
+        pageVersionSnapshot: { seenCandidateVersionId: candidate.id }
+      }
+    });
+    assert.equal(replayAfterReplacement.statusCode, 409, replayAfterReplacement.body);
+    assert.equal(replayAfterReplacement.json().error.code, ErrorCode.VersionConflict);
 
     await app.close();
   });
@@ -649,7 +795,11 @@ describe('novel package 2 direction routes', () => {
     const response = await app.inject({
       method: 'POST',
       url: `/novels/${novelId}/directions/${adoptedCandidate.id}/adopt`,
-      payload: { reason: '采用第一批中的候选，验证任务结果归属。' }
+      payload: {
+        currentVersionId: null,
+        idempotencyKey: 'adopt-first-batch-direction',
+        reason: '采用第一批中的候选，验证任务结果归属。'
+      }
     });
     assert.equal(response.statusCode, 200, response.body);
 
@@ -684,6 +834,8 @@ describe('novel package 2 direction routes', () => {
       method: 'POST',
       url: `/novels/${novelId}/directions/${lowScoreCandidate.id}/adopt`,
       payload: {
+        currentVersionId: null,
+        idempotencyKey: 'blocked-low-score-direction',
         reason: '想先验证差异化表达。'
       }
     });
@@ -694,6 +846,8 @@ describe('novel package 2 direction routes', () => {
       method: 'POST',
       url: `/novels/${novelId}/directions/${lowScoreCandidate.id}/adopt`,
       payload: {
+        currentVersionId: null,
+        idempotencyKey: 'missing-reason-low-score',
         confirmLowScore: true
       }
     });
@@ -703,6 +857,8 @@ describe('novel package 2 direction routes', () => {
       method: 'POST',
       url: `/novels/${novelId}/directions/${lowScoreCandidate.id}/adopt`,
       payload: {
+        currentVersionId: null,
+        idempotencyKey: 'adopt-low-score-direction',
         confirmLowScore: true,
         reason: '低分但题材差异化明显，先采用做设定验证。'
       }
@@ -3147,7 +3303,11 @@ describe('model integration M1 DeepSeek provider routes', () => {
     const adoptDirection = await app.inject({
       method: 'POST',
       url: `/novels/${novelId}/directions/${direction.id}/adopt`,
-      payload: { reason: '采用 fake DeepSeek 高分方向。' }
+      payload: {
+        currentVersionId: null,
+        idempotencyKey: 'adopt-fake-deepseek-direction',
+        reason: '采用 fake DeepSeek 高分方向。'
+      }
     });
     assertUnifiedSuccess(adoptDirection);
 
@@ -3343,6 +3503,8 @@ async function createNovelWithAdoptedDirection(app: Awaited<ReturnType<typeof bu
     method: 'POST',
     url: `/novels/${novelId}/directions/${candidate.id}/adopt`,
     payload: {
+      currentVersionId: null,
+      idempotencyKey: `adopt-${novelId}`,
       reason: '采用高分方向，进入设定阶段。'
     }
   });
@@ -4136,7 +4298,11 @@ describe('RP-02B2a1 registry and strict provider ABI', () => {
     await postOk(app, 'POST', `/novels/${novelId}/directions/fuse`, { versionIds: candidateIds.slice(0, 2), reason: 'route fuse', idempotencyKey: 'b2a1-direction-fuse' });
     await postOk(app, 'POST', `/novels/${novelId}/directions/${highCandidate.id}/optimize`, { instruction: 'route optimize', idempotencyKey: 'b2a1-direction-optimize' });
     bindings.creative.set('currentDirectionVersionId', highCandidate.id);
-    await postOk(app, 'POST', `/novels/${novelId}/directions/${highCandidate.id}/adopt`, { reason: 'adopt direction' });
+    await postOk(app, 'POST', `/novels/${novelId}/directions/${highCandidate.id}/adopt`, {
+      currentVersionId: null,
+      idempotencyKey: 'b2a1-adopt-direction',
+      reason: 'adopt direction'
+    });
     Object.assign(repository.getCreativeVersions().find((item) => item.id === highCandidate.id)!.content as Record<string, unknown>, { logline: 'DIRECTION_LOGLINE_CANARY', coreHook: 'DIRECTION_HOOK_CANARY' });
     await seedRawCanary(repository, novelId);
     const setting = await postOk(app, 'POST', `/novels/${novelId}/settings/generate`, { idempotencyKey: 'b2a1-setting' });

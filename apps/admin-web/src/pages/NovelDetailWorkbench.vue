@@ -1507,6 +1507,7 @@ const structureOptimizeDialog = reactive<{
 const adoptDialog = reactive({
   open: false,
   candidateId: '',
+  idempotencyKey: '',
   lowScore: false,
   reason: '',
 })
@@ -3379,6 +3380,7 @@ function handleDiscardCandidate(asset: StructureAssetRow) {
 function openAdoptDialog(candidate: DirectionCandidateRow) {
   adoptDialog.open = true
   adoptDialog.candidateId = candidate.id
+  adoptDialog.idempotencyKey = `direction-adopt-${crypto.randomUUID()}`
   adoptDialog.lowScore = candidate.lowScoreRequiresConfirm
   adoptDialog.reason = candidate.lowScoreRequiresConfirm ? '' : '采用该方向作为后续设定输入。'
 }
@@ -3409,6 +3411,7 @@ async function confirmAdopt() {
         seenAt: new Date().toISOString(),
       },
       currentVersionId: detail.value?.currentAssets.direction?.id ?? null,
+      idempotencyKey: adoptDialog.idempotencyKey,
     })
     ElMessage.success('方向已采用，小说进入设定阶段')
     adoptDialog.open = false

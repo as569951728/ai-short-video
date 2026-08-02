@@ -21,6 +21,8 @@ async function main() {
     await logTaskEvents(app, directions.task?.id, 'directions');
     const direction = directions.candidates.find((candidate: any) => candidate.score >= 75) ?? directions.candidates[0];
     await post(app, `/novels/${novelId}/directions/${direction.id}/adopt`, {
+      currentVersionId: null,
+      idempotencyKey: `live-smoke-adopt-${novelId}`,
       reason: direction.score >= 75 ? 'live smoke 采用方向。' : 'live smoke 低分方向风险确认。',
       confirmLowScore: direction.score < 75
     });

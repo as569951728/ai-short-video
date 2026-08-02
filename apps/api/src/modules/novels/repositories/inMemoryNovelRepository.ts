@@ -858,8 +858,56 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
 
     async adoptDirection(input: DirectionAdoptionInput): Promise<AdoptedDirectionRecord> {
+      const storedNovel = novels.find((item) => item.tenantId === input.context.tenantId && item.id === input.novel.id);
+      const storedCandidate = creativeVersions.find((item) =>
+        item.tenantId === input.context.tenantId
+        && item.novelId === input.novel.id
+        && item.id === input.candidate.id
+        && item.objectType === 'direction'
+      );
+      if (!storedNovel || !storedCandidate) throw new BusinessError(ErrorCode.NotFound, '小说或方向候选不存在');
+
+      const replayDecision = assetDecisionRecords.find((item) => {
+        const metadata = item.metadata && typeof item.metadata === 'object' && !Array.isArray(item.metadata)
+          ? item.metadata as Record<string, unknown>
+          : {};
+        return metadata.adoptionIdempotencyToken === input.idempotencyToken;
+      });
+      if (replayDecision) {
+        const metadata = replayDecision.metadata as Record<string, unknown>;
+        if (metadata.adoptionRequestHash !== input.requestHash) {
+          throw new BusinessError(ErrorCode.IdempotencyConflict, '同一个幂等键已绑定到不同的方向采用请求');
+        }
+        if (storedNovel.currentDirectionVersionId !== replayDecision.candidateVersionId) {
+          throw new BusinessError(ErrorCode.VersionConflict, '原方向采用结果已不再是当前版本，请刷新后重试');
+        }
+        const replayOperationLog = operationLogs.find((item) =>
+          item.tenantId === input.context.tenantId
+          && item.novelId === input.novel.id
+          && item.action === 'adopt_direction'
+          && item.objectId === replayDecision.candidateVersionId
+        );
+        if (!replayOperationLog) throw new BusinessError(ErrorCode.InternalError, '方向采用审计记录不完整');
+        return {
+          novel: cloneNovel(storedNovel.id),
+          currentDirection: storedCandidate,
+          versions: await this.listDirectionVersions(input.context.tenantId, input.novel.id),
+          decisionRecord: replayDecision,
+          operationLog: replayOperationLog
+        };
+      }
+
       assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id);
-      const currentVersionIdBefore = input.novel.currentDirectionVersionId;
+      if (storedNovel.currentDirectionVersionId !== input.expectedCurrentVersionId) {
+        throw new BusinessError(ErrorCode.VersionConflict, '当前方向版本已变化，请刷新后重试');
+      }
+      if (storedCandidate.status !== VersionStatus.Candidate || storedCandidate.staleLevel === StaleLevel.HardStale) {
+        throw new BusinessError(ErrorCode.VersionConflict, '该方向候选当前不可采用');
+      }
+
+      const currentVersionIdBefore = storedNovel.currentDirectionVersionId;
+      const creationStageBefore = storedNovel.creationStage;
+      const stageStatusBefore = storedNovel.stageStatus;
       const decisionRecord: AssetDecisionRecord = {
         id: nextId('decision'),
         tenantId: input.context.tenantId,
@@ -877,7 +925,11 @@ export function createInMemoryNovelRepository(): NovelRepository & {
         pageVersionSnapshot: input.pageVersionSnapshot ?? null,
         sourceTaskId: input.candidate.sourceTaskId,
         createdBy: input.context.userId,
-        createdAt: input.now
+        createdAt: input.now,
+        metadata: {
+          adoptionIdempotencyToken: input.idempotencyToken,
+          adoptionRequestHash: input.requestHash
+        }
       };
 
       const invalidatedDownstreamVersionIds = new Set<string>();
@@ -891,13 +943,12 @@ export function createInMemoryNovelRepository(): NovelRepository & {
           } else if (version.status === VersionStatus.Candidate || version.status === VersionStatus.Current) {
             version.status = VersionStatus.Historical;
           }
-        } else if (
-          ['setting', 'outline', 'stage_outline', 'chapter_plan'].includes(version.objectType)
-          && (version.status === VersionStatus.Candidate || version.status === VersionStatus.Current)
-        ) {
-          version.status = VersionStatus.Stale;
-          version.staleLevel = StaleLevel.HardStale;
+        } else if (['setting', 'outline', 'stage_outline', 'chapter_plan'].includes(version.objectType)) {
           invalidatedDownstreamVersionIds.add(version.id);
+          if (version.status === VersionStatus.Candidate || version.status === VersionStatus.Current) {
+            version.status = VersionStatus.Stale;
+            version.staleLevel = StaleLevel.HardStale;
+          }
         }
       }
 
@@ -914,8 +965,8 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       });
 
       for (const task of generationTasks) {
-        if (task.tenantId !== input.context.tenantId || task.novelId !== input.novel.id || task.status !== TaskStatus.WaitingConfirmation) continue;
-        if (task.objectType === 'direction') {
+        if (task.tenantId !== input.context.tenantId || task.novelId !== input.novel.id) continue;
+        if (task.objectType === 'direction' && task.status === TaskStatus.WaitingConfirmation) {
           const acceptedResult = task.resultVersionIds.includes(input.candidate.id);
           task.status = TaskStatus.Completed;
           task.activeClaimKey = null;
@@ -931,7 +982,10 @@ export function createInMemoryNovelRepository(): NovelRepository & {
             requestId: input.context.requestId,
             createdAt: input.now
           });
-        } else if (task.resultVersionIds.some((versionId) => invalidatedDownstreamVersionIds.has(versionId))) {
+        } else if (
+          task.status === TaskStatus.WaitingConfirmation
+          && task.resultVersionIds.some((versionId) => invalidatedDownstreamVersionIds.has(versionId))
+        ) {
           task.status = TaskStatus.Completed;
           task.activeClaimKey = null;
           task.statusNote = '上游方向已变更，本任务候选已过期并归档';
@@ -942,6 +996,22 @@ export function createInMemoryNovelRepository(): NovelRepository & {
           appendTaskEvent(task, {
             eventType: 'task_completed',
             message: '上游方向已变更，本任务候选已过期，待确认入口已归档。',
+            progress: 100,
+            requestId: input.context.requestId,
+            createdAt: input.now
+          });
+        } else if (
+          task.status === TaskStatus.Completed
+          && task.userAcceptedResult
+          && task.currentStep !== '历史采用结果已失效（上游方向变更）'
+          && task.resultVersionIds.some((versionId) => invalidatedDownstreamVersionIds.has(versionId))
+        ) {
+          task.statusNote = '上游方向已变更，本任务曾采用的结果现已失效';
+          task.currentStep = '历史采用结果已失效（上游方向变更）';
+          task.updatedAt = input.now;
+          appendTaskEvent(task, {
+            eventType: 'task_result_invalidated',
+            message: '上游方向已变更，本任务曾采用的结果已转为失效历史；原采用事实保留。',
             progress: 100,
             requestId: input.context.requestId,
             createdAt: input.now
@@ -959,8 +1029,8 @@ export function createInMemoryNovelRepository(): NovelRepository & {
         objectId: input.candidate.id,
         beforeSnapshot: {
           currentDirectionVersionId: currentVersionIdBefore,
-          creationStage: input.novel.creationStage,
-          stageStatus: input.novel.stageStatus
+          creationStage: creationStageBefore,
+          stageStatus: stageStatusBefore
         },
         afterSnapshot: {
           currentDirectionVersionId: input.candidate.id,

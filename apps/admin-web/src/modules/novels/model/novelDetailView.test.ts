@@ -397,6 +397,16 @@ describe('novel detail view model', () => {
       currentStep: '全书大纲候选未采用，已归档',
       userAcceptedResult: false,
     }), null)
+    assert.equal(getTaskResultPlacement({
+      ...acceptedStructureTask,
+      currentStep: '候选因方向变更已过期并归档',
+      userAcceptedResult: false,
+    }), null)
+    assert.equal(getTaskResultPlacement({
+      ...acceptedStructureTask,
+      currentStep: '历史采用结果已失效（上游方向变更）',
+      userAcceptedResult: true,
+    }), null)
   })
 
   it('maps adopted structure assets to the next concrete authoring step', () => {

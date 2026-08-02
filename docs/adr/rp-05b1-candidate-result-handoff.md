@@ -4,10 +4,10 @@ status: ready
 package_id: RP-05B1
 manifest_id: RP-05B1-v2
 baseline_sha: 058071861598f58dbe33e1c4f4d2e3df8f2a55de
-hard_max_files: 24
+hard_max_files: 29
 hard_max_net_additions: 3200
-actual_files: 24
-actual_net_additions: 1919
+actual_files: 29
+actual_net_additions: 2394
 exceeded_budget: changed_files
 split_reason: Candidate result handoff, authority enforcement, exact-result UI behavior, and their regression evidence form one user-visible vertical closure package.
 owner: MC + DEV + PRODUCT + TEST + QUALITY
@@ -23,7 +23,7 @@ valid_until: 2026-08-31
 | expected_ledger_transition | 独立 E4 验收全部通过后 `implemented_pending_verification -> closed`；任一原事故未通过则保持原状态 |
 | user_result | 用户执行生成、融合、按要求优化、手动编辑、继续优化或查看任务结果后，页面进入正确步骤并定位、高亮精确新候选；候选展示非敏感来源和变更原因；采用后进入正确下一步 |
 | evidence_buckets | shared contract、admin mapping/unit、API integration、browser DOM、independent PRODUCT/TEST/QUALITY |
-| fixed_candidate | code SHA `01c9f949e51c800fdfdbd40e1cff85de3fc77327` / tree `9cae8dc92e6e10d2135745f18423ad47199a4d54`；后续只允许验收记录和账本证据提交 |
+| fixed_candidate | code SHA `d09b9aae6cef1e98bd2fb84cee30455278685fac` / tree `26dfd802b667e38fed6c6aade7d474ab254f5a99`；后续只允许验收记录、候选绑定修正和账本证据提交 |
 
 ## 2. 实现合同
 
@@ -48,13 +48,15 @@ valid_until: 2026-08-31
 
 ## 4. 允许变更清单与预算
 
-产品预审发现原 v1 未覆盖结构优化 provider 权威链和试写精确候选承接，冻结前将范围扩展为不超过 24 个文件、净新增不超过 3,200 行：
+产品预审发现原 v1 未覆盖结构优化 provider 权威链和试写精确候选承接；第四轮 QUALITY 又发现方向采用缺少锁内 CAS 和成功重放；第五轮 QUALITY 进一步发现内存仓储的采用前审计快照被可变小说引用污染；第六轮 PRODUCT 发现成功重放会被后续活动任务冲突错误拦截。对应锁内重读、CAS、幂等重放优先级、前态冻结和动态审计断言均属于同一采用权威边界。为修复这些 P1，范围从 24 个文件强制扩展为不超过 29 个文件、净新增仍不超过 3,200 行。新增文件只用于同步已有调用方和治理回归：
 
 - `docs/adr/rp-05b1-candidate-result-handoff.md`
 - `docs/reviews/rp-05b1-candidate-result-handoff-acceptance-2026-08-02.md`
 - `packages/shared/src/novels.ts`
 - `packages/shared/src/contracts.test.ts`
 - `apps/api/src/modules/novels/services/novelService.ts`
+- `apps/api/src/modules/novels/domain/novelDomain.ts`
+- `apps/api/src/modules/novels/deepseekLiveSmoke.ts`
 - `apps/api/src/modules/novels/services/actionExecutionPlan.ts`
 - `apps/api/src/modules/novels/services/taskClaim.ts`
 - `apps/api/src/modules/novels/routes/novelRoutes.ts`
@@ -65,6 +67,9 @@ valid_until: 2026-08-31
 - `apps/api/src/modules/tasks/services/taskService.ts`
 - `apps/api/src/modules/novels/novelRoutes.test.ts`
 - `apps/api/test/rp02b/rp02b.test.ts`
+- `apps/api/test/rp02a/rp02a.test.ts`
+- `apps/api/test/rp02b2a/authority-claim.test.ts`
+- `apps/api/test/rp02b2a/fixtures.ts`
 - `apps/admin-web/src/modules/novels/model/novelTypes.ts`
 - `apps/admin-web/src/modules/novels/model/novelDetailView.ts`
 - `apps/admin-web/src/modules/novels/model/novelDetailView.test.ts`

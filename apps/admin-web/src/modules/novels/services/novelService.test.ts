@@ -256,6 +256,8 @@ describe('novel service data source switching', () => {
         'novel-001',
         generated.candidates[0].id,
         {
+          currentVersionId: null,
+          idempotencyKey: 'admin-adopt-direction-test',
           confirmLowScore: true,
           reason: '低分但差异化明确，先进入设定验证。',
           pageVersionSnapshot: { seenCandidateVersionId: generated.candidates[0].id },

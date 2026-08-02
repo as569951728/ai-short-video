@@ -320,7 +320,11 @@ async function prepareTarget(
   if (!source || candidates.length < 2) throw new Error('direction setup failed');
   if (action === 'direction_fuse') return target(`/novels/${novelId}/directions/fuse`, { versionIds: candidates.slice(0, 2).map((item) => item.id), reason: 'authority matrix' }, { sourceVersionId: candidates[0].id });
   if (action === 'direction_optimize') return target(`/novels/${novelId}/directions/${source.id}/optimize`, { instruction: 'authority matrix' }, { sourceVersionId: source.id, authorityObjectId: source.id });
-  await postRouteOk(app, `/novels/${novelId}/directions/${source.id}/adopt`, { reason: 'setup' });
+  await postRouteOk(app, `/novels/${novelId}/directions/${source.id}/adopt`, {
+    currentVersionId: null,
+    idempotencyKey: `setup-${action}-adopt-direction`,
+    reason: 'setup'
+  });
   if (action === 'setting_generate') return target(`/novels/${novelId}/settings/generate`);
   const setting = await postRouteOk(app, `/novels/${novelId}/settings/generate`, { idempotencyKey: `setup-${action}-setting` });
   await postRouteOk(app, `/novels/${novelId}/settings/${setting.candidate.id}/adopt`, { reason: 'setup' });

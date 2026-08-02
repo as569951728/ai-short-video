@@ -400,11 +400,13 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
         params: directionVersionParamsSchema,
         body: {
           type: 'object',
+          required: ['currentVersionId', 'idempotencyKey'],
           properties: {
             confirmLowScore: { type: 'boolean' },
             reason: { type: ['string', 'null'], maxLength: 1000 },
             pageVersionSnapshot: { type: ['object', 'null'], additionalProperties: true },
-            currentVersionId: { type: ['string', 'null'], maxLength: 80 }
+            currentVersionId: { type: ['string', 'null'], maxLength: 80 },
+            idempotencyKey: idempotencyKeySchema
           },
           additionalProperties: false
         },
@@ -418,7 +420,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
       const data = await novelService.adoptDirection(
         novelId,
         versionId,
-        (request.body ?? {}) as AdoptDirectionRequest,
+        withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as AdoptDirectionRequest),
         await resolveProviderContext(options.requestContextResolver, request)
       );
 
@@ -1343,7 +1345,11 @@ async function createOutlineAcceptanceSeed(
   await service.adoptDirection(
     novelId,
     direction.id,
-    { reason: '本地验收种子：采用方向，进入设定节点。' },
+    {
+      currentVersionId: null,
+      idempotencyKey: `seed-outline-adopt-${novelId}`,
+      reason: '本地验收种子：采用方向，进入设定节点。'
+    },
     context
   );
 
@@ -1430,7 +1436,11 @@ async function createTrialAcceptanceSeed(
   await service.adoptDirection(
     novelId,
     direction.id,
-    { reason: '本地验收种子：采用方向，进入设定节点。' },
+    {
+      currentVersionId: null,
+      idempotencyKey: `seed-trial-adopt-${novelId}`,
+      reason: '本地验收种子：采用方向，进入设定节点。'
+    },
     context
   );
 

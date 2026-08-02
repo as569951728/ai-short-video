@@ -1530,7 +1530,8 @@ export interface AdoptDirectionRequest {
   confirmLowScore?: boolean;
   reason?: string | null;
   pageVersionSnapshot?: unknown;
-  currentVersionId?: string | null;
+  currentVersionId: string | null;
+  idempotencyKey: string;
 }
 
 export interface GenerateStructureAssetRequest {

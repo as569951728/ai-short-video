@@ -87,6 +87,7 @@ import {
   type QualityScoringDTO
 } from '@ai-shortvideo/shared';
 import { BusinessError } from '../../../shared/errors.js';
+import { hashCanonicalJson } from '../domain/executionContract.js';
 import {
   DEFAULT_TENANT_ID,
   DEFAULT_USER_ID,
@@ -541,37 +542,59 @@ export class NovelService {
     const novel = await this.findNovelOrThrow(context.tenantId, novelId);
     this.ensureLifecycleActive(novel);
 
-    if (request.currentVersionId !== undefined && request.currentVersionId !== novel.currentDirectionVersionId) {
-      throw new BusinessError(ErrorCode.VersionConflict, '当前方向版本已变化，请刷新后重试');
-    }
+    const idempotencyKey = normalizeActionIdempotencyKey(request.idempotencyKey, '方向采用');
+    const idempotencyToken = hashCanonicalJson({
+      tenantId: context.tenantId,
+      userId: context.userId,
+      action: 'direction_adopt',
+      objectId: novelId,
+      idempotencyKey
+    });
+    const requestHash = hashCanonicalJson({
+      novelId,
+      candidateVersionId: versionId,
+      currentVersionId: request.currentVersionId,
+      confirmLowScore: request.confirmLowScore ?? false,
+      reason: request.reason?.trim() ?? ''
+    });
 
     const candidate = await this.findDirectionVersionOrThrow(context.tenantId, novelId, versionId);
-    if (candidate.status !== VersionStatus.Candidate) {
-      throw new BusinessError(ErrorCode.VersionConflict, '该方向候选当前不可采用');
-    }
-    if (candidate.staleLevel === StaleLevel.HardStale) {
-      throw new BusinessError(ErrorCode.CandidateStale, '该方向候选已过期，请重新生成');
-    }
-    if (
-      novel.creationStage !== NovelCreationStage.Direction &&
-      (
-        !novel.currentDirectionVersionId ||
-        !toDirectionSourceVersionIds(candidate.sourceVersionRefs).includes(novel.currentDirectionVersionId)
-      )
-    ) {
-      throw new BusinessError(ErrorCode.InvalidStage, '当前阶段只能采用基于正式方向生成的新候选');
+    const isCurrentReplayTarget = candidate.status === VersionStatus.Current
+      && novel.currentDirectionVersionId === candidate.id;
+    if (!isCurrentReplayTarget) {
+      if (request.currentVersionId !== novel.currentDirectionVersionId) {
+        throw new BusinessError(ErrorCode.VersionConflict, '当前方向版本已变化，请刷新后重试');
+      }
+      if (candidate.status !== VersionStatus.Candidate) {
+        throw new BusinessError(ErrorCode.VersionConflict, '该方向候选当前不可采用');
+      }
+      if (candidate.staleLevel === StaleLevel.HardStale) {
+        throw new BusinessError(ErrorCode.CandidateStale, '该方向候选已过期，请重新生成');
+      }
+      if (
+        novel.creationStage !== NovelCreationStage.Direction &&
+        (
+          !novel.currentDirectionVersionId ||
+          !toDirectionSourceVersionIds(candidate.sourceVersionRefs).includes(novel.currentDirectionVersionId)
+        )
+      ) {
+        throw new BusinessError(ErrorCode.InvalidStage, '当前阶段只能采用基于正式方向生成的新候选');
+      }
     }
 
     const score = candidate.score ?? 0;
     const isLowScore = score < 70;
     const reason = request.reason?.trim() ?? '';
-    if (isLowScore && (!request.confirmLowScore || !reason)) {
+    if (!isCurrentReplayTarget && isLowScore && (!request.confirmLowScore || !reason)) {
       throw new BusinessError(ErrorCode.GateBlocked, '低分方向采用必须二次确认并填写原因');
     }
 
     const result = await this.options.repository.adoptDirection({
       novel,
       candidate,
+      expectedCurrentVersionId: request.currentVersionId,
+      idempotencyToken,
+      requestHash,
       reason: reason || '采用方向候选',
       isForced: isLowScore,
       pageVersionSnapshot: request.pageVersionSnapshot,

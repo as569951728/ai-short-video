@@ -213,6 +213,7 @@ describe('NovelDetailWorkbench DOM behavior', () => {
     expectAdoptDirectionRequest({
       confirmLowScore: true,
       currentVersionId: null,
+      idempotencyKey: expect.stringMatching(/^direction-adopt-[0-9a-f-]{36}$/),
       pageVersionSnapshot: {
         seenAt: expect.any(String),
         seenCandidateVersionId: 'direction-low-1',
