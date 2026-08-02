@@ -6,6 +6,7 @@ import { expect, test } from '@playwright/test';
 const API_ORIGIN = process.env.RP04C_API_ORIGIN;
 const EVIDENCE_PATH = process.env.RP04C_EVIDENCE_PATH;
 const EXPECTED_CHAPTER_NOS = Array.from({ length: 12 }, (_, index) => index + 1);
+const SAFE_BODY_CANARY = '仓库后门的监控今晚会被清空';
 const SENSITIVE_KEYS = new Set([
   'apikey', 'authorization', 'cookie', 'databaseurl', 'messages', 'password', 'prompt',
   'providerbody', 'providerresponse', 'rawcontent', 'rawresponse', 'secret'
@@ -51,6 +52,13 @@ test('RP-04C M-01..M-11 full-review browser acceptance', async ({ page, context,
     expect(initialDetail.status).toBe(200);
     expect(initialDetail.data.chapters).toHaveLength(12);
     expect(initialDetail.data.completionDecision).toBeNull();
+    const canaryChapter = initialDetail.data.chapters.find((chapter) => chapter.chapterNo === 4);
+    expect(canaryChapter?.id).toBeTruthy();
+    const canarySourceResponse = await request.get(`${API_ORIGIN}/novels/${seed.novelId}/chapters/${canaryChapter.id}`);
+    expect(canarySourceResponse.status()).toBe(200);
+    const canarySource = unwrap(await canarySourceResponse.json());
+    expect(canarySource.currentContent.content).toContain(SAFE_BODY_CANARY);
+    evidence.fixture.bodyCanaryVerified = true;
     evidence.m['M-01'] = pass({ detailStatus: 200, chapterCount: 12, completionDisabled: true });
 
     currentStep = 'M-02';
@@ -68,15 +76,18 @@ test('RP-04C M-01..M-11 full-review browser acceptance', async ({ page, context,
     currentStep = 'M-03';
     await fullReviewButton(page).click();
     const requestPromise = page.waitForRequest((candidate) => candidate.method() === 'POST' && candidate.url() === `${API_ORIGIN}/novels/${seed.novelId}/full-review`);
+    const responsePromise = page.waitForResponse((candidate) => candidate.request().method() === 'POST' && candidate.url() === `${API_ORIGIN}/novels/${seed.novelId}/full-review`);
     await page.locator('.el-message-box').getByRole('button', { name: '确认发起审稿' }).click();
-    const fullReviewRequest = await requestPromise;
+    const [fullReviewRequest, fullReviewResponse] = await Promise.all([requestPromise, responsePromise]);
+    expect(fullReviewResponse.status()).toBe(200);
+    telemetry.fullReviewResponseStatus = fullReviewResponse.status();
     const requestPayload = fullReviewRequest.postDataJSON();
     expect(Object.keys(requestPayload).sort()).toEqual(['expectedNovelVersion', 'idempotencyKey']);
     expect(requestPayload.idempotencyKey).toBeTruthy();
     await expect(page.locator('.step-side-panel .task-progress-label')).toHaveText('生成中');
     await expect(fullReviewButton(page)).toBeDisabled();
     expect(telemetry.fullReviewPosts).toHaveLength(1);
-    evidence.m['M-03'] = pass({ fullReviewPostCount: 1, requestKeys: Object.keys(requestPayload).sort(), waitingStateVisible: true });
+    evidence.m['M-03'] = pass({ fullReviewPostCount: 1, responseStatus: fullReviewResponse.status(), requestKeys: Object.keys(requestPayload).sort(), waitingStateVisible: true });
 
     currentStep = 'M-04';
     const processingStartedAt = Date.now();
@@ -283,7 +294,7 @@ test('RP-04C M-01..M-11 full-review browser acceptance', async ({ page, context,
       taskDetailGetCount: telemetry.taskDetailGetCount,
       taskEventsGetCount: telemetry.taskEventsGetCount
     };
-    evidence.m['M-11'] = pass({ domHits: 0, consoleHits: 0, storageHits: 0, cookieHits: 0, networkHits: 0 });
+    evidence.m['M-11'] = pass({ bodyCanarySourceVerified: evidence.fixture.bodyCanaryVerified, bodyCanaryLeakHits: 0, domHits: 0, consoleHits: 0, storageHits: 0, cookieHits: 0, networkHits: 0 });
     if (evidence.failures.length > 0) {
       currentStep = 'M-SUMMARY';
       throw new Error(`RP-04C browser acceptance failures: ${evidence.failures.join(', ')}`);
@@ -322,7 +333,8 @@ function createEvidence(runId, startedAt) {
       chapterCount: 0,
       coveredChapterNos: [],
       evidenceCounts: null,
-      manifestHash: null
+      manifestHash: null,
+      bodyCanaryVerified: false
     },
     ids: { taskId: null, requestId: null, reportId: null, gateId: null },
     m: Object.fromEntries(EXPECTED_CHAPTER_NOS.slice(0, 11).map((_, index) => [`M-${String(index + 1).padStart(2, '0')}`, { status: 'NOT_RUN', evidence: {} }])),
@@ -435,7 +447,8 @@ function normalizeKey(key) {
 }
 
 function sensitiveValueHit(value) {
-  return SENSITIVE_VALUE_PATTERNS.some((pattern) => pattern.test(String(value)));
+  const text = String(value);
+  return text.includes(SAFE_BODY_CANARY) || SENSITIVE_VALUE_PATTERNS.some((pattern) => pattern.test(text));
 }
 
 async function browserGet(page, url) {
