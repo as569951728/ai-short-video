@@ -71,6 +71,8 @@ conclusion: approved | needs_revision | blocked
 | NOV-AI-CTA-01 | 章节目录、生成第 1 章、继续试写等主 CTA 点击后立即出现 taskId/任务态，完成后定位结果并给出下一步 | E4 | 点击无效果、只有本地 loading、完成后无结果/下一步 |
 | NOV-PREFERENCE-01 | 题材/爽点可配置或自定义；停用值保留历史；模型读取权威配置 | E3/E4 | 新选项必须改前端代码、历史值损坏 |
 
+关闭检查点：`NOV-CANDIDATE-01` 至 `NOV-CANDIDATE-06` 与 `NOV-AI-CTA-01` 已由 RP-05B1 第七候选、真实浏览器原事故复验、三方独立门禁和 PR #61 merge `91751dd` 达到 E4；该结论不覆盖 `NOV-CURRENT-01` 的真实 MySQL 约束、真实 provider 质量或 `NOV-PREFERENCE-01`。
+
 ## 5. 统一任务平台
 
 | 验收 ID | 核心操作与断言 | 最低证据 | 阻塞条件 |

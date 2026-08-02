@@ -1,6 +1,6 @@
 # RP-05B1 小说候选动作结果承接验收记录
 
-status: implementation_verified_pending_independent_re_review
+status: accepted_and_merged
 package_id: RP-05B1
 manifest_id: RP-05B1-v2
 baseline_sha: 058071861598f58dbe33e1c4f4d2e3df8f2a55de
@@ -10,7 +10,7 @@ target_issue: RMD-NOV-UX-001
 
 ## 1. 结论边界
 
-本包已完成共享合同、API、内存仓储、Prisma 实现、管理端交互和真实浏览器原事故复验。前六轮独立门禁依次暴露候选输入、权威来源、下游失效、任务结果承接、并发采用 CAS/幂等、内存审计前快照失真，以及成功重放被活动任务冲突错误拦截的问题，六个候选均未获准入。第六轮 PRODUCT 证明首次采用成功后若已有设定生成任务，同一请求重放会返回 `CONFLICT_TASK_EXISTS`；现已把成功重放判定前移到活动任务冲突检查之前，同时保持 Prisma 小说行锁。第七固定代码候选已获 PRODUCT、TEST、QUALITY 三方 `P0=0/P1=0`；远端 required checks 首轮仅因 ADR 未完整声明 `changed_files,net_additions` 两项预算豁免而失败，业务测试均通过。正常合并尚未完成，因此总账保持 `10/43`、`PB 0/7`、`RB 0/12`，不得提前关闭 `RMD-NOV-UX-001`。
+本包已完成共享合同、API、内存仓储、Prisma 实现、管理端交互和真实浏览器原事故复验。前六轮独立门禁暴露并拒绝候选输入、权威来源、下游失效、任务结果承接、并发采用 CAS/幂等、内存审计前快照失真，以及成功重放被活动任务冲突错误拦截的问题。第七固定代码候选获 PRODUCT、TEST、QUALITY 三方 `P0=0/P1=0`；ADR 预算声明修正后，PR #61 最终 required checks 全绿并正常 squash 合并为 `91751dd`，merge tree 与验收包 tree `ae968dcf` 一致。`RMD-NOV-UX-001` 达到 E4 关闭条件；真实 MySQL、provider、media 和偏好配置继续由独立问题 ID 承担。
 
 ## 2. 验收映射
 
@@ -170,13 +170,13 @@ API 回归额外覆盖：
 - 未调用真实模型，因此不证明真实 provider 输出质量、时延或费用表现。
 - 未执行跨设备恢复、长章节 checkpoint 或后续视频业务包。
 
-## 12. 待完成门禁
+## 12. 门禁完成记录
 
-1. 冻结候选 SHA/tree。
-2. 独立 PRODUCT、TEST、QUALITY 对同一候选清零 P0/P1。
-3. 推送分支并创建 PR，远端 required checks 全绿。
-4. 正常 squash 合并；禁止 admin bypass。
-5. 合并后再按证据决定是否更新 issue ledger；未满足以上条件时账本保持不变。
+1. 固定代码候选 `d09b9aa` / tree `26dfd802`，最终文档 tree `ae968dcf`。
+2. PRODUCT、TEST、QUALITY 对同一代码候选均清零 P0/P1。
+3. PR #61 最终 required checks 全绿。
+4. 已正常 squash 合并为 `91751dd`，未使用 admin bypass。
+5. 唯一问题总账按独立关闭记录更新，不外推其他问题状态。
 
 ## 13. 第七轮独立门禁与治理修正
 

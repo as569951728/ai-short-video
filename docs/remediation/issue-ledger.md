@@ -35,7 +35,7 @@
 | RMD-NOV-BATCH-001 | RB/P1 | 批量正文全部生成后才保存，中断会浪费结果；`previousMemory` 未进入模型 payload | open | `novelService.ts`、`deepseekNovelProvider.ts`；二次复盘 15.2 | DEV | RP-04B | NOV-BATCH-RESUME-01, NOV-MEMORY-01 |
 | RMD-NOV-QUALITY-001 | RB/P1 | 目标字数只在 prompt，结果只校验非空，短章节仍可通过 | open | N-19；`deepseekNovelProvider.ts` 长度校验 | DEV + PRODUCT | RP-04B | NOV-LENGTH-01 |
 | RMD-NOV-VERSION-001 | RB/P1 | current 唯一性缺数据库强约束，真实产物来源可能仍记为 `mock_ai` | partial | `prismaNovelRepository.ts`；N-14 | DEV + QUALITY | RP-03A, RP-03D | NOV-CURRENT-01, NOV-PROVENANCE-01 |
-| RMD-NOV-UX-001 | RB/P1 | 候选的编辑、优化、融合、结果定位、采用后导航和历史版本交互不统一；章节目录与试写主 CTA 也曾出现交互不一致或点击无效果 | implemented_pending_verification | N-02 至 N-05、N-10 至 N-15、N-18 | DEV + PRODUCT | RP-05A, RP-05B, RP-05D | NOV-CANDIDATE-01, NOV-CANDIDATE-02, NOV-CANDIDATE-03, NOV-CANDIDATE-04, NOV-CANDIDATE-05, NOV-CANDIDATE-06, NOV-AI-CTA-01 |
+| RMD-NOV-UX-001 | RB/P1 | 候选的编辑、优化、融合、结果定位、采用后导航和历史版本交互不统一；章节目录与试写主 CTA 也曾出现交互不一致或点击无效果 | closed | PR #61 merge `91751dd`；PRODUCT/TEST/QUALITY 第七候选 `P0=0/P1=0`；shared 23/23、API 126/126、admin 78/78、DOM 21/21、typecheck 与远端 required checks 全绿；真实浏览器原事故复验；关闭记录 | DEV + PRODUCT | RP-05A, RP-05B, RP-05D | NOV-CANDIDATE-01, NOV-CANDIDATE-02, NOV-CANDIDATE-03, NOV-CANDIDATE-04, NOV-CANDIDATE-05, NOV-CANDIDATE-06, NOV-AI-CTA-01 |
 | RMD-NOV-PREF-001 | RB/P2 | 题材方向和爽点偏好仍为硬编码常量，没有管理或自定义机制 | open | `createOptions.ts`；N-20 | PRODUCT + DEV | RP-05C, RP-05D | NOV-PREFERENCE-01 |
 | RMD-NOV-ERROR-001 | QG/P1 | 用户错误可能暴露内部 taskName，配置、超时、格式、额度和网络分类仍不完整 | partial | N-08/N-09；`jsonOutput.ts` | DEV + TEST | RP-04D | NOV-ERROR-01 |
 | RMD-NOV-PROVIDER-001 | RB/P1 | 真实 DeepSeek 只具备代码和 in-memory smoke，没有 Prisma、浏览器和长文本稳定证据 | implemented_pending_verification | `deepseekLiveSmoke.ts`；API 测试强制 mock | DEV + TEST + QUALITY | RP-06A, RP-06B, RP-06C | NOV-DEEPSEEK-LIVE-01 |
@@ -103,9 +103,9 @@
 | 类别 | 数量 | 当前关闭 |
 | --- | ---: | ---: |
 | PB | 7 | 0 |
-| RB | 12 | 0 |
+| RB | 12 | 1 |
 | QG | 22 | 9 |
 | DEBT | 2 | 1 |
-| 合计 | 43 | 10 |
+| 合计 | 43 | 11 |
 
 数量只用于确认总账覆盖和正式关闭状态，不转换成项目完成百分比。每次更新必须重新核对实际分类数量，并分别报告研发交付、独立验收和用户结果。
