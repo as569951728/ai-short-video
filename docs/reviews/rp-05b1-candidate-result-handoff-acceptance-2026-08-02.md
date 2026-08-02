@@ -10,7 +10,7 @@ target_issue: RMD-NOV-UX-001
 
 ## 1. 结论边界
 
-本包已完成共享合同、API、内存仓储、Prisma 实现、管理端交互和真实浏览器原事故复验。前六轮独立门禁依次暴露候选输入、权威来源、下游失效、任务结果承接、并发采用 CAS/幂等、内存审计前快照失真，以及成功重放被活动任务冲突错误拦截的问题，六个候选均未获准入。第六轮 PRODUCT 证明首次采用成功后若已有设定生成任务，同一请求重放会返回 `CONFLICT_TASK_EXISTS`；现已把成功重放判定前移到活动任务冲突检查之前，同时保持 Prisma 小说行锁，等待第七固定候选独立复验。远端 required checks 和正常合并尚未完成，因此总账保持 `10/43`、`PB 0/7`、`RB 0/12`，不得提前关闭 `RMD-NOV-UX-001`。
+本包已完成共享合同、API、内存仓储、Prisma 实现、管理端交互和真实浏览器原事故复验。前六轮独立门禁依次暴露候选输入、权威来源、下游失效、任务结果承接、并发采用 CAS/幂等、内存审计前快照失真，以及成功重放被活动任务冲突错误拦截的问题，六个候选均未获准入。第六轮 PRODUCT 证明首次采用成功后若已有设定生成任务，同一请求重放会返回 `CONFLICT_TASK_EXISTS`；现已把成功重放判定前移到活动任务冲突检查之前，同时保持 Prisma 小说行锁。第七固定代码候选已获 PRODUCT、TEST、QUALITY 三方 `P0=0/P1=0`；远端 required checks 首轮仅因 ADR 未完整声明 `changed_files,net_additions` 两项预算豁免而失败，业务测试均通过。正常合并尚未完成，因此总账保持 `10/43`、`PB 0/7`、`RB 0/12`，不得提前关闭 `RMD-NOV-UX-001`。
 
 ## 2. 验收映射
 
@@ -165,7 +165,7 @@ API 回归额外覆盖：
 ## 11. 预算与未覆盖项
 
 - 当前变更文件数：29，等于经第四轮 P1 强制扩展后的 `hard_max_files=29`；新增 5 个文件均是现有采用调用方或治理回归，不引入新业务面。
-- 当前净新增：`2652 - 258 = 2394` 行，低于 `hard_max_net_additions=3200`。
+- 当前净新增：`2661 - 258 = 2403` 行，低于 `hard_max_net_additions=3200`。
 - 未连接真实 MySQL，因此不关闭 `RMD-NOV-VERSION-001`，也不外推数据库并发唯一性。
 - 未调用真实模型，因此不证明真实 provider 输出质量、时延或费用表现。
 - 未执行跨设备恢复、长章节 checkpoint 或后续视频业务包。
@@ -177,3 +177,12 @@ API 回归额外覆盖：
 3. 推送分支并创建 PR，远端 required checks 全绿。
 4. 正常 squash 合并；禁止 admin bypass。
 5. 合并后再按证据决定是否更新 issue ledger；未满足以上条件时账本保持不变。
+
+## 13. 第七轮独立门禁与治理修正
+
+- PRODUCT：`ACCEPT / P0=0 / P1=0 / P2=2`。
+- TEST：`ACCEPT / P0=0 / P1=0 / P2=1`。
+- QUALITY：`ACCEPT / P0=0 / P1=0 / P2=2`。
+- 三方共同保留真实 MySQL 事务隔离、锁等待和并发竞争未动态验证的风险；不得据此关闭 `RMD-NOV-VERSION-001`。
+- PR #61 在远端最终 tree `566365619b4a6f4a6116803b3efc3123ed2a5a2c` 上的首轮业务检查均通过；治理检查指出 ADR `exceeded_budget` 只声明 `changed_files`，而脚本实际识别 `changed_files,net_additions` 两项默认阈值超限。
+- ADR 已按实际治理违规项修正为 `changed_files,net_additions`；未提高 `hard_max_files=29` 或 `hard_max_net_additions=3200`，也未改变代码候选。

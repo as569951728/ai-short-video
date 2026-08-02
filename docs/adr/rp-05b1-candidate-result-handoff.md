@@ -7,8 +7,8 @@ baseline_sha: 058071861598f58dbe33e1c4f4d2e3df8f2a55de
 hard_max_files: 29
 hard_max_net_additions: 3200
 actual_files: 29
-actual_net_additions: 2394
-exceeded_budget: changed_files
+actual_net_additions: 2403
+exceeded_budget: changed_files,net_additions
 split_reason: Candidate result handoff, authority enforcement, exact-result UI behavior, and their regression evidence form one user-visible vertical closure package.
 owner: MC + DEV + PRODUCT + TEST + QUALITY
 valid_until: 2026-08-31
