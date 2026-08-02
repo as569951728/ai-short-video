@@ -21,17 +21,17 @@
 
 | 字段 | 值 |
 | --- | --- |
-| run_id | `rp04c-2026-08-02T22-01-40-932Z` |
-| git_sha | `3252a937b3daedc0f775354b3d22fdffe85db0f7` |
-| git_tree | `a4cea5eb0d649ec147b3183a3452bb35d493203e` |
-| worktree_dirty | `true` |
+| run_id | `rp04c-2026-08-02T22-08-55-173Z` |
+| git_sha | `e49857ba99299a0a943bd95de52c42de5bec0bd4` |
+| git_tree | `57c798b0b10a025966ca1568914f93ee24f1151d` |
+| worktree_dirty | `false` |
 | executable_scope_hash | `afa98622575ead7d20da2dd17ee4529406d61688b5a239f486c5d46c906757e3` |
 | fixture_version | `rp04c-browser-12ch-v1` |
 | provider | `deterministic-delay-provider`，45 秒延迟 |
-| evidence_hash | `bca65468c69bef51359acb70f0ba67039955c87542e7ba41c60a7c54b1d6b90f` |
-| safe_summary | `output/playwright/rp-04c/rp04c-2026-08-02T22-01-40-932Z/safe-evidence.json` |
+| evidence_hash | `990e154407f6dd32d6e87e076c4693759ea725abd486cfb6438dea1dbcb0f8e1` |
+| safe_summary | `output/playwright/rp-04c/rp04c-2026-08-02T22-08-55-173Z/safe-evidence.json` |
 
-说明：安全摘要明确记录 `worktree.dirty=true`。`git_sha` 与 `git_tree` 仅表示运行时 HEAD 身份，不得作为最终候选或干净树声明；`executable_scope_hash` 绑定本次浏览器验收可执行资产。证据不包含文件正文或 diff。
+说明：安全摘要明确记录 `worktree.dirty=false`，并绑定上述 `git_sha`、`git_tree` 与 `executable_scope_hash`。该身份只证明本次本地确定性浏览器运行对应的干净候选，不替代远程 checks、E5/E6 或独立复核。证据不包含文件正文或 diff。
 
 运行使用随机本地端口、in-memory repository 和确定性 provider。启动器拒绝或移除数据库、真实模型、对象存储与媒体密钥；本轮未调用真实 MySQL、真实模型、对象存储、TTS、视频渲染或发布接口。
 
@@ -55,7 +55,7 @@
 
 - `coveredChapterNos` 为 1 至 12，连续、无重复。
 - 正文版本、feature card、单章 review 证据计数均为 12；长期 memory 计数为 1。
-- `manifestHash=d2264571b0e14ecbd8d396946a5d3f62fec587683dcf0db23d759e172eb4c3d9`。
+- `manifestHash=87f38e0724b984b0f3839348de2fc928febe9cf025bff3b2f60816f0d8ae4321`。
 - 浏览器 full-review POST 为 1，completion POST 为 0；同一 task ID 始终为 `task_000175`。
 - M-06 三个 `startActionDisabled*` 均为 `true`，五个 task 状态均为 `processing`，`providerActiveThroughout=true`。
 - M-11 扫描 41 个相关 Network JSON 对象；DOM/Console/Storage/Cookie/Network 敏感命中和页面错误均为 0。
@@ -77,7 +77,7 @@
 
 确定性 provider 维度契约修正后，终态报告、gate 与问题列表均成功进入页面和 latest API，M-07 至 M-11 全部通过。浏览器路径当前没有剩余 M 级失败项。
 
-浏览器证据只达到 `candidate_for_independent_review`。由于运行来自 dirty worktree，后续形成最终候选时仍需由主控绑定干净候选 SHA/tree 并重新执行相应准入检查。
+浏览器证据只达到 `candidate_for_independent_review`。本轮已绑定干净候选 SHA/tree；后续仍需取得同一最终候选的远程 checks 与独立复核，并单独补齐 E5/E6，才能改变整包结论。
 
 ## 6. 非 UI 边界
 
