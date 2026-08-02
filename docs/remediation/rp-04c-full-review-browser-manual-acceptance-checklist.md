@@ -70,7 +70,7 @@ npm run e2e:rp04c
 5. 安全摘要只包含 Git 身份、fixture 版本、计数、ID、hash、状态与隐私命中数，不包含正文、prompt、raw response、认证头或密钥。
 6. 自动化全通过时浏览器结论最高为 `candidate_for_independent_review`；真实 E5、真实数据库与独立复核仍按非 UI 边界单独验收。
 
-最新成功运行 `rp04c-2026-08-02T22-08-55-173Z` 使用 45 秒确定性延迟 provider，Playwright 1/1 通过，M-01 至 M-11 全部 `PASS`。安全摘要记录 `worktree.dirty=false`，并绑定候选 SHA `e49857ba99299a0a943bd95de52c42de5bec0bd4` 与 tree `57c798b0b10a025966ca1568914f93ee24f1151d`；本轮浏览器结论最高仍为 `candidate_for_independent_review`。E5 仍为 `BLOCKED`，E6 仍为 `NOT_PROVEN`，`approval=NOT_ISSUED`。安全摘要与边界见 `docs/remediation/rp-04c-full-review-browser-evidence-20260802.md`。
+最新成功运行 `rp04c-2026-08-02T22-23-49-868Z` 使用 45 秒确定性延迟 provider，Playwright 1/1 通过，M-01 至 M-11 全部 `PASS`。安全摘要记录 `worktree.dirty=false`，并绑定候选 SHA `5a55f3ed6162fdcfdbd709ccb7f013b3732ded28` 与 tree `3eca4bbdf0968bac1f85aec420b19d24c39c307e`；唯一 full-review POST 最终响应 HTTP 200，源正文 canary 已确认且浏览器表面泄漏命中为 0。本轮浏览器结论最高仍为 `candidate_for_independent_review`。E5 仍为 `BLOCKED`，E6 仍为 `NOT_PROVEN`，`approval=NOT_ISSUED`。安全摘要与边界见 `docs/remediation/rp-04c-full-review-browser-evidence-20260802.md`。
 
 ## 4. 浏览器证据采集约束
 

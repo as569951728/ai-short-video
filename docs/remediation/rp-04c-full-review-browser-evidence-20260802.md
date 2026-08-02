@@ -21,15 +21,15 @@
 
 | 字段 | 值 |
 | --- | --- |
-| run_id | `rp04c-2026-08-02T22-08-55-173Z` |
-| git_sha | `e49857ba99299a0a943bd95de52c42de5bec0bd4` |
-| git_tree | `57c798b0b10a025966ca1568914f93ee24f1151d` |
+| run_id | `rp04c-2026-08-02T22-23-49-868Z` |
+| git_sha | `5a55f3ed6162fdcfdbd709ccb7f013b3732ded28` |
+| git_tree | `3eca4bbdf0968bac1f85aec420b19d24c39c307e` |
 | worktree_dirty | `false` |
 | executable_scope_hash | `afa98622575ead7d20da2dd17ee4529406d61688b5a239f486c5d46c906757e3` |
 | fixture_version | `rp04c-browser-12ch-v1` |
 | provider | `deterministic-delay-provider`，45 秒延迟 |
-| evidence_hash | `990e154407f6dd32d6e87e076c4693759ea725abd486cfb6438dea1dbcb0f8e1` |
-| safe_summary | `output/playwright/rp-04c/rp04c-2026-08-02T22-08-55-173Z/safe-evidence.json` |
+| evidence_hash | `8c2faa52bd0069be0da863b58dc0a2003748b0684a0e31633bf91363ab75b723` |
+| safe_summary | `output/playwright/rp-04c/rp04c-2026-08-02T22-23-49-868Z/safe-evidence.json` |
 
 说明：安全摘要明确记录 `worktree.dirty=false`，并绑定上述 `git_sha`、`git_tree` 与 `executable_scope_hash`。该身份只证明本次本地确定性浏览器运行对应的干净候选，不替代远程 checks、E5/E6 或独立复核。证据不包含文件正文或 diff。
 
@@ -41,7 +41,7 @@
 | --- | --- | --- |
 | M-01 | PASS | 后端 fixture 加载成功；正式章节 12；完结入口禁用。 |
 | M-02 | PASS | 取消确认后 full-review POST 为 0；确认框显示 12 章且明确不会自动完结。 |
-| M-03 | PASS | 单次确认只产生 1 个 full-review POST；请求字段仅 `expectedNovelVersion`、`idempotencyKey`。 |
+| M-03 | PASS | 单次确认只产生 1 个 full-review POST；请求字段仅 `expectedNovelVersion`、`idempotencyKey`；长任务最终响应为 HTTP 200。 |
 | M-04 | PASS | 0/5/15 秒均显示生成中、不定进度与 1-3 分钟提示；未出现伪造百分比。 |
 | M-05 | PASS | 运行中后端 task 为 `task_000175`；任务详情与事件接口可用，事件数 1。 |
 | M-06 | PASS | 五个采样点均为 `task_000175 / processing`，provider 全程 active，POST 仍为 1；同页刷新、第二标签页、第二标签页再次刷新后的发起入口均为 disabled。 |
@@ -49,16 +49,16 @@
 | M-08 | PASS | 人物 2/8、时间线 4/9、关键事实 6/11 章 scope 正确；固定对照误报为 0。 |
 | M-09 | PASS | `allowCompletion=false`、blocking 数 3；完结入口禁用，completion POST 为 0。 |
 | M-10 | PASS | 终态刷新后 task/report/gate ID 稳定，没有重复 POST 或重复资产。 |
-| M-11 | PASS | DOM、Console、local/sessionStorage、Cookie、相关 Network JSON 敏感命中均为 0；页面错误为 0。 |
+| M-11 | PASS | 源正文 canary 已确认存在，DOM、Console、local/sessionStorage、Cookie、相关 Network JSON 的 canary/敏感命中均为 0；页面错误为 0。 |
 
 ## 4. 本轮覆盖与隐私摘要
 
 - `coveredChapterNos` 为 1 至 12，连续、无重复。
 - 正文版本、feature card、单章 review 证据计数均为 12；长期 memory 计数为 1。
-- `manifestHash=87f38e0724b984b0f3839348de2fc928febe9cf025bff3b2f60816f0d8ae4321`。
-- 浏览器 full-review POST 为 1，completion POST 为 0；同一 task ID 始终为 `task_000175`。
-- M-06 三个 `startActionDisabled*` 均为 `true`，五个 task 状态均为 `processing`，`providerActiveThroughout=true`。
-- M-11 扫描 41 个相关 Network JSON 对象；DOM/Console/Storage/Cookie/Network 敏感命中和页面错误均为 0。
+- `manifestHash=cd3ada1e4b9a46956229138873728f83624460650b9134da668c7422ead4f5f4`。
+- 浏览器 full-review POST 为 1、最终响应 HTTP 200，completion POST 为 0；同一 task ID 始终为 `task_000175`。
+- M-06 四个 `startActionDisabled*` 均为 `true`，五个 task 状态均为 `processing`，`providerActiveThroughout=true`。
+- M-11 在源正文确认 canary 后扫描 42 个相关 Network JSON 对象；DOM/Console/Storage/Cookie/Network canary/敏感命中和页面错误均为 0。
 - 未保存 HAR、trace、截图、视频、完整 prompt、完整正文、raw response、认证头或密钥。
 - `rawArtifactsSaved=false`、`harSaved=false`、`traceSaved=false`；安全摘要文本禁止内容命中为 0。
 
