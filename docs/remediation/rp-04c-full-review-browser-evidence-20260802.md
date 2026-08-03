@@ -21,16 +21,16 @@
 
 | 字段 | 值 |
 | --- | --- |
-| run_id | `rp04c-2026-08-03T00-41-10-512Z` |
-| git_sha | `3e184fdb42b82bb159f008b567c84146c034fd3f` |
-| git_tree | `d1ff9a7881c2bd8109aa1d78d0bda2c3174353f2` |
+| run_id | `rp04c-2026-08-03T08-13-45-744Z` |
+| git_sha | `6a73577359338080ca4e229bc8335e993b482a96` |
+| git_tree | `81cf2fcc30fe6470c4e5bde5d37a40d8409ce63a` |
 | worktree_dirty | `false` |
-| executable_scope_hash | `acdbcaa7669a7e1091c14db0394a2da6c4f71b9b9e88334dacaae4b0ef64f263` |
+| executable_scope_hash | `06076f7e3bbff31a4ab363ce1d37394671271c3a71a9bb91e4b8e6ea5d8f7f2b` |
 | fixture_version | `rp04c-browser-12ch-v1` |
 | provider | `deterministic-release-provider`，完成长等待、跨标签页与双刷新断言后由测试一次性释放 |
-| evidence_hash | `eff557551bf5eb1154e2e129676173ac0547654f8df88e01dad454c551b83b9c` |
-| safe_summary_sha256 | `166b91c7f8b912dd7211413c132531513d01059cbea1c8f6d5cc825295d00517` |
-| safe_summary | `output/playwright/rp-04c/rp04c-2026-08-03T00-41-10-512Z/safe-evidence.json` |
+| evidence_hash | `08a16b68cdfda8de891a59898e2ff300e0d61ad8371d85e11c1ed259651c691f` |
+| safe_summary_sha256 | `4d915947e8403cdd6762e02cc059bbe227f92d7fc97c4c13e4f0ad27e27371f0` |
+| safe_summary | `output/playwright/rp-04c/rp04c-2026-08-03T08-13-45-744Z/safe-evidence.json` |
 
 说明：安全摘要明确记录 `worktree.dirty=false`，并绑定上述 `git_sha`、`git_tree` 与 `executable_scope_hash`。该身份只证明本次本地确定性浏览器运行对应的干净候选，不替代远程 checks、E5 或独立复核。证据不包含文件正文或 diff。
 
@@ -57,10 +57,10 @@
 
 - `coveredChapterNos` 为 1 至 12，连续、无重复。
 - 正文版本、feature card、单章 review 证据计数均为 12；长期 memory 计数为 1。
-- `manifestHash=43108c3ee5dcb5d7253206bf00c1bbb2dc9a3a8965b8783da6aba1f59888d951`。
+- `manifestHash=8fb83d9a01fb28d0603e39aa889a57904dd2852f94c35d509a813cafded3ed32`。
 - 浏览器 full-review POST 为 2：成功链 HTTP 200 且 task 始终为 `task_000175`，R-01 受控失败 HTTP 500 且 task 为 `task_000358`；completion POST 为 0。
 - M-06 四个 `startActionDisabled*` 均为 `true`，五个 task 状态均为 `processing`，`providerActiveThroughout=true`，`providerCallCount=1`。
-- M-11 在源正文和 raw model canary 均已确认的前提下扫描 50 个相关 Network JSON；DOM/Console/Storage/Cookie/Network 敏感命中和页面错误均为 0。
+- M-11 在源正文和 raw model canary 均已确认的前提下扫描 44 个相关 Network JSON；DOM/Console/Storage/Cookie/Network 敏感命中和页面错误均为 0。
 - 未保存 HAR、trace、截图、视频、完整 prompt、完整正文、raw response、认证头或密钥。
 - `rawArtifactsSaved=false`、`harSaved=false`、`traceSaved=false`；安全摘要文本禁止内容命中为 0。
 
