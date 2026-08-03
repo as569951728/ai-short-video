@@ -4,7 +4,7 @@
 | --- | --- |
 | package/issue/acceptance | `RP-04C` / `RMD-NOV-REVIEW-001` / `RP-04C_BROWSER_ACCEPTANCE_M01_M11` |
 | browser/package/approval | `candidate_for_independent_review` / `blocked` / `NOT_ISSUED` |
-| real_model_e5/e6 | `FAILED`（首次仅一次调用，人物冲突漏检）/ `NOT_PROVEN` |
+| real_model_e5/e6 | `PASS`（修复候选仅一次调用）/ `NOT_PROVEN` |
 | run | `rp04c-2026-08-03T08-13-45-744Z` |
 | implementation SHA/tree | `6a73577359338080ca4e229bc8335e993b482a96` / `81cf2fcc30fe6470c4e5bde5d37a40d8409ce63a` |
 | dirty/scope hash | `false` / `06076f7e3bbff31a4ab363ce1d37394671271c3a71a9bb91e4b8e6ea5d8f7f2b` |
@@ -23,15 +23,18 @@ Playwright 1/1，M-01..M-11 与 R-01 全部 PASS，`failures=[]`。本轮只覆�
 | M-11 | PASS | 源正文 canary 存在；DOM/Console/Storage/Cookie/44 个 Network JSON 敏感命中与页面错误均为 0。 |
 | R-01 | PASS | 受控 output parse 失败持久为 `output_parse_failed/PROVIDER_ERROR`；刷新仍有安全原因与重发入口，无报告/raw canary。 |
 覆盖 1..12 连续无重复；content/feature/review=12，memory=1，manifest `8fb83d9a01fb28d0603e39aa889a57904dd2852f94c35d509a813cafded3ed32`。全局 full-review POST=2（成功 1、失败 1），provider total=2/success=1/failure=1；未保存 HAR/trace/截图/视频/raw artifact。
-## 3. E5 首次真实模型证据
+## 3. E5 真实模型证据
 | 字段 | 安全摘要 |
 | --- | --- |
-| candidate/model/prompt | `c0c673f` / `deepseek-v4-pro` / `deepseek-full-review-evidence-v3` |
-| fixture/manifest | `rp-04c-e5-conflicts-v1` / `a5c07a7...fde6b08d` |
-| coverage/calls | 12/12；`callCount=1`；禁止重试 |
-| usage/elapsed | 18492 prompt、4298 completion、22790 total；62935 ms |
-| result | 时间线 4/8、金额 5/9 命中；人物漏检；对照误报 0；`blocked/character_conflict_missing`，无 raw response |
-首次 E5 为失败证据。修复候选仍须重新独立准入，失败不得自动重试；第二次 E5 未通过前 package/ledger 均不关闭。
+| 首次历史失败 | `c0c673f` / prompt v3 / calls=1；人物漏检，时间线与金额命中，对照误报 0；`blocked/character_conflict_missing` |
+| success identity | `7d8d706e8e7b501a30a309bea28725099a34c970` / `full-review-e5-summary-v2` / summary SHA256 `fb72a9c84d9b112824d56e90ffd0ba81bc0f498bb2b3c9aee406d6662595b141` |
+| fixture/model/route | `rp-04c-e5-conflicts-v1` / `deepseek-v4-pro` / prompt v4 / `deepseek:deepseek-v4-pro:route-v5` |
+| manifest/evidence/result | `dbdbd12e...5f31222` / `5946a76c...2c21297` / `fd2db01c...047765` |
+| run/request | `rp04c-e5-fba54ffc-90a8-4e4d-8ce0-911b7ec74392` / `rp04c-e5-request-2efe080d-5cea-4a5e-9e0b-c957b32ddba0` |
+| coverage/calls | 12/12；`callCount=1/maxCalls=1`；retry=0 |
+| usage/budget | 18553 prompt、3217 completion、21770 total；53104 ms；保守费用上界 1249350 / 上限 5000000 micros |
+| result | 人物 3/7、时间线 4/8、金额 5/9 精确命中；对照误报 0；`gateResult=blocked`，无 raw response |
+E5 已通过，但仍须对该证据取得独立终验与正常合并后才可关闭 package/ledger。
 ## 4. 非证明边界与复现
 `E6` 与 MySQL 属于 `RMD-NOV-DB-001`；多版本报告治理、直接 API 并发、进程恢复、真实费用记录仍未证明。浏览器全绿不能替代这些边界。
 ```bash
