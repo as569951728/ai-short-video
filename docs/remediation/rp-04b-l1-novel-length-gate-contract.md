@@ -155,7 +155,7 @@ E5 最多允许一个固定样本的一次付费调用。调用前必须冻结 m
 
 | 证据 | 结果 | 可得结论 | 边界 |
 | --- | --- | --- | --- |
-| E2/E3 API focused | `105/105 PASS` | 纯函数、五类生成动作、权威 target 透传、单次 provider 调用、持久化前 fail-closed 与失败刷新回归通过 | 2026-08-03 本轮候选重跑；`5 JSON + 5 transport + 81 routes + 14 provider`；in-memory/fake provider |
+| E2/E3 API focused | `107/107 PASS` | 纯函数、五类生成动作、权威 target 透传、单次 provider 调用、持久化前 fail-closed 与失败刷新回归通过 | 2026-08-03 本轮候选重跑；`5 JSON + 5 transport + 83 routes + 14 provider`；in-memory/fake provider |
 | E2 admin unit | `80/80 PASS` | DTO 映射、刷新稳定 QA 夹具与缺失门禁 fail-closed 通过 | 既有验收记录；本轮后端限定写范围未重跑 admin |
 | E2 admin DOM | `32/32 PASS` | 缺失/短候选 fail-closed、目标变化后旧门禁不覆盖、费用确认 cancel=0/confirm=1、批量正文恢复入口通过 | `npm run test:dom -w apps/admin-web`，happy-dom |
 | E4 local browser | `PASS` | 可见实际/目标/区间/状态；偏少候选采用禁用；刷新后权限保持；重新生成先展示新调用/费用/不自动续写/取消零调用文案 | `VITE_DATA_SOURCE=mock`；不证明真实模型或数据库；调用次数由同场 DOM spy 证据补强 |
@@ -170,8 +170,8 @@ E5 首次运行暴露两个问题并已进入候选修正：
 本轮后端修复的可复算证据为：
 
 1. `npm run typecheck -w @ai-shortvideo/api`：通过。
-2. `npm exec -w @ai-shortvideo/api -- tsx --test src/modules/ai/jsonOutput.test.ts src/modules/ai/openAiCompatibleClient.test.ts src/modules/novels/novelRoutes.test.ts src/modules/novels/providers/deepseekNovelProvider.test.ts`：`105/105 PASS`。
-3. 全仓 `npm test --workspaces --if-present`：`277/277 PASS`；`npm run typecheck`、`npm run build` 与 `git diff --check` 均通过；build 仅保留仓库已知的 VueUse annotation 与主入口 chunk 警告。
+2. `npm exec -w @ai-shortvideo/api -- tsx --test src/modules/ai/jsonOutput.test.ts src/modules/ai/openAiCompatibleClient.test.ts src/modules/novels/novelRoutes.test.ts src/modules/novels/providers/deepseekNovelProvider.test.ts`：`107/107 PASS`。
+3. 全仓 `npm test --workspaces --if-present`：`279/279 PASS`；`npm run typecheck`、`npm run build` 与 `git diff --check` 均通过；build 仅保留仓库已知的 VueUse annotation 与主入口 chunk 警告。
 4. 五类生成动作的短/长双侧回归均断言 provider `callCount=1`，且正文版本、feature card、review、memory、body batch、decision、operation log 和章节 current 指针无增量/无变化。
 5. 长度失败任务持久化为 `content_length_out_of_range / NOVEL_CONTENT_LENGTH_OUT_OF_RANGE`，并通过 `GET /tasks/:taskId` 刷新回读一致性断言；详情仅包含可理解的实际字符数与合格区间，不包含正文、prompt 或 key。
 6. 上述代码回归证明门禁和费用边界的实现正确，不改变 E5 真实模型样本仍为 `FAIL`的事实；本轮未发起新的付费调用。
