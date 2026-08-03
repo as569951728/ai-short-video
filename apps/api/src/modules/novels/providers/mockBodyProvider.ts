@@ -7,6 +7,7 @@ import type {
   NovelProviderActionInputFor,
   NovelProviderInputV1
 } from '../services/actionExecutionPlan.js';
+import { countChapterLength } from '../domain/chapterLengthPolicy.js';
 
 type BodyGenerateInput = NovelProviderActionInputFor<'body_batch_generate' | 'chapter_body_generate'>;
 type BodyRewriteInput = NovelProviderActionInputFor<'chapter_rewrite'>;
@@ -52,7 +53,10 @@ export class MockBodyProvider implements BodyProvider {
     const candidate = createBodyDraft({
       novel: input.novel,
       chapter: input.chapter,
-      content: `${input.currentContent.content}\n\n【改稿补强】${input.instruction || '强化本章反击和结尾钩子'}。主角在结尾主动留下反制证据，让下一章的追击更清晰。`,
+      content: fitToChapterTarget(
+        `${input.currentContent.content}\n\n【改稿补强】${input.instruction || '强化本章反击和结尾钩子'}。主角在结尾主动留下反制证据，让下一章的追击更清晰。`,
+        input.chapter.wordTarget
+      ),
       summary: `候选改稿强化${input.chapter.title}的结尾钩子和反击证据。`,
       score,
       riskLevel: changesLater ? RiskLevel.Medium : RiskLevel.Low,
@@ -221,7 +225,22 @@ function createBodyContent(
     paragraphs.splice(1, 1, '本章突然让主角放弃旧码头线索，转而追查无关支线，导致策略快照中的主线承接被破坏。');
   }
 
-  return paragraphs.join('\n\n');
+  return fitToChapterTarget(paragraphs.join('\n\n'), chapter.wordTarget);
+}
+
+function fitToChapterTarget(content: string, target: number | null): string {
+  if (!target || target <= 0) return content;
+  const lowerBound = Math.ceil(target * 0.9);
+  const upperBound = Math.floor(target * 1.15);
+  const actual = countChapterLength(content);
+  if (actual >= lowerBound && actual <= upperBound) return content;
+  if (actual > upperBound) {
+    return Array.from(content.normalize('NFC')).filter((codePoint) => !/^\p{White_Space}$/u.test(codePoint)).slice(0, upperBound).join('');
+  }
+  const missing = lowerBound - actual;
+  const filler = '主角继续核对证据推进冲突并确认人物选择';
+  const source = filler.repeat(Math.ceil(missing / Array.from(filler).length));
+  return `${content}\n\n${Array.from(source).slice(0, missing).join('')}`;
 }
 
 function createScoring(score: number, hardFailed: boolean): QualityScoringDTO {

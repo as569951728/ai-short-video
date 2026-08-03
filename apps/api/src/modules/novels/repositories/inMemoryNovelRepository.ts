@@ -3546,6 +3546,7 @@ export function createInMemoryNovelRepository(): InMemoryNovelRepository {
       score: options.draft.scoring.totalScore,
       riskLevel: options.draft.riskLevel,
       hardFailed: options.draft.hardFailed,
+      lengthGate: options.draft.lengthGate,
       statusNote: options.statusNote,
       recommendedAction: options.draft.hardFailed ? '进入章节详情处理' : options.draft.scoring.totalScore < 70 ? '批次完成后可优化本章' : '继续下一章'
     };

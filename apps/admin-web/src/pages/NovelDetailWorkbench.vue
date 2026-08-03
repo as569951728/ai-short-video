@@ -423,7 +423,7 @@
               <div v-else-if="activeSubStep.key === 'stages' && detail?.currentAssets.stageOutline" class="task-notice step-inline-notice">
                 <div>
                   <strong>阶段大纲已采用</strong>
-                  <p>大纲设计已完成，下一步进入章节目录，生成每章标题、摘要、钩子和目标字数。</p>
+                  <p>大纲设计已完成，下一步进入章节目录，生成每章标题、摘要、钩子和目标字符数。</p>
                 </div>
                 <div class="task-notice-actions">
                   <el-button type="primary" @click="openStep('chapterPlan')">进入章节目录</el-button>
@@ -539,9 +539,9 @@
                   <strong v-if="isChapterPlanGenerating">章节目录正在生成中</strong>
                   <strong v-else-if="chapterPlanGenerationFailed">章节目录生成失败</strong>
                   <strong v-else>{{ chapterPlanRows.length > 0 ? '章节目录候选待确认' : '生成章节目录' }}</strong>
-                  <p v-if="isChapterPlanGenerating">模型正在生成章节表、单章摘要、章节钩子和目标字数；刷新或新开页面后会继续保留任务状态。</p>
+                  <p v-if="isChapterPlanGenerating">模型正在生成章节表、单章摘要、章节钩子和目标字符数；刷新或新开页面后会继续保留任务状态。</p>
                   <p v-else-if="chapterPlanGenerationFailed">{{ chapterPlanFailureReason || '本次生成失败，请查看任务详情后重试。' }}</p>
-                  <p v-else>基于已采用的阶段大纲生成章节表、单章摘要、章节钩子和目标字数。生成结果会进入候选池，只有点击“采用”后才会成为正式章节目录。</p>
+                  <p v-else>基于已采用的阶段大纲生成章节表、单章摘要、章节钩子和目标字符数。生成结果会进入候选池，只有点击“采用”后才会成为正式章节目录。</p>
                 </div>
                 <div class="task-notice-actions">
                   <el-button
@@ -620,8 +620,8 @@
               <template v-else>
                 <div class="chapter-word-target-toolbar">
                   <div>
-                    <strong>目标字数</strong>
-                    <span>默认 {{ detail?.preferences.chapterWordMin }}-{{ detail?.preferences.chapterWordMax }} 字/章，当前平均 {{ chapterWordTargetSummary.average || '-' }} 字，预计 {{ chapterWordTargetSummary.total || '-' }} 字</span>
+                    <strong>目标字符数</strong>
+                    <span>默认 {{ detail?.preferences.chapterWordMin }}-{{ detail?.preferences.chapterWordMax }} 字符/章，当前平均 {{ chapterWordTargetSummary.average || '-' }} 字符，预计 {{ chapterWordTargetSummary.total || '-' }} 字符</span>
                     <small>只影响后续生成；已生成正文需要在章节详情中扩写或重写。</small>
                   </div>
                   <div class="chapter-word-target-actions">
@@ -633,7 +633,16 @@
                   <el-table-column prop="chapterNo" label="章序" width="80" />
                   <el-table-column prop="stageIndex" label="阶段" width="80" />
                   <el-table-column prop="title" label="章节标题" min-width="220" />
-                  <el-table-column prop="wordTarget" label="目标字数" width="110" />
+                  <el-table-column label="长度门禁（忽略空白、含标点）" min-width="350">
+                    <template #default="{ row }">
+                      <div class="length-gate-line" :data-length-gate-status="row.lengthGate.status">
+                        <span>实际 {{ row.lengthGate.actualText }}</span>
+                        <span>目标 {{ row.lengthGate.targetText }}</span>
+                        <span>合格区间 {{ row.lengthGate.rangeText }}</span>
+                        <el-tag :type="row.lengthGate.tagType" effect="plain" size="small">{{ row.lengthGate.statusText }}</el-tag>
+                      </div>
+                    </template>
+                  </el-table-column>
                   <el-table-column prop="statusText" label="正文状态" width="110" />
                   <el-table-column label="正文版本" width="110">
                     <template #default="{ row }">
@@ -658,7 +667,7 @@
                   <p class="muted">先比较第 1 章候选，选定后才继续生成第 2-3 章和试写总评。</p>
                 </div>
                 <div class="task-notice-actions">
-                  <el-button v-if="showTrialAuthoringActions" :disabled="!canGenerateTrial" :loading="generatingTrial" @click="() => handleGenerateTrial()">重新生成 3 个</el-button>
+                  <el-button v-if="showTrialAuthoringActions" :disabled="!canGenerateTrial" :loading="generatingTrial" @click="() => handleRegenerateTrial('重新生成第 1 章候选')">重新生成 3 个</el-button>
                 </div>
               </div>
 
@@ -720,18 +729,30 @@
                     <div class="issue-list">
                       <el-tag v-for="tag in candidate.riskTags" :key="tag" type="warning" effect="plain">{{ tag }}</el-tag>
                     </div>
+                    <div v-if="candidate.lengthGate" class="length-gate-line" :data-length-gate-status="candidate.lengthGate.status">
+                      <span class="length-gate-metric">口径：{{ candidate.lengthGate.metricText }}</span>
+                      <span>实际 {{ candidate.lengthGate.actualText }}</span>
+                      <span>目标 {{ candidate.lengthGate.targetText }}</span>
+                      <span>合格区间 {{ candidate.lengthGate.rangeText }}</span>
+                      <el-tag :type="candidate.lengthGate.tagType" effect="plain" size="small">{{ candidate.lengthGate.statusText }}</el-tag>
+                    </div>
+                    <p v-if="candidate.selectDisabledReason && candidate.canSelectByStatus" class="length-gate-reason">{{ candidate.selectDisabledReason }}</p>
                     <p class="muted">{{ candidate.aiRecommendedReason }}</p>
                     <div class="split-actions">
                       <el-button size="small" @click="openTrialContent(candidate)">看全文</el-button>
                       <el-button
                         v-if="showTrialCandidateAction(candidate)"
                         size="small"
+                        :disabled="!candidate.canSelect"
+                        :title="candidate.selectDisabledReason || undefined"
                         :loading="selectingTrialCandidateId === candidate.id"
                         @click="handleSelectTrialCandidate(candidate)"
                       >
                         选这个继续试写
                       </el-button>
-                      <el-button v-if="showTrialAuthoringActions" size="small" :loading="generatingTrial" @click="handleGenerateTrial(`基于 ${candidate.versionLabel} 优化开篇`)">基于此版优化</el-button>
+                      <el-button v-if="showTrialAuthoringActions" size="small" :loading="generatingTrial" @click="handleRegenerateTrial(`基于 ${candidate.versionLabel} 优化开篇并满足长度门禁`)">
+                        {{ candidate.lengthGate && !candidate.lengthGate.canAdopt ? '重新生成字符数合格候选' : '基于此版优化' }}
+                      </el-button>
                     </div>
                   </article>
                 </div>
@@ -743,6 +764,13 @@
                       <el-tag :type="result.hardFailed ? 'danger' : 'success'">{{ result.statusText }}</el-tag>
                     </div>
                     <p>评分 {{ result.scoreText }} / 问题 {{ result.issueCount }} 个</p>
+                    <div v-if="result.lengthGate" class="length-gate-line" :data-length-gate-status="result.lengthGate.status">
+                      <span class="length-gate-metric">口径：{{ result.lengthGate.metricText }}</span>
+                      <span>实际 {{ result.lengthGate.actualText }}</span>
+                      <span>目标 {{ result.lengthGate.targetText }}</span>
+                      <span>合格区间 {{ result.lengthGate.rangeText }}</span>
+                      <el-tag :type="result.lengthGate.tagType" effect="plain" size="small">{{ result.lengthGate.statusText }}</el-tag>
+                    </div>
                     <p class="muted">{{ result.summary }}</p>
                     <div class="issue-list">
                       <el-tag v-for="reason in result.hardFailureReasons" :key="reason" type="danger" effect="plain">{{ reason }}</el-tag>
@@ -773,11 +801,18 @@
                       <strong>{{ detail.latestTrialRun.trialReview.suggestions.join('、') || '-' }}</strong>
                     </div>
                   </div>
+                  <el-alert
+                    v-if="trialLengthGateBlocked"
+                    title="第 2-3 章存在字符数不合格结果，暂不能确认试写；请重新生成试写候选。"
+                    type="warning"
+                    show-icon
+                    :closable="false"
+                  />
                   <div class="split-actions">
                     <el-button
                       v-if="showTrialReviewConfirmAction"
                       type="primary"
-                      :disabled="!detail.latestTrialRun.trialReview.allowNextStep"
+                      :disabled="!canConfirmTrialReview"
                       :loading="confirmingTrial"
                       @click="openTrialConfirmDialog"
                     >
@@ -871,11 +906,22 @@
                     第 {{ latestBodyBatch.startChapterNo }}-{{ latestBodyBatch.endChapterNo }} 章
                   </el-tag>
                 </div>
-                <el-table :data="latestBodyBatch.summary.chapterResults" border>
+                <el-table :data="latestBodyBatchChapterRows" border>
                   <el-table-column prop="chapterNo" label="章序" width="80" />
                   <el-table-column prop="title" label="章节" min-width="180" />
                   <el-table-column prop="statusText" label="结果" width="110" />
                   <el-table-column prop="score" label="评分" width="90" />
+                  <el-table-column label="长度门禁（忽略空白、含标点）" min-width="330">
+                    <template #default="{ row }">
+                      <div v-if="row.lengthGate" class="length-gate-line" :data-length-gate-status="row.lengthGate.status">
+                        <span>实际 {{ row.lengthGate.actualText }}</span>
+                        <span>目标 {{ row.lengthGate.targetText }}</span>
+                        <span>合格区间 {{ row.lengthGate.rangeText }}</span>
+                        <el-tag :type="row.lengthGate.tagType" effect="plain" size="small">{{ row.lengthGate.statusText }}</el-tag>
+                      </div>
+                      <span v-else class="muted">长度门禁待后端同步</span>
+                    </template>
+                  </el-table-column>
                   <el-table-column prop="recommendedAction" label="建议动作" min-width="180" />
                 </el-table>
               </div>
@@ -1298,13 +1344,33 @@
             <el-descriptions-item label="风险趋势">{{ latestBodyBatch.summary.riskTrend }}</el-descriptions-item>
             <el-descriptions-item label="下一批注意事项">{{ latestBodyBatch.summary.nextBatchNotes.join('；') }}</el-descriptions-item>
           </el-descriptions>
-          <el-table :data="latestBodyBatch.summary.chapterResults" border>
+          <el-table :data="latestBodyBatchChapterRows" border>
             <el-table-column prop="chapterNo" label="章序" width="80" />
             <el-table-column prop="title" label="章节" min-width="180" />
             <el-table-column prop="statusText" label="结果" width="110" />
             <el-table-column prop="score" label="评分" width="90" />
-            <el-table-column label="操作" width="110">
+            <el-table-column label="长度门禁（忽略空白、含标点）" min-width="330">
               <template #default="{ row }">
+                <div v-if="row.lengthGate" class="length-gate-line" :data-length-gate-status="row.lengthGate.status">
+                  <span>实际 {{ row.lengthGate.actualText }}</span>
+                  <span>目标 {{ row.lengthGate.targetText }}</span>
+                  <span>合格区间 {{ row.lengthGate.rangeText }}</span>
+                  <el-tag :type="row.lengthGate.tagType" effect="plain" size="small">{{ row.lengthGate.statusText }}</el-tag>
+                </div>
+                <span v-else class="muted">长度门禁待后端同步</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="210">
+              <template #default="{ row }">
+                <el-button
+                  v-if="row.lengthGate?.canAdopt !== true"
+                  size="small"
+                  type="warning"
+                  plain
+                  @click="router.push(`/novels/${novelId}/chapters/${row.chapterId}`)"
+                >
+                  重写本章
+                </el-button>
                 <el-button size="small" @click="router.push(`/novels/${novelId}/chapters/${row.chapterId}`)">章节详情</el-button>
               </template>
             </el-table-column>
@@ -1368,6 +1434,7 @@ import {
   startFullReview,
   confirmTrial as confirmTrialApi,
   toDirectionCandidateRow,
+  toBodyBatchChapterResultRow,
   toNovelChapterPlanRow,
   toStructureAssetRow,
   toTrialCandidateRow,
@@ -1601,7 +1668,26 @@ const fullOutlineRows = computed(() => structureRows.value.filter((asset) => ass
 const stageOutlineRows = computed(() => structureRows.value.filter((asset) => asset.objectType === 'stage_outline'))
 const visibleOutlineRows = computed(() => (activeSubStep.value.key === 'stages' ? stageOutlineRows.value : fullOutlineRows.value))
 const chapterPlanRows = computed(() => structureRows.value.filter((asset) => asset.objectType === 'chapter_plan'))
-const chapterRows = computed(() => (detail.value?.chapters ?? []).map(toNovelChapterPlanRow))
+const bodyGeneration = computed(() => detail.value?.bodyGeneration ?? null)
+const latestBodyBatch = computed(() => bodyGeneration.value?.latestBatch ?? null)
+const latestBodyBatchChapterRows = computed(() => (latestBodyBatch.value?.summary.chapterResults ?? []).map(toBodyBatchChapterResultRow))
+const authoritativeLengthGateByChapterId = computed(() => new Map(
+  latestBodyBatchChapterRows.value
+    .filter((row) => row.lengthGate?.authoritative)
+    .map((row) => [row.chapterId, row.lengthGate] as const),
+))
+const chapterRows = computed(() => (detail.value?.chapters ?? []).map((chapter) => {
+  const row = toNovelChapterPlanRow(chapter)
+  const generatedGate = authoritativeLengthGateByChapterId.value.get(row.id)
+  const currentTarget = chapter.wordTarget === null ? null : Number(chapter.wordTarget)
+  const currentGate = generatedGate && currentTarget !== null && generatedGate.target === currentTarget
+    ? generatedGate
+    : row.lengthGate
+  return {
+    ...row,
+    lengthGate: currentGate,
+  }
+}))
 const chapterLabelById = computed(() => new Map(
   (detail.value?.chapters ?? []).map((chapter) => [chapter.id, `第 ${chapter.chapterNo} 章`] as const),
 ))
@@ -1621,8 +1707,11 @@ const trialFollowupPendingTitle = computed(() => {
     : '已选择第 1 章候选，正在生成第 2-3 章和试写总评。'
 })
 const trialContentParagraphs = computed(() => trialContentDrawer.content.split(/\n\s*\n/).map((paragraph) => paragraph.trim()).filter(Boolean))
-const bodyGeneration = computed(() => detail.value?.bodyGeneration ?? null)
-const latestBodyBatch = computed(() => bodyGeneration.value?.latestBatch ?? null)
+const trialLengthGateBlocked = computed(() =>
+  trialCandidateRows.value.some((row) => row.isSelected && row.lengthGate?.canAdopt !== true) ||
+  trialChapterResultRows.value.some((row) => row.lengthGate?.canAdopt !== true),
+)
+const canConfirmTrialReview = computed(() => Boolean(detail.value?.latestTrialRun?.trialReview?.allowNextStep) && !trialLengthGateBlocked.value)
 const latestFullReview = computed(() => detail.value?.latestFullReview ?? null)
 const fullReviewTask = computed(() => resolveTaskSummaryForAction(pendingTask.value, detail.value, 'full_review'))
 const authoritativeFullReviewTask = computed(() => resolveTaskSummaryForAction(null, detail.value, 'full_review'))
@@ -1738,7 +1827,7 @@ const canSubmitStructureEdit = computed(() =>
 )
 
 function showTrialCandidateAction(candidate: TrialCandidateRow) {
-  return shouldShowTrialCandidateAction(detail.value, candidate.canSelect)
+  return shouldShowTrialCandidateAction(detail.value, candidate.canSelectByStatus)
 }
 
 function isCurrentStructureAsset(asset: StructureAssetRow) {
@@ -2045,7 +2134,7 @@ const workbenchSteps = computed<WorkbenchStepView[]>(() => {
     createStep({
       key: 'chapterPlan',
       name: '章节目录',
-      description: '确认章节标题、摘要、目标字数和每章钩子。',
+      description: '确认章节标题、摘要、目标字符数和每章钩子。',
       gateText: hasChapterPlan ? '章节目录已采用，试写调试已解锁。' : hasStageOutline ? '生成并采用章节目录后，试写调试才会解锁。' : '需要先采用全书大纲和阶段大纲。',
       nextAction: hasChapterPlan ? '章节计划已创建。' : hasStageOutline ? '生成并采用章节目录。' : '先完成大纲设计。',
       primaryActionLabel: '生成章节目录',
@@ -2056,8 +2145,8 @@ const workbenchSteps = computed<WorkbenchStepView[]>(() => {
       progress: hasChapterPlan ? 100 : hasStageOutline ? 36 : 0,
       subSteps: createSubSteps([
         ['table', '章节表', '标题、顺序和阶段归属', hasChapterPlan ? true : hasStageOutline ? 'active' : false],
-        ['summary', '单章摘要', '目标字数与章节钩子', hasChapterPlan],
-        ['batchAdjust', '批量调整', '节奏、字数和顺序调整', hasChapterPlan],
+        ['summary', '单章摘要', '目标字符数与章节钩子', hasChapterPlan],
+        ['batchAdjust', '批量调整', '节奏、字符数和顺序调整', hasChapterPlan],
         ['adopt', '采用目录', '进入试写调试', hasChapterPlan],
       ]),
     }),
@@ -2632,19 +2721,19 @@ async function handleGenerateStructure(
 
 async function handleApplyBatchWordTarget() {
   if (!detail.value?.currentAssets.chapterPlan || chapterRows.value.length === 0) {
-    ElMessage.info('需要先采用章节目录后再调整目标字数')
+    ElMessage.info('需要先采用章节目录后再调整目标字符数')
     return
   }
   const wordTarget = Number(batchWordTarget.value)
   if (!Number.isInteger(wordTarget) || wordTarget < 100) {
-    apiError.value = '目标字数必须是大于 100 的整数'
+    apiError.value = '目标字符数必须是大于 100 的整数'
     return
   }
 
   try {
     await ElMessageBox.confirm(
-      `将当前 ${chapterRows.value.length} 章的目标字数统一调整为 ${wordTarget} 字。已生成正文不会被覆盖，后续生成会按新目标执行。`,
-      '确认批量调整目标字数',
+      `将当前 ${chapterRows.value.length} 章的目标字符数统一调整为 ${wordTarget}。已生成正文不会被覆盖，后续生成会按新目标执行。`,
+      '确认批量调整目标字符数',
       { type: 'warning', confirmButtonText: '确认调整', cancelButtonText: '取消' },
     )
   } catch {
@@ -2659,10 +2748,10 @@ async function handleApplyBatchWordTarget() {
         chapterNo: Number(chapter.chapterNo),
         wordTarget,
       })),
-      reason: `批量调整章节目标字数为 ${wordTarget}`,
+      reason: `批量调整章节目标字符数为 ${wordTarget}`,
       currentChapterPlanVersionId: detail.value.currentAssets.chapterPlan.id,
     })
-    ElMessage.success('章节目标字数已更新')
+    ElMessage.success('章节目标字符数已更新')
     await loadDetail()
   } catch (error) {
     apiError.value = formatApiError(error)
@@ -2701,7 +2790,30 @@ async function handleGenerateTrial(regenerateReason?: string) {
   }
 }
 
+async function handleRegenerateTrial(regenerateReason: string) {
+  try {
+    await ElMessageBox.confirm(
+      '这会发起一次新的模型调用，可能产生新的模型费用。上一次不合格结果不会被采用或自动续写；取消不会产生新调用。',
+      '确认重新生成试写候选',
+      {
+        type: 'warning',
+        confirmButtonText: '确认新的模型调用',
+        cancelButtonText: '取消',
+      },
+    )
+  } catch {
+    return
+  }
+
+  await handleGenerateTrial(regenerateReason)
+}
+
 async function handleSelectTrialCandidate(candidate: TrialCandidateRow) {
+  if (!candidate.canSelect) {
+    ElMessage.warning(candidate.selectDisabledReason ?? '该候选当前不能采用，请重新生成后重试。')
+    return
+  }
+
   if (hasLocalPendingWait.value) {
     ElMessage.info('已有生成任务在等待中，请先查看最近任务或取消等待。')
     return
@@ -3677,5 +3789,27 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
+}
+
+.length-gate-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin: 10px 0;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.length-gate-metric {
+  color: #64748b;
+}
+
+.length-gate-reason {
+  margin: 6px 0 0;
+  color: #b45309;
+  font-size: 12px;
+  line-height: 1.5;
 }
 </style>

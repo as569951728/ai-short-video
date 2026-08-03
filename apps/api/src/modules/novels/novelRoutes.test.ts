@@ -8,7 +8,7 @@ import { buildApp as buildBaseApp } from '../../app.js';
 import { LlmProviderError, type LlmClient } from '../ai/llmClient.js';
 import { createInMemoryNovelRepository, isInMemoryNovelRepository } from './repositories/inMemoryNovelRepository.js';
 import { PrismaNovelRepository } from './repositories/prismaNovelRepository.js';
-import { DEFAULT_POLICY_PROFILE_VERSION_ID, type NovelRepository } from './domain/novelDomain.js';
+import { DEFAULT_POLICY_PROFILE_VERSION_ID, type GenerationTaskRecord, type NovelRepository } from './domain/novelDomain.js';
 import type { HotspotReferenceGateway, HotspotReferenceValidationInput } from './integrations/hotspotReferenceGateway.js';
 import { BusinessError, toErrorResponse } from '../../shared/errors.js';
 import { registerNovelRoutes } from './routes/novelRoutes.js';
@@ -27,6 +27,7 @@ import {
 } from './services/actionExecutionPlan.js';
 import { createActorScopedIdempotencyToken, hashCanonicalJson } from './services/taskClaim.js';
 import { validateExecutionEnvelopeV1_1ForTask } from './domain/executionContract.js';
+import { CHAPTER_LENGTH_COUNT_METRIC, countChapterLength, evaluateChapterLength } from './domain/chapterLengthPolicy.js';
 import { MockBodyProvider } from './providers/mockBodyProvider.js';
 import { MockDirectionProvider } from './providers/mockDirectionProvider.js';
 import { MockFullReviewProvider } from './providers/mockFullReviewProvider.js';
@@ -40,6 +41,35 @@ type MockFullReviewDraft = Awaited<ReturnType<MockFullReviewProvider['generateFu
 const buildApp = (options: Parameters<typeof buildBaseApp>[0] = {}) => buildBaseApp({
   requestContextResolver: async () => ({ tenantId: 'tenant_test', userId: 'user_test' }),
   ...options
+});
+describe('chapter length policy', () => {
+  it('normalizes NFC, counts code points, and excludes Unicode whitespace', () => {
+    assert.equal(countChapterLength(' e\u0301\n\t😀\u00a0中 '), 3);
+  });
+
+  it('uses the frozen inclusive boundaries', () => {
+    assert.deepEqual(evaluateChapterLength('字'.repeat(89), 100), {
+      metric: CHAPTER_LENGTH_COUNT_METRIC,
+      target: 100,
+      lowerBound: 90,
+      upperBound: 115,
+      actual: 89,
+      status: 'too_short',
+      statusText: '正文字符数不足：实际 89，允许范围 90-115。',
+      canAdopt: false
+    });
+    assert.equal(evaluateChapterLength('字'.repeat(90), 100).status, 'pass');
+    assert.equal(evaluateChapterLength('字'.repeat(115), 100).status, 'pass');
+    assert.equal(evaluateChapterLength('字'.repeat(116), 100).status, 'too_long');
+  });
+
+  it('fails closed without a target while preserving the measured count', () => {
+    const gate = evaluateChapterLength('正文 😀', null);
+    assert.deepEqual(
+      { target: gate.target, lowerBound: gate.lowerBound, upperBound: gate.upperBound, actual: gate.actual, status: gate.status, canAdopt: gate.canAdopt },
+      { target: null, lowerBound: null, upperBound: null, actual: 3, status: 'unconfigured', canAdopt: false }
+    );
+  });
 });
 function makeMockFullReviewDraftFinalizerCompatible(draft: MockFullReviewDraft): MockFullReviewDraft {
   const dimensionKeys = new Set(draft.dimensionScores.map((dimension) => dimension.key));
@@ -2176,6 +2206,128 @@ describe('novel package 5 trial writing routes', () => {
 
     await app.close();
   });
+
+  it('fails closed before trial providers when an authoritative chapter target is missing', async () => {
+    const repository = createInMemoryNovelRepository();
+    const app = await buildApp({ logger: false, novelRepository: repository });
+    const generateOne = MockTrialProvider.prototype.generateChapterOneCandidates;
+    const generateFollowup = MockTrialProvider.prototype.generateFollowup;
+    let providerCalls = 0;
+    const snapshot = () => JSON.stringify({
+      tasks: repository.getGenerationTasks(),
+      contents: repository.getChapterContentVersions(),
+      logs: repository.getOperationLogs()
+    });
+    try {
+      const { novelId } = await createNovelReadyForTrial(app, '试写目标字符数前置门禁', 8);
+      const chapterOne = repository.getNovelChapters().find((chapter) => chapter.novelId === novelId && chapter.chapterNo === 1)!;
+      const originalTarget = chapterOne.wordTarget;
+      chapterOne.wordTarget = null;
+      MockTrialProvider.prototype.generateChapterOneCandidates = async function(input) {
+        providerCalls += 1;
+        return generateOne.call(this, input);
+      };
+      const beforeOne = snapshot();
+      const blockedOne = await app.inject({ method: 'POST', url: `/novels/${novelId}/trial/generate`, payload: { idempotencyKey: 'trial-length-target-missing-one' } });
+      assert.deepEqual([blockedOne.statusCode, blockedOne.json().error.code, blockedOne.json().error.details.reasonCode], [409, ErrorCode.GateBlocked, 'NOVEL_CONTENT_LENGTH_TARGET_MISSING']);
+      assert.deepEqual([providerCalls, snapshot()], [0, beforeOne]);
+
+      chapterOne.wordTarget = originalTarget;
+      MockTrialProvider.prototype.generateChapterOneCandidates = generateOne;
+      const first = await postTrialGenerate(app, novelId, { idempotencyKey: 'trial-length-target-valid-one' });
+      const selected = first.trialRun.chapterOneCandidates.find((candidate: any) => candidate.isAiRecommended);
+      const chapterTwo = repository.getNovelChapters().find((chapter) => chapter.novelId === novelId && chapter.chapterNo === 2)!;
+      chapterTwo.wordTarget = null;
+      MockTrialProvider.prototype.generateFollowup = async function(input) {
+        providerCalls += 1;
+        return generateFollowup.call(this, input);
+      };
+      const beforeFollowup = snapshot();
+      const blockedFollowup = await app.inject({ method: 'POST', url: `/novels/${novelId}/trial/generate`, payload: { trialRunId: first.trialRun.id, selectedCandidateId: selected.id, idempotencyKey: 'trial-length-target-missing-followup' } });
+      assert.deepEqual([blockedFollowup.statusCode, blockedFollowup.json().error.code, blockedFollowup.json().error.details.reasonCode], [409, ErrorCode.GateBlocked, 'NOVEL_CONTENT_LENGTH_TARGET_MISSING']);
+      assert.deepEqual([providerCalls, snapshot()], [0, beforeFollowup]);
+    } finally {
+      MockTrialProvider.prototype.generateChapterOneCandidates = generateOne;
+      MockTrialProvider.prototype.generateFollowup = generateFollowup;
+      await app.close();
+    }
+  });
+
+  it('rejects short and long provider output for both trial actions without persisting chapter assets', async () => {
+    const originalChapterOne = MockTrialProvider.prototype.generateChapterOneCandidates;
+    const originalFollowup = MockTrialProvider.prototype.generateFollowup;
+    const cases = [
+      { status: 'too_short' as const, content: '正文泄漏标记-短' },
+      { status: 'too_long' as const, content: `正文泄漏标记-${'长'.repeat(30_000)}` }
+    ];
+
+    for (const action of ['trial_chapter_one_generate', 'trial_followup_generate'] as const) {
+      for (const testCase of cases) {
+        const repository = createInMemoryNovelRepository();
+        const app = await buildApp({ logger: false, novelRepository: repository });
+        let providerCalls = 0;
+        try {
+          const { novelId } = await createNovelReadyForTrial(app, `试写长度门禁-${action}-${testCase.status}`, 8);
+          let url = `/novels/${novelId}/trial/generate`;
+          let payload: Record<string, unknown>;
+          let objectId = novelId;
+
+          if (action === 'trial_chapter_one_generate') {
+            MockTrialProvider.prototype.generateChapterOneCandidates = async function(input) {
+              providerCalls += 1;
+              const candidates = await originalChapterOne.call(this, input);
+              candidates[0]!.content = testCase.content;
+              return candidates;
+            };
+            payload = { idempotencyKey: `trial-length-${action}-${testCase.status}` };
+          } else {
+            const first = await postTrialGenerate(app, novelId, { idempotencyKey: `trial-length-seed-${testCase.status}` });
+            const selected = first.trialRun.chapterOneCandidates.find((candidate: any) => candidate.isAiRecommended);
+            objectId = first.trialRun.id;
+            MockTrialProvider.prototype.generateFollowup = async function(input) {
+              providerCalls += 1;
+              const result = await originalFollowup.call(this, input);
+              result.chapters.find((chapter) => chapter.chapter.chapterNo === 2)!.content = testCase.content;
+              return result;
+            };
+            payload = {
+              trialRunId: first.trialRun.id,
+              selectedCandidateId: selected.id,
+              idempotencyKey: `trial-length-${action}-${testCase.status}`
+            };
+          }
+
+          const formalAssetsBefore = snapshotFormalChapterAssets(repository, novelId);
+          const trialRunCountBefore = repository.getTrialRuns().filter((run) => run.novelId === novelId).length;
+          const response = await app.inject({ method: 'POST', url, payload });
+          assert.deepEqual(
+            [response.statusCode, response.json().error.code, response.json().error.details.reasonCode],
+            [409, ErrorCode.GateBlocked, 'NOVEL_CONTENT_LENGTH_OUT_OF_RANGE'],
+            `${action}:${testCase.status}`
+          );
+          const rawKey = `trial-length-${action}-${testCase.status}`;
+          const task = repository.getGenerationTasks().find((item) =>
+            item.idempotencyToken === testActorScopedIdempotencyToken(action, objectId, rawKey)
+          );
+          assert.ok(task, `${action}:${testCase.status}`);
+          assert.equal(providerCalls, 1, `${action}:${testCase.status}`);
+          await assertPersistedLengthFailure(app, task, testCase.status);
+          assert.equal(snapshotFormalChapterAssets(repository, novelId), formalAssetsBefore, `${action}:${testCase.status}`);
+          if (action === 'trial_chapter_one_generate') {
+            assert.equal(repository.getTrialRuns().filter((run) => run.novelId === novelId).length, trialRunCountBefore);
+          }
+          assert.deepEqual(
+            repository.getGenerationTaskEvents().filter((event) => event.taskId === task.id).map((event) => event.eventType),
+            ['task_claimed', 'failed']
+          );
+        } finally {
+          MockTrialProvider.prototype.generateChapterOneCandidates = originalChapterOne;
+          MockTrialProvider.prototype.generateFollowup = originalFollowup;
+          await app.close();
+        }
+      }
+    }
+  });
 });
 describe('novel package 6 body generation routes', () => {
   it('guides users to confirm the trial review once follow-up trial chapters are ready', async () => {
@@ -2430,6 +2582,155 @@ describe('novel package 6 body generation routes', () => {
           assert.ok(response.statusCode >= 400, label); assert.deepEqual([providerReturns - providerBefore, finalizeCalls - finalizeBefore, task?.failureCategory, task?.errorCode, task?.resultReceiptHash], [1, 0, 'provider_error', 'PROVIDER_ERROR', null], label); assert.equal(JSON.stringify(snapshotTaskRetrySideEffects(repository, 0, { novelId, excludedTaskId: task?.id })), before, label);
         }
       } finally { MockBodyProvider.prototype.generateBodyChapter = generateBodyChapter; MockBodyProvider.prototype.rewriteChapter = rewriteChapter; await app.close(); }
+    }
+  });
+
+  it('rejects short and long provider output for batch, single-chapter, and rewrite actions without formal writes', async () => {
+    const originalGenerate = MockBodyProvider.prototype.generateBodyChapter;
+    const originalRewrite = MockBodyProvider.prototype.rewriteChapter;
+    const cases = [
+      { status: 'too_short' as const, content: '正文泄漏标记-短' },
+      { status: 'too_long' as const, content: `正文泄漏标记-${'长'.repeat(30_000)}` }
+    ];
+
+    for (const action of ['body_batch_generate', 'chapter_body_generate', 'chapter_rewrite'] as const) {
+      for (const testCase of cases) {
+        const repository = createInMemoryNovelRepository();
+        const app = await buildApp({ logger: false, novelRepository: repository });
+        let providerCalls = 0;
+        try {
+          const { novelId, strategySnapshot } = await createNovelReadyForBody(app, `正文长度门禁-${action}-${testCase.status}`, 8);
+          if (action === 'chapter_rewrite') await postBodyBatch(app, novelId, strategySnapshot);
+          const chapter = repository.getNovelChapters().find((item) => item.novelId === novelId && item.chapterNo === 4)!;
+          const rawKey = `body-length-${action}-${testCase.status}`;
+          let url: string;
+          let payload: Record<string, unknown>;
+          let objectId: string;
+
+          if (action === 'chapter_rewrite') {
+            MockBodyProvider.prototype.rewriteChapter = async function(input) {
+              providerCalls += 1;
+              const result = await originalRewrite.call(this, input);
+              result.candidate.content = testCase.content;
+              return result;
+            };
+            url = `/novels/${novelId}/chapters/${chapter.id}/rewrite`;
+            objectId = chapter.id;
+            payload = {
+              currentContentVersionId: chapter.currentContentVersionId,
+              instruction: '保持主线，仅优化表达。',
+              reason: '验证长度门禁失败不落库。',
+              idempotencyKey: rawKey
+            };
+          } else {
+            MockBodyProvider.prototype.generateBodyChapter = async function(input) {
+              providerCalls += 1;
+              const result = await originalGenerate.call(this, input);
+              result.content = testCase.content;
+              return result;
+            };
+            url = action === 'body_batch_generate'
+              ? `/novels/${novelId}/chapters/batch-generate`
+              : `/novels/${novelId}/chapters/${chapter.id}/generate`;
+            objectId = action === 'body_batch_generate' ? novelId : chapter.id;
+            payload = {
+              strategySnapshotId: strategySnapshot.id,
+              expectedStrategySnapshotVersion: strategySnapshot.versionNo,
+              idempotencyKey: rawKey
+            };
+          }
+
+          const formalAssetsBefore = snapshotFormalChapterAssets(repository, novelId);
+          const response = await app.inject({ method: 'POST', url, payload });
+          assert.deepEqual(
+            [response.statusCode, response.json().error.code, response.json().error.details.reasonCode],
+            [409, ErrorCode.GateBlocked, 'NOVEL_CONTENT_LENGTH_OUT_OF_RANGE'],
+            `${action}:${testCase.status}`
+          );
+          const task = repository.getGenerationTasks().find((item) =>
+            item.idempotencyToken === testActorScopedIdempotencyToken(action, objectId, rawKey)
+          );
+          assert.ok(task, `${action}:${testCase.status}`);
+          assert.equal(providerCalls, 1, `${action}:${testCase.status}`);
+          await assertPersistedLengthFailure(app, task, testCase.status);
+          assert.equal(snapshotFormalChapterAssets(repository, novelId), formalAssetsBefore, `${action}:${testCase.status}`);
+          assert.deepEqual(
+            repository.getGenerationTaskEvents().filter((event) => event.taskId === task.id).map((event) => event.eventType),
+            ['task_claimed', 'failed']
+          );
+        } finally {
+          MockBodyProvider.prototype.generateBodyChapter = originalGenerate;
+          MockBodyProvider.prototype.rewriteChapter = originalRewrite;
+          await app.close();
+        }
+      }
+    }
+  });
+  it('fails closed before body providers and adoption when an authoritative chapter target is missing', async () => {
+    const repository = createInMemoryNovelRepository();
+    const app = await buildApp({ logger: false, novelRepository: repository });
+    const generateBody = MockBodyProvider.prototype.generateBodyChapter;
+    const rewriteBody = MockBodyProvider.prototype.rewriteChapter;
+    const assessImpact = MockBodyProvider.prototype.assessImpact;
+    let providerCalls = 0;
+    const snapshot = () => JSON.stringify({
+      tasks: repository.getGenerationTasks(),
+      contents: repository.getChapterContentVersions(),
+      batches: repository.getBodyBatches(),
+      decisions: repository.getAssetDecisionRecords(),
+      logs: repository.getOperationLogs()
+    });
+    try {
+      const { novelId, strategySnapshot } = await createNovelReadyForBody(app, '正文目标字符数前置门禁', 8);
+      const chapter = repository.getNovelChapters().find((item) => item.novelId === novelId && item.chapterNo === 4)!;
+      const originalTarget = chapter.wordTarget;
+      chapter.wordTarget = null;
+      MockBodyProvider.prototype.generateBodyChapter = async function(input) {
+        providerCalls += 1;
+        return generateBody.call(this, input);
+      };
+      for (const [url, key] of [
+        [`/novels/${novelId}/chapters/batch-generate`, 'body-length-target-missing-batch'],
+        [`/novels/${novelId}/chapters/${chapter.id}/generate`, 'body-length-target-missing-single']
+      ] as const) {
+        const before = snapshot();
+        const response = await app.inject({ method: 'POST', url, payload: { strategySnapshotId: strategySnapshot.id, expectedStrategySnapshotVersion: strategySnapshot.versionNo, idempotencyKey: key } });
+        assert.deepEqual([response.statusCode, response.json().error.code, response.json().error.details.reasonCode], [409, ErrorCode.GateBlocked, 'NOVEL_CONTENT_LENGTH_TARGET_MISSING']);
+        assert.deepEqual([providerCalls, snapshot()], [0, before]);
+      }
+
+      chapter.wordTarget = originalTarget;
+      MockBodyProvider.prototype.generateBodyChapter = generateBody;
+      await postBodyBatch(app, novelId, strategySnapshot);
+      chapter.wordTarget = null;
+      MockBodyProvider.prototype.rewriteChapter = async function(input) {
+        providerCalls += 1;
+        return rewriteBody.call(this, input);
+      };
+      const beforeRewrite = snapshot();
+      const blockedRewrite = await app.inject({ method: 'POST', url: `/novels/${novelId}/chapters/${chapter.id}/rewrite`, payload: { currentContentVersionId: chapter.currentContentVersionId, instruction: '仅优化表达', reason: '验证目标字符数门禁', idempotencyKey: 'body-length-target-missing-rewrite' } });
+      assert.deepEqual([blockedRewrite.statusCode, blockedRewrite.json().error.code, blockedRewrite.json().error.details.reasonCode], [409, ErrorCode.GateBlocked, 'NOVEL_CONTENT_LENGTH_TARGET_MISSING']);
+      assert.deepEqual([providerCalls, snapshot()], [0, beforeRewrite]);
+
+      chapter.wordTarget = originalTarget;
+      MockBodyProvider.prototype.rewriteChapter = rewriteBody;
+      const rewrite = await app.inject({ method: 'POST', url: `/novels/${novelId}/chapters/${chapter.id}/rewrite`, payload: { currentContentVersionId: chapter.currentContentVersionId, instruction: '仅优化表达', reason: '生成历史候选', idempotencyKey: 'body-length-target-valid-rewrite' } });
+      assert.equal(rewrite.statusCode, 200, rewrite.body);
+      const candidateId = rewrite.json().data.candidate.id;
+      chapter.wordTarget = null;
+      MockBodyProvider.prototype.assessImpact = async function(input) {
+        providerCalls += 1;
+        return assessImpact.call(this, input);
+      };
+      const beforeAdopt = snapshot();
+      const blockedAdopt = await app.inject({ method: 'POST', url: `/novels/${novelId}/chapters/${chapter.id}/content-versions/${candidateId}/adopt`, payload: { currentContentVersionId: chapter.currentContentVersionId, reason: '验证历史候选采用门禁', idempotencyKey: 'body-length-target-missing-adopt' } });
+      assert.deepEqual([blockedAdopt.statusCode, blockedAdopt.json().error.code, blockedAdopt.json().error.details.reasonCode], [409, ErrorCode.GateBlocked, 'NOVEL_CONTENT_LENGTH_TARGET_MISSING']);
+      assert.deepEqual([providerCalls, snapshot()], [0, beforeAdopt]);
+    } finally {
+      MockBodyProvider.prototype.generateBodyChapter = generateBody;
+      MockBodyProvider.prototype.rewriteChapter = rewriteBody;
+      MockBodyProvider.prototype.assessImpact = assessImpact;
+      await app.close();
     }
   });
   it('blocks unsupported Prisma-like body write path before preclaiming tasks or calling the provider', async () => {
@@ -3889,8 +4190,55 @@ describe('model integration M1 DeepSeek provider routes', () => {
 });
 
 function snapshotTaskRetrySideEffects(repository: ReturnType<typeof createInMemoryNovelRepository>, provider = 0, scope?: { novelId: string; excludedTaskId?: string }) {
-  const tasks = repository.getGenerationTasks().filter((task) => task.id !== scope?.excludedTaskId); const events = repository.getGenerationTaskEvents().filter((event) => event.taskId !== scope?.excludedTaskId); const scoped = scope ? { tasks, events, bodyBatches: repository.getBodyBatches().filter((batch) => batch.novelId === scope.novelId), contentVersions: repository.getChapterContentVersions().filter((version) => version.novelId === scope.novelId), memories: repository.getLongTermMemories().filter((memory) => memory.novelId === scope.novelId), impactCases: repository.getImpactCases().filter((impactCase) => impactCase.novelId === scope.novelId), decisions: repository.getAssetDecisionRecords().filter((record) => record.novelId === scope.novelId), operationLogs: repository.getOperationLogs().filter((log) => log.novelId === scope.novelId), chapterPointers: repository.getNovelChapters().filter((chapter) => chapter.novelId === scope.novelId).map((chapter) => ({ id: chapter.id, currentContentVersionId: chapter.currentContentVersionId, currentFeatureCardVersionId: chapter.currentFeatureCardVersionId, currentReviewReportId: chapter.currentReviewReportId, lastGenerationTaskId: chapter.lastGenerationTaskId, mainStatus: chapter.mainStatus, statusNote: chapter.statusNote })) } : undefined;
+  const tasks = repository.getGenerationTasks().filter((task) => task.id !== scope?.excludedTaskId); const events = repository.getGenerationTaskEvents().filter((event) => event.taskId !== scope?.excludedTaskId); const scoped = scope ? { tasks, events, bodyBatches: repository.getBodyBatches().filter((batch) => batch.novelId === scope.novelId), contentVersions: repository.getChapterContentVersions().filter((version) => version.novelId === scope.novelId), featureCards: repository.getChapterFeatureCards().filter((card) => card.novelId === scope.novelId), reviewReports: repository.getReviewReports().filter((report) => report.novelId === scope.novelId), trialRuns: repository.getTrialRuns().filter((run) => run.novelId === scope.novelId), memories: repository.getLongTermMemories().filter((memory) => memory.novelId === scope.novelId), impactCases: repository.getImpactCases().filter((impactCase) => impactCase.novelId === scope.novelId), decisions: repository.getAssetDecisionRecords().filter((record) => record.novelId === scope.novelId), operationLogs: repository.getOperationLogs().filter((log) => log.novelId === scope.novelId), chapterPointers: repository.getNovelChapters().filter((chapter) => chapter.novelId === scope.novelId).map((chapter) => ({ id: chapter.id, currentContentVersionId: chapter.currentContentVersionId, currentFeatureCardVersionId: chapter.currentFeatureCardVersionId, currentReviewReportId: chapter.currentReviewReportId, lastGenerationTaskId: chapter.lastGenerationTaskId, mainStatus: chapter.mainStatus, statusNote: chapter.statusNote })) } : undefined;
   return { provider, task: tasks.length, event: events.length, asset: repository.getCreativeVersions().length, receipt: tasks.filter((task) => task.resultReceiptHash).length, current: repository.getNovelChapters().filter((chapter) => chapter.currentContentVersionId).length, operationLog: repository.getOperationLogs().length, child: tasks.filter((task) => task.retryOfTaskId).length, scoped };
+}
+
+function snapshotFormalChapterAssets(repository: ReturnType<typeof createInMemoryNovelRepository>, novelId: string) {
+  return JSON.stringify({
+    creativeVersions: repository.getCreativeVersions().filter((version) => version.novelId === novelId),
+    contentVersions: repository.getChapterContentVersions().filter((version) => version.novelId === novelId),
+    featureCards: repository.getChapterFeatureCards().filter((card) => card.novelId === novelId),
+    reviewReports: repository.getReviewReports().filter((report) => report.novelId === novelId),
+    memories: repository.getLongTermMemories().filter((memory) => memory.novelId === novelId),
+    bodyBatches: repository.getBodyBatches().filter((batch) => batch.novelId === novelId),
+    impactCases: repository.getImpactCases().filter((impactCase) => impactCase.novelId === novelId),
+    decisions: repository.getAssetDecisionRecords().filter((record) => record.novelId === novelId),
+    operationLogs: repository.getOperationLogs().filter((log) => log.novelId === novelId),
+    chapterPointers: repository.getNovelChapters().filter((chapter) => chapter.novelId === novelId).map((chapter) => ({
+      id: chapter.id,
+      currentContentVersionId: chapter.currentContentVersionId,
+      currentFeatureCardVersionId: chapter.currentFeatureCardVersionId,
+      currentReviewReportId: chapter.currentReviewReportId,
+      lastGenerationTaskId: chapter.lastGenerationTaskId,
+      mainStatus: chapter.mainStatus,
+      statusNote: chapter.statusNote
+    }))
+  });
+}
+
+async function assertPersistedLengthFailure(
+  app: Awaited<ReturnType<typeof buildApp>>,
+  task: GenerationTaskRecord,
+  expectedStatus: 'too_short' | 'too_long'
+) {
+  assert.deepEqual(
+    [task.status, task.failureCategory, task.errorCode, task.resultReceiptHash],
+    [TaskStatus.Failed, 'content_length_out_of_range', 'NOVEL_CONTENT_LENGTH_OUT_OF_RANGE', null]
+  );
+  assert.match(task.errorMessage ?? '', expectedStatus === 'too_short' ? /偏短/ : /偏长/);
+  assert.match(task.errorMessage ?? '', /实际 \d+，允许范围 \d+-\d+/);
+  assert.doesNotMatch(task.errorMessage ?? '', /正文泄漏标记|prompt|api[_ -]?key/i);
+
+  const detailResponse = await app.inject({ method: 'GET', url: `/tasks/${task.id}` });
+  assert.equal(detailResponse.statusCode, 200, detailResponse.body);
+  const detail = detailResponse.json().data;
+  assert.deepEqual(
+    [detail.failureCategory, detail.errorCode, detail.errorMessage],
+    [task.failureCategory, task.errorCode, task.errorMessage]
+  );
+  assert.match(detail.currentStep, expectedStatus === 'too_short' ? /偏短/ : /偏长/);
+  assert.equal(detail.retryable, false);
 }
 async function createDraft(app: Awaited<ReturnType<typeof buildApp>>, title: string, chapterLimit = 80) {
   const response = await app.inject({
@@ -4750,7 +5098,7 @@ describe('RP-02B2a1 registry and strict provider ABI', () => {
     for (const invalid of invalids) { const currentAssets = structuredClone(currentAssetsFor(invalid.action)); invalid.mutate(currentAssets); assert.throws(() => Reflect.apply(executeNovelProviderAction, undefined, [providers, { action: invalid.action, objectType: invalid.objectType, novel, preferences, currentAssets, optimization: null }]), /currentAssets|direction/); }
     assert.deepEqual(probe.snapshot(), { provider: 0, task: 0, event: 0, asset: 0, receipt: 0, current: 0, operationLog: 0, child: 0 });
   });
-  it('scenario 20 provider_public_abi_uses_exact_action_pick_and_preserves_nullable_word_target through real routes', async () => {
+  it('scenario 20 provider_public_abi_uses_exact_action_pick_and_preserves_authoritative_word_target through real routes', async () => {
     const repository = createInMemoryNovelRepository();
     const bindings = createExpectedBindingLedger();
     const writeTrace = traceCompoundRepositoryWrites(repository, bindings);
@@ -4815,7 +5163,7 @@ describe('RP-02B2a1 registry and strict provider ABI', () => {
     });
     const strategy = confirmed.bodyStrategySnapshot;
     const chapters = repository.getNovelChapters().filter((item) => item.novelId === novelId).sort((a, b) => a.chapterNo - b.chapterNo);
-    for (const item of chapters.slice(3)) item.wordTarget = null;
+    for (const item of chapters.slice(3)) item.wordTarget = 1600;
     Object.assign(chapters[3], { title: 'B2A1_MUTATED_SINGLE_CHAPTER_TITLE', wordTarget: 1666, statusNote: 'B2A1_MUTATED_SINGLE_STATUS' });
     Object.assign(chapters[4], { title: 'B2A1_MUTATED_BATCH_CHAPTER_TITLE', wordTarget: 1555, statusNote: 'B2A1_MUTATED_BATCH_STATUS' });
     await seedRawCanary(repository, novelId);

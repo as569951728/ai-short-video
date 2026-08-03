@@ -53,7 +53,7 @@ conclusion: approved | needs_revision | blocked
 | NOV-PLAN-RESUME-01 | 60/80 章 fixture、分块失败注入 | 每块持久化；中间块失败只重试该块；最终章节号连续、唯一、完整 | E3 + E5 | 已完成块重算、缺章、重复或整体丢失 |
 | NOV-BATCH-RESUME-01 | 正文批次和中断注入 | 每章生成即 checkpoint；中断后从首个未完成章继续 | E3 + E6 | 已生成章节丢失、整批重算 |
 | NOV-MEMORY-01 | 有跨章事实的连续性 fixture | 下一章 provider payload 包含更新后的长期记忆；故意冲突能被阻止或发现 | E2 + E5 | memory 未入 payload、连续性基准失败 |
-| NOV-LENGTH-01 | 多目标字符数样本 | UI 明确字符数口径；结果落在容差内；过短自动续写或失败 | E2 + E5 | 只校验非空、严重短文可采用 |
+| NOV-LENGTH-01 | 多目标字符数样本 | UI 明确字符数口径；结果落在容差内；过短/过长安全失败，只有用户显式确认后才可发起新的模型调用 | E2 + E5 | 只校验非空、严重短文可采用、自动续写或隐藏重试 |
 | NOV-ERROR-01 | timeout/rate/quota/network/format/config 注入 | 页面显示可理解分类、requestId 和恢复建议；安全详情不含密钥/prompt/raw | E3 + E4 | 笼统失败、内部名或敏感信息泄露 |
 | NOV-DEEPSEEK-LIVE-01 | 明确授权的 DeepSeek + MySQL | 固定样本覆盖短 JSON、长 JSON、章节目录、正文、超时和重试；记录耗时与 inputTokens/outputTokens 用量；浏览器验证刷新恢复、失败重试和结果定位 | E5 + E6 + browser E7 | 仅 inject/in-memory；无浏览器 trace 或脱敏报告 |
 | TEST-NOVEL-QUALITY-01 | 版本化基准集 | 评估字数、重复率、人物一致性、连续性、爽点和钩子；阈值可解释 | E2 + 人工复核 | 只有 JSON schema，无内容质量判断 |

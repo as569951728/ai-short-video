@@ -18,6 +18,7 @@ import {
   type BodyBatchSummaryDTO,
   type BodyGenerationStateDTO,
   type BodyGenerationStrategySnapshotDTO,
+  type ChapterLengthGateDTO,
   type ChapterFeatureCardDTO,
   type ChapterContentAdoptionResultDTO,
   type ChapterReviewIssueDTO,
@@ -88,6 +89,7 @@ import {
 } from '@ai-shortvideo/shared';
 import { BusinessError } from '../../../shared/errors.js';
 import { hashCanonicalJson } from '../domain/executionContract.js';
+import { evaluateChapterLength } from '../domain/chapterLengthPolicy.js';
 import {
   DEFAULT_TENANT_ID,
   DEFAULT_USER_ID,
@@ -755,6 +757,7 @@ export class NovelService {
 
     if (!request.trialRunId) {
       const chapterCount = normalizeTrialChapterCount(request.chapterCount);
+      assertChapterLengthTargetConfigured(chapters.find((chapter) => chapter.chapterNo === 1)?.wordTarget);
       const preferences = await this.options.repository.findPreferencesByNovelId(context.tenantId, novelId);
       const sourceVersionRefs = createTrialSourceRefs(novel);
       const providerInput = {
@@ -828,6 +831,11 @@ export class NovelService {
     if (!selectedCandidate || getMetadataString(selectedCandidate.metadata, 'trialRunId') !== trialRun.id) {
       throw new BusinessError(ErrorCode.NotFound, '第1章候选不存在');
     }
+    const selectedChapter = chapters.find((chapter) => chapter.id === selectedCandidate.chapterId);
+    if (!selectedChapter) {
+      throw new BusinessError(ErrorCode.VersionConflict, '第1章候选对应的权威章节不存在，请刷新后重试。');
+    }
+    assertChapterLengthGate(selectedCandidate.content, selectedChapter.wordTarget);
     const selectionReason = request.selectionReason?.trim() ?? '';
     if (selectionReason) {
       assertSafeTrialSelectionReason(selectionReason);
@@ -843,6 +851,7 @@ export class NovelService {
 
     const sourceVersionRefs = createTrialSourceRefs(novel);
     const trialScopeChapters = chapters.slice(0, trialRun.trialChapterCount);
+    trialScopeChapters.forEach((chapter) => assertChapterLengthTargetConfigured(chapter.wordTarget));
     const providerInput = {
       action: 'trial_followup_generate' as const,
       novel: projectNovelProviderInput(novel),
@@ -912,6 +921,11 @@ export class NovelService {
     if (!selectedCandidate) {
       throw new BusinessError(ErrorCode.NotFound, '已选择的第1章候选不存在');
     }
+    const selectedChapter = await this.options.repository.findChapterById(context.tenantId, novelId, selectedCandidate.chapterId);
+    if (!selectedChapter) {
+      throw new BusinessError(ErrorCode.VersionConflict, '已选择候选对应的权威章节不存在，请刷新后重试。');
+    }
+    assertChapterLengthGate(selectedCandidate.content, selectedChapter.wordTarget);
 
     const result = await this.options.repository.confirmTrial({
       novel,
@@ -967,6 +981,7 @@ export class NovelService {
     const latestBatch = await this.options.repository.findLatestBodyBatch(context.tenantId, novelId);
     const previousMemory = await this.options.repository.findLatestLongTermMemory(context.tenantId, novelId, null);
     const targetChapters = chapters.filter((chapter) => chapter.chapterNo >= range.startChapterNo! && chapter.chapterNo <= range.endChapterNo!);
+    targetChapters.forEach((chapter) => assertChapterLengthTargetConfigured(chapter.wordTarget));
     const previousBatchNotes = latestBatch?.summary.nextBatchNotes ?? [];
     const enhancedReview = isEnhancedReviewEnabled(strategySnapshot) && range.startChapterNo <= 10;
     const objectId = action === 'chapter_body_generate' ? targetChapters[0]?.id ?? novelId : novelId;
@@ -1105,6 +1120,7 @@ export class NovelService {
     if (!chapter) {
       throw new BusinessError(ErrorCode.NotFound, '章节不存在');
     }
+    assertChapterLengthTargetConfigured(chapter.wordTarget);
 
     return this.generateBodyBatch(
       novelId,
@@ -1172,6 +1188,7 @@ export class NovelService {
     if (!chapter) {
       throw new BusinessError(ErrorCode.NotFound, '章节不存在');
     }
+    assertChapterLengthTargetConfigured(chapter.wordTarget);
     if (!chapter.currentContentVersionId) {
       throw new BusinessError(ErrorCode.GateBlocked, '当前章节没有正式正文，不能生成重写候选');
     }
@@ -1299,6 +1316,7 @@ export class NovelService {
     if (!chapter) {
       throw new BusinessError(ErrorCode.NotFound, '章节不存在');
     }
+    assertChapterLengthTargetConfigured(chapter.wordTarget);
     const existingTask = request.idempotencyKey?.trim()
       ? await this.options.repository.findTaskByIdempotencyToken(
           context.tenantId,
@@ -1318,6 +1336,9 @@ export class NovelService {
     }
     if (!existingTask && candidate.status !== VersionStatus.Candidate) {
       throw new BusinessError(ErrorCode.VersionConflict, '该章节正文版本当前不可采用');
+    }
+    if (!existingTask) {
+      assertChapterLengthGate(candidate.content, chapter.wordTarget);
     }
     const existingSourceRefs = toRecord(existingTask?.sourceVersionRefs);
     const existingContentVersionId = typeof existingSourceRefs.currentContentVersionId === 'string'
@@ -3254,6 +3275,7 @@ function toTrialChapterCandidateDTO(version: ChapterContentVersionRecord, chapte
     riskTags: toStringArray(metadata.riskTags),
     aiRecommendedReason: String(metadata.aiRecommendedReason ?? ''),
     wordCount: version.wordCount,
+    lengthGate: evaluateChapterLength(version.content, chapter?.wordTarget),
     contentPreview: version.content.slice(0, 180),
     content: version.content,
     scoring: toQualityScoring(metadata.scoring, version.reviewScore ?? 0),
@@ -4334,15 +4356,27 @@ function getImpactStatusText(status: ImpactCaseVisibleStatus) {
   return '已取消';
 }
 
-function bindTrialChapterOneCandidates(chapters: NovelChapterRecord[], candidates: TrialChapterCandidateDraft[]): TrialChapterCandidateDraft[] { const chapter = chapters.find((item) => item.chapterNo === 1); if (!chapter) throw new BusinessError(ErrorCode.ValidationError, '缺少权威第1章，无法保存试写候选。'); if (candidates.some((candidate) => candidate.chapterId !== chapter.id || candidate.chapterNo !== chapter.chapterNo)) throw new BusinessError(ErrorCode.ValidationError, '模型返回的首章标识与权威章节不一致。'); return candidates.map((candidate) => ({ ...candidate, chapterId: chapter.id, chapterNo: chapter.chapterNo })); }
+function bindTrialChapterOneCandidates(chapters: NovelChapterRecord[], candidates: TrialChapterCandidateDraft[]): TrialChapterCandidateDraft[] {
+  const chapter = chapters.find((item) => item.chapterNo === 1);
+  if (!chapter) throw new BusinessError(ErrorCode.ValidationError, '缺少权威第1章，无法保存试写候选。');
+  if (candidates.some((candidate) => candidate.chapterId !== chapter.id || candidate.chapterNo !== chapter.chapterNo)) {
+    throw new BusinessError(ErrorCode.ValidationError, '模型返回的首章标识与权威章节不一致。');
+  }
+  return candidates.map((candidate) => {
+    assertChapterLengthGate(candidate.content, chapter.wordTarget);
+    return { ...candidate, chapterId: chapter.id, chapterNo: chapter.chapterNo };
+  });
+}
 function bindGeneratedBodyChapter(chapter: NovelChapterRecord, draft: BodyChapterProviderDraft): BodyChapterDraft {
   const providerChapter = draft.chapter;
   if (providerChapter.id !== chapter.id || providerChapter.chapterNo !== chapter.chapterNo) {
     throw new BusinessError(ErrorCode.ValidationError, '模型返回的章节标识与请求章节不一致。');
   }
   if (draft.featureCard.chapterId !== chapter.id) throw new BusinessError(ErrorCode.ValidationError, '模型返回的章节特性卡与请求章节不一致。');
+  const lengthGate = assertChapterLengthGate(draft.content, chapter.wordTarget);
   return {
     ...constructTrialFollowupChapterDraft(chapter, draft),
+    lengthGate,
     memory: {
       previousSummary: draft.memory.previousSummary,
       characterStates: [...draft.memory.characterStates],
@@ -4381,6 +4415,7 @@ function bindTrialFollowupChapters(
     if (!chapter || chapter.chapterNo !== providerChapter.chapterNo) throw new BusinessError(ErrorCode.ValidationError, '模型返回了不属于当前试写范围的章节。');
     if (seenChapterIds.has(chapter.id)) throw new BusinessError(ErrorCode.ValidationError, '模型重复返回了同一试写章节。');
     if (draft.featureCard.chapterId !== chapter.id) throw new BusinessError(ErrorCode.ValidationError, '模型返回的章节特性卡与试写章节不一致。');
+    assertChapterLengthGate(draft.content, chapter.wordTarget);
     const chapterScore = chapterScoresByNo.get(providerChapter.chapterNo);
     if (!chapterScore || chapterScore.score !== draft.scoring.totalScore || draft.scoring.totalScore !== draft.review.totalScore || chapterScore.hardFailed !== draft.hardFailed || draft.scoring.hardFailure !== draft.hardFailed || (typeof draft.review.metadata.hardFailed === 'boolean' && draft.review.metadata.hardFailed !== draft.hardFailed)) throw new BusinessError(ErrorCode.ValidationError, '模型试写章节评分或硬失败标记不一致。');
     seenChapterIds.add(chapter.id);
@@ -4390,6 +4425,33 @@ function bindTrialFollowupChapters(
     throw new BusinessError(ErrorCode.ValidationError, '模型未完整返回当前试写范围章节。');
   }
   return bound;
+}
+
+function assertChapterLengthGate(content: string, target: number | null): ChapterLengthGateDTO {
+  const lengthGate = evaluateChapterLength(content, target);
+  if (!lengthGate.canAdopt) {
+    const reasonCode = lengthGate.status === 'unconfigured'
+      ? 'NOVEL_CONTENT_LENGTH_TARGET_MISSING'
+      : 'NOVEL_CONTENT_LENGTH_OUT_OF_RANGE';
+    throw new BusinessError(
+      ErrorCode.GateBlocked,
+      lengthGate.status === 'unconfigured'
+        ? lengthGate.statusText
+        : `${lengthGate.statusText} 本次结果未保存，请调整生成要求后重新生成。`,
+      { reasonCode, lengthGate }
+    );
+  }
+  return lengthGate;
+}
+
+function assertChapterLengthTargetConfigured(target: number | null | undefined): asserts target is number {
+  if (!Number.isInteger(target) || Number(target) <= 0) {
+    throw new BusinessError(
+      ErrorCode.GateBlocked,
+      '本章未配置有效的目标字符数，请先更新章节目录中的目标字数。',
+      { reasonCode: 'NOVEL_CONTENT_LENGTH_TARGET_MISSING' }
+    );
+  }
 }
 
 function constructTrialFollowupChapterDraft(

@@ -11,6 +11,8 @@ import {
   type AdoptChapterContentVersionRequest,
   type AdoptStructureAssetRequest,
   type BodyBatchActionResultDTO,
+  type BodyBatchChapterResultDTO,
+  type ChapterLengthGateDTO,
   type ChapterWorkbenchDTO,
   type CompletionActionResultDTO,
   type ConfirmCompletionRequest,
@@ -61,7 +63,7 @@ import { novels } from '../../../mock/prototypeData.js'
 import { getApiMode, type ApiMode } from '../../../shared/services/apiMode.js'
 import { apiRequest } from '../../../shared/services/http.js'
 import type { Novel } from '../../../types/prototype'
-import type { DirectionCandidateRow, NovelChapterPlanRow, NovelListQuery, NovelListResult, NovelListRow, StructureAssetRow, TrialCandidateRow, TrialChapterResultRow } from '../model/novelTypes.js'
+import type { BodyBatchChapterResultRow, ChapterLengthGateRow, DirectionCandidateRow, NovelChapterPlanRow, NovelListQuery, NovelListResult, NovelListRow, StructureAssetRow, TrialCandidateRow, TrialChapterResultRow } from '../model/novelTypes.js'
 
 const mockDetailOverrides = new Map<string, Partial<NovelDetailDTO>>()
 
@@ -774,6 +776,124 @@ export function toStructureAssetRow(asset: StructureAssetDTO): StructureAssetRow
   }
 }
 
+type TrialCandidateWithLengthGate = Omit<TrialChapterCandidateDTO, 'lengthGate'> & { lengthGate?: ChapterLengthGateDTO | null }
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0
+}
+
+function invalidLengthGateRow(): ChapterLengthGateRow {
+  return {
+    metric: 'invalid',
+    metricText: '忽略空白、含标点',
+    target: null,
+    lowerBound: null,
+    upperBound: null,
+    actual: null,
+    targetText: '-',
+    rangeText: '-',
+    actualText: '-',
+    status: 'invalid',
+    statusText: '门禁数据异常',
+    tagType: 'danger',
+    canAdopt: false,
+    adoptDisabledReason: '长度门禁数据不完整，已阻止采用；请重新生成或刷新后重试。',
+    authoritative: true,
+  }
+}
+
+export function toChapterLengthGateRow(input: unknown): ChapterLengthGateRow | null {
+  if (input === undefined || input === null) return null
+  if (typeof input !== 'object') return invalidLengthGateRow()
+
+  const gate = input as Partial<ChapterLengthGateDTO>
+  const baseValid = gate.metric === 'unicode_code_point_non_whitespace_nfc_v1' &&
+    isNonNegativeInteger(gate.actual) &&
+    ['unconfigured', 'pass', 'too_short', 'too_long'].includes(gate.status ?? '') &&
+    typeof gate.statusText === 'string' && gate.statusText.trim().length > 0 &&
+    typeof gate.canAdopt === 'boolean'
+  if (!baseValid) return invalidLengthGateRow()
+  const actual = gate.actual as number
+
+  const unconfigured = gate.status === 'unconfigured'
+  if (unconfigured) {
+    if (gate.target !== null || gate.lowerBound !== null || gate.upperBound !== null || gate.canAdopt) return invalidLengthGateRow()
+  } else {
+    if (!isNonNegativeInteger(gate.target) || !isNonNegativeInteger(gate.lowerBound) || !isNonNegativeInteger(gate.upperBound)) return invalidLengthGateRow()
+    if (gate.lowerBound > gate.upperBound || gate.target < gate.lowerBound || gate.target > gate.upperBound) return invalidLengthGateRow()
+    if (gate.status === 'pass' && (!gate.canAdopt || actual < gate.lowerBound || actual > gate.upperBound)) return invalidLengthGateRow()
+    if (gate.status === 'too_short' && (gate.canAdopt || actual >= gate.lowerBound)) return invalidLengthGateRow()
+    if (gate.status === 'too_long' && (gate.canAdopt || actual <= gate.upperBound)) return invalidLengthGateRow()
+  }
+
+  const status = gate.status as string
+  const canAdopt = gate.canAdopt as boolean
+  const tagType = status === 'too_short'
+    ? 'warning'
+    : status === 'too_long'
+      ? 'danger'
+      : status === 'unconfigured'
+        ? 'info'
+      : 'success'
+  const target = gate.target ?? null
+  const lowerBound = gate.lowerBound ?? null
+  const upperBound = gate.upperBound ?? null
+  const statusText = status === 'unconfigured'
+    ? '未配置'
+    : status === 'pass'
+      ? '字符数合格'
+      : status === 'too_short'
+        ? '字符数偏少'
+        : '字符数偏多'
+
+  return {
+    metric: gate.metric as string,
+    metricText: '忽略空白、含标点',
+    target,
+    lowerBound,
+    upperBound,
+    actual,
+    targetText: target === null ? '未配置' : String(target),
+    rangeText: lowerBound === null || upperBound === null ? '未配置' : `${lowerBound}-${upperBound}`,
+    actualText: String(actual),
+    status,
+    statusText,
+    tagType,
+    canAdopt,
+    adoptDisabledReason: canAdopt
+      ? null
+      : status === 'unconfigured'
+        ? '尚未配置章节字符数目标，已阻止采用；请先配置目标字符数后重新生成。'
+        : `${statusText}：实际 ${actual}，合格区间 ${lowerBound}-${upperBound}；请重新生成达到要求后再采用。`,
+    authoritative: true,
+  }
+}
+
+function createPlannedLengthGateRow(chapter: NovelChapterDTO): ChapterLengthGateRow {
+  const hasContent = Boolean(chapter.currentContentVersionId)
+  const target = chapter.wordTarget
+  const isConfigured = target !== null
+  const lowerBound = isConfigured ? Math.ceil((target * 90) / 100) : null
+  const upperBound = isConfigured ? Math.floor((target * 115) / 100) : null
+  return {
+    metric: 'unicode_code_point_non_whitespace_nfc_v1',
+    metricText: '忽略空白、含标点',
+    target,
+    lowerBound,
+    upperBound,
+    actual: hasContent ? chapter.wordCount : null,
+    targetText: isConfigured ? String(target) : '未配置',
+    rangeText: lowerBound === null || upperBound === null ? '未配置' : `${lowerBound}-${upperBound}`,
+    actualText: hasContent ? String(chapter.wordCount) : '尚未生成',
+    status: isConfigured ? (hasContent ? 'not_evaluated' : 'pending') : 'unconfigured',
+    statusText: isConfigured ? (hasContent ? '待后端校验' : '待生成') : '未配置',
+    tagType: isConfigured ? 'info' : 'warning',
+    canAdopt: false,
+    adoptDisabledReason: isConfigured ? null : '尚未配置章节字符数目标，已阻止后续采用。',
+    authoritative: false,
+  }
+}
+
 export function toNovelChapterPlanRow(chapter: NovelChapterDTO): NovelChapterPlanRow {
   return {
     id: chapter.id,
@@ -786,11 +906,15 @@ export function toNovelChapterPlanRow(chapter: NovelChapterDTO): NovelChapterPla
     statusNote: chapter.statusNote ?? '正文尚未生成',
     impactLevelText: getImpactLevelText(chapter.impactLevel),
     hasCurrentContent: Boolean(chapter.currentContentVersionId),
+    lengthGate: createPlannedLengthGateRow(chapter),
   }
 }
 
 export function toTrialCandidateRow(candidate: TrialChapterCandidateDTO): TrialCandidateRow {
   const score = candidate.scoring.totalScore
+  const lengthGate = toChapterLengthGateRow((candidate as TrialCandidateWithLengthGate).lengthGate)
+  const canSelectByStatus = candidate.status === VersionStatus.Candidate
+  const canSelect = canSelectByStatus && lengthGate?.canAdopt === true
 
   return {
     id: candidate.id,
@@ -810,15 +934,21 @@ export function toTrialCandidateRow(candidate: TrialChapterCandidateDTO): TrialC
     aiRecommendedReason: candidate.aiRecommendedReason,
     isAiRecommended: candidate.isAiRecommended,
     isSelected: candidate.isSelected,
-    canSelect: candidate.status === VersionStatus.Candidate,
+    canSelectByStatus,
+    canSelect,
+    selectDisabledReason: canSelect
+      ? null
+      : lengthGate?.adoptDisabledReason ?? (canSelectByStatus ? '缺少权威字符数门禁结果，已阻止采用，请重新生成。' : '该候选当前状态不允许采用。'),
     requiresRiskConfirm: score < 75 || candidate.scoring.gateResult !== 'pass',
     evidence: candidate.scoring.evidence,
     penalties: candidate.scoring.penalties,
     content: candidate.content,
+    lengthGate,
   }
 }
 
 export function toTrialChapterResultRow(result: TrialChapterResultDTO): TrialChapterResultRow {
+  const lengthGate = toChapterLengthGateRow((result.contentVersion as TrialCandidateWithLengthGate | null)?.lengthGate)
   return {
     id: result.id,
     chapterId: result.chapterId,
@@ -830,6 +960,21 @@ export function toTrialChapterResultRow(result: TrialChapterResultDTO): TrialCha
     hardFailureReasons: result.hardFailureReasons,
     summary: result.contentVersion?.first300Summary ?? result.reviewReport?.summary ?? '暂无摘要',
     issueCount: result.reviewReport?.issues.length ?? 0,
+    lengthGate,
+  }
+}
+
+export function toBodyBatchChapterResultRow(result: BodyBatchChapterResultDTO): BodyBatchChapterResultRow {
+  return {
+    chapterId: result.chapterId,
+    chapterNo: result.chapterNo,
+    title: result.title,
+    status: result.status,
+    statusText: result.statusText,
+    score: result.score,
+    recommendedAction: result.recommendedAction,
+    hardFailed: result.hardFailed,
+    lengthGate: toChapterLengthGateRow(result.lengthGate),
   }
 }
 
@@ -1172,6 +1317,30 @@ function applyHighRiskConfirmationFixture(detail: NovelDetailDTO, novelId: strin
     return
   }
 
+  if (novelId === 'qa-length-gate') {
+    const trialResult = createMockTrialActionResult(novelId, {})
+    const shortCandidate = trialResult.trialRun.chapterOneCandidates[1]
+    if (!shortCandidate) throw new Error('QA length-gate fixture requires a second trial candidate')
+    shortCandidate.lengthGate = {
+      metric: 'unicode_code_point_non_whitespace_nfc_v1',
+      target: 2200,
+      lowerBound: 1980,
+      upperBound: 2530,
+      actual: 1420,
+      status: 'too_short',
+      statusText: '字符数偏少',
+      canAdopt: false,
+    }
+    detail.title = 'QA 章节字符数门禁夹具'
+    detail.creationStage = NovelCreationStage.Trial
+    detail.stageStatus = StageStatus.WaitingUser
+    detail.statusSummary = trialResult.statusSummary
+    detail.latestTrialRun = trialResult.trialRun
+    detail.recentTask = trialResult.task
+    detail.recentTasks = [trialResult.task]
+    return
+  }
+
   if (novelId === 'qa-body-batch') {
     const bodyGeneration = createMockBodyGenerationState('qa-body-strategy-001', 3)
     detail.creationStage = NovelCreationStage.Body
@@ -1248,6 +1417,7 @@ function applyHighRiskConfirmationFixture(detail: NovelDetailDTO, novelId: strin
 
 function getHighRiskFixtureTitle(novelId: string) {
   if (novelId === 'qa-risk-trial') return 'QA 风险试写确认夹具'
+  if (novelId === 'qa-length-gate') return 'QA 章节字符数门禁夹具'
   if (novelId === 'qa-body-batch') return 'QA 批量正文确认夹具'
   if (novelId === 'qa-full-review') return 'QA 全书审稿确认夹具'
   if (novelId === 'qa-video-readiness') return 'QA 待视频化确认夹具'
@@ -1689,7 +1859,8 @@ function createMockTrialCandidate(score: number, index: number, selectedId?: str
     '手机跳出陌生短信：今晚八点，旧码头仓库，一个人来。',
   ].join('\n\n')
 
-  return {
+  const actualLength = content.replace(/\s/g, '').length
+  const candidate: TrialCandidateWithLengthGate = {
     id,
     chapterId: 'mock-chapter-1',
     chapterNo: 1,
@@ -1707,7 +1878,17 @@ function createMockTrialCandidate(score: number, index: number, selectedId?: str
     riskLevel: score < 75 ? RiskLevel.Medium : RiskLevel.Low,
     riskTags: score < 75 ? ['节奏风险'] : ['节奏稳定'],
     aiRecommendedReason: index === 1 ? '综合分最高，压迫和钩子更均衡。' : '可作为备选版本。',
-    wordCount: content.replace(/\s/g, '').length,
+    wordCount: actualLength,
+    lengthGate: {
+      metric: 'unicode_code_point_non_whitespace_nfc_v1',
+      target: actualLength,
+      lowerBound: Math.max(0, actualLength - 20),
+      upperBound: actualLength + 20,
+      actual: actualLength,
+      status: 'pass' as const,
+      statusText: '字符数合格',
+      canAdopt: true,
+    },
     contentPreview: content.slice(0, 180),
     content,
     scoring: {
@@ -1726,6 +1907,8 @@ function createMockTrialCandidate(score: number, index: number, selectedId?: str
     },
     createdAt: new Date().toISOString(),
   }
+
+  return candidate as TrialChapterCandidateDTO
 }
 
 function createMockTrialChapterResult(chapterNo: number, candidate?: TrialChapterCandidateDTO): TrialChapterResultDTO {
@@ -1875,21 +2058,32 @@ function createMockBodyBatchActionResult(novelId: string, request: Pick<Generate
 }
 
 function createMockBodyBatchChapterResult(chapterNo: number) {
+  const lengthQualified = true
   return {
     chapterId: `mock-chapter-${chapterNo}`,
     chapterNo,
     title: `第${chapterNo}章 正文节点`,
-    status: 'completed' as const,
-    statusText: '已生成',
-    contentVersionId: `mock-content-${chapterNo}`,
-    featureCardId: `mock-feature-${chapterNo}`,
-    reviewReportId: `mock-review-${chapterNo}`,
-    longTermMemoryId: `mock-memory-${chapterNo}`,
+    status: (lengthQualified ? 'completed' : 'failed') as 'completed' | 'failed',
+    statusText: lengthQualified ? '已生成' : '字符数门禁未通过',
+    contentVersionId: lengthQualified ? `mock-content-${chapterNo}` : null,
+    featureCardId: lengthQualified ? `mock-feature-${chapterNo}` : null,
+    reviewReportId: lengthQualified ? `mock-review-${chapterNo}` : null,
+    longTermMemoryId: lengthQualified ? `mock-memory-${chapterNo}` : null,
     score: chapterNo === 5 ? 66 : 84,
     riskLevel: chapterNo === 5 ? RiskLevel.Medium : RiskLevel.Low,
     hardFailed: false,
     statusNote: chapterNo === 5 ? '普通风险，已记录。' : null,
     recommendedAction: chapterNo === 5 ? '批次完成后可优化本章' : '继续下一章',
+    lengthGate: {
+      metric: 'unicode_code_point_non_whitespace_nfc_v1' as const,
+      target: 2200,
+      lowerBound: 1980,
+      upperBound: 2530,
+      actual: 2240,
+      status: 'pass' as const,
+      statusText: '字符数合格',
+      canAdopt: true,
+    },
   }
 }
 

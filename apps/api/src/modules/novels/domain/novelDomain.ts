@@ -8,6 +8,7 @@ import {
   VersionStatus,
   type BodyBatchChapterResultDTO,
   type BodyBatchStatus,
+  type ChapterLengthGateDTO,
   type ChapterSummaryCompareDTO,
   type FirstVideoSuggestionDTO,
   type FullReviewGateResult,
@@ -448,6 +449,7 @@ export interface BodyChapterDraft {
   memory: Omit<LongTermMemoryRecord, 'id' | 'tenantId' | 'novelId' | 'chapterId' | 'sourceContentVersionId' | 'status' | 'staleLevel' | 'sourceTaskId' | 'createdAt'>;
   hardFailed: boolean;
   hardFailureReasons: string[];
+  lengthGate: ChapterLengthGateDTO;
 }
 
 export interface BodyBatchSummaryRecord {

@@ -864,6 +864,17 @@ export interface QualityScoringDTO {
   hardFailureReasons: string[];
 }
 
+export interface ChapterLengthGateDTO {
+  metric: 'unicode_code_point_non_whitespace_nfc_v1';
+  target: number | null;
+  lowerBound: number | null;
+  upperBound: number | null;
+  actual: number;
+  status: 'unconfigured' | 'pass' | 'too_short' | 'too_long';
+  statusText: string;
+  canAdopt: boolean;
+}
+
 export interface TrialChapterCandidateDTO {
   id: string;
   chapterId: string;
@@ -883,6 +894,7 @@ export interface TrialChapterCandidateDTO {
   riskTags: string[];
   aiRecommendedReason: string;
   wordCount: number;
+  lengthGate: ChapterLengthGateDTO;
   contentPreview: string;
   content: string;
   scoring: QualityScoringDTO;
@@ -1044,6 +1056,7 @@ export interface BodyBatchChapterResultDTO {
   score: number | null;
   riskLevel: RiskLevel;
   hardFailed: boolean;
+  lengthGate?: ChapterLengthGateDTO;
   statusNote: string | null;
   recommendedAction: string;
 }

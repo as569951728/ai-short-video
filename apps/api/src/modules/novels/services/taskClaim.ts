@@ -995,6 +995,9 @@ function getPublicClaimFailure(
     };
   }
 
+  const chapterLengthFailure = getChapterLengthFailure(error);
+  if (chapterLengthFailure) return chapterLengthFailure;
+
   if (isPublicOutputFormatFailure(error)) {
     return {
       errorCode: 'PROVIDER_ERROR',
@@ -1009,6 +1012,31 @@ function getPublicClaimFailure(
     errorMessage: '模型服务调用失败。',
     failureCategory: 'provider_error',
     statusNote: '模型服务调用失败，请稍后重试。'
+  };
+}
+
+function getChapterLengthFailure(error: unknown) {
+  if (!(error instanceof BusinessError)) return null;
+  const details = toRecord(error.details);
+  if (details.reasonCode !== 'NOVEL_CONTENT_LENGTH_OUT_OF_RANGE') return null;
+  const gate = toRecord(details.lengthGate);
+  const status = gate.status;
+  const actual = gate.actual;
+  const lowerBound = gate.lowerBound;
+  const upperBound = gate.upperBound;
+  if (
+    (status !== 'too_short' && status !== 'too_long')
+    || !Number.isInteger(actual)
+    || !Number.isInteger(lowerBound)
+    || !Number.isInteger(upperBound)
+  ) return null;
+  const readableStatus = status === 'too_short' ? '偏短' : '偏长';
+  const message = `正文字符数${readableStatus}：实际 ${actual}，允许范围 ${lowerBound}-${upperBound}。本次结果未保存。`;
+  return {
+    errorCode: 'NOVEL_CONTENT_LENGTH_OUT_OF_RANGE',
+    errorMessage: message,
+    failureCategory: 'content_length_out_of_range',
+    statusNote: message
   };
 }
 

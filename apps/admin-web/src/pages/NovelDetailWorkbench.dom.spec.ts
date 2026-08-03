@@ -92,6 +92,7 @@ vi.mock('../modules/novels/services/novelService', () => {
       canAdopt: (candidate.status ?? VersionStatus.Candidate) === VersionStatus.Candidate && candidate.staleLevel !== StaleLevel.HardStale,
     }),
     toNovelChapterPlanRow: (chapter: unknown) => chapter,
+    toBodyBatchChapterResultRow: (result: unknown) => result,
     toStructureAssetRow: (asset: Record<string, unknown>) => ({
       id: asset.id,
       title: asset.title,
@@ -542,6 +543,285 @@ describe('NovelDetailWorkbench DOM behavior', () => {
     await nextTick()
     expect(document.getElementById('trial-candidate-trial-generated')?.classList.contains('result-focus-card')).toBe(false)
     scrollIntoView.mockRestore()
+  })
+
+  it('renders the non-whitespace length gate and blocks an under-length trial candidate from selection', async () => {
+    mocks.route.query = { step: 'trial' }
+    const trialRun: any = createTrialRunFixture()
+    trialRun.status = 'review_ready'
+    trialRun.chapterOneCandidates[0] = {
+      ...trialRun.chapterOneCandidates[0],
+      canSelect: false,
+      selectDisabledReason: '字符数偏少：实际 1420，合格区间 1800-2300；请重新生成达到要求后再采用。',
+      lengthGate: {
+        ...trialRun.chapterOneCandidates[0].lengthGate,
+        actual: 1420,
+        actualText: '1420',
+        status: 'too_short',
+        statusText: '字符数偏少',
+        tagType: 'warning',
+        canAdopt: false,
+        adoptDisabledReason: '字符数偏少：实际 1420，合格区间 1800-2300；请重新生成达到要求后再采用。',
+      },
+    }
+    trialRun.chapterResults = [{
+      id: 'trial-result-dom-002',
+      chapterId: 'chapter-dom-002',
+      chapterNo: 2,
+      title: '连续性试写',
+      statusText: '已生成',
+      scoreText: '82',
+      hardFailed: false,
+      hardFailureReasons: [],
+      summary: '第二章试写摘要',
+      issueCount: 0,
+      lengthGate: {
+        ...trialRun.chapterOneCandidates[0].lengthGate,
+        actual: 1580,
+        actualText: '1580',
+      },
+    }]
+    trialRun.trialReview = {
+      totalScore: 82,
+      trialResultText: '试写通过',
+      recommendedAction: '确认试写结果',
+      requiresRiskConfirmation: false,
+      allowNextStep: true,
+      strengths: ['连续性清楚'],
+      problems: [],
+      suggestions: [],
+    }
+    mocks.getNovelDetail.mockResolvedValue(createNovelDetail({
+      creationStage: NovelCreationStage.Trial,
+      stageStatus: StageStatus.WaitingUser,
+      currentAssets: { direction: {}, setting: {}, outline: {}, stageOutline: {}, chapterPlan: { id: 'chapter-plan-current' } },
+      statusSummary: {
+        displayStatusText: '试写调试',
+        recommendedAction: { type: 'confirm_trial_review', label: '确认试写总评', reason: '确认后进入正文' },
+      },
+      latestTrialRun: trialRun,
+    }))
+
+    wrapper = mount(NovelDetailWorkbench, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    const candidate = wrapper.find('#trial-candidate-trial-candidate-risk-001')
+    expect(candidate.text()).toContain('口径：忽略空白、含标点')
+    expect(candidate.text()).toContain('实际 1420')
+    expect(candidate.text()).toContain('目标 2000')
+    expect(candidate.text()).toContain('合格区间 1800-2300')
+    expect(candidate.text()).toContain('字符数偏少')
+    expect(candidate.find('[data-length-gate-status="too_short"] .el-tag--warning').exists()).toBe(true)
+    expect(candidate.findAll('button').find((button) => button.text() === '选这个继续试写')?.attributes('disabled')).toBeDefined()
+    expect(candidate.findAll('button').map((button) => button.text())).toContain('重新生成字符数合格候选')
+    expect(wrapper.text()).toContain('第 2-3 章存在字符数不合格结果')
+    expect(wrapper.findAll('button').find((button) => button.text() === '确认试写并生成策略快照')?.attributes('disabled')).toBeDefined()
+    expect(mocks.generateTrial).not.toHaveBeenCalled()
+  })
+
+  it('requires explicit billing confirmation before retrying an under-length trial candidate', async () => {
+    mocks.route.query = { step: 'trial' }
+    const trialRun: any = createTrialRunFixture()
+    trialRun.chapterOneCandidates[0] = {
+      ...trialRun.chapterOneCandidates[0],
+      canSelect: false,
+      selectDisabledReason: '字符数偏少，请重新生成。',
+      lengthGate: {
+        ...trialRun.chapterOneCandidates[0].lengthGate,
+        actual: 1420,
+        actualText: '1420',
+        status: 'too_short',
+        statusText: '字符数偏少',
+        canAdopt: false,
+      },
+    }
+    const detail = createNovelDetail({
+      creationStage: NovelCreationStage.Trial,
+      stageStatus: StageStatus.WaitingUser,
+      currentAssets: { direction: {}, setting: {}, outline: {}, stageOutline: {}, chapterPlan: { id: 'chapter-plan-current' } },
+      latestTrialRun: trialRun,
+    })
+    mocks.getNovelDetail.mockResolvedValue(detail)
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValueOnce('cancel')
+
+    wrapper = mount(NovelDetailWorkbench, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    const retryButton = wrapper.find('#trial-candidate-trial-candidate-risk-001').findAll('button')
+      .find((button) => button.text() === '重新生成字符数合格候选')
+    await retryButton?.trigger('click')
+    await flushPromises()
+
+    expect(confirmSpy).toHaveBeenCalledTimes(1)
+    expect(String(confirmSpy.mock.calls[0]?.[0])).toContain('新的模型调用')
+    expect(String(confirmSpy.mock.calls[0]?.[0])).toContain('可能产生新的模型费用')
+    expect(String(confirmSpy.mock.calls[0]?.[0])).toContain('不会被采用或自动续写')
+    expect(mocks.generateTrial).not.toHaveBeenCalled()
+
+    confirmSpy.mockResolvedValueOnce('confirm' as never)
+    mocks.generateTrial.mockResolvedValue({ task: { resultVersionIds: [] } })
+    await retryButton?.trigger('click')
+    await flushPromises()
+
+    expect(mocks.generateTrial).toHaveBeenCalledTimes(1)
+    expect(mocks.generateTrial).toHaveBeenCalledWith('novel-dom-001', {
+      chapterCount: 3,
+      regenerateReason: '基于 v1 优化开篇并满足长度门禁',
+    })
+    confirmSpy.mockRestore()
+  })
+
+  it('fails closed when trial candidates or generated trial chapters are missing length evidence', async () => {
+    mocks.route.query = { step: 'trial' }
+    const trialRun: any = createTrialRunFixture()
+    trialRun.status = 'review_ready'
+    trialRun.chapterOneCandidates[0] = {
+      ...trialRun.chapterOneCandidates[0],
+      isSelected: true,
+      canSelect: false,
+      selectDisabledReason: '缺少权威字符数门禁结果，已阻止采用，请重新生成。',
+      lengthGate: null,
+    }
+    trialRun.chapterResults = [{
+      id: 'trial-result-missing-gate',
+      chapterId: 'chapter-dom-002',
+      chapterNo: 2,
+      title: '缺失门禁证据',
+      statusText: '已生成',
+      scoreText: '90',
+      hardFailed: false,
+      hardFailureReasons: [],
+      summary: '结果摘要',
+      issueCount: 0,
+      lengthGate: null,
+    }]
+    trialRun.trialReview = {
+      totalScore: 90,
+      trialResultText: '试写通过',
+      recommendedAction: '确认试写结果',
+      requiresRiskConfirmation: false,
+      allowNextStep: true,
+      strengths: [],
+      problems: [],
+      suggestions: [],
+    }
+    mocks.getNovelDetail.mockResolvedValue(createNovelDetail({
+      creationStage: NovelCreationStage.Trial,
+      stageStatus: StageStatus.WaitingUser,
+      currentAssets: { direction: {}, setting: {}, outline: {}, stageOutline: {}, chapterPlan: { id: 'chapter-plan-current' } },
+      statusSummary: { displayStatusText: '试写调试', recommendedAction: { type: 'confirm_trial_review', label: '确认试写总评', reason: '确认后进入正文' } },
+      latestTrialRun: trialRun,
+    }))
+
+    wrapper = mount(NovelDetailWorkbench, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('缺少权威字符数门禁结果')
+    expect(wrapper.findAll('button').find((button) => button.text() === '选这个继续试写')?.attributes('disabled')).toBeDefined()
+    expect(wrapper.findAll('button').find((button) => button.text() === '确认试写并生成策略快照')?.attributes('disabled')).toBeDefined()
+  })
+
+  it('shows length target context in the chapter plan and authoritative gates in body batch results', async () => {
+    mocks.route.query = { step: 'chapterPlan' }
+    const plannedGate = {
+      metric: 'non_whitespace_characters',
+      metricText: '忽略空白、含标点',
+      target: 2200,
+      lowerBound: 1980,
+      upperBound: 2530,
+      actual: null,
+      targetText: '2200',
+      rangeText: '1980-2530',
+      actualText: '尚未生成',
+      status: 'pending',
+      statusText: '待生成',
+      tagType: 'info',
+      canAdopt: false,
+      adoptDisabledReason: null,
+      authoritative: false,
+    }
+    mocks.getNovelDetail.mockResolvedValueOnce(createNovelDetail({
+      creationStage: NovelCreationStage.Trial,
+      currentAssets: { direction: {}, setting: {}, outline: {}, stageOutline: {}, chapterPlan: { id: 'chapter-plan-current' } },
+      chapters: [{
+        id: 'chapter-dom-001',
+        chapterNo: 1,
+        stageIndex: 1,
+        title: '第一章',
+        wordTarget: '2200',
+        wordCount: '0',
+        statusText: '待试写',
+        statusNote: '正文尚未生成',
+        impactLevelText: '无影响',
+        hasCurrentContent: false,
+        lengthGate: plannedGate,
+      }],
+    }))
+
+    wrapper = mount(NovelDetailWorkbench, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    expect(wrapper.text()).toContain('长度门禁（忽略空白、含标点）')
+    expect(wrapper.text()).toContain('实际 尚未生成')
+    expect(wrapper.text()).toContain('目标 2200')
+    expect(wrapper.text()).toContain('合格区间 1980-2530')
+    wrapper.unmount()
+
+    mocks.route.query = { step: 'body' }
+    const bodyGate = {
+      ...plannedGate,
+      actual: 2800,
+      actualText: '2800',
+      status: 'too_long',
+      statusText: '字符数偏多',
+      tagType: 'danger',
+      authoritative: true,
+    }
+    mocks.getNovelDetail.mockResolvedValueOnce(createNovelDetail({
+      creationStage: NovelCreationStage.Body,
+      stageStatus: StageStatus.NotStarted,
+      currentAssets: { direction: {}, setting: {}, outline: {}, stageOutline: {}, chapterPlan: { id: 'chapter-plan-current' } },
+      bodyGeneration: createBodyGenerationFixture(bodyGate),
+    }))
+    wrapper = mount(NovelDetailWorkbench, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    expect(wrapper.text()).toContain('实际 2800')
+    expect(wrapper.text()).toContain('字符数偏多')
+    expect(wrapper.find('[data-length-gate-status="too_long"]').exists()).toBe(true)
+    expect(wrapper.find('[data-length-gate-status="too_long"] .el-tag--danger').exists()).toBe(true)
+    await wrapper.findAll('button').find((button) => button.text() === '查看批次总结')?.trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('button').map((button) => button.text())).toContain('重写本章')
+  })
+
+  it('does not overlay a stale body length gate after the authoritative chapter target changes', async () => {
+    mocks.route.query = { step: 'chapterPlan' }
+    const plannedGate = {
+      metric: 'non_whitespace_characters', metricText: '忽略空白、含标点', target: 2600,
+      lowerBound: 2340, upperBound: 2990, actual: null, targetText: '2600', rangeText: '2340-2990',
+      actualText: '尚未生成', status: 'pending', statusText: '待生成', tagType: 'info',
+      canAdopt: false, adoptDisabledReason: null, authoritative: false,
+    }
+    const staleGeneratedGate = {
+      ...plannedGate, target: 2200, lowerBound: 1980, upperBound: 2530, targetText: '2200', rangeText: '1980-2530',
+      actual: 2240, actualText: '2240', status: 'qualified', statusText: '字符数合格', tagType: 'success', canAdopt: true, authoritative: true,
+    }
+    mocks.getNovelDetail.mockResolvedValue(createNovelDetail({
+      creationStage: NovelCreationStage.Body,
+      currentAssets: { direction: {}, setting: {}, outline: {}, stageOutline: {}, chapterPlan: { id: 'chapter-plan-current' } },
+      chapters: [{
+        id: 'chapter-dom-004', chapterNo: 4, stageIndex: 1, title: '第四章', wordTarget: '2600', wordCount: '0',
+        statusText: '待生成', statusNote: '目标已调整', impactLevelText: '无影响', hasCurrentContent: false, lengthGate: plannedGate,
+      }],
+      bodyGeneration: createBodyGenerationFixture(staleGeneratedGate),
+    }))
+
+    wrapper = mount(NovelDetailWorkbench, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    const chapterGate = wrapper.find('[data-length-gate-status="pending"]')
+    expect(chapterGate.text()).toContain('实际 尚未生成')
+    expect(chapterGate.text()).toContain('目标 2600')
+    expect(chapterGate.text()).toContain('合格区间 2340-2990')
+    expect(chapterGate.text()).not.toContain('2240')
   })
 
   it('shows one current direction, historicalizes the previous version, removes non-candidate controls, and enters setting after adopt', async () => {
@@ -1198,13 +1478,71 @@ function createTrialRunFixture() {
         endingHook: '关键证据突然出现。',
         riskTags: ['低分继续需确认'],
         aiRecommendedReason: '钩子强，但评分偏低。',
+        canSelectByStatus: true,
         canSelect: true,
+        selectDisabledReason: null,
+        lengthGate: {
+          metric: 'non_whitespace_characters',
+          metricText: '忽略空白、含标点',
+          target: 2000,
+          lowerBound: 1800,
+          upperBound: 2200,
+          actual: 1900,
+          targetText: '2000',
+          rangeText: '1800-2200',
+          actualText: '1900',
+          status: 'qualified',
+          statusText: '字符数合格',
+          tagType: 'success',
+          canAdopt: true,
+          adoptDisabledReason: null,
+          authoritative: true,
+        },
         content: '完整正文内容摘要占位',
       },
     ],
     chapterResults: [],
     trialReview: null,
     task: null,
+  }
+}
+
+function createBodyGenerationFixture(lengthGate: Record<string, unknown>) {
+  const chapterResult = {
+    chapterId: 'chapter-dom-004',
+    chapterNo: 4,
+    title: '第四章 正文节点',
+    status: 'completed',
+    statusText: '已生成',
+    score: 84,
+    recommendedAction: '重新生成至合格区间',
+    hardFailed: false,
+    lengthGate,
+  }
+  return {
+    strategySnapshot: {
+      id: 'strategy-dom-001',
+      versionNo: 1,
+      summary: '试写确认后的正文策略',
+    },
+    latestBatch: {
+      id: 'batch-dom-001',
+      status: 'completed',
+      statusText: '本批完成',
+      startChapterNo: 4,
+      endChapterNo: 4,
+      summary: {
+        conclusion: '正文已生成，长度门禁待处理。',
+        chapterResults: [chapterResult],
+        riskTrend: '稳定',
+        nextBatchNotes: [],
+      },
+    },
+    openImpactCases: [],
+    nextBatchRange: { startChapterNo: 5, endChapterNo: 8, text: '第 5-8 章' },
+    chapterProgress: { text: '4/12', pendingChapterCount: 8 },
+    blockingReasons: [],
+    recommendedAction: { label: '生成下一批', reasonText: '继续生成', disabled: false },
   }
 }
 

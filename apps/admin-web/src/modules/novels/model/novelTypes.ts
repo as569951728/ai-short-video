@@ -117,6 +117,27 @@ export interface NovelChapterPlanRow {
   statusNote: string
   impactLevelText: string
   hasCurrentContent: boolean
+  lengthGate: ChapterLengthGateRow
+}
+
+export type LengthGateTagType = 'success' | 'warning' | 'danger' | 'info'
+
+export interface ChapterLengthGateRow {
+  metric: string
+  metricText: string
+  target: number | null
+  lowerBound: number | null
+  upperBound: number | null
+  actual: number | null
+  targetText: string
+  rangeText: string
+  actualText: string
+  status: string
+  statusText: string
+  tagType: LengthGateTagType
+  canAdopt: boolean
+  adoptDisabledReason: string | null
+  authoritative: boolean
 }
 
 export interface TrialCandidateRow {
@@ -137,11 +158,14 @@ export interface TrialCandidateRow {
   aiRecommendedReason: string
   isAiRecommended: boolean
   isSelected: boolean
+  canSelectByStatus: boolean
   canSelect: boolean
+  selectDisabledReason: string | null
   requiresRiskConfirm: boolean
   evidence: string[]
   penalties: string[]
   content: string
+  lengthGate: ChapterLengthGateRow | null
 }
 
 export interface TrialChapterResultRow {
@@ -155,4 +179,17 @@ export interface TrialChapterResultRow {
   hardFailureReasons: string[]
   summary: string
   issueCount: number
+  lengthGate: ChapterLengthGateRow | null
+}
+
+export interface BodyBatchChapterResultRow {
+  chapterId: string
+  chapterNo: number
+  title: string
+  status: string
+  statusText: string
+  score: number | null
+  recommendedAction: string
+  hardFailed: boolean
+  lengthGate: ChapterLengthGateRow | null
 }
