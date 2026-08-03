@@ -18,6 +18,7 @@ import {
   validateExecutionEnvelopeV1_1ForTask,
   WorkerPayloadUnsupportedError
 } from '../domain/executionContract.js';
+import { sanitizeChapterLengthGate } from '../domain/chapterLengthPolicy.js';
 import type {
   ChapterFeatureCardRecord,
   ChapterContentVersionRecord,
@@ -310,7 +311,9 @@ export async function executeClaimedGeneration<TProviderResult, TFinalResult>(
     providerResult = await input.provider(finalProviderInput);
   } catch (error) {
     await failClaimedTask(input, claim.task, error, 'provider_error');
-    throw error instanceof BusinessError ? error : createPublicProviderFailure(error);
+    throw error instanceof BusinessError
+      ? withClaimTrace(error, claim.task, input.context.requestId)
+      : createPublicProviderFailure(error);
   }
 
   const latestTask = await input.repository.findTaskById(input.context.tenantId, claim.task.id);
@@ -337,7 +340,9 @@ export async function executeClaimedGeneration<TProviderResult, TFinalResult>(
     return { reused: false, task: claim.task, value };
   } catch (error) {
     await failClaimedTask(input, claim.task, error, 'save_failed');
-    throw error;
+    throw error instanceof BusinessError
+      ? withClaimTrace(error, claim.task, input.context.requestId)
+      : error;
   }
 }
 
@@ -958,6 +963,14 @@ function sourceStale() {
   });
 }
 
+function withClaimTrace(error: BusinessError, task: GenerationTaskRecord, requestId: string) {
+  return new BusinessError(error.code, error.message, {
+    ...toRecord(error.details),
+    taskId: task.id,
+    requestId
+  });
+}
+
 async function failClaimedTask<TProviderResult, TFinalResult>(
   input: ExecuteClaimedGenerationInput<TProviderResult, TFinalResult>,
   task: GenerationTaskRecord,
@@ -995,6 +1008,9 @@ function getPublicClaimFailure(
     };
   }
 
+  const chapterLengthFailure = getChapterLengthFailure(error);
+  if (chapterLengthFailure) return chapterLengthFailure;
+
   if (isPublicOutputFormatFailure(error)) {
     return {
       errorCode: 'PROVIDER_ERROR',
@@ -1009,6 +1025,33 @@ function getPublicClaimFailure(
     errorMessage: '模型服务调用失败。',
     failureCategory: 'provider_error',
     statusNote: '模型服务调用失败，请稍后重试。'
+  };
+}
+
+function getChapterLengthFailure(error: unknown) {
+  if (!(error instanceof BusinessError)) return null;
+  const details = toRecord(error.details);
+  if (details.reasonCode !== 'NOVEL_CONTENT_LENGTH_OUT_OF_RANGE') return null;
+  const gate = sanitizeChapterLengthGate(details.lengthGate);
+  if (!gate) return null;
+  const status = gate.status;
+  const actual = gate.actual;
+  const lowerBound = gate.lowerBound;
+  const upperBound = gate.upperBound;
+  if (
+    (status !== 'too_short' && status !== 'too_long')
+    || !Number.isInteger(actual)
+    || !Number.isInteger(lowerBound)
+    || !Number.isInteger(upperBound)
+  ) return null;
+  const readableStatus = status === 'too_short' ? '偏短' : '偏长';
+  const message = `正文字符数${readableStatus}：实际 ${actual}，允许范围 ${lowerBound}-${upperBound}。本次结果未保存。`;
+  return {
+    errorCode: 'NOVEL_CONTENT_LENGTH_OUT_OF_RANGE',
+    errorMessage: message,
+    failureCategory: 'content_length_out_of_range',
+    statusNote: message,
+    lengthGate: gate
   };
 }
 

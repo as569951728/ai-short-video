@@ -30,10 +30,13 @@ import {
   rewriteChapter,
   startFullReview,
   toDirectionCandidateRow,
+  toBodyBatchChapterResultRow,
+  toChapterLengthGateRow,
   toNovelChapterPlanRow,
   toNovelListRow,
   toStructureAssetRow,
   toTrialCandidateRow,
+  toTrialChapterResultRow,
 } from './novelService.js'
 import {
   NovelCreationStage,
@@ -44,6 +47,7 @@ import {
   TaskStatus,
   VersionStatus,
   type DirectionActionResultDTO,
+  type BodyBatchChapterResultDTO,
   type DirectionCandidateDTO,
   type NovelDetailDTO,
   type NovelListItemDTO,
@@ -107,6 +111,20 @@ describe('novel service data source switching', () => {
     assert.equal(videoReadiness.stageStatus, StageStatus.Completed)
     assert.equal(videoReadiness.videoReadiness?.status, 'candidate')
     assert.equal(videoReadiness.videoReadiness?.recommendedAction.label, '确认进入待视频化')
+  })
+
+  it('provides a refresh-stable mock fixture for the chapter length gate', async () => {
+    const first = await getNovelDetail('qa-length-gate', 'mock')
+    const refreshed = await getNovelDetail('qa-length-gate', 'mock')
+    const firstRows = first.latestTrialRun?.chapterOneCandidates.map(toTrialCandidateRow) ?? []
+    const refreshedRows = refreshed.latestTrialRun?.chapterOneCandidates.map(toTrialCandidateRow) ?? []
+    const blocked = firstRows.find((candidate) => candidate.lengthGate?.status === 'too_short')
+
+    assert.equal(blocked?.canSelect, false)
+    assert.equal(blocked?.lengthGate?.actualText, '1420')
+    assert.equal(blocked?.lengthGate?.targetText, '2200')
+    assert.equal(blocked?.lengthGate?.rangeText, '1980-2530')
+    assert.equal(refreshedRows.find((candidate) => candidate.id === blocked?.id)?.canSelect, false)
   })
 
   it('maps backend draft DTOs into list rows with detail as the primary action', () => {
@@ -365,7 +383,7 @@ describe('novel service data source switching', () => {
       currentContentVersionId: null,
       createdAt: '2026-06-17T12:00:00.000Z',
       updatedAt: '2026-06-17T12:00:00.000Z',
-    })
+    }, { lowerBound: 1800, upperBound: 2600 })
 
     assert.equal(row.typeText, '章节目录')
     assert.equal(row.status, '候选版本')
@@ -374,6 +392,88 @@ describe('novel service data source switching', () => {
     assert.equal(row.primaryReason, '章节目录字段完整，可以进入试写前置。')
     assert.equal(chapter.statusText, '待试写')
     assert.equal(chapter.wordTarget, '2200')
+    assert.equal(chapter.lengthGate.metricText, '忽略空白、含标点')
+    assert.equal(chapter.lengthGate.actualText, '尚未生成')
+    assert.equal(chapter.lengthGate.rangeText, '1980-2530')
+    assert.equal(chapter.lengthGate.statusText, '待生成')
+
+    const integerBoundary = toNovelChapterPlanRow({
+      id: 'chapter-800',
+      chapterNo: 2,
+      stageIndex: 1,
+      title: '整数边界章节',
+      wordTarget: 800,
+      wordCount: 0,
+      mainStatus: 'pending',
+      statusNote: null,
+      impactLevel: 'none',
+      currentContentVersionId: null,
+      createdAt: '2026-06-17T12:00:00.000Z',
+      updatedAt: '2026-06-17T12:00:00.000Z',
+    })
+    assert.equal(integerBoundary.lengthGate.rangeText, '720-920')
+  })
+
+  it('maps authoritative length gates and fails closed for invalid gate payloads', () => {
+    const shortCandidate = Object.assign(createTrialCandidateDTO(), {
+      lengthGate: {
+        metric: 'unicode_code_point_non_whitespace_nfc_v1',
+        target: 2200,
+        lowerBound: 1980,
+        upperBound: 2530,
+        actual: 1420,
+        status: 'too_short',
+        statusText: '字符数偏少',
+        canAdopt: false,
+      },
+    })
+    const candidateRow = toTrialCandidateRow(shortCandidate)
+    const trialResultRow = toTrialChapterResultRow({
+      id: 'trial-result-002',
+      chapterId: 'chapter-002',
+      chapterNo: 2,
+      title: '第2章 继续试写',
+      status: 'completed',
+      score: 82,
+      hardFailed: false,
+      hardFailureReasons: [],
+      contentVersion: shortCandidate,
+      featureCard: null,
+      reviewReport: null,
+    })
+    const bodyResult: BodyBatchChapterResultDTO & { lengthGate: typeof shortCandidate.lengthGate } = {
+      chapterId: 'chapter-004',
+      chapterNo: 4,
+      title: '第4章 正文节点',
+      status: 'completed',
+      statusText: '已生成',
+      contentVersionId: 'content-004',
+      featureCardId: 'feature-004',
+      reviewReportId: 'review-004',
+      longTermMemoryId: 'memory-004',
+      score: 84,
+      riskLevel: RiskLevel.Low,
+      hardFailed: false,
+      statusNote: null,
+      recommendedAction: '重新生成正文',
+      lengthGate: { ...shortCandidate.lengthGate, actual: 2800, status: 'too_long', statusText: '字符数偏多' },
+    }
+    const bodyRow = toBodyBatchChapterResultRow(bodyResult)
+    const invalidRow = toChapterLengthGateRow({ metric: 'unicode_code_point_non_whitespace_nfc_v1', canAdopt: true })
+    const missingGateRow = toTrialCandidateRow({ ...createTrialCandidateDTO(), lengthGate: undefined } as unknown as TrialChapterCandidateDTO)
+
+    assert.equal(candidateRow.canSelectByStatus, true)
+    assert.equal(candidateRow.canSelect, false)
+    assert.equal(candidateRow.lengthGate?.tagType, 'warning')
+    assert.match(candidateRow.selectDisabledReason ?? '', /实际 1420.*1980-2530/)
+    assert.equal(trialResultRow.lengthGate?.status, 'too_short')
+    assert.equal(bodyRow.lengthGate?.tagType, 'danger')
+    assert.equal(bodyRow.lengthGate?.actualText, '2800')
+    assert.equal(invalidRow?.status, 'invalid')
+    assert.equal(invalidRow?.canAdopt, false)
+    assert.equal(missingGateRow.canSelectByStatus, true)
+    assert.equal(missingGateRow.canSelect, false)
+    assert.match(missingGateRow.selectDisabledReason ?? '', /缺少权威字符数门禁结果/)
   })
 
   it('posts structure generation and adoption requests to the backend', async () => {
@@ -1305,6 +1405,16 @@ function createTrialCandidateDTO(): TrialChapterCandidateDTO {
     riskTags: ['节奏稳定'],
     aiRecommendedReason: '综合分最高。',
     wordCount: 1800,
+    lengthGate: {
+      metric: 'unicode_code_point_non_whitespace_nfc_v1',
+      target: 2000,
+      lowerBound: 1800,
+      upperBound: 2200,
+      actual: 1800,
+      status: 'pass',
+      statusText: '字符数合格',
+      canAdopt: true,
+    },
     contentPreview: '会议室的灯白得刺眼。',
     content: '会议室的灯白得刺眼，所有人都在等她低头签字。',
     scoring: {

@@ -12,6 +12,7 @@ import type {
   NovelProviderInputV1,
   TrialFollowupChapterProviderDraft
 } from '../services/actionExecutionPlan.js';
+import { countChapterLength } from '../domain/chapterLengthPolicy.js';
 
 type TrialChapterOneInput = NovelProviderActionInputFor<'trial_chapter_one_generate'>;
 type TrialFollowupInput = NovelProviderActionInputFor<'trial_followup_generate'>;
@@ -314,7 +315,17 @@ function createChapterBody(novelTitle: string, chapter: ChapterProviderInputV1, 
     paragraphs.splice(1, 0, '她短暂想起母亲临终前的话，情绪几乎压过理智。这个版本人物情绪更细，但反击动作出现稍晚，因此需要后续确认节奏风险。');
   }
 
-  return paragraphs.join('\n\n');
+  return extendToChapterTarget(paragraphs.join('\n\n'), chapter.wordTarget);
+}
+
+function extendToChapterTarget(content: string, target: number | null): string {
+  if (!target || target <= 0) return content;
+  const lowerBound = Math.ceil(target * 0.9);
+  const missing = lowerBound - countChapterLength(content);
+  if (missing <= 0) return content;
+  const filler = '主角继续核对证据推进冲突并确认人物选择';
+  const source = filler.repeat(Math.ceil(missing / Array.from(filler).length));
+  return `${content}\n\n${Array.from(source).slice(0, missing).join('')}`;
 }
 
 function firstSentence(content: string) {

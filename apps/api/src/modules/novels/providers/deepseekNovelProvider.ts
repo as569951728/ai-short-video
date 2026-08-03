@@ -54,6 +54,11 @@ interface DeepSeekNovelProviderOptions {
   reasonerModel?: string;
 }
 
+const SINGLE_PAID_CALL_JSON_POLICY = {
+  outputRepairRetries: 0,
+  transportRetries: 0
+} as const;
+
 export class DeepSeekNovelProvider implements DirectionProvider, StructureProvider, TrialProvider, BodyProvider, FullReviewProvider {
   private readonly model: string;
   private readonly structureModel: string;
@@ -178,29 +183,24 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
     }
 
     const expectedCount = Math.max(2, Math.min(5, input.chapterCount || 3));
-    let actualCount = 0;
+    const wordTargetPolicy = createWordTargetPolicy(input.novel, firstChapter.wordTarget ?? undefined);
+    const candidates = await requestJsonOutput(this.options.client, {
+      taskName: 'novel_trial_chapter_one',
+      model: this.structureModel,
+      ...SINGLE_PAID_CALL_JSON_POLICY,
+      messages: createMessages('生成完整的第1章试写候选，只返回 JSON。每个候选必须是可直接采用的完整章节正文，不得用提纲、摘要或省略号代替正文。', input.novel, {
+        preferences: input.preferences,
+        chapterCount: expectedCount,
+        requiredCandidateCount: expectedCount,
+        chapter: pickChapter(firstChapter),
+        wordTargetPolicy
+      }, M1_OUTPUT_SCHEMA_HINT.trialChapterOne),
+      maxTokens: getChapterSetMaxTokens(Array.from({ length: expectedCount }, () => wordTargetPolicy.target)),
+      validate: (value) => readArray(value, 'candidates').map((item, index) => toTrialCandidateDraft(item, firstChapter, index === 0))
+    });
 
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const candidates = await requestJsonOutput(this.options.client, {
-        taskName: 'novel_trial_chapter_one',
-        model: this.structureModel,
-        messages: createMessages('生成第1章试写候选，只返回 JSON。每个候选的 content 控制在 900-1200 个中文字符，用于开篇方向比较；不要扩写成完整长章。', input.novel, {
-          preferences: input.preferences,
-          chapterCount: expectedCount,
-          requiredCandidateCount: expectedCount,
-          retryReason: attempt > 0 ? '上一轮返回候选数量不足，请补齐到要求数量。' : undefined,
-          chapter: pickChapter(firstChapter)
-        }, M1_OUTPUT_SCHEMA_HINT.trialChapterOne),
-        maxTokens: 4200,
-        validate: (value) => readArray(value, 'candidates').map((item, index) => toTrialCandidateDraft(item, firstChapter, index === 0))
-      });
-
-      actualCount = candidates.length;
-      if (actualCount >= expectedCount) {
-        return candidates.slice(0, expectedCount);
-      }
-    }
-
+    const actualCount = candidates.length;
+    if (actualCount >= expectedCount) return candidates.slice(0, expectedCount);
     throw new LlmProviderError('output_parse_failed', '模型返回的第1章候选数量不足，请重试。', {
       taskName: 'novel_trial_chapter_one',
       expectedCount,
@@ -209,13 +209,19 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
   }
 
   async generateFollowup(input: TrialFollowupInput): Promise<{ chapters: TrialFollowupChapterProviderDraft[]; review: TrialReviewDraft }> {
+    const generatedChapterPolicies = input.chapters
+      .filter((chapter) => chapter.chapterNo > 1)
+      .map((chapter) => ({ chapterId: chapter.id, chapterNo: chapter.chapterNo, ...createWordTargetPolicy(input.novel, chapter.wordTarget ?? undefined) }));
     return requestJsonOutput(this.options.client, {
       taskName: 'novel_trial_followup',
       model: this.model,
-      messages: createMessages('基于已选第1章生成第2-3章试写和试写总评，只返回 JSON。', input.novel, {
+      ...SINGLE_PAID_CALL_JSON_POLICY,
+      messages: createMessages('基于已选第1章生成第2-3章完整试写正文和试写总评，只返回 JSON。每章 content 必须是可直接采用的完整正文，不得用提纲、摘要或省略号代替。', input.novel, {
         selectedCandidate: summarizeSelectedCandidate(input.selectedCandidate),
-        chapters: input.chapters.map(pickChapter)
+        chapters: input.chapters.map(pickChapter),
+        chapterWordTargetPolicies: generatedChapterPolicies
       }, M1_OUTPUT_SCHEMA_HINT.trialFollowup),
+      maxTokens: getChapterSetMaxTokens(generatedChapterPolicies.map((policy) => policy.target)),
       validate: (value) => {
         const payload = asRecord(value);
         const generatedChapters = readArray(payload, 'chapters').map((item) => {
@@ -240,6 +246,7 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
     return requestJsonOutput(this.options.client, {
       taskName: 'novel_body_chapter_generate',
       model: this.model,
+      ...SINGLE_PAID_CALL_JSON_POLICY,
       messages: createMessages('生成单章正文、特性卡、单章审稿和长篇记忆摘要，只返回 JSON。', input.novel, {
         chapter: pickChapter(input.chapter),
         wordTargetPolicy,
@@ -255,14 +262,18 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
   }
 
   async rewriteChapter(input: BodyRewriteInput): Promise<{ candidate: BodyChapterProviderDraft; summaryCompare: ChapterSummaryCompareDTO }> {
+    const wordTargetPolicy = createWordTargetPolicy(input.novel, input.chapter.wordTarget ?? undefined);
     return requestJsonOutput(this.options.client, {
       taskName: 'novel_chapter_rewrite',
       model: this.model,
-      messages: createMessages('生成章节重写候选和摘要对比，只返回 JSON。', input.novel, {
+      ...SINGLE_PAID_CALL_JSON_POLICY,
+      messages: createMessages('生成完整章节重写候选和摘要对比，只返回 JSON。candidate.content 必须是可直接采用的完整正文，不得只返回改动片段、提纲或摘要。', input.novel, {
         chapter: pickChapter(input.chapter),
+        wordTargetPolicy,
         instruction: input.instruction,
         currentSummary: input.currentContent.summary
       }, M1_OUTPUT_SCHEMA_HINT.body),
+      maxTokens: getBodyChapterMaxTokens(wordTargetPolicy.target),
       validate: (value) => {
         const payload = asRecord(value);
         const candidateSource = readObject(payload, 'candidate') ?? payload;
@@ -449,9 +460,9 @@ const M1_OUTPUT_SCHEMA_HINT = {
   chapterPlanChunk:
     '章节目录分块只返回 {"chapters":[{"chapterNo","stageIndex","title","wordTarget","goal","conflict","hook"}]}。不得返回说明、Markdown、额外字段或缺失章节。',
   trialChapterOne:
-    '第1章试写返回 {"candidates":[{"title","content","summary","openingStrategy","openingHighlight","firstSentence","first300Summary","endingHook","riskLevel","riskTags":[],"aiRecommendedReason","isAiRecommended":true/false,"scoring":{"totalScore":0-100,"dimensions":[{"key","label","score","weight","evidence","penaltyPoints"}]}}]}。每个 content 900-1200 中文字符，候选数量必须等于 requiredCandidateCount。',
+    '第1章试写返回 {"candidates":[{"title","content","summary","openingStrategy","openingHighlight","firstSentence","first300Summary","endingHook","riskLevel","riskTags":[],"aiRecommendedReason","isAiRecommended":true/false,"scoring":{"totalScore":0-100,"dimensions":[{"key","label","score","weight","evidence","penaltyPoints"}]}}]}。每个 content 必须遵守 payload.wordTargetPolicy 的 target/lowerBound/upperBound 并提供完整正文，候选数量必须等于 requiredCandidateCount。',
   trialFollowup:
-    '第2-3章试写返回 {"chapters":[{"chapterNo":2,"title","content","summary","openingStrategy","openingHighlight","firstSentence","first300Summary","endingHook","riskLevel","riskTags":[],"aiRecommendedReason","scoring":{"totalScore","dimensions":[]},"featureCard":{},"review":{"totalScore","issues":[],"suggestions":[],"riskLevel"},"hardFailed":false,"hardFailureReasons":[]}],"review":{"totalScore","trialResult":"pass|pass_with_suggestions|blocked|return_upstream","summary","strengths":[],"problems":[],"suggestions":[],"recommendedAction","allowNextStep":true,"requiresRiskConfirmation":false,"chapterScores":[{"chapterNo","score","hardFailed":false}]}}',
+    '第2-3章试写返回 {"chapters":[{"chapterNo":2,"title","content","summary","openingStrategy","openingHighlight","firstSentence","first300Summary","endingHook","riskLevel","riskTags":[],"aiRecommendedReason","scoring":{"totalScore","dimensions":[]},"featureCard":{},"review":{"totalScore","issues":[],"suggestions":[],"riskLevel"},"hardFailed":false,"hardFailureReasons":[]}],"review":{"totalScore","trialResult":"pass|pass_with_suggestions|blocked|return_upstream","summary","strengths":[],"problems":[],"suggestions":[],"recommendedAction","allowNextStep":true,"requiresRiskConfirmation":false,"chapterScores":[{"chapterNo","score","hardFailed":false}]}}。每章 content 必须遵守 payload.chapterWordTargetPolicies 中对应 chapterId/chapterNo 的 target/lowerBound/upperBound 并提供完整正文。',
   body:
     '正文/重写返回 {"title","content","summary","openingStrategy","openingHighlight","firstSentence","first300Summary","endingHook","riskLevel","riskTags":[],"aiRecommendedReason","scoring":{"totalScore","dimensions":[]},"featureCard":{},"review":{"totalScore","issues":[],"suggestions":[],"riskLevel"},"memory":{"summary","facts":[],"foreshadows":[]},"hardFailed":false,"hardFailureReasons":[]}',
   impact:
@@ -1193,6 +1204,8 @@ interface WordTargetPolicy {
   target: number;
   lowerBound: number;
   upperBound: number;
+  preferredLowerBound: number;
+  preferredUpperBound: number;
   instruction: string;
 }
 
@@ -1200,9 +1213,11 @@ function createWordTargetPolicy(novel: NovelProviderInputV1, chapterTarget?: num
   const min = clampInteger(novel.chapterWordMin ?? 1800, 100, 30000);
   const max = clampInteger(Math.max(novel.chapterWordMax ?? 2600, min), min, 30000);
   const defaultTarget = Math.round((min + max) / 2);
-  const target = clampInteger(chapterTarget ?? defaultTarget, min, max);
-  const lowerBound = Math.max(100, Math.floor(target * 0.9));
-  const upperBound = Math.ceil(target * 1.15);
+  const target = clampInteger(chapterTarget ?? defaultTarget, 100, 30000);
+  const lowerBound = Math.max(100, Math.ceil((target * 90) / 100));
+  const upperBound = Math.floor((target * 115) / 100);
+  const preferredLowerBound = Math.max(lowerBound, Math.ceil((target * 95) / 100));
+  const preferredUpperBound = target;
 
   return {
     min,
@@ -1211,12 +1226,19 @@ function createWordTargetPolicy(novel: NovelProviderInputV1, chapterTarget?: num
     target,
     lowerBound,
     upperBound,
-    instruction: `本章目标 ${target} 字，允许范围 ${lowerBound}-${upperBound} 字。content 正文字数不得低于 ${lowerBound} 字；如果剧情不足，请补充动作、对话、心理、场景和冲突推进，不要用提纲或说明凑数。`
+    preferredLowerBound,
+    preferredUpperBound,
+    instruction: `本章目标 ${target} 个非空白字符，合格区间 ${lowerBound}-${upperBound}。优先将 content 控制在 ${preferredLowerBound}-${preferredUpperBound} 个非空白字符；content 绝不能少于 ${lowerBound}，也绝不能超过 ${upperBound}。完成草稿后先自行估算并压缩超出的段落，只返回完整正文，不要输出字数说明。`
   };
 }
 
 function getBodyChapterMaxTokens(target: number): number {
   return Math.max(3600, Math.min(9000, Math.ceil(target * 2.4)));
+}
+
+function getChapterSetMaxTokens(targets: number[]): number {
+  const total = targets.reduce((sum, target) => sum + getBodyChapterMaxTokens(target), 0);
+  return Math.max(4200, Math.min(32000, total));
 }
 
 function clampInteger(value: number, min: number, max: number): number {

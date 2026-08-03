@@ -3,6 +3,7 @@ import {
   TaskStatus,
   type CancelTaskRequest,
   type CancelTaskResultDTO,
+  type ChapterLengthGateDTO,
   type RecommendedActionDTO,
   type RetryTaskRequest,
   type RetryTaskResultDTO,
@@ -18,6 +19,7 @@ import type {
   NovelRepository,
   RequestContext
 } from '../../novels/domain/novelDomain.js';
+import { sanitizeChapterLengthGate } from '../../novels/domain/chapterLengthPolicy.js';
 import { listActionExecutionPlans } from '../../novels/services/actionExecutionPlan.js';
 
 export interface TaskServiceOptions {
@@ -30,6 +32,8 @@ const PROVIDER_BACKED_TASK_TYPES = new Set(listActionExecutionPlans().map((plan)
 const PROVIDER_FAILURE_PUBLIC_MESSAGE = '任务执行失败，未写入新的候选或正式内容。';
 const PROVIDER_FAILURE_PUBLIC_ERROR_CODE = 'PROVIDER_ERROR';
 const OUTPUT_PARSE_FAILURE_PUBLIC_MESSAGE = '模型输出格式不符合约定，本次未生成报告。';
+const CONTENT_LENGTH_FAILURE_CATEGORY = 'content_length_out_of_range';
+const CONTENT_LENGTH_FAILURE_ERROR_CODE = 'NOVEL_CONTENT_LENGTH_OUT_OF_RANGE';
 const RETRY_FREEZE_REASON = '当前阶段暂不支持任务重试，请返回业务页面查看当前内容。';
 
 export class TaskService {
@@ -53,7 +57,7 @@ export class TaskService {
     const providerBackedFailed = isProviderBackedFailedTask(task);
 
     return {
-      items: events.map((event) => toTaskEventDTO(event, providerBackedFailed))
+      items: events.map((event) => toTaskEventDTO(event, providerBackedFailed ? getProviderFailureMessage(task) : null))
     };
   }
 
@@ -162,7 +166,7 @@ export class TaskService {
       status: task.status,
       statusText: getTaskStatusText(task.status),
       progress: task.progress,
-      currentStep: providerBackedFailed ? task.failureCategory === 'output_parse_failed' ? providerFailureMessage : '生成任务失败，暂不支持直接重试' : task.currentStep,
+      currentStep: providerBackedFailed ? isContentLengthFailure(task) || task.failureCategory === 'output_parse_failed' ? providerFailureMessage : '生成任务失败，暂不支持直接重试' : task.currentStep,
       userAcceptedResult: task.userAcceptedResult,
       novelId: task.novelId,
       objectType: task.objectType,
@@ -175,8 +179,9 @@ export class TaskService {
       retryOfTaskId: task.retryOfTaskId,
       failureCategory: task.failureCategory,
       failureCategoryText: getFailureCategoryText(task.failureCategory),
-      errorCode: providerBackedFailed ? PROVIDER_FAILURE_PUBLIC_ERROR_CODE : task.errorCode,
+      errorCode: providerBackedFailed ? getProviderFailureErrorCode(task) : task.errorCode,
       errorMessage: providerBackedFailed ? providerFailureMessage : task.errorMessage,
+      lengthGate: getTaskLengthGate(task),
       userFailureReason: getUserFailureReason(task, sourceStale),
       retryable,
       cancellable,
@@ -189,7 +194,7 @@ export class TaskService {
       nextAction: getTaskNextAction(task, retryable, cancellable, sourceStale),
       createdAt: task.createdAt.toISOString(),
       updatedAt: task.updatedAt.toISOString(),
-      events: events.map((event) => toTaskEventDTO(event, providerBackedFailed))
+      events: events.map((event) => toTaskEventDTO(event, providerBackedFailed ? providerFailureMessage : null))
     };
   }
 }
@@ -203,19 +208,20 @@ export function toRecentTaskSummaryDTO(task: GenerationTaskRecord) {
     status: task.status,
     statusText: getTaskStatusText(task.status),
     progress: task.progress,
-    currentStep: providerBackedFailed ? task.failureCategory === 'output_parse_failed' ? providerFailureMessage : '生成任务失败，暂不支持直接重试' : task.currentStep,
+    currentStep: providerBackedFailed ? isContentLengthFailure(task) || task.failureCategory === 'output_parse_failed' ? providerFailureMessage : '生成任务失败，暂不支持直接重试' : task.currentStep,
     resultVersionIds: task.resultVersionIds,
     userAcceptedResult: task.userAcceptedResult,
     failureCategory: task.failureCategory,
     failureCategoryText: getFailureCategoryText(task.failureCategory),
-    errorCode: providerBackedFailed ? PROVIDER_FAILURE_PUBLIC_ERROR_CODE : task.errorCode,
+    errorCode: providerBackedFailed ? getProviderFailureErrorCode(task) : task.errorCode,
     errorMessage: providerBackedFailed ? providerFailureMessage : task.errorMessage,
+    lengthGate: getTaskLengthGate(task),
     createdAt: task.createdAt.toISOString(),
     updatedAt: task.updatedAt.toISOString()
   };
 }
 
-function toTaskEventDTO(event: GenerationTaskEventRecord, providerBackedFailed = false): TaskEventDTO {
+function toTaskEventDTO(event: GenerationTaskEventRecord, providerFailureMessage: string | null = null): TaskEventDTO {
   return {
     id: event.id,
     taskId: event.taskId,
@@ -223,7 +229,7 @@ function toTaskEventDTO(event: GenerationTaskEventRecord, providerBackedFailed =
     statusText: getTaskStatusText(event.status),
     eventType: event.eventType,
     eventTypeText: getEventTypeText(event.eventType),
-    message: providerBackedFailed ? PROVIDER_FAILURE_PUBLIC_MESSAGE : event.message ?? '',
+    message: providerFailureMessage ?? event.message ?? '',
     progress: event.progress,
     requestId: getRequestId(event.payload),
     createdAt: event.createdAt.toISOString()
@@ -263,6 +269,7 @@ function getFailureCategoryText(category: string | null) {
   if (category === 'rate_limited') return '模型服务限流';
   if (category === 'quota_insufficient') return '模型额度不足';
   if (category === 'output_parse_failed') return '模型输出解析失败';
+  if (category === CONTENT_LENGTH_FAILURE_CATEGORY) return '正文字符数不合格';
   if (category === 'source_stale') return '上游版本已变化';
   if (category === 'validation_error') return '生成结果结构异常';
   if (category === 'cancelled') return '用户取消';
@@ -349,7 +356,25 @@ function isProviderBackedFailedTask(task: GenerationTaskRecord) {
 }
 
 function getProviderFailureMessage(task: GenerationTaskRecord) {
+  if (isContentLengthFailure(task)) {
+    return task.errorMessage || '正文字符数不在允许范围内，本次结果未保存。';
+  }
   return task.failureCategory === 'output_parse_failed'
     ? OUTPUT_PARSE_FAILURE_PUBLIC_MESSAGE
     : PROVIDER_FAILURE_PUBLIC_MESSAGE;
+}
+
+function getProviderFailureErrorCode(task: GenerationTaskRecord) {
+  return isContentLengthFailure(task) ? CONTENT_LENGTH_FAILURE_ERROR_CODE : PROVIDER_FAILURE_PUBLIC_ERROR_CODE;
+}
+
+function isContentLengthFailure(task: GenerationTaskRecord) {
+  return task.failureCategory === CONTENT_LENGTH_FAILURE_CATEGORY
+    && task.errorCode === CONTENT_LENGTH_FAILURE_ERROR_CODE;
+}
+
+function getTaskLengthGate(task: GenerationTaskRecord): ChapterLengthGateDTO | null {
+  if (!isContentLengthFailure(task)) return null;
+  const metadata = task.metadata && typeof task.metadata === 'object' ? task.metadata as Record<string, unknown> : {};
+  return sanitizeChapterLengthGate(metadata.lengthGate);
 }

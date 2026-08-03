@@ -528,7 +528,41 @@ describe('DeepSeek novel provider', () => {
     const payload = JSON.parse(requests[0].messages[1].content);
     assert.equal(payload.payload.chapter.wordTarget, 2600);
     assert.match(payload.payload.wordTargetPolicy.instruction, /2600/);
-    assert.match(payload.payload.wordTargetPolicy.instruction, /低于/);
+    assert.match(payload.payload.wordTargetPolicy.instruction, /不能少于 2340/);
+    assert.match(payload.payload.wordTargetPolicy.instruction, /不能超过 2990/);
+  });
+
+  it('preserves authoritative chapter targets outside the novel default range', async () => {
+    for (const expected of [
+      { target: 900, lowerBound: 810, upperBound: 1035 },
+      { target: 4000, lowerBound: 3600, upperBound: 4600 }
+    ]) {
+      const requests: ChatCompletionRequest[] = [];
+      const provider = new DeepSeekNovelProvider({
+        client: {
+          async chat(request) {
+            requests.push(request);
+            return { content: JSON.stringify(createBodyChapterJson()), model: request.model };
+          }
+        }
+      });
+
+      await provider.generateBodyChapter({
+        novel: { ...createNovel(), chapterWordMin: 1800, chapterWordMax: 2600 },
+        chapter: { ...createChapter(4), wordTarget: expected.target },
+        strategySnapshot: {},
+        previousContent: null,
+        previousMemory: null,
+        previousBatchNotes: [],
+        enhancedReview: false
+      });
+
+      const policy = JSON.parse(requests[0].messages[1].content).payload.wordTargetPolicy;
+      assert.deepEqual(
+        { target: policy.target, lowerBound: policy.lowerBound, upperBound: policy.upperBound },
+        expected
+      );
+    }
   });
 
   it('summarizes adopted direction context before setting generation', async () => {
@@ -590,19 +624,14 @@ describe('DeepSeek novel provider', () => {
     assert.equal(userPayload.payload.currentAssets.setting, null);
   });
 
-  it('retries once when the trial chapter-one candidate count is lower than requested', async () => {
+  it('does not make a second paid call when the trial chapter-one candidate count is lower than requested', async () => {
     let callCount = 0;
     const provider = new DeepSeekNovelProvider({
       client: {
         async chat() {
           callCount += 1;
           return {
-            content: JSON.stringify({
-              candidates:
-                callCount === 1
-                  ? [createTrialCandidateJson('候选 A'), createTrialCandidateJson('候选 B')]
-                  : [createTrialCandidateJson('候选 A'), createTrialCandidateJson('候选 B'), createTrialCandidateJson('候选 C')]
-            }),
+            content: JSON.stringify({ candidates: [createTrialCandidateJson('候选 A'), createTrialCandidateJson('候选 B')] }),
             model: 'deepseek-fake',
             usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 }
           };
@@ -610,16 +639,10 @@ describe('DeepSeek novel provider', () => {
       }
     });
 
-    const result = await provider.generateChapterOneCandidates({
-      novel: createNovel(),
-      preferences: [],
-      chapters: [createChapter(1)],
-      chapterCount: 3
-    });
-
-    assert.equal(callCount, 2);
-    assert.equal(result.length, 3);
-    assert.equal(result[0].isAiRecommended, true);
+    await assert.rejects(() => provider.generateChapterOneCandidates({
+      novel: createNovel(), preferences: [], chapters: [createChapter(1)], chapterCount: 3
+    }), (error) => error instanceof LlmProviderError && error.category === 'output_parse_failed');
+    assert.equal(callCount, 1);
   });
 
   it('uses the faster structure model and bounded output for trial chapter-one candidates', async () => {
@@ -649,13 +672,23 @@ describe('DeepSeek novel provider', () => {
     });
 
     assert.equal(capturedRequest?.model, 'deepseek-v4-flash');
-    assert.equal(capturedRequest?.maxTokens, 4200);
+    assert.equal(capturedRequest?.maxTokens, 15840);
+    const payload = JSON.parse(capturedRequest!.messages[1].content).payload;
+    assert.deepEqual(
+      { target: payload.wordTargetPolicy.target, lowerBound: payload.wordTargetPolicy.lowerBound, upperBound: payload.wordTargetPolicy.upperBound },
+      { target: 2200, lowerBound: 1980, upperBound: 2530 }
+    );
+    assert.deepEqual(
+      { preferredLowerBound: payload.wordTargetPolicy.preferredLowerBound, preferredUpperBound: payload.wordTargetPolicy.preferredUpperBound },
+      { preferredLowerBound: 2090, preferredUpperBound: 2200 }
+    );
+    assert.match(payload.wordTargetPolicy.instruction, /绝不能超过 2530/);
+    assert.doesNotMatch(capturedRequest!.messages[0].content, /900-1200/);
   });
 
-  it('fails as output_parse_failed when retry still returns too few trial candidates', async () => {
+  it('fails as output_parse_failed after one call when trial candidates are insufficient', async () => {
     const provider = new DeepSeekNovelProvider({
       client: createQueueClient([
-        JSON.stringify({ candidates: [createTrialCandidateJson('候选 A'), createTrialCandidateJson('候选 B')] }),
         JSON.stringify({ candidates: [createTrialCandidateJson('候选 A'), createTrialCandidateJson('候选 B')] })
       ])
     });
@@ -676,6 +709,80 @@ describe('DeepSeek novel provider', () => {
         return true;
       }
     );
+  });
+
+  it('uses one model call with zero transport retries for every gated chapter generation action', async () => {
+    const cases: Array<{
+      label: string;
+      run: (provider: DeepSeekNovelProvider) => Promise<unknown>;
+      readTargets: (payload: any) => number[];
+    }> = [
+      {
+        label: 'trial_chapter_one_generate',
+        run: (provider) => provider.generateChapterOneCandidates({
+          novel: createNovel(), preferences: [], chapters: [{ ...createChapter(1), wordTarget: 900 }], chapterCount: 3
+        }),
+        readTargets: (payload) => [payload.wordTargetPolicy.target]
+      },
+      {
+        label: 'trial_followup_generate',
+        run: (provider) => provider.generateFollowup({
+          novel: createNovel(),
+          selectedCandidate: { id: 'candidate-1', content: '已选首章正文', summary: '首章摘要', reviewScore: 85 } as any,
+          chapters: [1, 2, 3].map((chapterNo) => ({ ...createChapter(chapterNo), wordTarget: 900 }))
+        }),
+        readTargets: (payload) => payload.chapterWordTargetPolicies.map((policy: any) => policy.target)
+      },
+      ...(['body_batch_generate', 'chapter_body_generate'] as const).map((action) => ({
+        label: action,
+        run: (provider: DeepSeekNovelProvider) => provider.generateBodyChapter({
+          action,
+          novel: createNovel(),
+          chapter: { ...createChapter(4), wordTarget: 900 },
+          strategySnapshot: {},
+          previousContent: null,
+          previousMemory: null,
+          previousBatchNotes: [],
+          enhancedReview: false
+        }),
+        readTargets: (payload: any) => [payload.wordTargetPolicy.target]
+      })),
+      {
+        label: 'chapter_rewrite',
+        run: (provider) => provider.rewriteChapter({
+          novel: createNovel(),
+          chapter: { ...createChapter(4), wordTarget: 900 },
+          currentContent: { id: 'content-1', content: '当前正文', summary: '当前摘要' } as any,
+          instruction: '保持主线，优化表达'
+        }),
+        readTargets: (payload) => [payload.wordTargetPolicy.target]
+      }
+    ];
+
+    for (const testCase of cases) {
+      const requests: ChatCompletionRequest[] = [];
+      const provider = new DeepSeekNovelProvider({
+        client: {
+          async chat(request) {
+            requests.push(request);
+            return { content: '不是 JSON', model: request.model };
+          }
+        }
+      });
+      await assert.rejects(
+        () => testCase.run(provider),
+        (error) => error instanceof LlmProviderError && error.category === 'output_parse_failed',
+        testCase.label
+      );
+      assert.equal(requests.length, 1, testCase.label);
+      assert.equal(requests[0].maxRetries, 0, testCase.label);
+      const payload = JSON.parse(requests[0].messages[1].content).payload;
+      assert.deepEqual(
+        testCase.readTargets(payload),
+        testCase.label === 'trial_followup_generate' ? [900, 900] : [900],
+        `${testCase.label}: authoritative target outside novel default range`
+      );
+    }
   });
 });
 
@@ -755,6 +862,23 @@ function createTrialCandidateJson(title: string) {
       gateConclusion: 'pass',
       dimensions: [{ key: 'opening', label: '开篇', score: 86, weight: 0.4, evidence: '开场清楚', deductions: [] }]
     }
+  };
+}
+
+function createBodyChapterJson() {
+  return {
+    title: '第4章 新证据',
+    content: '正文内容。'.repeat(300),
+    summary: '主角获得新证据。',
+    riskLevel: 'low',
+    riskTags: [],
+    aiRecommendedReason: '承接主线。',
+    scoring: { totalScore: 86, dimensions: [] },
+    featureCard: {},
+    review: { totalScore: 86, issues: [], suggestions: [], riskLevel: 'low' },
+    memory: { summary: '证据线推进。', facts: [], foreshadows: [] },
+    hardFailed: false,
+    hardFailureReasons: []
   };
 }
 
