@@ -446,8 +446,35 @@ export class PrismaNovelRepository implements NovelRepository {
           input.tenantId, novel.id, item.currentContentVersionId!, prisma
         )))
       : [];
-    if (loadedFullReviewContents.some((item) => !item)) return null;
+    const loadedFullReviewFeatureCards = input.action === 'novel_full_review'
+      ? await Promise.all(orderedChapters.map((item) => this.findFeatureCardById(
+          input.tenantId, item.currentFeatureCardVersionId!, prisma
+        )))
+      : [];
+    const loadedFullReviewReviews = input.action === 'novel_full_review'
+      ? await Promise.all(orderedChapters.map((item) => this.findReviewReportById(
+          input.tenantId, item.currentReviewReportId!, prisma
+        )))
+      : [];
+    const fullReviewMemory = input.action === 'novel_full_review'
+      ? await this.findLatestLongTermMemory(input.tenantId, novel.id, null, prisma)
+      : null;
+    const finalChapter = orderedChapters.at(-1);
+    if (
+      loadedFullReviewContents.some((item, index) => !item || item.chapterId !== orderedChapters[index]?.id)
+      || loadedFullReviewFeatureCards.some((item, index) => !item || item.chapterId !== orderedChapters[index]?.id || item.staleLevel === StaleLevel.HardStale)
+      || loadedFullReviewReviews.some((item, index) => !item || item.objectId !== orderedChapters[index]?.id || item.objectVersionId !== orderedChapters[index]?.currentContentVersionId)
+      || (input.action === 'novel_full_review' && (
+        !fullReviewMemory
+        || !finalChapter
+        || fullReviewMemory.chapterId !== finalChapter.id
+        || fullReviewMemory.sourceContentVersionId !== finalChapter.currentContentVersionId
+        || fullReviewMemory.staleLevel === StaleLevel.HardStale
+      ))
+    ) return null;
     const fullReviewContents = loadedFullReviewContents.filter((item): item is ChapterContentVersionRecord => Boolean(item));
+    const fullReviewFeatureCards = loadedFullReviewFeatureCards.filter((item): item is ChapterFeatureCardRecord => Boolean(item));
+    const fullReviewReviews = loadedFullReviewReviews.filter((item): item is ReviewReportRecord => Boolean(item));
     const strategy = typeof refs.strategySnapshotId === 'string'
       ? await this.findStructureVersionById(input.tenantId, novel.id, 'body_strategy_snapshot', refs.strategySnapshotId, prisma)
       : null;
@@ -499,7 +526,12 @@ export class PrismaNovelRepository implements NovelRepository {
         bodyPreviousContent,
         bodyPreviousMemory,
         bodyPreviousBatch,
+        fullReviewNovel: input.action === 'novel_full_review' ? novel : null,
+        fullReviewChapters: input.action === 'novel_full_review' ? chapters : [],
         fullReviewContents,
+        fullReviewFeatureCards,
+        fullReviewReviews,
+        fullReviewMemory,
         bodyPreviousBatchNotes: bodyPreviousBatch?.summary.nextBatchNotes ?? []
       }
     };
@@ -1992,16 +2024,24 @@ export class PrismaNovelRepository implements NovelRepository {
     return chapter ? mapNovelChapter(chapter) : null;
   }
 
-  async findFeatureCardById(tenantId: string, featureCardId: string) {
-    const card = await this.prisma.chapterFeatureCard.findFirst({
+  async findFeatureCardById(
+    tenantId: string,
+    featureCardId: string,
+    prisma: Prisma.TransactionClient = this.prisma
+  ) {
+    const card = await prisma.chapterFeatureCard.findFirst({
       where: { tenantId, id: featureCardId }
     });
 
     return card ? mapChapterFeatureCard(card) : null;
   }
 
-  async findReviewReportById(tenantId: string, reviewReportId: string) {
-    const report = await this.prisma.reviewReport.findFirst({
+  async findReviewReportById(
+    tenantId: string,
+    reviewReportId: string,
+    prisma: Prisma.TransactionClient = this.prisma
+  ) {
+    const report = await prisma.reviewReport.findFirst({
       where: { tenantId, id: reviewReportId }
     });
 

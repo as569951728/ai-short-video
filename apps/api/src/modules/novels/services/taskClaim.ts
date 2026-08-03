@@ -11,6 +11,7 @@ import {
   type NovelProviderAction
 } from '@ai-shortvideo/shared';
 import { BusinessError } from '../../../shared/errors.js';
+import { LlmProviderError } from '../../ai/llmClient.js';
 import {
   hashCanonicalJson,
   matchGenerationAuthority,
@@ -18,6 +19,7 @@ import {
   WorkerPayloadUnsupportedError
 } from '../domain/executionContract.js';
 import type {
+  ChapterFeatureCardRecord,
   ChapterContentVersionRecord,
   CreativeVersionRecord,
   GenerationAuthoritySnapshot,
@@ -27,9 +29,11 @@ import type {
   NovelRecord,
   NovelRepository,
   RequestContext,
+  ReviewReportRecord,
   TrialRunRecord
 } from '../domain/novelDomain.js';
 import {
+  buildFullReviewEvidenceProviderInput,
   getActionExecutionPlan,
   projectBodyStrategyProviderInput,
   projectChapterContentProviderInput,
@@ -306,7 +310,7 @@ export async function executeClaimedGeneration<TProviderResult, TFinalResult>(
     providerResult = await input.provider(finalProviderInput);
   } catch (error) {
     await failClaimedTask(input, claim.task, error, 'provider_error');
-    throw error;
+    throw error instanceof BusinessError ? error : createPublicProviderFailure(error);
   }
 
   const latestTask = await input.repository.findTaskById(input.context.tenantId, claim.task.id);
@@ -607,12 +611,21 @@ function buildAuthoritativeProviderInput(
     return { action, novel, chapter: projectChapterProviderInput(chapter!), oldContent: currentContent ? projectChapterContentProviderInput(currentContent) : null,
       newContent: projectChapterContentProviderInput(candidate!), instruction: candidate?.rewriteReason };
   }
-  return {
-    action,
-    novel,
-    chapters: chapters.map(projectChapterProviderInput),
+  const fullReviewNovel = facts.fullReviewNovel as NovelRecord | null;
+  const fullReviewChapters = Array.isArray(facts.fullReviewChapters)
+    ? facts.fullReviewChapters as NovelChapterRecord[]
+    : [];
+  if (!fullReviewNovel) throw sourceStale();
+  return buildFullReviewEvidenceProviderInput({
+    tenantId: authority.tenantId,
+    novel: fullReviewNovel,
+    chapters: fullReviewChapters,
+    contents: Array.isArray(facts.fullReviewContents) ? facts.fullReviewContents as ChapterContentVersionRecord[] : [],
+    featureCards: Array.isArray(facts.fullReviewFeatureCards) ? facts.fullReviewFeatureCards as ChapterFeatureCardRecord[] : [],
+    reviews: Array.isArray(facts.fullReviewReviews) ? facts.fullReviewReviews as ReviewReportRecord[] : [],
+    memory: facts.fullReviewMemory as LongTermMemoryRecord | null,
     sourceVersionRefs: projectFullReviewSourceVersionRefsProviderInput(refs)
-  };
+  });
 }
 function buildActionAuthoritySourceRefs(
   action: NovelProviderAction,
@@ -684,6 +697,27 @@ function buildActionAuthoritySourceRefs(
     preferences,
     authorityChapters
   );
+  if (action === 'novel_full_review') {
+    const fullReviewNovel = facts.fullReviewNovel as NovelRecord | null;
+    if (!fullReviewNovel) throw sourceStale();
+    const fullReviewMemory = facts.fullReviewMemory as LongTermMemoryRecord | null;
+    if (!fullReviewMemory || !isRealId(fullReviewMemory.id) || !isRealId(fullReviewMemory.sourceContentVersionId)) throw sourceStale();
+    result.longTermMemoryIdentity = {
+      id: fullReviewMemory.id,
+      sourceContentVersionId: fullReviewMemory.sourceContentVersionId,
+      snapshotHash: hashCanonicalJson(projectLongTermMemoryProviderInput(fullReviewMemory))
+    };
+    result.evidenceManifestHash = buildFullReviewEvidenceProviderInput({
+      tenantId: authority.tenantId,
+      novel: fullReviewNovel,
+      chapters: Array.isArray(facts.fullReviewChapters) ? facts.fullReviewChapters as NovelChapterRecord[] : [],
+      contents: Array.isArray(facts.fullReviewContents) ? facts.fullReviewContents as ChapterContentVersionRecord[] : [],
+      featureCards: Array.isArray(facts.fullReviewFeatureCards) ? facts.fullReviewFeatureCards as ChapterFeatureCardRecord[] : [],
+      reviews: Array.isArray(facts.fullReviewReviews) ? facts.fullReviewReviews as ReviewReportRecord[] : [],
+      memory: fullReviewMemory,
+      sourceVersionRefs: projectFullReviewSourceVersionRefsProviderInput(refs)
+    }).coverageManifest.manifestHash;
+  }
   return result;
 }
 function buildAuthoritySourceIdentities(
@@ -746,6 +780,27 @@ function buildAuthoritySourceIdentities(
     add('chapter', chapter.id, chapter.currentContentVersionId ?? planVersionId ?? hashCanonicalJson(chapterSnapshot), chapterSnapshot);
   }
   for (const content of actualContents) addContent(content);
+  const fullReviewFeatureCards = Array.isArray(facts.fullReviewFeatureCards)
+    ? facts.fullReviewFeatureCards as ChapterFeatureCardRecord[]
+    : [];
+  for (const featureCard of fullReviewFeatureCards) {
+    add('chapter_feature_card', featureCard.id, featureCard.versionNo, fullReviewFeatureCardAuthoritySnapshot(featureCard));
+  }
+  const fullReviewReviews = Array.isArray(facts.fullReviewReviews)
+    ? facts.fullReviewReviews as ReviewReportRecord[]
+    : [];
+  for (const review of fullReviewReviews) {
+    add('chapter_review_report', review.id, review.objectVersionId ?? review.sourceTaskId ?? hashCanonicalJson(review.id), fullReviewReviewAuthoritySnapshot(review));
+  }
+  const fullReviewMemory = facts.fullReviewMemory as LongTermMemoryRecord | null;
+  if (fullReviewMemory) {
+    add(
+      'long_term_memory',
+      fullReviewMemory.id,
+      fullReviewMemory.sourceContentVersionId ?? hashCanonicalJson(fullReviewMemory.id),
+      projectLongTermMemoryProviderInput(fullReviewMemory)
+    );
+  }
   const trialRun = facts.trialRun as TrialRunRecord | null;
   if (trialRun) {
     const snapshot = {
@@ -789,6 +844,41 @@ function creativeAuthoritySnapshot(version: CreativeVersionRecord) {
     riskLevel: version.riskLevel
   };
 }
+function fullReviewFeatureCardAuthoritySnapshot(featureCard: ChapterFeatureCardRecord) {
+  return {
+    id: featureCard.id,
+    chapterId: featureCard.chapterId,
+    versionNo: featureCard.versionNo,
+    status: featureCard.status,
+    staleLevel: featureCard.staleLevel,
+    oneLineSummary: featureCard.oneLineSummary,
+    coreTask: featureCard.coreTask,
+    mainConflict: featureCard.mainConflict,
+    characterChanges: featureCard.characterChanges,
+    relationshipChanges: featureCard.relationshipChanges,
+    keyInformation: featureCard.keyInformation,
+    factsCannotChange: featureCard.factsCannotChange,
+    foreshadowingOperation: featureCard.foreshadowingOperation,
+    endingHook: featureCard.endingHook
+  };
+}
+function fullReviewReviewAuthoritySnapshot(review: ReviewReportRecord) {
+  return {
+    id: review.id,
+    objectId: review.objectId,
+    objectVersionId: review.objectVersionId,
+    reviewLevel: review.reviewLevel,
+    totalScore: review.totalScore,
+    summary: review.summary,
+    problems: review.problems,
+    suggestions: review.suggestions,
+    issueCards: review.issueCards,
+    recommendedAction: review.recommendedAction,
+    allowNextStep: review.allowNextStep,
+    blockingIssueCount: review.blockingIssueCount,
+    policyProfileVersionId: review.policyProfileVersionId
+  };
+}
 function actionNeedsPreferences(action: NovelProviderAction) {
   return ['direction_generate', 'direction_fuse', 'direction_optimize', 'setting_generate', 'outline_generate', 'stage_outline_generate', 'chapter_plan_generate', 'trial_chapter_one_generate', 'trial_followup_generate'].includes(action);
 }
@@ -809,7 +899,8 @@ function pickActionAuthoritySourceRefs(value: unknown): AuthoritySourceVersionRe
   return Object.fromEntries([
     'sourceIdentitySchemaVersion', 'sourceIdentities', 'novelProviderInputSnapshotHash', 'preferencesSnapshotHash',
     'chapterProviderInputSnapshotHash', 'chapterRefs', 'chapterInputSnapshotHash', 'targetChapterRefs',
-    'previousContentVersionId', 'longTermMemoryIdentity', 'previousBatchIdentity', 'strategyProviderInputSnapshotHash'
+    'previousContentVersionId', 'longTermMemoryIdentity', 'previousBatchIdentity', 'strategyProviderInputSnapshotHash',
+    'evidenceManifestHash'
   ].filter((key) => key in refs).map((key) => [key, refs[key]])) as unknown as AuthoritySourceVersionRefsV1;
 }
 function isRealId(value: unknown): value is string {
@@ -873,15 +964,78 @@ async function failClaimedTask<TProviderResult, TFinalResult>(
   error: unknown,
   category: 'provider_error' | 'save_failed' | 'source_stale'
 ) {
-  const sourceChanged = category === 'source_stale';
+  const failure = getPublicClaimFailure(error, category);
   await input.repository.failTask({
     task,
-    errorCode: sourceChanged ? 'SOURCE_STALE' : category === 'provider_error' ? 'PROVIDER_ERROR' : 'SAVE_FAILED',
-    errorMessage: sourceChanged ? '生成所依赖的权威内容已变化。' : category === 'provider_error' ? '模型服务调用失败。' : '生成结果保存失败。',
-    failureCategory: category,
-    statusNote: sourceChanged ? '权威内容已变化，任务已在模型调用前终止。' : category === 'provider_error' ? '模型服务调用失败，请稍后重试。' : '生成结果保存失败，请联系管理员处理。',
+    ...failure,
     context: input.context,
     now: input.now()
   });
-  void error;
+}
+
+function getPublicClaimFailure(
+  error: unknown,
+  category: 'provider_error' | 'save_failed' | 'source_stale'
+) {
+  if (category === 'source_stale') {
+    return {
+      errorCode: 'SOURCE_STALE',
+      errorMessage: '生成所依赖的权威内容已变化。',
+      failureCategory: 'source_stale',
+      statusNote: '权威内容已变化，任务已在模型调用前终止。'
+    };
+  }
+
+  if (category === 'save_failed') {
+    return {
+      errorCode: 'SAVE_FAILED',
+      errorMessage: '生成结果保存失败。',
+      failureCategory: 'save_failed',
+      statusNote: '生成结果保存失败，请联系管理员处理。'
+    };
+  }
+
+  if (isPublicOutputFormatFailure(error)) {
+    return {
+      errorCode: 'PROVIDER_ERROR',
+      errorMessage: '模型输出格式不符合约定，本次未生成报告。',
+      failureCategory: 'output_parse_failed',
+      statusNote: '模型输出格式不符合约定，本次未生成结果。'
+    };
+  }
+
+  return {
+    errorCode: 'PROVIDER_ERROR',
+    errorMessage: '模型服务调用失败。',
+    failureCategory: 'provider_error',
+    statusNote: '模型服务调用失败，请稍后重试。'
+  };
+}
+
+function isPublicOutputFormatFailure(error: unknown) {
+  return getPublicOutputKind(error) !== null;
+}
+
+function createPublicProviderFailure(error: unknown) {
+  const outputKind = getPublicOutputKind(error);
+  if (outputKind) {
+    return new BusinessError(
+      ErrorCode.InternalError,
+      '模型输出格式不符合约定，本次未生成报告。',
+      { category: 'output_parse_failed', outputKind }
+    );
+  }
+
+  return new BusinessError(
+    ErrorCode.InternalError,
+    '模型服务调用失败。',
+    { category: 'provider_error' }
+  );
+}
+
+function getPublicOutputKind(error: unknown): 'schema_invalid' | 'non_json' | null {
+  const candidate = error instanceof LlmProviderError ? error : toRecord(error);
+  if (candidate.name !== 'LlmProviderError' || candidate.category !== 'output_parse_failed') return null;
+  const outputKind = toRecord(candidate.details).outputKind;
+  return outputKind === 'schema_invalid' || outputKind === 'non_json' ? outputKind : null;
 }

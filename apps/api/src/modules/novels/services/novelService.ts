@@ -141,11 +141,12 @@ import {
   projectChapterProviderInput,
   projectCreativeAssetProviderInput,
   projectDirectionDraftProviderInput,
-  projectFullReviewSourceVersionRefsProviderInput,
   projectLongTermMemoryProviderInput,
   projectNovelProviderInput,
   projectPreferencesProviderInput,
+  validateFullReviewDraftForPersistence,
   type BodyChapterProviderDraft,
+  type FullReviewDraftPersistenceAuthority,
   type NovelProviderActionInputFor,
   type NovelProviderSet,
   type TrialFollowupChapterProviderDraft
@@ -1599,12 +1600,7 @@ export class NovelService {
 
     const chapters = await this.ensureFullReviewGate(novel, context);
     const sourceVersionRefs = createFullReviewSourceRefs(novel, chapters);
-    const providerInput = {
-      action: 'novel_full_review' as const,
-      novel: projectNovelProviderInput(novel),
-      chapters: chapters.map(projectChapterProviderInput),
-      sourceVersionRefs: projectFullReviewSourceVersionRefsProviderInput(sourceVersionRefs)
-    };
+    let persistenceAuthority: FullReviewDraftPersistenceAuthority | null = null;
     const execution = await executeClaimedGeneration({
       action: 'novel_full_review',
       repository: this.options.repository,
@@ -1615,21 +1611,40 @@ export class NovelService {
       context,
       now: this.now,
       providerCapability: this.fullReviewProvider,
-      provider: (authoritativeInput) => executeNovelProviderAction(this.getProviderSet(), authoritativeInput as typeof providerInput),
-      finalize: (task, draft) => this.options.repository.createFullReview({
-        novel,
-        task,
-        chapters,
-        draft: {
-          ...draft,
-          reviewPolicyVersionId: requestFingerprint.reviewPolicyVersionId
-        },
-        idempotencyKey,
-        requestFingerprint,
-        sourceVersionRefs,
-        context,
-        now: this.now()
-      })
+      provider: (authoritativeInput) => {
+        const input = authoritativeInput as NovelProviderActionInputFor<'novel_full_review'>;
+        const authoritativePolicyVersionId = input.coverageManifest.policyProfileVersionId?.trim()
+          || DEFAULT_POLICY_PROFILE_VERSION_ID;
+        if (authoritativePolicyVersionId !== requestFingerprint.reviewPolicyVersionId) {
+          throw new BusinessError(ErrorCode.VersionConflict, '全书审稿策略版本已变化，请刷新后重试。', {
+            code: 'SOURCE_STALE'
+          });
+        }
+        persistenceAuthority = {
+          expectedReviewPolicyVersionId: authoritativePolicyVersionId,
+          chapterManifest: input.coverageManifest.chapters.map(({ chapterId, chapterNo }) => ({ chapterId, chapterNo }))
+        };
+        return executeNovelProviderAction(this.getProviderSet(), input);
+      },
+      finalize: (task, draft) => {
+        if (!persistenceAuthority) throw new Error('full review persistence authority is missing');
+        const executionEnvelope = toRecord(task.executionEnvelopeJson);
+        const authoritativeSourceVersionRefs = toRecord(executionEnvelope.sourceVersionRefs);
+        const validatedDraft = validateFullReviewDraftForPersistence(draft, persistenceAuthority);
+        return this.options.repository.createFullReview({
+          novel,
+          task,
+          chapters,
+          draft: validatedDraft,
+          idempotencyKey,
+          requestFingerprint,
+          sourceVersionRefs: Object.keys(authoritativeSourceVersionRefs).length
+            ? authoritativeSourceVersionRefs
+            : sourceVersionRefs,
+          context,
+          now: this.now()
+        });
+      }
     });
     if (execution.reused) {
       const existing = await this.options.repository.findFullReviewByIdempotencyKey(context.tenantId, novelId, idempotencyToken);
@@ -1947,6 +1962,51 @@ export class NovelService {
       throw new BusinessError(ErrorCode.GateBlocked, '仍有章节缺少正式正文、章节特性卡或单章审稿，不能发起全书审稿', {
         chapterId: invalidChapter.id,
         chapterNo: invalidChapter.chapterNo
+      });
+    }
+    const authoritativeChapters = await Promise.all(chapters.map(async (chapter) => {
+      const [content, featureCard, reviewReport] = await Promise.all([
+        this.options.repository.findChapterContentVersionById(context.tenantId, novel.id, chapter.currentContentVersionId!),
+        this.options.repository.findFeatureCardById(context.tenantId, chapter.currentFeatureCardVersionId!),
+        this.options.repository.findReviewReportById(context.tenantId, chapter.currentReviewReportId!)
+      ]);
+      if (
+        !content
+        || content.chapterId !== chapter.id
+        || content.status !== VersionStatus.Current
+        || content.staleLevel !== StaleLevel.None
+        || !featureCard
+        || featureCard.novelId !== novel.id
+        || featureCard.chapterId !== chapter.id
+        || featureCard.status !== VersionStatus.Current
+        || featureCard.staleLevel !== StaleLevel.None
+        || !reviewReport
+        || reviewReport.novelId !== novel.id
+        || reviewReport.objectType !== 'chapter'
+        || reviewReport.objectId !== chapter.id
+        || reviewReport.objectVersionId !== content.id
+      ) {
+        throw new BusinessError(ErrorCode.VersionConflict, '全书审稿来源已变化，请刷新后重试', {
+          code: 'SOURCE_STALE',
+          chapterId: chapter.id,
+          chapterNo: chapter.chapterNo
+        });
+      }
+      return { chapter, content };
+    }));
+    const finalChapter = [...authoritativeChapters].sort((left, right) => left.chapter.chapterNo - right.chapter.chapterNo).at(-1)!;
+    const finalMemory = await this.options.repository.findLatestLongTermMemory(context.tenantId, novel.id, null);
+    if (
+      !finalMemory
+      || finalMemory.chapterId !== finalChapter.chapter.id
+      || finalMemory.sourceContentVersionId !== finalChapter.content.id
+      || finalMemory.status !== VersionStatus.Current
+      || finalMemory.staleLevel !== StaleLevel.None
+    ) {
+      throw new BusinessError(ErrorCode.VersionConflict, '全书审稿来源已变化，请刷新后重试', {
+        code: 'SOURCE_STALE',
+        chapterId: finalChapter.chapter.id,
+        chapterNo: finalChapter.chapter.chapterNo
       });
     }
     const openImpactCases = await this.options.repository.listOpenBlockingImpactCases(context.tenantId, novel.id);
@@ -3667,9 +3727,21 @@ function ensureFullReviewSourceRefsFresh(gate: FullReviewGateRecord, expectedRef
   if (gate.isStale) {
     throw new BusinessError(ErrorCode.CandidateStale, gate.staleReason ?? '全书审稿来源已过期，请重新审稿');
   }
-  if (!isSameFingerprint(gate.sourceVersionRefs, expectedRefs)) {
+  if (!isSameFingerprint(pickFullReviewFreshnessRefs(gate.sourceVersionRefs), pickFullReviewFreshnessRefs(expectedRefs))) {
     throw new BusinessError(ErrorCode.CandidateStale, '方向、设定、大纲、章节目录或章节正文版本已变化，旧全书审稿不能继续确认');
   }
+}
+
+function pickFullReviewFreshnessRefs(value: unknown) {
+  const refs = toRecord(value);
+  return Object.fromEntries([
+    'currentDirectionVersionId',
+    'currentSettingVersionId',
+    'currentOutlineVersionId',
+    'currentStageOutlineVersionId',
+    'currentChapterPlanVersionId',
+    'chapterContentVersionIds'
+  ].map((key) => [key, refs[key]]));
 }
 
 function isEnhancedReviewEnabled(strategySnapshot: CreativeVersionRecord) {

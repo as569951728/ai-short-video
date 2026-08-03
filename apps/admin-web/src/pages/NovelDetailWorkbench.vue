@@ -883,9 +883,24 @@
 
             <template v-else-if="activeStep.key === 'fullReview'">
               <div class="task-notice-actions mb-16">
-                <el-button v-if="!videoReadyEntryAction" type="primary" :disabled="!canStartFullReview" :loading="startingFullReview" @click="handleStartFullReview">全书 AI 审稿</el-button>
-                <el-button v-if="!videoReadyEntryAction" :disabled="!canConfirmCompletion" :loading="confirmingCompletion" @click="handleConfirmCompletion">确认小说完成</el-button>
+                <el-button v-if="!videoReadyEntryAction" type="primary" :disabled="!canStartFullReview || isAuthoritativeFullReviewInFlight" :loading="startingFullReview || isAuthoritativeFullReviewInFlight" @click="handleStartFullReview">{{ fullReviewStartActionLabel }}</el-button>
+                <el-button v-if="!videoReadyEntryAction" :disabled="!canConfirmCompletion || Boolean(failedFullReviewTask)" :loading="confirmingCompletion" @click="handleConfirmCompletion">确认小说完成</el-button>
               </div>
+
+              <el-alert
+                v-if="failedFullReviewTask"
+                class="mb-16"
+                :title="failedFullReviewTitle"
+                type="error"
+                show-icon
+                :closable="false"
+              >
+                <template #default>
+                  <p>{{ failedFullReviewSafeReason }}</p>
+                  <p class="muted">错误代码：{{ failedFullReviewTask.errorCode || 'PROVIDER_ERROR' }} · Task ID：{{ failedFullReviewTask.id }}</p>
+                  <el-button size="small" @click="openTaskDrawer(failedFullReviewTask.id)">查看 Task / Request 详情</el-button>
+                </template>
+              </el-alert>
 
               <el-empty v-if="!latestFullReview" description="正文完成后可发起正式全书审稿" />
               <template v-else>
@@ -914,6 +929,7 @@
                       <el-tag :type="issue.blocking ? 'danger' : 'warning'">{{ issue.status }}</el-tag>
                     </div>
                     <p>{{ issue.plainDescription || '审稿返回了待处理项，但没有提供详细说明。' }}</p>
+                    <p class="full-review-issue-scope">{{ fullReviewIssueScopeText(issue) }}</p>
                     <p class="muted">{{ issue.recommendedAction || '请查看章节内容并决定标记解决或接受风险。' }}</p>
                     <div class="task-notice-actions">
                       <el-button size="small" :loading="resolvingFullReviewIssueId === issue.issueId" @click="handleResolveFullReviewIssue(issue.issueId, 'resolve')">标记解决</el-button>
@@ -1323,7 +1339,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { NovelCreationStage, StageStatus, TaskStatus, VersionStatus, type RecentTaskSummaryDTO, type StructureAssetType, type TaskDetailDTO } from '@ai-shortvideo/shared'
+import { NovelCreationStage, StageStatus, TaskStatus, VersionStatus, type FullReviewIssueDTO, type RecentTaskSummaryDTO, type StructureAssetType, type TaskDetailDTO } from '@ai-shortvideo/shared'
 import { ApiClientError } from '../shared/services/http'
 import TaskProgressPanel from '../modules/novels/components/TaskProgressPanel.vue'
 import {
@@ -1586,6 +1602,9 @@ const stageOutlineRows = computed(() => structureRows.value.filter((asset) => as
 const visibleOutlineRows = computed(() => (activeSubStep.value.key === 'stages' ? stageOutlineRows.value : fullOutlineRows.value))
 const chapterPlanRows = computed(() => structureRows.value.filter((asset) => asset.objectType === 'chapter_plan'))
 const chapterRows = computed(() => (detail.value?.chapters ?? []).map(toNovelChapterPlanRow))
+const chapterLabelById = computed(() => new Map(
+  (detail.value?.chapters ?? []).map((chapter) => [chapter.id, `第 ${chapter.chapterNo} 章`] as const),
+))
 const chapterWordTargetSummary = computed(() => {
   const numericTargets = (detail.value?.chapters ?? []).map((chapter) => chapter.wordTarget ?? 0).filter((target) => target > 0)
   const average = numericTargets.length ? Math.round(numericTargets.reduce((sum, target) => sum + target, 0) / numericTargets.length) : 0
@@ -1605,10 +1624,35 @@ const trialContentParagraphs = computed(() => trialContentDrawer.content.split(/
 const bodyGeneration = computed(() => detail.value?.bodyGeneration ?? null)
 const latestBodyBatch = computed(() => bodyGeneration.value?.latestBatch ?? null)
 const latestFullReview = computed(() => detail.value?.latestFullReview ?? null)
+const fullReviewTask = computed(() => resolveTaskSummaryForAction(pendingTask.value, detail.value, 'full_review'))
+const authoritativeFullReviewTask = computed(() => resolveTaskSummaryForAction(null, detail.value, 'full_review'))
+const isAuthoritativeFullReviewInFlight = computed(() =>
+  authoritativeFullReviewTask.value?.status === TaskStatus.Queued ||
+  authoritativeFullReviewTask.value?.status === TaskStatus.Processing
+)
+const failedFullReviewTask = computed(() => fullReviewTask.value?.status === TaskStatus.Failed ? fullReviewTask.value : null)
+const failedFullReviewSafeReason = computed(() => failedFullReviewTask.value?.errorMessage ?? failedFullReviewTask.value?.currentStep ?? '任务执行失败，未写入新的候选或正式内容。')
+const failedFullReviewTitle = computed(() => isSchemaOrFormatFailure(failedFullReviewTask.value)
+  ? '模型输出格式不符合约定，本次未生成报告'
+  : '全书审稿失败，本次未生成报告')
+const fullReviewStartActionLabel = computed(() => failedFullReviewTask.value ? '重新发起全书审稿' : '全书 AI 审稿')
 const videoReadiness = computed(() => detail.value?.videoReadiness ?? null)
 const videoReadyEntryAction = computed(() => getVideoReadyEntryAction(detail.value))
 const showTrialAuthoringActions = computed(() => shouldShowTrialAuthoringAction(detail.value))
 const showTrialReviewConfirmAction = computed(() => shouldShowTrialReviewConfirmAction(detail.value))
+
+function isSchemaOrFormatFailure(task: typeof failedFullReviewTask.value) {
+  if (!task) return false
+  if (task.failureCategory === 'output_parse_failed') return true
+
+  const safeFailureText = [task.errorCode, task.errorMessage, task.currentStep]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+
+  return /schema[_\s-]*(invalid|validation|error|mismatch)|invalid[_\s-]*schema|json[_\s-]*(invalid|parse|error|解析|格式|错误)|invalid[_\s-]*json|不是合法\s*json|非合法\s*json|output[_\s-]*format|format[_\s-]*(invalid|error|mismatch)|输出格式|格式不符合|格式错误/.test(safeFailureText)
+}
+
 const canStartBodyBatch = computed(() => Boolean(
   bodyGeneration.value?.strategySnapshot &&
   bodyGeneration.value.nextBatchRange.startChapterNo &&
@@ -1619,6 +1663,19 @@ const canStartBodyBatch = computed(() => Boolean(
 const canStartFullReview = computed(() => detail.value?.creationStage === NovelCreationStage.Body && detail.value.stageStatus === StageStatus.Completed)
 const canConfirmCompletion = computed(() => Boolean(latestFullReview.value?.gate.allowCompletion && detail.value?.creationStage === NovelCreationStage.CompletionConfirm && detail.value.stageStatus === StageStatus.WaitingUser))
 const canConfirmVideoReady = computed(() => Boolean(videoReadiness.value?.check && videoReadiness.value.status === 'candidate' && detail.value?.completionDecision))
+
+function fullReviewIssueScopeText(issue: FullReviewIssueDTO) {
+  if (issue.scopeType === 'novel') return '影响范围：全书'
+  if (issue.scopeType !== 'chapter') return `影响范围：${issue.recommendedTarget || '结构范围待确认'}`
+  const chapterLabels = issue.scopeRefs
+    .flatMap((scopeRef) => {
+      const label = chapterLabelById.value.get(scopeRef)
+      return label ? [label] : []
+    })
+  return chapterLabels.length
+    ? `涉及章节：${chapterLabels.join('、')}`
+    : '涉及章节：定位信息待同步'
+}
 const activeRecentTask = computed(() => resolveVisibleTaskSummary(pendingTask.value, detail.value))
 const chapterPlanGenerationTask = computed(() => resolveTaskSummaryForAction(pendingTask.value, detail.value, 'chapter_plan_generate'))
 const isChapterPlanGenerating = computed(() =>
@@ -2048,10 +2105,10 @@ const workbenchSteps = computed<WorkbenchStepView[]>(() => {
       description: '检查全书质量、结构、风险和视频化准备度。',
       gateText: hasCompletion ? '小说完成确认已记录，待视频化检查已解锁。' : latestFullReview.value ? '处理阻塞问题或确认完成后，进入待视频化检查。' : '需要正文批量生成完成且无阻塞章节。',
       nextAction: hasCompletion ? '小说已完成确认。' : latestFullReview.value ? '处理 Top 问题并确认小说完成。' : hasBodyReady ? '发起全书 AI 审稿。' : '先完成批量正文。',
-      primaryActionLabel: latestFullReview.value ? '确认小说完成' : '全书 AI 审稿',
-      primaryAction: latestFullReview.value ? handleConfirmCompletion : handleStartFullReview,
-      primaryLoading: latestFullReview.value ? confirmingCompletion.value : (startingFullReview.value || isNovelActionRunning('full_review')),
-      primaryDisabled: hasLocalPendingWait.value || (latestFullReview.value ? !canConfirmCompletion.value : !canStartFullReview.value),
+      primaryActionLabel: failedFullReviewTask.value ? '重新发起全书审稿' : latestFullReview.value ? '确认小说完成' : '全书 AI 审稿',
+      primaryAction: failedFullReviewTask.value ? handleStartFullReview : latestFullReview.value ? handleConfirmCompletion : handleStartFullReview,
+      primaryLoading: isAuthoritativeFullReviewInFlight.value || (failedFullReviewTask.value ? startingFullReview.value : latestFullReview.value ? confirmingCompletion.value : (startingFullReview.value || isNovelActionRunning('full_review'))),
+      primaryDisabled: isAuthoritativeFullReviewInFlight.value || hasLocalPendingWait.value || (failedFullReviewTask.value ? !canStartFullReview.value : latestFullReview.value ? !canConfirmCompletion.value : !canStartFullReview.value),
       state: stateWithIssue(hasCompletion ? 'done' : hasBodyReady || latestFullReview.value ? 'active' : 'locked', [NovelCreationStage.FullReview, NovelCreationStage.CompletionConfirm]),
       progress: hasCompletion ? 100 : latestFullReview.value ? 76 : hasBodyReady ? 30 : 0,
       subSteps: createSubSteps([
@@ -2866,21 +2923,32 @@ async function handleGenerateBodyBatch() {
 
 async function handleStartFullReview() {
   if (!detail.value) return
+  if (isAuthoritativeFullReviewInFlight.value) {
+    ElMessage.info('全书审稿任务正在执行中，请查看最近任务进度。')
+    return
+  }
   if (hasLocalPendingWait.value) {
     ElMessage.info('已有生成任务在等待中，请先查看最近任务或取消等待。')
     return
   }
 
+  const failedTask = failedFullReviewTask.value
   const confirmed = await confirmHighRiskAction({
-    title: '确认发起全书 AI 审稿',
-    message: '将基于当前全部正式正文创建全书审稿任务。审稿只生成报告、问题卡和门禁结论，不会自动确认完成，也不会进入待视频化或视频生产链路。',
+    title: failedTask ? '确认重新发起全书审稿' : '确认发起全书 AI 审稿',
+    message: failedTask
+      ? '这会创建一次新的模型调用，可能产生新的模型费用。旧任务不会被直接 retry，也不会被覆盖；本次仍只生成报告、问题卡和门禁结论，不会自动确认完成或进入视频生产链路。'
+      : '将基于当前全部正式正文创建全书审稿任务。审稿只生成报告、问题卡和门禁结论，不会自动确认完成，也不会进入待视频化或视频生产链路。',
     details: [
       { label: '小说对象', value: detail.value.title },
       { label: '小说版本', value: detail.value.updatedAt },
       { label: '计划章节数', value: chapterRows.value.length },
       { label: '当前阶段', value: detail.value.statusSummary.displayStatusText },
+      ...(failedTask ? [
+        { label: '旧任务 ID', value: failedTask.id },
+        { label: '旧任务结果', value: '未生成报告，不直接重试' },
+      ] : []),
     ],
-    confirmButtonText: '确认发起审稿',
+    confirmButtonText: failedTask ? '确认新的模型调用' : '确认发起审稿',
   })
   if (!confirmed) return
 

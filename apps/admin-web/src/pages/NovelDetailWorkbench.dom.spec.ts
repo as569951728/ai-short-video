@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   generateDirections: vi.fn(),
   generateOutline: vi.fn(),
   optimizeDirection: vi.fn(),
+  startFullReview: vi.fn(),
   generateTrial: vi.fn(),
 }))
 
@@ -60,7 +61,7 @@ vi.mock('../modules/novels/services/novelService', () => {
     optimizeDirection: mocks.optimizeDirection,
     recheckVideoReadiness: noopAction,
     resolveFullReviewIssue: noopAction,
-    startFullReview: noopAction,
+    startFullReview: mocks.startFullReview,
     updateChapterWordTargets: noopAction,
     toDirectionCandidateRow: (candidate: Record<string, unknown>) => ({
       id: candidate.id,
@@ -139,6 +140,7 @@ afterEach(() => {
   mocks.generateDirections.mockReset()
   mocks.generateOutline.mockReset()
   mocks.optimizeDirection.mockReset()
+  mocks.startFullReview.mockReset()
   mocks.generateTrial.mockReset()
   localStorage.clear()
   sessionStorage.clear()
@@ -742,6 +744,238 @@ describe('NovelDetailWorkbench DOM behavior', () => {
     expect(mocks.generateTrial).toHaveBeenCalledTimes(secretCanaries.length)
     promptSpy.mockRestore()
   })
+
+  it('renders authoritative chapter locations for full-review issues without exposing internal ids', async () => {
+    mocks.route.query = { step: 'fullReview' }
+    mocks.getNovelDetail.mockResolvedValue(createNovelDetail({
+      creationStage: NovelCreationStage.FullReview,
+      stageStatus: StageStatus.WaitingUser,
+      statusSummary: {
+        displayStatusText: '全书审稿',
+        recommendedAction: { type: 'resolve_full_review_issue', label: '处理问题', reason: '先处理阻塞问题' },
+      },
+      chapters: [
+        { id: 'chapter-authority-002', chapterNo: 2, title: '第二章' },
+        { id: 'chapter-authority-008', chapterNo: 8, title: '第八章' },
+      ],
+      latestFullReview: {
+        id: 'review-001',
+        version: 1,
+        totalScore: 68,
+        rating: 'C',
+        summary: '存在跨章一致性冲突。',
+        suggestions: ['先修复阻塞问题'],
+        videoSuggestion: '',
+        firstVideoSuggestion: { chapterRange: '', narrationHook: '' },
+        issues: [{
+          issueId: 'issue-001',
+          title: '人物生死状态冲突',
+          plainDescription: '人物状态前后矛盾。',
+          severity: 'blocking',
+          scopeType: 'chapter',
+          scopeRefs: ['chapter-authority-002', 'chapter-authority-008'],
+          dimension: 'character_continuity',
+          blocking: true,
+          recommendedTarget: '第 2、8 章',
+          recommendedAction: '统一人物状态。',
+          status: 'open',
+          acceptedReason: null,
+        }],
+        gate: {
+          id: 'gate-001',
+          gateResultText: '阻断',
+          allowCompletion: false,
+          forcePassAllowed: false,
+          forcePassReason: null,
+        },
+      },
+    }))
+
+    wrapper = mount(NovelDetailWorkbench, {
+      attachTo: document.body,
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+
+    const scope = wrapper.find('.full-review-issue-scope')
+    expect(scope.text()).toBe('涉及章节：第 2 章、第 8 章')
+    expect(wrapper.text()).not.toContain('chapter-authority-002')
+    expect(wrapper.text()).not.toContain('chapter-authority-008')
+  })
+
+  it('shows a safe failed full-review recovery state with task and request trace access', async () => {
+    mocks.route.query = { step: 'fullReview' }
+    const failedTask = createFailedFullReviewTask()
+    mocks.getNovelDetail.mockResolvedValue(createNovelDetail({
+      creationStage: NovelCreationStage.Body,
+      stageStatus: StageStatus.Completed,
+      statusSummary: {
+        displayStatusText: '批量正文已完成',
+        recommendedAction: { type: 'full_review', label: '全书 AI 审稿', reason: '重新审稿' },
+      },
+      recentTask: failedTask,
+      recentTasks: [failedTask],
+    }))
+    mocks.getTaskDetail.mockResolvedValue(createFailedFullReviewTaskDetail())
+
+    wrapper = mount(NovelDetailWorkbench, {
+      attachTo: document.body,
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('模型输出格式不符合约定，本次未生成报告')
+    expect(wrapper.text()).toContain('模型输出格式不符合约定，本次未生成报告。')
+    expect(wrapper.text()).toContain('错误代码：PROVIDER_ERROR')
+    expect(wrapper.text()).toContain('Task ID：task-full-review-failed-001')
+    const restartButtons = wrapper.findAll('button').filter((button) => button.text() === '重新发起全书审稿')
+    expect(restartButtons.length).toBeGreaterThan(0)
+    expect(restartButtons.every((button) => button.attributes('disabled') === undefined)).toBe(true)
+    expect(wrapper.text()).not.toContain('RAW_PROVIDER_RESPONSE_CANARY')
+
+    await wrapper.findAll('button').find((button) => button.text() === '查看 Task / Request 详情')?.trigger('click')
+    await flushPromises()
+
+    expect(mocks.getTaskDetail).toHaveBeenCalledWith('task-full-review-failed-001')
+    expect(document.body.textContent).toContain('request-full-review-failed-001')
+    expect(document.body.textContent).toContain('task-full-review-failed-001')
+  })
+
+  it('uses the generic failed full-review title for a non-schema provider failure', async () => {
+    mocks.route.query = { step: 'fullReview' }
+    const failedTask = createFailedFullReviewTask({
+      failureCategory: 'provider_error',
+      errorCode: 'PROVIDER_TIMEOUT',
+      errorMessage: '模型调用超时，请稍后重试。',
+      currentStep: '等待模型响应超时',
+    })
+    mocks.getNovelDetail.mockResolvedValue(createNovelDetail({
+      creationStage: NovelCreationStage.Body,
+      stageStatus: StageStatus.Completed,
+      statusSummary: {
+        displayStatusText: '批量正文已完成',
+        recommendedAction: { type: 'full_review', label: '全书 AI 审稿', reason: '重新审稿' },
+      },
+      recentTask: failedTask,
+      recentTasks: [failedTask],
+    }))
+
+    wrapper = mount(NovelDetailWorkbench, {
+      attachTo: document.body,
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('全书审稿失败，本次未生成报告')
+    expect(wrapper.text()).toContain('模型调用超时，请稍后重试。')
+    expect(wrapper.text()).toContain('错误代码：PROVIDER_TIMEOUT')
+    expect(wrapper.text()).not.toContain('模型输出格式不符合约定')
+  })
+
+  it('keeps full-review actions locked from an authoritative processing task after refresh without local pending state', async () => {
+    mocks.route.query = { step: 'fullReview' }
+    const processingTask = createProcessingFullReviewTask()
+    mocks.getNovelDetail.mockResolvedValue(createNovelDetail({
+      creationStage: NovelCreationStage.Body,
+      stageStatus: StageStatus.Completed,
+      statusSummary: {
+        displayStatusText: '批量正文已完成',
+        recommendedAction: { type: 'full_review', label: '全书 AI 审稿', reason: '发起审稿' },
+      },
+      recentTask: processingTask,
+      recentTasks: [processingTask],
+    }))
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm')
+
+    expect(localStorage.length).toBe(0)
+    wrapper = mount(NovelDetailWorkbench, {
+      attachTo: document.body,
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+
+    const fullReviewButtons = wrapper.findAll('button').filter((button) => button.text() === '全书 AI 审稿')
+    expect(fullReviewButtons.length).toBeGreaterThanOrEqual(2)
+    expect(fullReviewButtons.every((button) => button.attributes('disabled') !== undefined)).toBe(true)
+    expect(fullReviewButtons.every((button) => button.classes().includes('is-loading'))).toBe(true)
+
+    for (const button of fullReviewButtons) await button.trigger('click')
+    await flushPromises()
+
+    expect(confirmSpy).not.toHaveBeenCalled()
+    expect(mocks.startFullReview).not.toHaveBeenCalled()
+    expect(localStorage.length).toBe(0)
+    confirmSpy.mockRestore()
+  })
+
+  it('explains that a failed full review restart is a new potentially billable call and cancel has no side effect', async () => {
+    mocks.route.query = { step: 'fullReview' }
+    const failedTask = createFailedFullReviewTask()
+    mocks.getNovelDetail.mockResolvedValue(createNovelDetail({
+      creationStage: NovelCreationStage.Body,
+      stageStatus: StageStatus.Completed,
+      statusSummary: {
+        displayStatusText: '批量正文已完成',
+        recommendedAction: { type: 'full_review', label: '全书 AI 审稿', reason: '重新审稿' },
+      },
+      recentTask: failedTask,
+      recentTasks: [failedTask],
+    }))
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValueOnce('cancel')
+
+    wrapper = mount(NovelDetailWorkbench, {
+      attachTo: document.body,
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+
+    await wrapper.findAll('button').find((button) => button.text() === '重新发起全书审稿')?.trigger('click')
+    await flushPromises()
+
+    expect(confirmSpy).toHaveBeenCalledTimes(1)
+    expect(confirmSpy.mock.calls[0]?.[1]).toBe('确认重新发起全书审稿')
+    expect(String(confirmSpy.mock.calls[0]?.[0])).toContain('新的模型调用')
+    expect(String(confirmSpy.mock.calls[0]?.[0])).toContain('可能产生新的模型费用')
+    expect(String(confirmSpy.mock.calls[0]?.[0])).toContain('旧任务不会被直接 retry')
+    expect(confirmSpy.mock.calls[0]?.[2]).toEqual(expect.objectContaining({ confirmButtonText: '确认新的模型调用' }))
+    expect(mocks.startFullReview).not.toHaveBeenCalled()
+    expect(localStorage.length).toBe(0)
+    confirmSpy.mockRestore()
+  })
+
+  it('starts exactly one new full-review call after explicit restart confirmation', async () => {
+    mocks.route.query = { step: 'fullReview' }
+    const failedTask = createFailedFullReviewTask()
+    const failedDetail = createNovelDetail({
+      creationStage: NovelCreationStage.Body,
+      stageStatus: StageStatus.Completed,
+      statusSummary: {
+        displayStatusText: '批量正文已完成',
+        recommendedAction: { type: 'full_review', label: '全书 AI 审稿', reason: '重新审稿' },
+      },
+      recentTask: failedTask,
+      recentTasks: [failedTask],
+    })
+    mocks.getNovelDetail.mockResolvedValue(failedDetail)
+    mocks.startFullReview.mockResolvedValue({})
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockImplementationOnce(async () => 'confirm' as never)
+
+    wrapper = mount(NovelDetailWorkbench, {
+      attachTo: document.body,
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+
+    await wrapper.findAll('button').find((button) => button.text() === '重新发起全书审稿')?.trigger('click')
+    await flushPromises()
+
+    expect(mocks.startFullReview).toHaveBeenCalledTimes(1)
+    expect(mocks.startFullReview).toHaveBeenCalledWith('novel-dom-001', {
+      idempotencyKey: expect.stringMatching(/^full-review-[0-9a-f-]{36}$/),
+      expectedNovelVersion: '2026-07-13T00:00:00.000Z',
+    })
+    confirmSpy.mockRestore()
+  })
 })
 
 function createNovelDetail(overrides: Record<string, unknown> = {}) {
@@ -817,6 +1051,75 @@ function createTaskDetail(taskId: string, resultVersionId: string, taskType = 'n
     nextAction: { reasonText: '查看并确认候选' },
     createdAt: '2026-08-02T08:00:00.000Z',
     updatedAt: '2026-08-02T08:01:00.000Z',
+    events: [],
+  }
+}
+
+function createFailedFullReviewTask(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'task-full-review-failed-001',
+    taskType: 'novel_full_review',
+    status: TaskStatus.Failed,
+    statusText: '失败',
+    progress: 0,
+    currentStep: '模型输出格式不符合约定，本次未生成报告。',
+    resultVersionIds: [],
+    failureCategory: 'output_parse_failed',
+    failureCategoryText: '模型输出解析失败',
+    errorCode: 'PROVIDER_ERROR',
+    errorMessage: '模型输出格式不符合约定，本次未生成报告。',
+    createdAt: '2026-08-03T01:00:00.000Z',
+    updatedAt: '2026-08-03T01:01:00.000Z',
+    ...overrides,
+  }
+}
+
+function createProcessingFullReviewTask() {
+  return {
+    id: 'task-full-review-processing-001',
+    taskType: 'novel_full_review',
+    status: TaskStatus.Processing,
+    statusText: '生成中',
+    progress: 42,
+    currentStep: '正在执行全书审稿',
+    resultVersionIds: [],
+    errorCode: null,
+    errorMessage: null,
+    createdAt: '2026-08-03T02:00:00.000Z',
+    updatedAt: '2026-08-03T02:01:00.000Z',
+  }
+}
+
+function createFailedFullReviewTaskDetail() {
+  const task = createFailedFullReviewTask()
+  return {
+    ...task,
+    novelId: 'novel-dom-001',
+    objectType: 'novel',
+    objectId: 'novel-dom-001',
+    statusNote: task.errorMessage,
+    sourceVersionRefs: [],
+    conflictScope: null,
+    conflictKey: null,
+    retryOfTaskId: null,
+    failureCategory: 'provider_error',
+    failureCategoryText: '生成服务异常',
+    userFailureReason: task.errorMessage,
+    retryable: false,
+    cancellable: false,
+    cancelReason: null,
+    trace: {
+      taskId: task.id,
+      requestId: 'request-full-review-failed-001',
+      retryOfTaskId: null,
+    },
+    nextAction: {
+      type: 'disabled',
+      label: '暂不支持任务重试',
+      reasonText: '旧任务不会被直接重试。',
+      targetType: 'disabled',
+      disabled: true,
+    },
     events: [],
   }
 }

@@ -112,7 +112,7 @@ import {
 } from '../domain/executionContract.js';
 import { BusinessError } from '../../../shared/errors.js';
 
-export function createInMemoryNovelRepository(): NovelRepository & {
+export interface InMemoryNovelRepository extends NovelRepository {
   getOperationLogs(): OperationLogRecord[];
   getGenerationTasks(): GenerationTaskRecord[];
   getGenerationTaskEvents(): GenerationTaskEventRecord[];
@@ -127,7 +127,16 @@ export function createInMemoryNovelRepository(): NovelRepository & {
   getPreferences(): NovelPreferencesRecord[];
   getChapterFeatureCards(): ChapterFeatureCardRecord[];
   getReviewReports(): ReviewReportRecord[];
-} {
+  getFullReviewGates(): FullReviewGateRecord[];
+}
+
+const inMemoryNovelRepositories = new WeakSet<NovelRepository>();
+
+export function isInMemoryNovelRepository(repository: NovelRepository): repository is InMemoryNovelRepository {
+  return inMemoryNovelRepositories.has(repository);
+}
+
+export function createInMemoryNovelRepository(): InMemoryNovelRepository {
   const novels: NovelRecord[] = [];
   const preferences: NovelPreferencesRecord[] = [];
   const operationLogs: OperationLogRecord[] = [];
@@ -189,6 +198,12 @@ export function createInMemoryNovelRepository(): NovelRepository & {
       : null;
     const contentById = (id: unknown) => typeof id === 'string'
       ? chapterContentVersions.find((item) => item.tenantId === input.tenantId && item.novelId === novel.id && item.id === id)
+      : null;
+    const featureCardById = (id: unknown) => typeof id === 'string'
+      ? chapterFeatureCards.find((item) => item.tenantId === input.tenantId && item.novelId === novel.id && item.id === id)
+      : null;
+    const reviewReportById = (id: unknown) => typeof id === 'string'
+      ? reviewReports.find((item) => item.tenantId === input.tenantId && item.novelId === novel.id && item.id === id)
       : null;
     const structureAction = ['setting_generate', 'outline_generate', 'stage_outline_generate', 'chapter_plan_generate'].includes(input.action);
     const currentVersionIds = [refs.currentDirectionVersionId, refs.currentSettingVersionId, refs.currentOutlineVersionId, refs.currentStageOutlineVersionId, refs.currentChapterPlanVersionId];
@@ -258,8 +273,33 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     const loadedFullReviewContents = input.action === 'novel_full_review'
       ? orderedChapters.map((item) => contentById(item.currentContentVersionId))
       : [];
-    if (loadedFullReviewContents.some((item) => !item)) return null;
+    const loadedFullReviewFeatureCards = input.action === 'novel_full_review'
+      ? orderedChapters.map((item) => featureCardById(item.currentFeatureCardVersionId))
+      : [];
+    const loadedFullReviewReviews = input.action === 'novel_full_review'
+      ? orderedChapters.map((item) => reviewReportById(item.currentReviewReportId))
+      : [];
+    const fullReviewMemory = input.action === 'novel_full_review'
+      ? longTermMemories
+          .filter((memory) => memory.tenantId === input.tenantId && memory.novelId === novel.id)
+          .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())[0] ?? null
+      : null;
+    const finalChapter = orderedChapters.at(-1);
+    if (
+      loadedFullReviewContents.some((item, index) => !item || item.chapterId !== orderedChapters[index]?.id)
+      || loadedFullReviewFeatureCards.some((item, index) => !item || item.chapterId !== orderedChapters[index]?.id || item.staleLevel === StaleLevel.HardStale)
+      || loadedFullReviewReviews.some((item, index) => !item || item.objectId !== orderedChapters[index]?.id || item.objectVersionId !== orderedChapters[index]?.currentContentVersionId)
+      || (input.action === 'novel_full_review' && (
+        !fullReviewMemory
+        || !finalChapter
+        || fullReviewMemory.chapterId !== finalChapter.id
+        || fullReviewMemory.sourceContentVersionId !== finalChapter.currentContentVersionId
+        || fullReviewMemory.staleLevel === StaleLevel.HardStale
+      ))
+    ) return null;
     const fullReviewContents = loadedFullReviewContents.filter((item): item is ChapterContentVersionRecord => Boolean(item));
+    const fullReviewFeatureCards = loadedFullReviewFeatureCards.filter((item): item is ChapterFeatureCardRecord => Boolean(item));
+    const fullReviewReviews = loadedFullReviewReviews.filter((item): item is ReviewReportRecord => Boolean(item));
     const strategy = versionById(refs.strategySnapshotId);
     if (typeof refs.strategySnapshotId === 'string' && (
       !strategy
@@ -303,12 +343,21 @@ export function createInMemoryNovelRepository(): NovelRepository & {
         bodyPreviousContent,
         bodyPreviousMemory,
         bodyPreviousBatch,
+        fullReviewNovel: input.action === 'novel_full_review' ? novel : null,
+        fullReviewChapters: input.action === 'novel_full_review'
+          ? chapters
+              .filter((item) => item.tenantId === input.tenantId && item.novelId === novel.id)
+              .sort((left, right) => left.chapterNo - right.chapterNo || left.id.localeCompare(right.id))
+          : [],
         fullReviewContents,
+        fullReviewFeatureCards,
+        fullReviewReviews,
+        fullReviewMemory,
         bodyPreviousBatchNotes: bodyPreviousBatch?.summary.nextBatchNotes ?? []
       }
     };
   }
-  return {
+  const repository: InMemoryNovelRepository = {
     async createDraft(input: DraftCreationInput): Promise<CreatedDraftRecord> {
       const normalized = normalizeDraftRequest(input.request);
       const novelId = nextId('novel');
@@ -3089,8 +3138,12 @@ export function createInMemoryNovelRepository(): NovelRepository & {
     },
     getPreferences() { return preferences; },
     getChapterFeatureCards() { return chapterFeatureCards; },
-    getReviewReports() { return reviewReports; }
+    getReviewReports() { return reviewReports; },
+    getFullReviewGates() { return fullReviewGates; }
   };
+
+  inMemoryNovelRepositories.add(repository);
+  return repository;
 
   function createTask(options: {
     input: DirectionCreationInput | DirectionRevisionInput | StructureCreationInput | StructureGenerationTaskCreationInput;

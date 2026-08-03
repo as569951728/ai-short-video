@@ -4,6 +4,7 @@ import { BusinessError } from '../../../shared/errors.js';
 import { sendOk } from '../../../shared/reply.js';
 import { NovelService, type NovelServiceOptions } from '../services/novelService.js';
 import { resolveRequestIdempotencyKey } from '../services/taskClaim.js';
+import { isInMemoryNovelRepository } from '../repositories/inMemoryNovelRepository.js';
 import type {
   AdoptDirectionRequest,
   AdoptStructureAssetRequest,
@@ -122,15 +123,31 @@ const fullReviewParamsSchema = {
 
 const idempotencyKeySchema = { type: 'string', minLength: 8, maxLength: 120, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{7,119}$' } as const;
 
-type NovelRouteOptions = NovelServiceOptions & { requestContextResolver?: RequestContextResolver };
+interface AcceptanceSeedRouteAccess {
+  enabled: boolean;
+}
+
+type NovelRouteOptions = NovelServiceOptions & {
+  requestContextResolver?: RequestContextResolver;
+  acceptanceSeeds?: AcceptanceSeedRouteAccess;
+};
 export async function registerNovelRoutes(app: FastifyInstance, options: NovelRouteOptions) {
   const novelService = new NovelService(options);
-  const devSeedNovelService = new NovelService({
-    repository: options.repository,
-    now: options.now
-  });
+  const acceptanceSeeds = options.acceptanceSeeds ?? {
+    enabled: false
+  };
+  if (
+    acceptanceSeeds.enabled
+    && (process.env.NODE_ENV === 'production' || Boolean(process.env.DATABASE_URL) || !isInMemoryNovelRepository(options.repository))
+  ) {
+    throw new Error('acceptance seeds require an explicit in-memory repository with no DATABASE_URL');
+  }
 
-  if (process.env.NODE_ENV !== 'production') {
+  if (acceptanceSeeds.enabled) {
+    const devSeedNovelService = new NovelService({
+      repository: options.repository,
+      now: options.now
+    });
     app.post(
       '/dev/novels/acceptance-seeds/outline',
       {
@@ -177,6 +194,34 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
       },
       async (request, reply) => {
         const data = await createTrialAcceptanceSeed(
+          devSeedNovelService,
+          request.body as { title?: string } | undefined,
+          await resolveProviderContext(options.requestContextResolver, request)
+        );
+
+        reply.status(201);
+        return sendOk(request, reply, data);
+      }
+    );
+
+    app.post(
+      '/dev/novels/acceptance-seeds/full-review',
+      {
+        schema: {
+          body: {
+            type: 'object',
+            properties: {
+              title: { type: 'string', minLength: 1, maxLength: 200 }
+            },
+            additionalProperties: false
+          },
+          response: {
+            201: responseEnvelopeSchema
+          }
+        }
+      },
+      async (request, reply) => {
+        const data = await createFullReviewAcceptanceSeed(
           devSeedNovelService,
           request.body as { title?: string } | undefined,
           await resolveProviderContext(options.requestContextResolver, request)
@@ -1513,6 +1558,105 @@ async function createTrialAcceptanceSeed(
     trialRunId: trialResult.trialRun.id,
     candidateIds: trialResult.trialRun.chapterOneCandidates.map((candidate) => candidate.id),
     note: '已创建到第 5 个主节点“试写调试”：方向、设定、大纲和章节目录已采用，第 1 章候选待选择。'
+  };
+}
+
+async function createFullReviewAcceptanceSeed(
+  service: NovelService,
+  body: { title?: string } | undefined,
+  context: RequestContext
+) {
+  const suffix = new Date().toISOString().slice(5, 16).replace('T', ' ');
+  const title = body?.title?.trim() || `验收种子：全书审稿证据 ${suffix}`;
+  const draft = await service.createDraft(
+    {
+      title,
+      genres: ['都市逆袭', '系统爽文'],
+      preferences: {
+        appealPoints: ['低谷翻盘', '连续性冲突验收', '事业逆袭'],
+        targetAudience: '18-35 岁爽文用户',
+        stageCount: 3,
+        customIdea: '用于本地验收全书审稿：固定 12 章正式正文，不自动发起全书审稿。',
+        videoAdaptationPreference: '适合口播短视频'
+      },
+      chapterLimit: 12,
+      chapterWordRange: {
+        min: 1_800,
+        max: 2_600
+      }
+    } satisfies CreateNovelDraftRequest,
+    context
+  );
+  const novelId = draft.id;
+
+  const directions = await service.generateDirections(novelId, { regenerateReason: 'RP-04C 夹具：生成方向' }, context);
+  const direction = directions.candidates.find((candidate) => candidate.score >= 75) ?? directions.candidates[0];
+  if (!direction) throw new Error('全书审稿验收种子创建失败：方向候选未生成');
+  await service.adoptDirection(novelId, direction.id, {
+    currentVersionId: null,
+    idempotencyKey: `seed-full-review-direction-${novelId}`,
+    reason: 'RP-04C 夹具：采用方向。'
+  }, context);
+
+  const setting = await service.generateSetting(novelId, { regenerateReason: 'RP-04C 夹具：生成设定' }, context);
+  if (!setting.candidate) throw new Error('全书审稿验收种子创建失败：设定候选未生成');
+  await service.adoptSetting(novelId, setting.candidate.id, { reason: 'RP-04C 夹具：采用设定。' }, context);
+
+  const outline = await service.generateOutline(novelId, { regenerateReason: 'RP-04C 夹具：生成全书大纲' }, context);
+  if (!outline.candidate) throw new Error('全书审稿验收种子创建失败：全书大纲候选未生成');
+  await service.adoptOutline(novelId, outline.candidate.id, { reason: 'RP-04C 夹具：采用全书大纲。' }, context);
+
+  const stages = await service.generateStageOutline(novelId, { regenerateReason: 'RP-04C 夹具：生成阶段大纲' }, context);
+  if (!stages.candidate) throw new Error('全书审稿验收种子创建失败：阶段大纲候选未生成');
+  await service.adoptStageOutline(novelId, stages.candidate.id, { reason: 'RP-04C 夹具：采用阶段大纲。' }, context);
+
+  const chapterPlan = await service.generateChapterPlan(novelId, { regenerateReason: 'RP-04C 夹具：生成章节目录' }, context);
+  if (!chapterPlan.candidate) throw new Error('全书审稿验收种子创建失败：章节目录候选未生成');
+  await service.adoptChapterPlan(novelId, chapterPlan.candidate.id, { reason: 'RP-04C 夹具：采用章节目录。' }, context);
+
+  const chapterOne = await service.generateTrial(novelId, {
+    chapterCount: 3,
+    regenerateReason: 'RP-04C 夹具：生成第 1 章候选。',
+    idempotencyKey: `seed-full-review-trial-one-${novelId}`
+  }, context);
+  const selected = chapterOne.trialRun.chapterOneCandidates.find((candidate) => candidate.isAiRecommended)
+    ?? chapterOne.trialRun.chapterOneCandidates[0];
+  if (!selected) throw new Error('全书审稿验收种子创建失败：试写候选未生成');
+  const followup = await service.generateTrial(novelId, {
+    trialRunId: chapterOne.trialRun.id,
+    selectedCandidateId: selected.id,
+    selectionReason: 'RP-04C 夹具：采用推荐候选。',
+    idempotencyKey: `seed-full-review-trial-followup-${novelId}`
+  }, context);
+  const confirmed = await service.confirmTrial(novelId, {
+    trialRunId: followup.trialRun.id,
+    decision: 'confirm_pass',
+    reason: 'RP-04C 夹具：试写通过。'
+  }, context);
+  const strategy = confirmed.bodyStrategySnapshot;
+  if (!strategy) throw new Error('全书审稿验收种子创建失败：正文策略快照未生成');
+
+  let pendingChapterCount = 12;
+  for (let batchNo = 1; batchNo <= 12 && pendingChapterCount > 0; batchNo += 1) {
+    const batch = await service.generateBodyBatch(novelId, {
+      strategySnapshotId: strategy.id,
+      expectedStrategySnapshotVersion: strategy.versionNo,
+      idempotencyKey: `seed-full-review-body-${novelId}-${batchNo}`
+    }, context);
+    pendingChapterCount = batch.bodyGeneration.chapterProgress.pendingChapterCount;
+  }
+  if (pendingChapterCount > 0) throw new Error('全书审稿验收种子创建失败：12 章正文未全部完成');
+
+  const detail = await service.getDetail(novelId, context.tenantId);
+  return {
+    novelId,
+    title,
+    acceptanceStep: 'fullReview',
+    url: `/novels/${novelId}?step=fullReview`,
+    chapterCount: detail.chapters.length,
+    pendingChapterCount: detail.bodyGeneration?.chapterProgress.pendingChapterCount ?? null,
+    fullReviewTaskCreated: detail.recentTasks.some((task) => task.taskType === 'novel_full_review'),
+    note: '已生成 12 章正式正文并停在全书审稿前；未自动发起全书审稿。'
   };
 }
 

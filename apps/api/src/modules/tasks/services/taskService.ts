@@ -27,9 +27,9 @@ export interface TaskServiceOptions {
 
 const ACTIVE_TASK_STATUSES = [TaskStatus.Queued, TaskStatus.Processing, TaskStatus.WaitingConfirmation];
 const PROVIDER_BACKED_TASK_TYPES = new Set(listActionExecutionPlans().map((plan) => plan.taskType));
-const PROVIDER_FAILURE_PUBLIC_CURRENT_STEP = '生成任务失败，暂不支持直接重试';
 const PROVIDER_FAILURE_PUBLIC_MESSAGE = '任务执行失败，未写入新的候选或正式内容。';
 const PROVIDER_FAILURE_PUBLIC_ERROR_CODE = 'PROVIDER_ERROR';
+const OUTPUT_PARSE_FAILURE_PUBLIC_MESSAGE = '模型输出格式不符合约定，本次未生成报告。';
 const RETRY_FREEZE_REASON = '当前阶段暂不支持任务重试，请返回业务页面查看当前内容。';
 
 export class TaskService {
@@ -151,6 +151,7 @@ export class TaskService {
 
   private toTaskDetailDTO(task: GenerationTaskRecord, events: GenerationTaskEventRecord[], sourceStale: boolean): TaskDetailDTO {
     const providerBackedFailed = isProviderBackedFailedTask(task);
+    const providerFailureMessage = getProviderFailureMessage(task);
     const retryable = task.status === TaskStatus.Failed && !sourceStale && !providerBackedFailed;
     const cancellable = ACTIVE_TASK_STATUSES.includes(task.status);
     const traceRequestId = getRequestId(task.metadata);
@@ -161,12 +162,12 @@ export class TaskService {
       status: task.status,
       statusText: getTaskStatusText(task.status),
       progress: task.progress,
-      currentStep: providerBackedFailed ? PROVIDER_FAILURE_PUBLIC_CURRENT_STEP : task.currentStep,
+      currentStep: providerBackedFailed ? task.failureCategory === 'output_parse_failed' ? providerFailureMessage : '生成任务失败，暂不支持直接重试' : task.currentStep,
       userAcceptedResult: task.userAcceptedResult,
       novelId: task.novelId,
       objectType: task.objectType,
       objectId: task.objectId,
-      statusNote: providerBackedFailed ? PROVIDER_FAILURE_PUBLIC_MESSAGE : task.statusNote,
+      statusNote: providerBackedFailed ? providerFailureMessage : task.statusNote,
       sourceVersionRefs: task.sourceVersionRefs,
       conflictScope: task.conflictScope,
       conflictKey: task.conflictKey,
@@ -175,7 +176,7 @@ export class TaskService {
       failureCategory: task.failureCategory,
       failureCategoryText: getFailureCategoryText(task.failureCategory),
       errorCode: providerBackedFailed ? PROVIDER_FAILURE_PUBLIC_ERROR_CODE : task.errorCode,
-      errorMessage: providerBackedFailed ? PROVIDER_FAILURE_PUBLIC_MESSAGE : task.errorMessage,
+      errorMessage: providerBackedFailed ? providerFailureMessage : task.errorMessage,
       userFailureReason: getUserFailureReason(task, sourceStale),
       retryable,
       cancellable,
@@ -195,17 +196,20 @@ export class TaskService {
 
 export function toRecentTaskSummaryDTO(task: GenerationTaskRecord) {
   const providerBackedFailed = isProviderBackedFailedTask(task);
+  const providerFailureMessage = getProviderFailureMessage(task);
   return {
     id: task.id,
     taskType: task.taskType,
     status: task.status,
     statusText: getTaskStatusText(task.status),
     progress: task.progress,
-    currentStep: providerBackedFailed ? PROVIDER_FAILURE_PUBLIC_CURRENT_STEP : task.currentStep,
+    currentStep: providerBackedFailed ? task.failureCategory === 'output_parse_failed' ? providerFailureMessage : '生成任务失败，暂不支持直接重试' : task.currentStep,
     resultVersionIds: task.resultVersionIds,
     userAcceptedResult: task.userAcceptedResult,
+    failureCategory: task.failureCategory,
+    failureCategoryText: getFailureCategoryText(task.failureCategory),
     errorCode: providerBackedFailed ? PROVIDER_FAILURE_PUBLIC_ERROR_CODE : task.errorCode,
-    errorMessage: providerBackedFailed ? PROVIDER_FAILURE_PUBLIC_MESSAGE : task.errorMessage,
+    errorMessage: providerBackedFailed ? providerFailureMessage : task.errorMessage,
     createdAt: task.createdAt.toISOString(),
     updatedAt: task.updatedAt.toISOString()
   };
@@ -266,7 +270,7 @@ function getFailureCategoryText(category: string | null) {
 }
 
 function getUserFailureReason(task: GenerationTaskRecord, sourceStale: boolean) {
-  if (isProviderBackedFailedTask(task)) return PROVIDER_FAILURE_PUBLIC_MESSAGE;
+  if (isProviderBackedFailedTask(task)) return getProviderFailureMessage(task);
   if (sourceStale) return '上游内容已经变化，旧任务不能直接重试，请基于最新版本重新生成。';
   if (task.status === TaskStatus.Failed) {
     return task.errorMessage || task.statusNote || '任务失败，请稍后重试或调整输入后重新生成。';
@@ -342,4 +346,10 @@ function isVersionRefChanged(refs: Record<string, unknown>, key: string, current
 
 function isProviderBackedFailedTask(task: GenerationTaskRecord) {
   return task.status === TaskStatus.Failed && PROVIDER_BACKED_TASK_TYPES.has(task.taskType);
+}
+
+function getProviderFailureMessage(task: GenerationTaskRecord) {
+  return task.failureCategory === 'output_parse_failed'
+    ? OUTPUT_PARSE_FAILURE_PUBLIC_MESSAGE
+    : PROVIDER_FAILURE_PUBLIC_MESSAGE;
 }

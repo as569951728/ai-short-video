@@ -1,10 +1,8 @@
 import { RiskLevel, type ScoringDimensionDTO } from '@ai-shortvideo/shared';
-import type { FullReviewDraft } from '../domain/novelDomain.js';
-import type { NovelProviderActionInputFor, NovelProviderInputV1 } from '../services/actionExecutionPlan.js';
+import { DEFAULT_POLICY_PROFILE_VERSION_ID, type FullReviewDraft } from '../domain/novelDomain.js';
+import type { NovelProviderActionInputFor } from '../services/actionExecutionPlan.js';
 
 type FullReviewProviderInput = NovelProviderActionInputFor<'novel_full_review'>;
-
-const FULL_REVIEW_POLICY_VERSION = 'full-review-policy-v1';
 
 export interface FullReviewProvider {
   generateFullReview(input: FullReviewProviderInput): Promise<FullReviewDraft>;
@@ -16,7 +14,7 @@ export class MockFullReviewProvider implements FullReviewProvider {
     const videoReadinessFail = input.novel.title.includes('视频化检查失败');
     const totalScore = lowScore ? 66 : 84;
     const gateResult = totalScore >= 80 ? 'pass' : totalScore >= 70 ? 'warning' : 'blocked';
-    const issues = createIssues(input.novel, lowScore, videoReadinessFail);
+    const issues = createIssues(input, lowScore, videoReadinessFail);
 
     return {
       totalScore,
@@ -45,31 +43,36 @@ export class MockFullReviewProvider implements FullReviewProvider {
       originalityRisks: lowScore ? ['部分冲突表达同质化'] : ['无明显搬运风险'],
       aiFlavorRisks: lowScore ? ['中段解释性文字偏多'] : ['轻微模板化风险'],
       lowScoreContinueRisks: lowScore ? ['低分强制继续可能导致首条视频验证失败'] : [],
-      reviewPolicyVersionId: FULL_REVIEW_POLICY_VERSION
+      reviewPolicyVersionId: input.coverageManifest.policyProfileVersionId?.trim()
+        || input.novel.policyProfileVersionId?.trim()
+        || DEFAULT_POLICY_PROFILE_VERSION_ID
     };
   }
 }
 
 function createDimensions(totalScore: number, lowScore: boolean): ScoringDimensionDTO[] {
   const items = [
-    ['completion', '全书完成度', totalScore],
-    ['opening_hook', '开篇吸引力', lowScore ? 68 : 86],
-    ['continuity', '长篇连贯性', lowScore ? 64 : 84],
-    ['appeal_density', '爽点密度', lowScore ? 62 : 82],
-    ['video_fit', '视频化适配', lowScore ? 65 : 85]
+    ['stage_continuity', '阶段连续性', totalScore],
+    ['character_continuity', '人物连续性', totalScore + 2],
+    ['timeline_continuity', '时间线连续性', totalScore + 1],
+    ['fact_consistency', '事实一致性', totalScore],
+    ['foreshadowing', '伏笔回收', totalScore - 2],
+    ['evidence_grounding', '证据定位', totalScore - 1]
   ] as const;
 
   return items.map(([key, label, score]) => ({
     key,
     label,
     score,
-    weight: key === 'completion' ? 0.25 : 0.18,
+    weight: 1 / items.length,
     evidence: `${label}评分 ${score}，基于章节摘要、单章审稿和长篇记忆汇总。`,
     penaltyPoints: Math.max(0, 80 - score)
   }));
 }
 
-function createIssues(novel: NovelProviderInputV1, lowScore: boolean, videoReadinessFail: boolean) {
+function createIssues(input: FullReviewProviderInput, lowScore: boolean, videoReadinessFail: boolean) {
+  const chapterIds = input.coverageManifest.chapters.map((chapter) => chapter.chapterId);
+  const primaryChapterId = chapterIds[Math.min(4, chapterIds.length - 1)]!;
   if (!lowScore && !videoReadinessFail) {
     return [
       {
@@ -78,14 +81,13 @@ function createIssues(novel: NovelProviderInputV1, lowScore: boolean, videoReadi
         plainDescription: '这一章解释信息偏多，视频化时建议不要作为首条切片。',
         severity: 'warning' as const,
         scopeType: 'chapter' as const,
-        scopeRefs: ['chapter_5'],
-        dimension: 'pace',
+        scopeRefs: [primaryChapterId],
+        dimension: 'stage_continuity',
         blocking: false,
         recommendedTarget: 'chapter',
         recommendedAction: '如做视频，优先选择第 1-3 章。',
         status: 'open' as const,
-        acceptedReason: null,
-        sourceReviewReportId: ''
+        acceptedReason: null
       }
     ];
   }
@@ -94,17 +96,16 @@ function createIssues(novel: NovelProviderInputV1, lowScore: boolean, videoReadi
     {
       issueId: 'full-issue-appeal-1',
       title: videoReadinessFail ? '首条视频建议缺失' : '中段爽点衰减',
-      plainDescription: videoReadinessFail ? `${novel.title} 缺少可用首条视频钩子。` : '中段几章的反击方式较重复，读者追更动力可能下降。',
+      plainDescription: videoReadinessFail ? `${input.novel.title} 缺少可用首条视频钩子。` : '中段几章的反击方式较重复，读者追更动力可能下降。',
       severity: 'blocking' as const,
-      scopeType: videoReadinessFail ? 'novel' as const : 'stage' as const,
-      scopeRefs: videoReadinessFail ? [novel.id] : ['stage_2'],
-      dimension: videoReadinessFail ? 'video_fit' : 'appeal_density',
+      scopeType: 'chapter' as const,
+      scopeRefs: [primaryChapterId],
+      dimension: videoReadinessFail ? 'evidence_grounding' : 'stage_continuity',
       blocking: true,
       recommendedTarget: videoReadinessFail ? 'full_review' : 'chapter',
       recommendedAction: videoReadinessFail ? '补强首条视频建议后重新检查。' : '优化中段重复章节，或填写原因强制通过。',
       status: 'open' as const,
-      acceptedReason: null,
-      sourceReviewReportId: ''
+      acceptedReason: null
     }
   ];
 }
