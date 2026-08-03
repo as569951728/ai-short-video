@@ -221,4 +221,16 @@ jobs:
       - run: npm run build -w @ai-shortvideo/api
       - run: npm run prisma:validate -w @ai-shortvideo/api
       - run: git diff --check
-      - run: npm run governance:git-budget
+      - name: Check package diff budget
+        env:
+          GOVERNANCE_BASE_SHA: ${{ steps.b2a-range.outputs.delivery_base }}
+          GOVERNANCE_HEAD_SHA: ${{ steps.b2a-range.outputs.delivery_head }}
+        run: |
+          set -euo pipefail
+          ADR_ARGS=()
+          while IFS= read -r -d '' path; do
+            case "$path" in
+              docs/adr/*.md) ADR_ARGS+=(--adr "$path") ;;
+            esac
+          done < <(git diff --name-only -z "$GOVERNANCE_BASE_SHA" "$GOVERNANCE_HEAD_SHA")
+          npm run governance:git-budget -- --base "$GOVERNANCE_BASE_SHA" --head "$GOVERNANCE_HEAD_SHA" "${ADR_ARGS[@]}"
