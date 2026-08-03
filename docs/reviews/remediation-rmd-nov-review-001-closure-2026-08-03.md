@@ -41,7 +41,7 @@
 | 证据桶 | 命令/证据 | 结果 | not_proven |
 | --- | --- | --- | --- |
 | contract | shared/API full-review contract 与 12 章 authority manifest 回归 | passed | 无 |
-| unit | PR #63 targeted suites 与根级单测 | passed | 调用前 prompt chars/maxTokens 缺独立单测 |
+| unit | PR #63 targeted suites 与根级单测；调用次数与总预算拒绝回归 | passed | `promptCharacters` 与 `maxTokens` 两项各自的 provider call=0 聚焦负例缺独立单测 |
 | API | Fastify full-review transport、任务恢复、报告和 completion gate | passed | 真实 MySQL transport |
 | DB/MySQL/Prisma | N/A；本 issue 的目标证据为 E5 provider + browser/API，数据库完本链由 `RMD-NOV-DB-001` 承担 | 不适用 | E6/真实 MySQL/Prisma 仍未证明 |
 | browser | `npm run e2e:rp04c`；M-01..M-11 + R-01 | 1/1 passed，12/12 章，刷新/跨标签/失败恢复通过 | 跨进程恢复 |
@@ -108,13 +108,13 @@ not_proven: E6/MySQL/Prisma; direct API concurrency; process restart; strict pre
 - Git 和工作树：PR #63 正常 squash 合并；PR #64 正常 squash 修复 main delivery budget gate；均未使用 admin bypass。
 - 是否存在未归因文件：否。
 
-独立结论：PRODUCT、TEST、QUALITY 对最终候选均为 `P0=0/P1=0`，全部批准合并和关闭；非阻断 P2 为调用前预算参数显式测试、固定金丝雀预算保守性及记忆直接标记人物冲突。
+独立结论：PRODUCT、TEST、QUALITY 对最终候选均为 `P0=0/P1=0`，全部批准合并和关闭；非阻断 P2 为 `promptCharacters/maxTokens` 各自的 provider call=0 聚焦负例、固定金丝雀预算保守性及记忆直接标记人物冲突。
 
 ## 7. Git 与远程
 
 | 字段 | 内容 |
 | --- | --- |
-| branch | implementation `codex/rp-04c-full-review-evidence-20260803`；closure `codex/rp04c-ledger-close-20260803` |
+| branch | implementation `codex/rp-04c-full-review-evidence-20260802`；closure `codex/rp04c-ledger-close-20260803` |
 | commit | PR #63 merge `5e42d5f32de308dff4e3c9531aed428c815bd279`；PR #64 merge `f98f53245ce3382b93d10938e2d82d745031a4e4` |
 | upstream | `origin/main@f98f53245ce3382b93d10938e2d82d745031a4e4` |
 | changed_files | implementation 28；governance correction 3；closure assets 8 |
@@ -129,7 +129,7 @@ PR #63 最终 required checks 5/5；PR #64 最终 required checks 6/6。main@`f9
 issue_id: RMD-NOV-REVIEW-001
 final_status: closed
 closed_acceptance_ids: NOV-REVIEW-QUALITY-01
-residual_risks: E6/MySQL/Prisma; direct API concurrency; process restart; strict prepaid token/cost isolation; explicit pre-call budget tests
+residual_risks: E6/MySQL/Prisma; direct API concurrency; process restart; strict prepaid token/cost isolation; focused promptCharacters/maxTokens provider-call-zero tests
 reopen_conditions: full review skips authoritative chapters/evidence; provider is called with incomplete or stale authority; conflict fixture misses or control false-positive appears; duplicate paid call occurs; completion gate allows blocking issues; safe summary exposes raw content or secrets
 decided_by: MC after independent PRODUCT, TEST and QUALITY approval
 decided_at: 2026-08-03 CST
