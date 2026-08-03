@@ -37,9 +37,11 @@ describe('AI JSON output helper', () => {
 
   it('repairs one malformed response by retrying with strict JSON instructions', async () => {
     const calls: string[] = [];
+    const retryLimits: Array<number | undefined> = [];
     const client: LlmClient = {
       async chat(request) {
         calls.push(request.messages.at(-1)?.content ?? '');
+        retryLimits.push(request.maxRetries);
         return {
           content: calls.length === 1 ? '这次先给说明，不给 JSON' : '{"title":"修复后的大纲","score":88}',
           model: 'fake-model'
@@ -51,12 +53,14 @@ describe('AI JSON output helper', () => {
       taskName: 'test_repair',
       model: 'fake-model',
       messages: [{ role: 'user', content: 'return json' }],
+      transportRetries: 0,
       validate: (value) => value as { title: string; score: number }
     });
 
     assert.equal(result.title, '修复后的大纲');
     assert.equal(result.score, 88);
     assert.equal(calls.length, 2);
+    assert.deepEqual(retryLimits, [0, 0]);
     assert.match(calls[1], /重新输出一个完整 JSON 对象/);
   });
 

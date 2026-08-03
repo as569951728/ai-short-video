@@ -11,6 +11,7 @@ export interface ChatCompletionRequest {
   messages: ChatMessage[];
   temperature?: number;
   maxTokens?: number;
+  maxRetries?: number;
 }
 
 export interface ChatCompletionUsage {
