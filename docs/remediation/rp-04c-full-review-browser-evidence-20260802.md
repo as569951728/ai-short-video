@@ -1,117 +1,39 @@
 # RP-04C 全书审稿浏览器证据（2026-08-02）
-
-## 1. 结论
-
-| 项目 | 结论 |
-| --- | --- |
-| package_id | `RP-04C` |
-| target_issue_id | `RMD-NOV-REVIEW-001` |
-| acceptance_id | `RP-04C_BROWSER_ACCEPTANCE_M01_M11` |
-| browser_result | `candidate_for_independent_review` |
-| failing_step | 无，M-01 至 M-11 与 R-01 全部 `PASS` |
-| real_model_e5 | `FAILED`（仅一次调用，人物冲突漏检） |
-| e6 | `NOT_PROVEN` |
-| package_result | `blocked` |
-| approval | `NOT_ISSUED` |
-| ledger_action | 不关闭、不调整总账进度；ADR 文件数与净增量由主控更新 |
-
-指定安全摘要显示 Playwright 1/1 通过，M-01 至 M-11 与失败刷新恢复 R-01 全部 `PASS`，`failures=[]`。浏览器结论为 `candidate_for_independent_review`；该结论只覆盖本地内存仓储与确定性 provider，不替代 E5 或独立批准。
-
-## 2. 运行身份与安全边界
-
+## 1. 结论与身份
 | 字段 | 值 |
 | --- | --- |
-| run_id | `rp04c-2026-08-03T08-13-45-744Z` |
-| git_sha | `6a73577359338080ca4e229bc8335e993b482a96` |
-| git_tree | `81cf2fcc30fe6470c4e5bde5d37a40d8409ce63a` |
-| worktree_dirty | `false` |
-| executable_scope_hash | `06076f7e3bbff31a4ab363ce1d37394671271c3a71a9bb91e4b8e6ea5d8f7f2b` |
-| fixture_version | `rp04c-browser-12ch-v1` |
-| provider | `deterministic-release-provider`，完成长等待、跨标签页与双刷新断言后由测试一次性释放 |
-| evidence_hash | `08a16b68cdfda8de891a59898e2ff300e0d61ad8371d85e11c1ed259651c691f` |
-| safe_summary_sha256 | `4d915947e8403cdd6762e02cc059bbe227f92d7fc97c4c13e4f0ad27e27371f0` |
-| safe_summary | `output/playwright/rp-04c/rp04c-2026-08-03T08-13-45-744Z/safe-evidence.json` |
-
-说明：安全摘要明确记录 `worktree.dirty=false`，并绑定上述 `git_sha`、`git_tree` 与 `executable_scope_hash`。该身份只证明本次本地确定性浏览器运行对应的干净候选，不替代远程 checks、E5 或独立复核。证据不包含文件正文或 diff。
-
-运行使用随机本地端口、in-memory repository 和确定性 provider。启动器拒绝或移除数据库、真实模型、对象存储与媒体密钥；本轮未调用真实 MySQL、真实模型、对象存储、TTS、视频渲染或发布接口。
-
-## 3. M-01 至 M-11 结果
-
-| 编号 | 结果 | 安全证据摘要 |
+| package/issue/acceptance | `RP-04C` / `RMD-NOV-REVIEW-001` / `RP-04C_BROWSER_ACCEPTANCE_M01_M11` |
+| browser/package/approval | `candidate_for_independent_review` / `blocked` / `NOT_ISSUED` |
+| real_model_e5/e6 | `FAILED`（首次仅一次调用，人物冲突漏检）/ `NOT_PROVEN` |
+| run | `rp04c-2026-08-03T08-13-45-744Z` |
+| implementation SHA/tree | `6a73577359338080ca4e229bc8335e993b482a96` / `81cf2fcc30fe6470c4e5bde5d37a40d8409ce63a` |
+| dirty/scope hash | `false` / `06076f7e3bbff31a4ab363ce1d37394671271c3a71a9bb91e4b8e6ea5d8f7f2b` |
+| fixture/provider | `rp-04c-browser-12ch-v1` / `deterministic-release-provider`（长等待、跨标签与双刷新后一次性释放） |
+| evidence/file SHA256 | `08a16b68cdfda8de891a59898e2ff300e0d61ad8371d85e11c1ed259651c691f` / `4d915947e8403cdd6762e02cc059bbe227f92d7fc97c4c13e4f0ad27e27371f0` |
+| safe summary | `output/playwright/rp-04c/rp04c-2026-08-03T08-13-45-744Z/safe-evidence.json` |
+Playwright 1/1，M-01..M-11 与 R-01 全部 PASS，`failures=[]`。本轮只覆盖随机本地端口、in-memory repository 和确定性 provider；启动器移除数据库、真实模型、对象存储及媒体密钥，不替代 E5、MySQL 或独立批准。
+## 2. M-01..M-11 与恢复
+| 编号 | 结果 | 安全摘要 |
 | --- | --- | --- |
-| M-01 | PASS | 后端 fixture 加载成功；正式章节 12；完结入口禁用。 |
-| M-02 | PASS | 取消确认后 full-review POST 为 0；确认框显示 12 章且明确不会自动完结。 |
-| M-03 | PASS | 单次确认只产生 1 个 full-review POST；请求字段仅 `expectedNovelVersion`、`idempotencyKey`；长任务最终响应为 HTTP 200。 |
-| M-04 | PASS | 0/5/15 秒均显示生成中、不定进度与 1-3 分钟提示；未出现伪造百分比。 |
-| M-05 | PASS | 运行中后端 task 为 `task_000175`；任务详情与事件接口可用，事件数 1。 |
-| M-06 | PASS | 五个采样点均为 `task_000175 / processing`，provider 全程 active，POST 与 provider 调用均为 1；同页刷新、第二标签页、第二标签页再次刷新后的发起入口均为 disabled。 |
-| M-07 | PASS | 报告 `review_000177`、gate `fullGate_000178` 到达；问题数 3，没有 completion decision，视频化状态为 `not_ready`。 |
-| M-08 | PASS | 人物 2/8、时间线 4/9、关键事实 6/11 章 scope 正确；固定对照误报为 0。 |
-| M-09 | PASS | `allowCompletion=false`、blocking 数 3；完结入口禁用，completion POST 为 0。 |
-| M-10 | PASS | 终态刷新后 task/report/gate ID 稳定，没有重复 POST 或重复资产。 |
-| M-11 | PASS | 源正文 canary 已确认存在，DOM、Console、local/sessionStorage、Cookie、相关 Network JSON 的 canary/敏感命中均为 0；页面错误为 0。 |
-| R-01 | PASS | 输出格式失败持久为 `output_parse_failed / PROVIDER_ERROR`；刷新后仍显示安全原因与重新发起入口，未写入报告，raw canary 未泄漏。 |
-
-## 4. 本轮覆盖与隐私摘要
-
-- `coveredChapterNos` 为 1 至 12，连续、无重复。
-- 正文版本、feature card、单章 review 证据计数均为 12；长期 memory 计数为 1。
-- `manifestHash=8fb83d9a01fb28d0603e39aa889a57904dd2852f94c35d509a813cafded3ed32`。
-- 浏览器 full-review POST 为 2：成功链 HTTP 200 且 task 始终为 `task_000175`，R-01 受控失败 HTTP 500 且 task 为 `task_000358`；completion POST 为 0。
-- M-06 四个 `startActionDisabled*` 均为 `true`，五个 task 状态均为 `processing`，`providerActiveThroughout=true`，`providerCallCount=1`。
-- M-11 在源正文和 raw model canary 均已确认的前提下扫描 44 个相关 Network JSON；DOM/Console/Storage/Cookie/Network 敏感命中和页面错误均为 0。
-- 未保存 HAR、trace、截图、视频、完整 prompt、完整正文、raw response、认证头或密钥。
-- `rawArtifactsSaved=false`、`harSaved=false`、`traceSaved=false`；安全摘要文本禁止内容命中为 0。
-
-## 5. 浏览器结论
-### 已验证修复：M-06 authoritative server task in-flight
-
-独立证据：
-
-1. 发起全书审稿并确认后端已持久化 `task_000175`，状态 `processing`。
-2. 同页刷新、新开第二标签页、第二标签页再次刷新均恢复同一 task。
-3. 五个采样点均为 `processing`，provider 全程 active。
-4. 三个恢复场景的“全书 AI 审稿”入口均为 disabled，累计 POST 为 1。
-
-### 已验证修复：M-07 终态报告链路
-
-确定性 provider 维度契约修正后，终态报告、gate 与问题列表均成功进入页面和 latest API，M-07 至 M-11 全部通过。浏览器路径当前没有剩余 M 级失败项。
-
-### 已验证修复：R-01 失败刷新恢复
-
-输出格式错误绑定指定小说后只调用 provider 一次；任务持久为 `output_parse_failed / PROVIDER_ERROR`。页面刷新后仍显示安全原因与重新发起入口，且没有审稿报告、完成决定或 raw canary 泄漏。
-
-浏览器证据只达到 `candidate_for_independent_review`。远程 checks 与独立复核已通过，但首次 E5 漏检人物冲突，整包继续阻塞。
-
-## 6. E5 首次真实模型证据
+| M-01..02 | PASS | 12 章、完结禁用；取消确认后 POST=0，确认框明确不会自动完结。 |
+| M-03..04 | PASS | 确认后成功链 POST=1；字段仅 expected version/key；0/5/15 秒均 processing，无伪百分比。 |
+| M-05..06 | PASS | task `task_000175` 可追踪；五个采样、跨标签与双刷新均为同一 processing task，provider active，所有发起入口禁用。 |
+| M-07..08 | PASS | report `review_000177`、gate `fullGate_000178`；人物 2/8、时间 4/9、事实 6/11 scope 正确，对照误报 0。 |
+| M-09..10 | PASS | blocking=3、allowCompletion=false、completion POST=0；终态刷新 ID 稳定，无重复 POST/资产。 |
+| M-11 | PASS | 源正文 canary 存在；DOM/Console/Storage/Cookie/44 个 Network JSON 敏感命中与页面错误均为 0。 |
+| R-01 | PASS | 受控 output parse 失败持久为 `output_parse_failed/PROVIDER_ERROR`；刷新仍有安全原因与重发入口，无报告/raw canary。 |
+覆盖 1..12 连续无重复；content/feature/review=12，memory=1，manifest `8fb83d9a01fb28d0603e39aa889a57904dd2852f94c35d509a813cafded3ed32`。全局 full-review POST=2（成功 1、失败 1），provider total=2/success=1/failure=1；未保存 HAR/trace/截图/视频/raw artifact。
+## 3. E5 首次真实模型证据
 | 字段 | 安全摘要 |
 | --- | --- |
-| 候选/模型 | `c0c673f` / `deepseek-v4-pro` / `deepseek-full-review-evidence-v3` |
+| candidate/model/prompt | `c0c673f` / `deepseek-v4-pro` / `deepseek-full-review-evidence-v3` |
 | fixture/manifest | `rp-04c-e5-conflicts-v1` / `a5c07a7...fde6b08d` |
-| 覆盖/调用 | 12/12 章完整；`callCount=1`；禁止重试 |
-| 用量/耗时 | prompt 18492、completion 4298、total 22790 tokens；62935 ms |
-| 命中 | 时间线 4/8、合同金额 5/9；人物死亡后复活未命中；对照误报为 0 |
-| 结论 | `blocked / full_review_evidence_gate_failed / character_conflict_missing`；未保存 raw response |
-
-## 7. 非 UI 边界
-本轮仍未证明或仍被阻塞：
-
-- `E5`：首次受控 canary 为 `FAILED`；确定性修复完成后仍须重新独立准入，禁止自动重试。
-- `E6`：仍为 `NOT_PROVEN`，归属独立的 `RMD-NOV-DB-001`，不得由本轮证据替代，也不是 RP-04C 的包门禁。
-- `N-01`：多版本候选报告池与采用/废弃治理。
-- `N-05`：真实付费 provider 调用数和费用记录数。
-- `N-06`：固定真实模型 E5 首次调用漏检人物冲突。
-- `N-08`：直接 API/并发/真实仓储层完结阻断。
-- `N-09`：进程重启、worker 恢复和未知 provider 结果下的去重。
-- 本轮未连接 MySQL，不能证明数据库持久化和服务重启恢复。
-
-浏览器步骤虽已全绿，RP-04C 仍不得批准或关闭，直至 E5、远程 checks 和独立 TEST/PRODUCT/QUALITY 证据齐备。E6 与真实数据库边界继续在 `RMD-NOV-DB-001` 下保持开放。
-
-## 8. 复现命令
-
+| coverage/calls | 12/12；`callCount=1`；禁止重试 |
+| usage/elapsed | 18492 prompt、4298 completion、22790 total；62935 ms |
+| result | 时间线 4/8、金额 5/9 命中；人物漏检；对照误报 0；`blocked/character_conflict_missing`，无 raw response |
+首次 E5 为失败证据。修复候选仍须重新独立准入，失败不得自动重试；第二次 E5 未通过前 package/ledger 均不关闭。
+## 4. 非证明边界与复现
+`E6` 与 MySQL 属于 `RMD-NOV-DB-001`；多版本报告治理、直接 API 并发、进程恢复、真实费用记录仍未证明。浏览器全绿不能替代这些边界。
 ```bash
 npm run e2e:rp04c
 ```
-
-当前结果：M-01 至 M-11 与 R-01 全部 `PASS`；安全摘要中 `failures=[]`、`browserConclusion=candidate_for_independent_review`、`approval=NOT_ISSUED`。

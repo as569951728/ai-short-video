@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import {
@@ -24,6 +25,7 @@ import type {
   NovelRecord,
   ReviewReportRecord
 } from './domain/novelDomain.js';
+import { hashCanonicalJson } from './domain/executionContract.js';
 import { DeepSeekNovelProvider } from './providers/deepseekNovelProvider.js';
 import {
   buildFullReviewEvidenceProviderInput,
@@ -34,7 +36,17 @@ import {
 export const FULL_REVIEW_CONFLICT_FIXTURE_VERSION = 'rp-04c-e5-conflicts-v1';
 export const FULL_REVIEW_PROMPT_VERSION = 'deepseek-full-review-evidence-v4';
 export const FULL_REVIEW_EVIDENCE_PRIVACY_CANARY = 'PRIVATE_FULL_REVIEW_BODY_CANARY_RP04C_E5';
-export const FULL_REVIEW_E5_SUMMARY_VERSION = 'full-review-e5-summary-v1';
+export const FULL_REVIEW_E5_SUMMARY_VERSION = 'full-review-e5-summary-v2';
+export const FULL_REVIEW_E5_LIMITS = Object.freeze({
+  maxCalls: 1,
+  maxPromptCharacters: 240_000,
+  maxPromptTokens: 60_000,
+  maxCompletionTokens: 7_000,
+  maxTotalTokens: 67_000,
+  maxCostMicros: 5_000_000,
+  promptCostMicrosPerTokenUpperBound: 50,
+  completionCostMicrosPerTokenUpperBound: 100
+});
 
 export const FULL_REVIEW_CONFLICT_SCOPES = {
   characterDeathResurrection: ['rp04c-chapter-03', 'rp04c-chapter-07'],
@@ -72,6 +84,14 @@ export interface FullReviewEvidenceSmokeSummary {
   usage: ChatCompletionUsage;
   elapsedMs: number;
   callCount: number;
+  budget: typeof FULL_REVIEW_E5_LIMITS & { estimatedCostMicrosUpperBound: number | null };
+  provenance: {
+    runId: string;
+    requestId: string;
+    evidenceHash: string | null;
+    resultHash: string | null;
+    providerRouteFingerprint: string;
+  };
   hits: {
     characterDeathResurrection: SmokeHit;
     timeline: SmokeHit;
@@ -92,6 +112,8 @@ export interface FullReviewEvidenceSmokeOptions {
   env?: AiProviderEnv;
   gitSha?: string;
   model?: string;
+  runId?: string;
+  requestId?: string;
   now?: () => number;
   writeSummary?: (line: string) => void;
 }
@@ -105,6 +127,29 @@ export class FullReviewEvidenceSmokeFailure extends Error {
     super(code);
     this.name = 'FullReviewEvidenceSmokeFailure';
   }
+}
+
+export function createPaidCallBudgetClient(baseClient: LlmClient) {
+  let callCount = 0;
+  let usage: ChatCompletionUsage = {};
+  let responseModel: string | null = null;
+  return {
+    client: {
+      async chat(request) {
+        if (callCount >= FULL_REVIEW_E5_LIMITS.maxCalls) throw new FullReviewEvidenceSmokeFailure('paid_call_budget_exhausted');
+        const promptCharacters = request.messages.reduce((sum, message) => sum + message.content.length, 0);
+        if (promptCharacters > FULL_REVIEW_E5_LIMITS.maxPromptCharacters || (request.maxTokens ?? Infinity) > FULL_REVIEW_E5_LIMITS.maxCompletionTokens) {
+          throw new FullReviewEvidenceSmokeFailure('paid_request_budget_exceeded');
+        }
+        callCount += 1;
+        const result = await baseClient.chat(request);
+        usage = { ...(result.usage ?? {}) };
+        responseModel = result.model || request.model;
+        return result;
+      }
+    } satisfies LlmClient,
+    observation: () => ({ callCount, usage: { ...usage }, responseModel })
+  };
 }
 
 export function createFullReviewConflictFixture(): FullReviewEvidenceProviderInputV1 {
@@ -123,31 +168,23 @@ export async function executeFullReviewEvidenceSmoke(
   const input = createFullReviewConflictFixture();
   const gitSha = options.gitSha ?? readGitSha();
   const model = options.model ?? config.reasonerModel;
+  const runId = options.runId ?? `rp04c-e5-${randomUUID()}`;
+  const requestId = options.requestId ?? `rp04c-e5-request-${randomUUID()}`;
+  const providerRouteFingerprint = `deepseek:${model}:route-v5`;
   const baseClient = options.client ?? createDeepSeekLlmClient(config);
   if (!baseClient) {
     const safeSummary = createSafeSmokeErrorSummary(
       new FullReviewEvidenceSmokeFailure('deepseek_api_key_missing'),
-      createSmokeSummaryContext(input, gitSha, model, {}, 0, 0)
+      createSmokeSummaryContext(input, gitSha, model, {}, 0, 0, { runId, requestId, providerRouteFingerprint })
     );
     options.writeSummary?.(JSON.stringify(safeSummary));
     throw new FullReviewEvidenceSmokeFailure('deepseek_api_key_missing', [], safeSummary);
   }
 
   const now = options.now ?? Date.now;
-  let callCount = 0;
-  let usage: ChatCompletionUsage = {};
-  let responseModel = model;
-  const observingClient: LlmClient = {
-    async chat(request) {
-      callCount += 1;
-      const result = await baseClient.chat(request);
-      usage = { ...(result.usage ?? {}) };
-      responseModel = result.model || request.model;
-      return result;
-    }
-  };
+  const paidCallBudget = createPaidCallBudgetClient(baseClient);
   const provider = new DeepSeekNovelProvider({
-    client: observingClient,
+    client: paidCallBudget.client,
     reasonerModel: model
   });
 
@@ -156,10 +193,11 @@ export async function executeFullReviewEvidenceSmoke(
   try {
     draft = await provider.generateFullReview(input);
   } catch (error) {
+    const observed = paidCallBudget.observation();
     const elapsedMs = Math.max(0, now() - startedAt);
     const safeSummary = createSafeSmokeErrorSummary(
       error,
-      createSmokeSummaryContext(input, gitSha, responseModel, usage, elapsedMs, callCount)
+      createSmokeSummaryContext(input, gitSha, observed.responseModel ?? model, observed.usage, elapsedMs, observed.callCount, { runId, requestId, providerRouteFingerprint })
     );
     options.writeSummary?.(JSON.stringify(safeSummary));
     const failure = safeSummary.failure as { validationCode?: string | null } | null;
@@ -169,8 +207,9 @@ export async function executeFullReviewEvidenceSmoke(
       safeSummary
     );
   }
+  const observed = paidCallBudget.observation();
   const elapsedMs = Math.max(0, now() - startedAt);
-  let summary = createSafeSmokeSummary({ input, draft, gitSha, model: responseModel, usage, elapsedMs, callCount });
+  let summary = createSafeSmokeSummary({ input, draft, gitSha, model: observed.responseModel ?? model, usage: observed.usage, elapsedMs, callCount: observed.callCount, runId, requestId, providerRouteFingerprint });
   const failureCodes = evaluateSmokeGate(summary);
   summary = {
     ...summary,
@@ -198,6 +237,9 @@ function createSafeSmokeSummary(input: {
   usage: ChatCompletionUsage;
   elapsedMs: number;
   callCount: number;
+  runId: string;
+  requestId: string;
+  providerRouteFingerprint: string;
 }): FullReviewEvidenceSmokeSummary {
   const characterIssue = findBlockingIssue(input.draft.issues, FULL_REVIEW_CONFLICT_SCOPES.characterDeathResurrection, FULL_REVIEW_CONFLICT_DIMENSIONS.characterDeathResurrection);
   const timelineIssue = findBlockingIssue(input.draft.issues, FULL_REVIEW_CONFLICT_SCOPES.timeline, FULL_REVIEW_CONFLICT_DIMENSIONS.timeline);
@@ -228,6 +270,14 @@ function createSafeSmokeSummary(input: {
     usage: { ...input.usage },
     elapsedMs: input.elapsedMs,
     callCount: input.callCount,
+    budget: createBudgetSummary(input.usage),
+    provenance: {
+      runId: input.runId,
+      requestId: input.requestId,
+      evidenceHash: input.input.evidenceHash,
+      resultHash: hashCanonicalJson(input.draft),
+      providerRouteFingerprint: input.providerRouteFingerprint
+    },
     hits: {
       characterDeathResurrection: toSmokeHit(characterIssue),
       timeline: toSmokeHit(timelineIssue),
@@ -248,7 +298,19 @@ function evaluateSmokeGate(summary: FullReviewEvidenceSmokeSummary): string[] {
   if (summary.controlFalsePositive) failures.push('control_false_positive');
   if (summary.gateResult !== 'blocked') failures.push('gate_not_blocked');
   if (summary.callCount !== 1) failures.push('call_count_not_one');
+  if (summary.budget.estimatedCostMicrosUpperBound === null || summary.budget.estimatedCostMicrosUpperBound > summary.budget.maxCostMicros) failures.push('cost_budget_exceeded');
+  if ((summary.usage.promptTokens ?? Infinity) > summary.budget.maxPromptTokens
+    || (summary.usage.completionTokens ?? Infinity) > summary.budget.maxCompletionTokens
+    || (summary.usage.totalTokens ?? Infinity) > summary.budget.maxTotalTokens) failures.push('token_budget_exceeded');
   return failures;
+}
+
+function createBudgetSummary(usage: ChatCompletionUsage): FullReviewEvidenceSmokeSummary['budget'] {
+  const estimatedCostMicrosUpperBound = Number.isInteger(usage.promptTokens) && Number.isInteger(usage.completionTokens)
+    ? usage.promptTokens! * FULL_REVIEW_E5_LIMITS.promptCostMicrosPerTokenUpperBound
+      + usage.completionTokens! * FULL_REVIEW_E5_LIMITS.completionCostMicrosPerTokenUpperBound
+    : null;
+  return { ...FULL_REVIEW_E5_LIMITS, estimatedCostMicrosUpperBound };
 }
 
 function findBlockingIssue(
@@ -567,6 +629,8 @@ interface SmokeSummaryContext {
   usage: ChatCompletionUsage;
   elapsedMs: number;
   callCount: number;
+  budget: FullReviewEvidenceSmokeSummary['budget'];
+  provenance: FullReviewEvidenceSmokeSummary['provenance'];
 }
 
 function createSmokeSummaryContext(
@@ -575,7 +639,8 @@ function createSmokeSummaryContext(
   model: string,
   usage: ChatCompletionUsage,
   elapsedMs: number,
-  callCount: number
+  callCount: number,
+  identity: Pick<FullReviewEvidenceSmokeSummary['provenance'], 'runId' | 'requestId' | 'providerRouteFingerprint'>
 ): SmokeSummaryContext {
   const coveredChapterNos = [...input.coverageManifest.coveredChapterNos];
   return {
@@ -592,7 +657,9 @@ function createSmokeSummaryContext(
     },
     usage: { ...usage },
     elapsedMs,
-    callCount
+    callCount,
+    budget: createBudgetSummary(usage),
+    provenance: { ...identity, evidenceHash: input.evidenceHash, resultHash: null }
   };
 }
 
@@ -607,7 +674,15 @@ export function createSafeSmokeErrorSummary(
     coverage: { chapterCount: 0, coveredChapterNos: [], complete: false },
     usage: {},
     elapsedMs: 0,
-    callCount: 0
+    callCount: 0,
+    budget: createBudgetSummary({}),
+    provenance: {
+      runId: 'not-started',
+      requestId: 'not-started',
+      evidenceHash: null,
+      resultHash: null,
+      providerRouteFingerprint: 'not-resolved'
+    }
   }
 ): Record<string, unknown> {
   let failure: FullReviewEvidenceSmokeSummary['failure'];

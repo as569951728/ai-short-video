@@ -4,10 +4,12 @@ import { LlmProviderError, type ChatCompletionRequest, type LlmClient } from '..
 import {
   FULL_REVIEW_CONFLICT_FIXTURE_VERSION,
   FULL_REVIEW_CONFLICT_SCOPES,
+  FULL_REVIEW_E5_LIMITS,
   FULL_REVIEW_E5_SUMMARY_VERSION,
   FULL_REVIEW_EVIDENCE_PRIVACY_CANARY,
   FullReviewEvidenceSmokeFailure,
   createSafeSmokeErrorSummary,
+  createPaidCallBudgetClient,
   createFullReviewConflictFixture,
   executeFullReviewEvidenceSmoke
 } from './fullReviewEvidenceLiveSmoke.js';
@@ -67,6 +69,8 @@ describe('RP-04C E5 full-review conflict evidence', () => {
       },
       gitSha: '0123456789abcdef0123456789abcdef01234567',
       model: 'deepseek-deterministic-fixture',
+      runId: 'rp04c-e5-test-run',
+      requestId: 'rp04c-e5-test-request',
       now: () => {
         clock += 50;
         return clock;
@@ -82,6 +86,15 @@ describe('RP-04C E5 full-review conflict evidence', () => {
     assert.equal(summary.fixtureVersion, FULL_REVIEW_CONFLICT_FIXTURE_VERSION);
     assert.equal(summary.manifestHash, fixture.coverageManifest.manifestHash);
     assert.equal(summary.callCount, 1);
+    assert.deepEqual(summary.budget, { ...FULL_REVIEW_E5_LIMITS, estimatedCostMicrosUpperBound: 180_000 });
+    assert.deepEqual(summary.provenance, {
+      runId: 'rp04c-e5-test-run',
+      requestId: 'rp04c-e5-test-request',
+      evidenceHash: fixture.evidenceHash,
+      resultHash: summary.provenance.resultHash,
+      providerRouteFingerprint: 'deepseek:deepseek-deterministic-fixture:route-v5'
+    });
+    assert.match(summary.provenance.resultHash!, /^[a-f0-9]{64}$/);
     assert.equal(summary.gateResult, 'blocked');
     assert.equal(summary.coverage.complete, true);
     assert.equal(summary.hits.characterDeathResurrection.hit, true);
@@ -99,6 +112,42 @@ describe('RP-04C E5 full-review conflict evidence', () => {
     assert.doesNotMatch(safeLog, new RegExp(API_KEY_CANARY));
     assert.doesNotMatch(safeLog, /沈岚在仓库爆炸中确认死亡/);
     assert.doesNotMatch(safeLog, /XH-MAIN-001/);
+  });
+
+  it('rejects a second paid chat before invoking the underlying client', async () => {
+    let underlyingCalls = 0;
+    const budgeted = createPaidCallBudgetClient({
+      async chat(request) {
+        underlyingCalls += 1;
+        return { content: '{}', model: request.model, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
+      }
+    });
+    const request: ChatCompletionRequest = {
+      taskName: 'novel_full_review', model: 'deepseek-test', maxTokens: 7_000,
+      messages: [{ role: 'user', content: 'bounded fixture' }]
+    };
+    await budgeted.client.chat(request);
+    await assert.rejects(
+      () => budgeted.client.chat(request),
+      (error: unknown) => error instanceof FullReviewEvidenceSmokeFailure && error.code === 'paid_call_budget_exhausted'
+    );
+    assert.equal(underlyingCalls, 1);
+    assert.equal(budgeted.observation().callCount, 1);
+  });
+
+  it('fails the canary when reported token and conservative cost limits are exceeded', async () => {
+    const client = responseClient(createBlockingReviewResponse());
+    const originalChat = client.chat;
+    client.chat = async (request) => ({
+      ...(await originalChat(request)),
+      usage: { promptTokens: 100_000, completionTokens: 600, totalTokens: 100_600 }
+    });
+    await assert.rejects(
+      () => executeFullReviewEvidenceSmoke({ client, model: 'deepseek-budget-test' }),
+      (error: unknown) => error instanceof FullReviewEvidenceSmokeFailure
+        && error.failureCodes.includes('token_budget_exceeded')
+        && error.failureCodes.includes('cost_budget_exceeded')
+    );
   });
 
   it('fails the smoke gate when the non-conflicting amount control is reported as blocking', async () => {
