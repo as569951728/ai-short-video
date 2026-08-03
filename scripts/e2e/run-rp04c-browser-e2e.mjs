@@ -41,8 +41,7 @@ async function main() {
     NODE_ENV: 'test',
     E2E_PROFILE: 'rp04c-local-inmemory',
     AI_PROVIDER_MODE: 'mock',
-    DOTENV_CONFIG_PATH: '/dev/null',
-    RP04C_PROVIDER_DELAY_MS: process.env.RP04C_PROVIDER_DELAY_MS ?? '45000'
+    DOTENV_CONFIG_PATH: '/dev/null'
   });
   children.push(api);
   const admin = startChild('npm', ['run', 'dev', '-w', 'apps/admin-web', '--', '--host', '127.0.0.1', '--port', String(adminPort), '--strictPort'], {

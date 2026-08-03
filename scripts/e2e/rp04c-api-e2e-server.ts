@@ -43,8 +43,8 @@ async function main() {
     import('../../apps/api/src/modules/videos/repositories/inMemoryVideoRepository.js')
   ]);
 
-  const delayMs = Math.max(45_000, Number(process.env.RP04C_PROVIDER_DELAY_MS ?? 45_000));
-  const observer = createObserver(delayMs);
+  const providerGate = createProviderGate();
+  const observer = createObserver();
   const novelRepository = createInMemoryNovelRepository();
   const app: FastifyInstance = await buildApp({
     logger: false,
@@ -52,7 +52,7 @@ async function main() {
     novelRepository,
     videoRepository: createInMemoryVideoRepository(),
     aiProviderEnv: { AI_PROVIDER_MODE: 'mock' },
-    fullReviewProvider: createRp04cFullReviewProvider(delayMs, observer),
+    fullReviewProvider: createRp04cFullReviewProvider(providerGate, observer),
     requestContextResolver: async (request) => ({
       tenantId: 'tenant_rp04c_e2e',
       userId: 'user_rp04c_e2e',
@@ -82,10 +82,15 @@ async function main() {
     observer.outputParseFailureNovelId = request.body.novelId;
     return { success: true, data: { armedNovelId: request.body.novelId }, requestId: 'rp04c-safe-observer' };
   });
+  app.post('/__e2e/rp04c/release-success-provider', async () => {
+    providerGate.release();
+    observer.providerReleaseCount += 1;
+    return { success: true, data: { released: true }, requestId: 'rp04c-safe-observer' };
+  });
 
   const port = Number(process.env.PORT ?? 0);
   await app.listen({ host: '127.0.0.1', port });
-  console.log(`RP-04C API ready on ${port}; deterministic provider delay ${delayMs}ms`);
+  console.log(`RP-04C API ready on ${port}; deterministic provider release gate armed`);
 
   async function close() {
     await app.close();
@@ -98,8 +103,8 @@ type FullReviewInput = NovelProviderActionInputFor<'novel_full_review'>;
 
 interface Rp04cObserver {
   fixtureVersion: 'rp04c-browser-12ch-v1';
-  modelRouteSafeName: 'deterministic-delay-provider';
-  providerDelayMs: number;
+  modelRouteSafeName: 'deterministic-release-provider';
+  providerReleaseCount: number;
   providerCallCount: number;
   providerTotalCallCount: number;
   outputParseFailureCallCount: number;
@@ -116,11 +121,11 @@ interface Rp04cObserver {
   evidenceHash: string | null;
 }
 
-function createObserver(delayMs: number): Rp04cObserver {
+function createObserver(): Rp04cObserver {
   return {
     fixtureVersion: 'rp04c-browser-12ch-v1',
-    modelRouteSafeName: 'deterministic-delay-provider',
-    providerDelayMs: delayMs,
+    modelRouteSafeName: 'deterministic-release-provider',
+    providerReleaseCount: 0,
     providerCallCount: 0,
     providerTotalCallCount: 0,
     outputParseFailureCallCount: 0,
@@ -138,7 +143,20 @@ function createObserver(delayMs: number): Rp04cObserver {
   };
 }
 
-function createRp04cFullReviewProvider(delayMs: number, observer: Rp04cObserver): FullReviewProvider {
+function createProviderGate() {
+  let release: (() => void) | null = null;
+  let released = false;
+  return {
+    wait: () => released ? Promise.resolve() : new Promise<void>((resolve) => { release = resolve; }),
+    release: () => {
+      if (released) throw new Error('RP-04C success provider release was requested more than once');
+      released = true;
+      release?.();
+    }
+  };
+}
+
+function createRp04cFullReviewProvider(providerGate: ReturnType<typeof createProviderGate>, observer: Rp04cObserver): FullReviewProvider {
   return {
     async generateFullReview(input): Promise<FullReviewDraft> {
       observer.providerTotalCallCount += 1;
@@ -151,7 +169,7 @@ function createRp04cFullReviewProvider(delayMs: number, observer: Rp04cObserver)
         });
       }
       recordAndAssertEvidence(input, observer);
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      await providerGate.wait();
       const chapterId = (chapterNo: number) => {
         const id = input.chapterEvidence.find((item) => item.chapter.chapterNo === chapterNo)?.chapter.id;
         if (!id) throw new Error(`RP-04C fixture missing chapter ${chapterNo}`);

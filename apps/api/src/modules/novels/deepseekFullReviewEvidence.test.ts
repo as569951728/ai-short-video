@@ -59,6 +59,8 @@ describe('DeepSeek full-review evidence boundary', () => {
     assert.equal(requests[0].maxTokens, 7_000);
     const prompt = JSON.parse(requests[0].messages[1].content);
     assert.match(prompt.instruction, /scopeChapterNos 必须列出冲突涉及的全部章节号整数/);
+    assert.match(prompt.instruction, /dimension=character_continuity/);
+    assert.match(prompt.instruction, /只列死亡确认章和再次出现章/);
     assert.deepEqual(
       prompt.chapterIdCatalog,
       input.chapterEvidence.map((item) => ({ id: item.chapter.id, chapterNo: item.chapter.chapterNo }))

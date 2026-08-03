@@ -32,7 +32,7 @@ import {
 } from './services/actionExecutionPlan.js';
 
 export const FULL_REVIEW_CONFLICT_FIXTURE_VERSION = 'rp-04c-e5-conflicts-v1';
-export const FULL_REVIEW_PROMPT_VERSION = 'deepseek-full-review-evidence-v3';
+export const FULL_REVIEW_PROMPT_VERSION = 'deepseek-full-review-evidence-v4';
 export const FULL_REVIEW_EVIDENCE_PRIVACY_CANARY = 'PRIVATE_FULL_REVIEW_BODY_CANARY_RP04C_E5';
 export const FULL_REVIEW_E5_SUMMARY_VERSION = 'full-review-e5-summary-v1';
 
@@ -322,14 +322,14 @@ function createFullReviewConflictAuthorityFacts(): FullReviewAuthorityFactsV1 {
     chapterId: finalChapter.id,
     sourceContentVersionId: finalContent.id,
     previousSummary: '十二章已完成，沈岚状态、董事会日期与星海主合同金额仍需跨章核验。',
-    characterStates: ['林川进入董事会', '沈岚状态存在跨章记录'],
+    characterStates: ['林川进入董事会', '沈岚第 3 章确认死亡，第 7 章无解释以本人身份签字'],
     relationshipStates: ['林川与许青维持合作'],
     locations: ['海城总部'],
     organizations: ['星海集团'],
     items: ['星海主合同', '晨光采购合同', '远山授权合同'],
     plantedForeshadowing: ['旧案证据将在终局公开'],
     resolvedForeshadowing: [],
-    unresolvedConflicts: ['董事会日期待统一', '星海主合同金额待统一'],
+    unresolvedConflicts: ['沈岚死亡后无解释出现待处理', '董事会日期待统一', '星海主合同金额待统一'],
     newSettings: ['本故事没有时间回溯、梦境或替身机制'],
     factsCannotContradict: ['同一人物死亡后复活必须解释', '同一事件日期必须唯一', '同一合同金额必须唯一'],
     status: VersionStatus.Current,

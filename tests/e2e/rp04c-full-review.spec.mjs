@@ -63,7 +63,9 @@ test('RP-04C M-01..M-11 and failed-refresh recovery browser acceptance', async (
     evidence.m['M-01'] = pass({ detailStatus: 200, chapterCount: 12, completionDisabled: true });
 
     currentStep = 'M-02';
-    await fullReviewButton(page).click();
+    await fullReviewButton(page).scrollIntoViewIfNeeded();
+    await expect(fullReviewButton(page)).toBeEnabled();
+    await fullReviewButton(page).click({ timeout: 30_000 });
     const confirmation = page.locator('.el-message-box');
     await expect(confirmation).toContainText('确认发起全书 AI 审稿');
     await expect(confirmation).toContainText('计划章节数: 12');
@@ -77,10 +79,6 @@ test('RP-04C M-01..M-11 and failed-refresh recovery browser acceptance', async (
     currentStep = 'M-03';
     await fullReviewButton(page).click();
     const requestPromise = page.waitForRequest((candidate) => candidate.method() === 'POST' && candidate.url() === `${API_ORIGIN}/novels/${seed.novelId}/full-review`);
-    const responsePromise = page.waitForResponse(
-      (candidate) => candidate.request().method() === 'POST' && candidate.url() === `${API_ORIGIN}/novels/${seed.novelId}/full-review`,
-      { timeout: 70_000 }
-    );
     await page.locator('.el-message-box').getByRole('button', { name: '确认发起审稿' }).click();
     const fullReviewRequest = await requestPromise;
     const requestPayload = fullReviewRequest.postDataJSON();
@@ -194,6 +192,12 @@ test('RP-04C M-01..M-11 and failed-refresh recovery browser acceptance', async (
     }
 
     currentStep = 'M-07';
+    const responsePromise = page.waitForResponse(
+      (candidate) => candidate.request().method() === 'POST' && candidate.url() === `${API_ORIGIN}/novels/${seed.novelId}/full-review`,
+      { timeout: 30_000 }
+    );
+    const releaseResponse = await request.post(`${API_ORIGIN}/__e2e/rp04c/release-success-provider`);
+    expect(releaseResponse.status()).toBe(200);
     await expect(secondPage.getByText('68 / C')).toBeVisible({ timeout: 30_000 });
     const fullReviewResponse = await responsePromise;
     expect(fullReviewResponse.status()).toBe(200);
@@ -205,6 +209,7 @@ test('RP-04C M-01..M-11 and failed-refresh recovery browser acceptance', async (
     expect(latest.status).toBe(200);
     expect(observer.status).toBe(200);
     expect(observer.data.providerCallCount).toBe(1);
+    expect(observer.data.providerReleaseCount).toBe(1);
     expect(observer.data.chapterCount).toBe(12);
     expect(observer.data.coveredChapterNos).toEqual(EXPECTED_CHAPTER_NOS);
     expect(observer.data.contentEvidenceCount).toBe(12);
@@ -336,6 +341,7 @@ test('RP-04C M-01..M-11 and failed-refresh recovery browser acceptance', async (
     expect(telemetry.consoleSensitiveHits).toBe(0);
     expect(telemetry.networkSensitiveHits).toBe(0);
     expect(telemetry.pageErrors).toBe(0);
+    expect(telemetry.fullReviewPosts).toHaveLength(2);
     evidence.privacy = {
       domSensitiveHits,
       consoleSensitiveHits: telemetry.consoleSensitiveHits,
@@ -393,7 +399,7 @@ function createEvidence(runId, startedAt) {
     finishedAt: null,
     fixture: {
       fixtureVersion: 'rp04c-browser-12ch-v1',
-      modelRouteSafeName: 'deterministic-delay-provider',
+      modelRouteSafeName: 'deterministic-release-provider',
       novelId: null,
       chapterCount: 0,
       coveredChapterNos: [],

@@ -43,6 +43,7 @@ describe('RP-04C E5 full-review conflict evidence', () => {
         assert.equal(new Set(prompt.payload.chapterEvidence.map((item) => item.chapter.id)).size, 12);
         assert.match(request.messages[1]!.content, /沈岚在仓库爆炸中确认死亡/);
         assert.match(request.messages[1]!.content, /已经死亡的沈岚无解释地亲自出席签约/);
+        assert.match(request.messages[1]!.content, /沈岚死亡后无解释出现待处理/);
         assert.match(request.messages[1]!.content, /2026-03-18/);
         assert.match(request.messages[1]!.content, /2026-03-12/);
         assert.match(request.messages[1]!.content, /XH-MAIN-001/);

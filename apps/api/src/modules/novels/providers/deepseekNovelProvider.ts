@@ -83,7 +83,7 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
       : reasonerActions.has(action)
         ? this.reasonerModel
         : this.model;
-    const routeVersion = action === 'novel_full_review' ? 'route-v4' : 'route-v1';
+    const routeVersion = action === 'novel_full_review' ? 'route-v5' : 'route-v1';
     return `deepseek:${model}:${routeVersion}`;
   }
 
@@ -334,6 +334,7 @@ function createFullReviewMessages(
     instruction: [
       '基于 coverage manifest 与每个计划章节的完整有界证据，生成全书审稿报告、门禁结论和首条视频建议。',
       '必须逐章检查人物生死与状态、时间线、同一合同或关键事实、伏笔和因果连续性，不得忽略、合并或臆测任何章节。',
+      '人物在前章明确死亡、后章又以本人身份出现且没有复活、替身、梦境、伪造死亡或时间回溯解释时，必须单列 blocking issue，dimension=character_continuity，scopeChapterNos 只列死亡确认章和再次出现章。',
       '每个跨章问题必须单独写入 issues；scopeType 必须为 chapter，scopeChapterNos 必须列出冲突涉及的全部章节号整数。禁止输出 scopeRefs，服务端会将章节号映射为权威 chapter.id。',
       'severity=blocking 的问题会由服务端转换为未解决阻断项；存在 blocking 问题时 gateResult 必须为 blocked。',
       'dimensionScores 必须覆盖阶段连续性、人物弧、时间线、事实一致性、伏笔回收和证据定位；每个 issue.dimension 必须引用一个已返回的 dimensionScores.key。',

@@ -18,7 +18,7 @@ describe('DeepSeek novel provider', () => {
     assert.equal(provider.getModelRoutingVersion('direction_generate'), 'deepseek:deepseek-general-test:route-v1');
     assert.equal(provider.getModelRoutingVersion('chapter_plan_generate'), 'deepseek:deepseek-structure-test:route-v1');
     assert.equal(provider.getModelRoutingVersion('chapter_impact_assess'), 'deepseek:deepseek-reasoner-test:route-v1');
-    assert.equal(provider.getModelRoutingVersion('novel_full_review'), 'deepseek:deepseek-reasoner-test:route-v4');
+    assert.equal(provider.getModelRoutingVersion('novel_full_review'), 'deepseek:deepseek-reasoner-test:route-v5');
   });
 
   it('maps fake DeepSeek JSON into direction, structure, trial, body, impact, and full-review drafts', async () => {

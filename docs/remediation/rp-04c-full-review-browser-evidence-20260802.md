@@ -9,7 +9,7 @@
 | acceptance_id | `RP-04C_BROWSER_ACCEPTANCE_M01_M11` |
 | browser_result | `candidate_for_independent_review` |
 | failing_step | 无，M-01 至 M-11 与 R-01 全部 `PASS` |
-| real_model_e5 | `PENDING`（本轮浏览器运行未调用） |
+| real_model_e5 | `FAILED`（仅一次调用，人物冲突漏检） |
 | e6 | `NOT_PROVEN` |
 | package_result | `blocked` |
 | approval | `NOT_ISSUED` |
@@ -27,7 +27,7 @@
 | worktree_dirty | `false` |
 | executable_scope_hash | `acdbcaa7669a7e1091c14db0394a2da6c4f71b9b9e88334dacaae4b0ef64f263` |
 | fixture_version | `rp04c-browser-12ch-v1` |
-| provider | `deterministic-delay-provider`，45 秒延迟 |
+| provider | `deterministic-release-provider`，完成长等待、跨标签页与双刷新断言后由测试一次性释放 |
 | evidence_hash | `eff557551bf5eb1154e2e129676173ac0547654f8df88e01dad454c551b83b9c` |
 | safe_summary_sha256 | `166b91c7f8b912dd7211413c132531513d01059cbea1c8f6d5cc825295d00517` |
 | safe_summary | `output/playwright/rp-04c/rp04c-2026-08-03T00-41-10-512Z/safe-evidence.json` |
@@ -82,23 +82,33 @@
 
 输出格式错误绑定指定小说后只调用 provider 一次；任务持久为 `output_parse_failed / PROVIDER_ERROR`。页面刷新后仍显示安全原因与重新发起入口，且没有审稿报告、完成决定或 raw canary 泄漏。
 
-浏览器证据只达到 `candidate_for_independent_review`。本轮已绑定干净候选 SHA/tree；后续仍需取得同一最终候选的远程 checks、独立复核与 E5，才能改变整包结论。
+浏览器证据只达到 `candidate_for_independent_review`。远程 checks 与独立复核已通过，但首次 E5 漏检人物冲突，整包继续阻塞。
 
-## 6. 非 UI 边界
+## 6. E5 首次真实模型证据
+| 字段 | 安全摘要 |
+| --- | --- |
+| 候选/模型 | `c0c673f` / `deepseek-v4-pro` / `deepseek-full-review-evidence-v3` |
+| fixture/manifest | `rp-04c-e5-conflicts-v1` / `a5c07a7...fde6b08d` |
+| 覆盖/调用 | 12/12 章完整；`callCount=1`；禁止重试 |
+| 用量/耗时 | prompt 18492、completion 4298、total 22790 tokens；62935 ms |
+| 命中 | 时间线 4/8、合同金额 5/9；人物死亡后复活未命中；对照误报为 0 |
+| 结论 | `blocked / full_review_evidence_gate_failed / character_conflict_missing`；未保存 raw response |
+
+## 7. 非 UI 边界
 本轮仍未证明或仍被阻塞：
 
-- `E5`：受控真实模型 canary 为 `PENDING`，本轮浏览器运行未调用真实模型；它是 RP-04C 的包门禁。
+- `E5`：首次受控 canary 为 `FAILED`；确定性修复完成后仍须重新独立准入，禁止自动重试。
 - `E6`：仍为 `NOT_PROVEN`，归属独立的 `RMD-NOV-DB-001`，不得由本轮证据替代，也不是 RP-04C 的包门禁。
 - `N-01`：多版本候选报告池与采用/废弃治理。
 - `N-05`：真实付费 provider 调用数和费用记录数。
-- `N-06`：固定真实模型 E5。本轮没有付费调用。
+- `N-06`：固定真实模型 E5 首次调用漏检人物冲突。
 - `N-08`：直接 API/并发/真实仓储层完结阻断。
 - `N-09`：进程重启、worker 恢复和未知 provider 结果下的去重。
 - 本轮未连接 MySQL，不能证明数据库持久化和服务重启恢复。
 
 浏览器步骤虽已全绿，RP-04C 仍不得批准或关闭，直至 E5、远程 checks 和独立 TEST/PRODUCT/QUALITY 证据齐备。E6 与真实数据库边界继续在 `RMD-NOV-DB-001` 下保持开放。
 
-## 7. 复现命令
+## 8. 复现命令
 
 ```bash
 npm run e2e:rp04c
