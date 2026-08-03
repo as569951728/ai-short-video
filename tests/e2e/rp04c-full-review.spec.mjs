@@ -272,13 +272,14 @@ test('RP-04C M-01..M-11 and failed-refresh recovery browser acceptance', async (
     evidence.m['M-10'] = pass({ idsStableAfterRefresh: true, duplicatePostOrAsset: false, taskId, reportId: evidence.ids.reportId, gateId: evidence.ids.gateId });
 
     currentStep = 'R-01';
-    const armFailure = await request.post(`${API_ORIGIN}/__e2e/rp04c/fail-next-output-parse`);
-    expect(armFailure.status()).toBe(200);
     const failureSeedResponse = await request.post(`${API_ORIGIN}/dev/novels/acceptance-seeds/full-review`, {
       data: { title: `RP-04C 失败恢复 ${runId.slice(-19)}` }
     });
     expect(failureSeedResponse.status()).toBe(201);
     const failureSeed = unwrap(await failureSeedResponse.json());
+    expect(failureSeed.fullReviewTaskCreated).toBe(false);
+    const armFailure = await request.post(`${API_ORIGIN}/__e2e/rp04c/output-parse-failure-fixture`, { data: { novelId: failureSeed.novelId } });
+    expect(armFailure.status()).toBe(200);
     const failurePage = await context.newPage();
     attachPageTelemetry(failurePage, telemetry);
     await failurePage.goto(`/novels/${failureSeed.novelId}?step=fullReview`);
@@ -291,13 +292,17 @@ test('RP-04C M-01..M-11 and failed-refresh recovery browser acceptance', async (
     const failedDetail = await pollNovelDetail(failurePage, failureSeed.novelId, (detail) =>
       detail.recentTasks?.some((task) => task.taskType === 'novel_full_review' && task.status === 'failed'));
     const failedTask = failedDetail.recentTasks.find((task) => task.taskType === 'novel_full_review' && task.status === 'failed');
+    expect(failedDetail.recentTasks.filter((task) => task.taskType === 'novel_full_review')).toHaveLength(1);
     expect(failedTask).toBeTruthy();
     expect(failedTask.failureCategory).toBe('output_parse_failed');
+    expect(failedTask.failureCategoryText).toBe('模型输出解析失败');
     expect(failedTask.errorCode).toBe('PROVIDER_ERROR');
+    expect(failedTask.errorMessage).toBe('模型输出格式不符合约定，本次未生成报告。');
     const failedTaskDetail = await browserGet(failurePage, `${API_ORIGIN}/tasks/${failedTask.id}`);
     expect(failedTaskDetail.data.failureCategory).toBe('output_parse_failed');
+    expect(failedTaskDetail.data.errorCode).toBe('PROVIDER_ERROR');
     expect(JSON.stringify(failedTaskDetail.data)).not.toContain(RAW_MODEL_CANARY);
-    await expect(failurePage.locator('main.step-main-content').getByRole('button', { name: '重新发起全书审稿' })).toBeVisible({ timeout: 10_000 });
+    await expect(failurePage.locator('main.step-main-content').getByRole('button', { name: '重新发起全书审稿' })).toBeEnabled({ timeout: 10_000 });
     const failureAlert = failurePage.locator('main.step-main-content .el-alert--error');
     await expect(failureAlert.locator('.el-alert__title')).toHaveText('模型输出格式不符合约定，本次未生成报告');
     await expect(failureAlert).toContainText('模型输出格式不符合约定，本次未生成报告。');
@@ -307,15 +312,17 @@ test('RP-04C M-01..M-11 and failed-refresh recovery browser acceptance', async (
     await expect(failureAlert).toContainText('错误代码：PROVIDER_ERROR');
     const refreshedFailure = await browserGet(failurePage, `${API_ORIGIN}/novels/${failureSeed.novelId}`);
     const refreshedTask = refreshedFailure.data.recentTasks.find((task) => task.id === failedTask.id);
+    expect(refreshedFailure.data.recentTasks.filter((task) => task.taskType === 'novel_full_review')).toHaveLength(1);
     expect(refreshedTask.failureCategory).toBe('output_parse_failed');
     expect(refreshedTask.errorCode).toBe('PROVIDER_ERROR');
     expect(JSON.stringify(refreshedFailure.data)).not.toContain(RAW_MODEL_CANARY);
     const recoveryObserver = await browserGet(failurePage, `${API_ORIGIN}/__e2e/rp04c/state`);
     expect(recoveryObserver.data.providerCallCount).toBe(1);
+    expect(recoveryObserver.data.providerTotalCallCount).toBe(2);
     expect(recoveryObserver.data.outputParseFailureCallCount).toBe(1);
     expect(refreshedFailure.data.latestFullReview).toBeNull();
     await expect(completionButton(failurePage)).toBeDisabled();
-    evidence.recovery = pass({ taskId: failedTask.id, failureCategory: refreshedTask.failureCategory, errorCode: refreshedTask.errorCode, safeAfterRefresh: true, reportWritten: false, providerSuccessCallCount: 1, outputParseFailureCallCount: 1 });
+    evidence.recovery = pass({ taskId: failedTask.id, failureCategory: refreshedTask.failureCategory, errorCode: refreshedTask.errorCode, safeAfterRefresh: true, reportWritten: false, providerTotalCallCount: 2, providerSuccessCallCount: 1, outputParseFailureCallCount: 1 });
 
     currentStep = 'M-11';
     await Promise.all(telemetry.pendingNetworkScans);

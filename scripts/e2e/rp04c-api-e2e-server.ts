@@ -77,9 +77,10 @@ async function main() {
     },
     requestId: 'rp04c-safe-observer'
   }));
-  app.post('/__e2e/rp04c/fail-next-output-parse', async () => {
-    observer.failNextOutputParse = true;
-    return { success: true, data: { armed: true }, requestId: 'rp04c-safe-observer' };
+  app.post<{ Body: { novelId: string } }>('/__e2e/rp04c/output-parse-failure-fixture', async (request) => {
+    if (!request.body?.novelId) throw new Error('RP-04C failure fixture requires novelId');
+    observer.outputParseFailureNovelId = request.body.novelId;
+    return { success: true, data: { armedNovelId: request.body.novelId }, requestId: 'rp04c-safe-observer' };
   });
 
   const port = Number(process.env.PORT ?? 0);
@@ -100,8 +101,9 @@ interface Rp04cObserver {
   modelRouteSafeName: 'deterministic-delay-provider';
   providerDelayMs: number;
   providerCallCount: number;
+  providerTotalCallCount: number;
   outputParseFailureCallCount: number;
-  failNextOutputParse: boolean;
+  outputParseFailureNovelId: string | null;
   providerActive: boolean;
   providerCompleted: boolean;
   chapterCount: number;
@@ -120,8 +122,9 @@ function createObserver(delayMs: number): Rp04cObserver {
     modelRouteSafeName: 'deterministic-delay-provider',
     providerDelayMs: delayMs,
     providerCallCount: 0,
+    providerTotalCallCount: 0,
     outputParseFailureCallCount: 0,
-    failNextOutputParse: false,
+    outputParseFailureNovelId: null,
     providerActive: false,
     providerCompleted: false,
     chapterCount: 0,
@@ -138,9 +141,10 @@ function createObserver(delayMs: number): Rp04cObserver {
 function createRp04cFullReviewProvider(delayMs: number, observer: Rp04cObserver): FullReviewProvider {
   return {
     async generateFullReview(input): Promise<FullReviewDraft> {
-      if (observer.failNextOutputParse) {
-        observer.failNextOutputParse = false;
+      observer.providerTotalCallCount += 1;
+      if (input.novel.id === observer.outputParseFailureNovelId) {
         observer.outputParseFailureCallCount += 1;
+        if (observer.outputParseFailureCallCount !== 1) throw new Error('RP-04C failure provider was called more than once');
         throw new LlmProviderError('output_parse_failed', 'schema invalid RP04C_RAW_MODEL_CANARY', {
           outputKind: 'schema_invalid',
           reason: 'schema_invalid'

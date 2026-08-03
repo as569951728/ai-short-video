@@ -69,12 +69,9 @@
 | manifestHash 与 authority snapshot 不一致 | `source_stale` | 0 | 0 |
 | 上下文预算导致章节未覆盖 | `coverage_incomplete` | 0 | 0 |
 | 同幂等键绑定不同 manifest 或策略 | `idempotency_conflict` | 0 | 0 |
-
 门禁至少执行两次：claim 或预占前一次，provider 调用前按权威仓储重新读取并验证一次。失败后禁止通过补默认值、跳过章节、复用旧 memory 或缩减到元数据模式继续调用。
-
 ## 7. 单次幂等付费合同
 调用身份为 `tenantId + userId + novelId + action + idempotencyKey + manifestHash + reviewPolicyVersionId + providerRouteFingerprint`。首次有效请求最多调用 provider 一次；同身份 waiting/processing/terminal 重放复用 taskId；同键但 manifest/策略/路由变化时返回冲突且不调用 provider。超时、刷新、多标签和网络重放均不得触发第二次付费调用；未知结果不得自动付费重试。测试同时断言 provider 调用、task、审稿资产、事件和费用记录计数。
-
 ## 8. 固定冲突 Fixture
 
 正式 fixture 必须版本固定、可重复 seed，并至少包含 12 个连续章节和以下三类预置冲突：
@@ -84,41 +81,29 @@
 | 人物状态冲突 | 某人物在前章明确死亡，后章无解释重新出现 | 报告定位两章并判定为 blocking |
 | 时间线冲突 | 同一事件在不同章节出现互斥日期或先后顺序 | 报告定位相关章节并给出统一时间线建议 |
 | 关键事实冲突 | 同一合同金额、股权比例或关键物件归属前后不一致 | 报告引用正文证据并给出修复建议 |
-
 fixture 还应包含至少一个相似但不冲突的对照事实，避免模型仅按关键词误报。验收报告必须记录预置冲突命中数、漏报、误报、证据章节正确性和 gateResult；只断言“返回了问题数组”不算通过。
-
 ## 9. E5 受控真实模型 Canary
-
 ### 9.1 前置条件
-
 - 使用固定 fixture、固定模型路由、固定 prompt/version 和固定审稿策略。
 - 明确单次费用上限、最大 input/output tokens 和最大调用次数 1。
 - API Key 通过安全环境注入，不写入仓库、命令行回显或 artifact。
 - 禁止自动付费重试；timeout、rate limit、quota、network 和 malformed output 均安全失败。
 - canary 前先通过相同 manifest 的 deterministic provider 测试和全部 fail-closed 负向测试。
-
 ### 9.2 最低 E5 证据
-
 E5 证据只保存安全摘要，至少包括：
-
 - Git SHA、fixture 版本、manifestHash、模型名和 promptVersion。
 - 覆盖章节数与章节号范围，不保存完整正文。
 - input/output token 数、耗时、费用上限和实际调用次数。
 - 三类固定冲突的命中、漏报、误报和证据章节。
 - gateResult、失败分类、requestId 安全摘要和结果 provenance。
 - 独立 TEST 与 QUALITY 的复核结论。
-
 真实模型输出只有在 schema 校验、证据引用校验和固定冲突基准通过后，才可进入候选审稿报告；不得自动成为完成门禁的正式结论。
-
 ## 10. 日志与隐私
-
 普通日志、错误响应、任务列表、浏览器控制台和测试 artifact 禁止记录：
-
 - API Key、认证头和 provider token。
 - 完整 prompt、完整正文、完整 feature/review/memory 内容。
 - 完整 provider 原始响应。
 - 可还原用户正文的大段证据片段。
-
 允许记录的字段仅限 requestId、taskId、novelId、manifestHash、对象版本 ID、安全错误码、token 数、耗时、调用次数和脱敏结果摘要。安全诊断需要原始内容时，只能进入明确授权、限时、访问受控的隔离证据存储，并记录销毁时间。
 
 ## 11. 验收清单
