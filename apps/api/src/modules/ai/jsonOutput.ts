@@ -7,6 +7,7 @@ export interface JsonOutputRequest<T> {
   temperature?: number;
   maxTokens?: number;
   outputRepairRetries?: number;
+  transportRetries?: number;
   validate: (value: unknown) => T;
 }
 
@@ -24,7 +25,8 @@ export async function requestJsonOutput<T>(
       model: request.model,
       messages: attempt === 0 ? request.messages : createRepairMessages(request.messages),
       temperature: attempt === 0 ? request.temperature : 0.1,
-      maxTokens: request.maxTokens
+      maxTokens: request.maxTokens,
+      maxRetries: request.transportRetries
     });
     lastModel = result.model;
     const text = extractJsonText(result.content);

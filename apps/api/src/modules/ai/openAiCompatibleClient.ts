@@ -22,8 +22,9 @@ export class OpenAiCompatibleChatClient implements LlmClient {
 
     const url = `${this.options.baseUrl.replace(/\/+$/, '')}/v1/chat/completions`;
     let lastStatus: number | null = null;
+    const maxRetries = request.maxRetries ?? this.options.maxRetries;
 
-    for (let attempt = 0; attempt <= this.options.maxRetries; attempt += 1) {
+    for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), this.options.timeoutMs);
       try {
@@ -45,7 +46,7 @@ export class OpenAiCompatibleChatClient implements LlmClient {
         lastStatus = response.status;
 
         if (!response.ok) {
-          if (attempt < this.options.maxRetries && response.status >= 500) {
+          if (attempt < maxRetries && response.status >= 500) {
             continue;
           }
           const category = classifyProviderFailure(response.status);
@@ -66,7 +67,7 @@ export class OpenAiCompatibleChatClient implements LlmClient {
         };
         const content = payload.choices?.[0]?.message?.content;
         if (!content) {
-          if (attempt < this.options.maxRetries) {
+          if (attempt < maxRetries) {
             continue;
           }
           throw new LlmProviderError('provider_error', '模型服务返回为空。', {
@@ -88,7 +89,7 @@ export class OpenAiCompatibleChatClient implements LlmClient {
         if (error instanceof LlmProviderError) {
           throw error;
         }
-        if (attempt >= this.options.maxRetries) {
+        if (attempt >= maxRetries) {
           const timeout = error instanceof Error && error.name === 'AbortError';
           throw new LlmProviderError(timeout ? 'timeout' : 'provider_error', timeout ? '模型调用超时，请稍后重试。' : '模型服务调用异常。', {
             taskName: request.taskName,
