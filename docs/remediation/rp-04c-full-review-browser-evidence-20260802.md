@@ -35,6 +35,12 @@ Playwright 1/1，M-01..M-11 与 R-01 全部 PASS，`failures=[]`。本轮只覆�
 | usage/budget | 18553 prompt、3217 completion、21770 total；53104 ms；保守费用上界 1249350 / 上限 5000000 micros |
 | result | 人物 3/7、时间线 4/8、金额 5/9 精确命中；对照误报 0；`gateResult=blocked`，无 raw response |
 E5 已通过，但仍须对该证据取得独立终验与正常合并后才可关闭 package/ledger。
+### 3.1 E5 可复算安全摘要实体
+下列单行 JSON 是成功调用输出的完整脱敏摘要；以 `JSON.stringify(JSON.parse(entity))` 作为规范字节，SHA256 必须为 `fb72a9c84d9b112824d56e90ffd0ba81bc0f498bb2b3c9aee406d6662595b141`。它不含 prompt、正文、raw response、密钥或认证头。
+```json
+{"summaryVersion":"full-review-e5-summary-v2","outcome":"success","success":true,"gitSha":"7d8d706e8e7b501a30a309bea28725099a34c970","fixtureVersion":"rp-04c-e5-conflicts-v1","manifestHash":"dbdbd12e9194184a087ec049861591afd035221a0c047cf77ea2799735f31222","model":"deepseek-v4-pro","promptVersion":"deepseek-full-review-evidence-v4","coverage":{"chapterCount":12,"coveredChapterNos":[1,2,3,4,5,6,7,8,9,10,11,12],"complete":true},"usage":{"promptTokens":18553,"completionTokens":3217,"totalTokens":21770},"elapsedMs":53104,"callCount":1,"budget":{"maxCalls":1,"maxPromptCharacters":240000,"maxPromptTokens":60000,"maxCompletionTokens":7000,"maxTotalTokens":67000,"maxCostMicros":5000000,"promptCostMicrosPerTokenUpperBound":50,"completionCostMicrosPerTokenUpperBound":100,"estimatedCostMicrosUpperBound":1249350},"provenance":{"runId":"rp04c-e5-fba54ffc-90a8-4e4d-8ce0-911b7ec74392","requestId":"rp04c-e5-request-2efe080d-5cea-4a5e-9e0b-c957b32ddba0","evidenceHash":"5946a76cb41971c3d9c49db3b608184c798bd8e4d569294279dab28a12c21297","resultHash":"fd2db01c4222d7fe44b27f31399676cf385c89e8ee834f0dbc985a3a8a047765","providerRouteFingerprint":"deepseek:deepseek-v4-pro:route-v5"},"hits":{"characterDeathResurrection":{"hit":true,"scopeRefs":["rp04c-chapter-03","rp04c-chapter-07"]},"timeline":{"hit":true,"scopeRefs":["rp04c-chapter-04","rp04c-chapter-08"]},"contractAmount":{"hit":true,"scopeRefs":["rp04c-chapter-05","rp04c-chapter-09"]}},"controlFalsePositive":false,"gateResult":"blocked","failure":null}
+```
+复算：`node -e 'const fs=require("fs"),c=require("crypto");const s=fs.readFileSync(process.argv[1],"utf8").split("\n").find((line)=>line.startsWith("{\"summaryVersion\":\"full-review-e5-summary-v2\""));console.log(c.createHash("sha256").update(JSON.stringify(JSON.parse(s))).digest("hex"))' docs/remediation/rp-04c-full-review-browser-evidence-20260802.md`。
 ## 4. 非证明边界与复现
 `E6` 与 MySQL 属于 `RMD-NOV-DB-001`；多版本报告治理、直接 API 并发、进程恢复、真实费用记录仍未证明。浏览器全绿不能替代这些边界。
 ```bash
