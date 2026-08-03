@@ -3,7 +3,7 @@
 | 字段 | 值 |
 | --- | --- |
 | package/issue/acceptance | `RP-04C` / `RMD-NOV-REVIEW-001` / `RP-04C_BROWSER_ACCEPTANCE_M01_M11` |
-| browser/package/approval | `candidate_for_independent_review` / `blocked` / `NOT_ISSUED` |
+| browser/package/approval | `passed` / `merged` / `ISSUED` |
 | real_model_e5/e6 | `PASS`（修复候选仅一次调用）/ `NOT_PROVEN` |
 | run | `rp04c-2026-08-03T08-13-45-744Z` |
 | implementation SHA/tree | `6a73577359338080ca4e229bc8335e993b482a96` / `81cf2fcc30fe6470c4e5bde5d37a40d8409ce63a` |
@@ -34,7 +34,7 @@ Playwright 1/1，M-01..M-11 与 R-01 全部 PASS，`failures=[]`。本轮只覆�
 | coverage/calls | 12/12；`callCount=1/maxCalls=1`；retry=0 |
 | usage/budget | 18553 prompt、3217 completion、21770 total；53104 ms；保守费用上界 1249350 / 上限 5000000 micros |
 | result | 人物 3/7、时间线 4/8、金额 5/9 精确命中；对照误报 0；`gateResult=blocked`，无 raw response |
-E5 已通过，但仍须对该证据取得独立终验与正常合并后才可关闭 package/ledger。
+E5 已通过 PRODUCT、TEST、QUALITY 独立终验，PR #63 正常 squash 合并为 `5e42d5f`；main delivery 的 ADR budget 绑定由 PR #64 正常 squash 合并为 `f98f532` 并完成四路 main required checks。本证据已用于关闭 `RMD-NOV-REVIEW-001`。
 ### 3.1 E5 可复算安全摘要实体
 下列单行 JSON 是成功调用输出的完整脱敏摘要；以 `JSON.stringify(JSON.parse(entity))` 作为规范字节，SHA256 必须为 `fb72a9c84d9b112824d56e90ffd0ba81bc0f498bb2b3c9aee406d6662595b141`。它不含 prompt、正文、raw response、密钥或认证头。
 ```json

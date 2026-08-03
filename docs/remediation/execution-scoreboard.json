@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
-  "asOf": "2026-08-02",
+  "asOf": "2026-08-03",
   "mode": "execution_reset",
   "ledger": {
     "total": 43,
-    "closed": 11,
-    "openOrPending": 32,
+    "closed": 12,
+    "openOrPending": 31,
     "byCategory": {
-      "PB": { "total": 7, "closed": 0 },
+      "PB": { "total": 7, "closed": 1 },
       "RB": { "total": 12, "closed": 1 },
       "QG": { "total": 22, "closed": 9 },
       "DEBT": { "total": 2, "closed": 1 }
@@ -15,16 +15,16 @@
   },
   "delivery": {
     "activeImplementationPackage": null,
-    "lastCompletedPackage": "RP-05B1",
-    "lastCompletedStage": "E4",
-    "lastResult": "closed_rmd_nov_ux_001"
+    "lastCompletedPackage": "RP-04C",
+    "lastCompletedStage": "E5",
+    "lastResult": "closed_rmd_nov_review_001"
   },
   "acceptance": {
     "activePackage": null,
     "status": "not_started"
   },
   "productOutcome": {
-    "pbClosed": 0,
+    "pbClosed": 1,
     "rbClosed": 1,
     "status": "partial"
   },
