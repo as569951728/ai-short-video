@@ -1518,3 +1518,25 @@ evidence: fixed code d09b9aae/tree 26dfd802；final package tree ae968dcf；PROD
 mc_decision: RMD-NOV-UX-001 从 implemented_pending_verification 转为 closed；总账更新为 11/43、RB 1/12，PB 0/7、QG 9/22、DEBT 1/2 不变。真实 MySQL current 唯一性、provider 输出和偏好配置未关闭，分别继续由 RMD-NOV-VERSION-001、RMD-NOV-PROVIDER-001、RMD-NOV-PREF-001 承担。
 next_action: 保持 execution_reset 且无活动实现包；从剩余 PB/P0 或 RB/P0/P1 中选择下一条结果链，重新走 target_issue_ids、expected_ledger_transition、用户结果和证据桶准入。
 ```
+
+### MCE-20260803-RP04C-NOV-REVIEW-CLOSED
+
+```text
+event_id: MCE-20260803-RP04C-NOV-REVIEW-CLOSED
+occurred_at: 2026-08-03 CST
+event_type: remediation_issue_closed
+source_thread: main-control with independent PRODUCT, TEST and QUALITY agents
+package_id: RP-04C
+issue_ids: RMD-NOV-REVIEW-001
+acceptance_ids: NOV-REVIEW-QUALITY-01
+merged_pr_63: 5e42d5f32de308dff4e3c9531aed428c815bd279
+merged_pr_64: f98f53245ce3382b93d10938e2d82d745031a4e4
+governance_fix_pr_64: f98f53245ce3382b93d10938e2d82d745031a4e4
+closure_issue_id: RMD-NOV-REVIEW-001
+closure_head: f98f53245ce3382b93d10938e2d82d745031a4e4
+closure_ledger_closed: 12
+summary: RP-04C 将 12 章权威正文、章节特征与连续性记忆纳入全书审稿；真实 DeepSeek E5 单次调用发现人物、时间线和合同金额跨章冲突且对照误报为 0，真实浏览器/API 链证明长等待、刷新、多标签、失败恢复、结果定位和 completion gate。
+evidence: PR #63 normal squash merge 5e42d5f，tree 315e8e9；PR #64 normal squash merge f98f532 修复 main delivery 的 ADR budget 绑定；E5 safe summary fb72a9c84d9b112824d56e90ffd0ba81bc0f498bb2b3c9aee406d6662595b141；browser M-01..M-11 + R-01 PASS；PRODUCT/TEST/QUALITY P0=0/P1=0；main runs 30801863814/30801863047/30801863058/30801863049 success。
+mc_decision: RMD-NOV-REVIEW-001 从 open 转为 closed；总账更新为 12/43、PB 1/7、RB 1/12、QG 9/22、DEBT 1/2。E6/MySQL/Prisma 继续由 RMD-NOV-DB-001 承担，不把 in-memory repository 外推为真实数据库证明。
+next_action: 从剩余 PB/P0 或 RB/P0/P1 中选择第二条结果链；必须重新声明 target_issue_ids、expected_ledger_transition、用户结果和证据桶，不自动准入真实数据库或媒体包。
+```

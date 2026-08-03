@@ -1,6 +1,6 @@
 # AIShortvideo 整改唯一问题总账
 
-更新时间：2026-08-02
+更新时间：2026-08-03
 
 状态：frozen_for_remediation
 
@@ -30,7 +30,7 @@
 | ID | 类别/级别 | 问题与影响 | 状态 | 主要证据 | Owner | 整改包 | 验收 ID |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | RMD-NOV-DB-001 | PB/P0 | Prisma 模式的正文批量、重写、正文采用、全书审稿和完结确认未实现，真实数据库无法完本 | open | `prismaNovelRepository.ts` 未实现路径；二次复盘 15.1 | DEV | RP-03B, RP-03C, RP-03D | NOV-DB-E2E-01 |
-| RMD-NOV-REVIEW-001 | PB/P0 | 全书审稿未输入章节正文，连贯性和风险结论不可信 | open | `deepseekNovelProvider.ts` 全书审稿 payload；二次复盘 15.1 | DEV | RP-04C | NOV-REVIEW-QUALITY-01 |
+| RMD-NOV-REVIEW-001 | PB/P0 | 全书审稿未输入章节正文，连贯性和风险结论不可信 | closed | PR #63 merge `5e42d5f`；PR #64 merge `f98f532`；真实 DeepSeek E5 脱敏摘要 `fb72a9c8...`；浏览器 M-01..M-11 + R-01；PRODUCT/TEST/QUALITY `P0=0/P1=0`；main 四路 required checks 全绿；关闭记录 | DEV | RP-04C | NOV-REVIEW-QUALITY-01 |
 | RMD-NOV-AI-001 | RB/P0 | 长输出只有顺序分块和一次通用 repair，没有持久 checkpoint、失败段续跑和完整性校验 | partial | `jsonOutput.ts`、`deepseekNovelProvider.ts`；N-08/N-09/N-16/N-17 | DEV | RP-04A | NOV-JSON-01, NOV-PLAN-RESUME-01 |
 | RMD-NOV-BATCH-001 | RB/P1 | 批量正文全部生成后才保存，中断会浪费结果；`previousMemory` 未进入模型 payload | open | `novelService.ts`、`deepseekNovelProvider.ts`；二次复盘 15.2 | DEV | RP-04B | NOV-BATCH-RESUME-01, NOV-MEMORY-01 |
 | RMD-NOV-QUALITY-001 | RB/P1 | 目标字数只在 prompt，结果只校验非空，短章节仍可通过 | open | N-19；`deepseekNovelProvider.ts` 长度校验 | DEV + PRODUCT | RP-04B | NOV-LENGTH-01 |
@@ -102,10 +102,10 @@
 
 | 类别 | 数量 | 当前关闭 |
 | --- | ---: | ---: |
-| PB | 7 | 0 |
+| PB | 7 | 1 |
 | RB | 12 | 1 |
 | QG | 22 | 9 |
 | DEBT | 2 | 1 |
-| 合计 | 43 | 11 |
+| 合计 | 43 | 12 |
 
 数量只用于确认总账覆盖和正式关闭状态，不转换成项目完成百分比。每次更新必须重新核对实际分类数量，并分别报告研发交付、独立验收和用户结果。

@@ -1,6 +1,6 @@
 # AIShortvideo 主控统一状态
 
-更新时间：2026-08-02 CST
+更新时间：2026-08-03 CST
 
 本文件是需求主控的当前状态入口。历史过程和详细证据仍保留在各模块设计、验收和工程质量文档中；发生冲突时，以当前代码、最新正式验收结论和本文件列出的证据为准。
 
@@ -18,14 +18,14 @@
 
 | 维度 | 当前状态 | 主控判断 |
 | --- | --- | --- |
-| 执行模式 | `execution_reset` | 状态单源回归已关闭，停工计数归零；当前仍无活动实现包，下一步只选择明确推进 PB/P0 或 RB/P0/P1 的结果链，不自动进入 RP-02B2a3 |
-| 小说核心流程 | 候选交互 E4 已关闭，完整生产链仍未证明 | RP-05B1 已关闭 RMD-NOV-UX-001；真实 Prisma 后半程未实现、全书审稿未输入正文，仍有 2 个未关闭 P0 |
+| 执行模式 | `execution_reset` | RP-04C 已完成 E5 并正式关闭一个 PB/P0；当前无活动实现包，下一步只选择明确推进剩余 PB/P0 或 RB/P0/P1 的第二条结果链 |
+| 小说核心流程 | 候选交互 E4 与全书审稿 E5 已关闭，真实生产链仍未证明 | RP-04C 已关闭 RMD-NOV-REVIEW-001；真实 Prisma 后半程仍未实现，小说核心剩余 1 个未关闭 P0：RMD-NOV-DB-001 |
 | 视频 P8-P9 | 工作台状态流与版本流程按限定范围验收 | P9c 无可播放音频，P9e 无真实 MP4/下载文件；不能称为真实视频生成闭环 |
 | P10-preflight | 已正式收口 | `creationSource` 的 shared/API/仓储/migration/admin 与浏览器链路通过 `CS-R3` 及条件项复验 |
 | P10 | `P10-R0` 已正式收口；R1 准入设计通过 | R1 准入文档已纳入当前远程分支；尚未授权，未启动业务代码 |
-| 整改计划 | RP-05B1 已正式完成 E4；既有治理包保持关闭，任务平台包保持限定阶段 | 唯一总账当前关闭 11/43；RMD-NOV-UX-001 已关闭，RB 1/12；RMD-TASK-002 为 partial、003 为 open，后续业务包仍需重新准入 |
-| 测试 | RP-05B1 PRODUCT/TEST/QUALITY 第七候选均 `P0=0/P1=0`，PR #61 required checks 全绿 | 证明候选交互与结果承接 E4；不外推真实 MySQL、provider、media 或完整小说生产链 |
-| 工程质量 | `guarded / high` | clean worktree 根级 typecheck 全绿；PR #59 与 merge `e3cdc9a` 的 governance/admin-dom/backend-e2e/rp01c-fixtures 全绿，历史 A2 receipt 不再劫持普通 main push；当前高风险仍来自小说真实完本与全书审稿 2 个既有 P0 |
+| 整改计划 | RP-04C 已正式完成 E5；既有治理包保持关闭，任务平台包保持限定阶段 | 唯一总账当前关闭 12/43；PB 1/7、RB 1/12；RMD-TASK-002 为 partial、003 为 open，第二结果包仍需重新准入 |
+| 测试 | RP-04C PRODUCT/TEST/QUALITY 最终候选均 `P0=0/P1=0`；PR #63/#64 与 main 四路 required checks 全绿 | 证明全书审稿完整正文输入、冲突识别、浏览器恢复与完结阻断 E5；不外推 E6/MySQL、进程重启或媒体链 |
+| 工程质量 | `guarded / high` | PR #64 已修复 RP-01C main delivery 的 ADR budget 绑定；main@`f98f532` 的 RP-01A、governance、RP-01B、RP-01C 全绿；当前小说最高风险收敛为真实 Prisma 完本链 RMD-NOV-DB-001 |
 | 本地服务 | 运行态不入版本化状态 | 用户需要浏览器验收时实时检查 health、端口和 fixture；不得沿用文档中的历史瞬时状态 |
 | 真实环境 | 数据库/模型已获阶段性授权，待安全前置 | P8b-L1b 与真实模型只在隔离、回滚、费用上限和密钥脱敏满足后执行；外部渲染/云存储仍未授权 |
 
@@ -35,8 +35,8 @@
 
 ```text
 execution_mode: execution_reset
-ledger_closed: 11/43
-pb_closed: 0/7
+ledger_closed: 12/43
+pb_closed: 1/7
 rb_closed: 1/12
 active_implementation_package: none
 merged_prs_without_ledger_closure: 0
@@ -48,10 +48,10 @@ next_decision: select_result_linked_package
 
 | 层级 | 当前状态 | 结论 |
 | --- | --- | --- |
-| 总账关闭 | 11/43；PB 0/7；RB 1/12 | RMD-NOV-UX-001 已按 E4 关闭；不表示小说或视频完整闭环 |
-| 研发交付 | 无活动实现包；最近完成 RP-05B1 E4 | PR #61 merge tree 与验收包一致 |
-| 独立验收 | 当前无待验候选 | RP-05B1 三方已通过；结论不自动覆盖下一包 |
-| 用户结果 | `partial` | 候选交互事故链已证明，真实完本、模型和视频媒体链仍未证明 |
+| 总账关闭 | 12/43；PB 1/7；RB 1/12 | RMD-NOV-REVIEW-001 已按 E5 关闭；不表示小说或视频完整闭环 |
+| 研发交付 | 无活动实现包；最近完成 RP-04C E5 | PR #63 正常合并，PR #64 修复 main delivery gate |
+| 独立验收 | 当前无待验候选 | RP-04C PRODUCT/TEST/QUALITY 已通过；结论不自动覆盖第二包 |
+| 用户结果 | `partial` | 全书审稿真实模型与浏览器链已证明；真实 Prisma 完本和视频媒体链仍未证明 |
 
 历史包阶段（审计参考，不作为当前进度）：
 
@@ -108,8 +108,8 @@ next_decision: select_result_linked_package
 
 ### 当前阻塞
 
-- P0：Prisma 正文批量、重写、正文采用、全书审稿和完结确认未形成真实 MySQL 完整链路。
-- P0：全书审稿只接收章节元数据，没有章节正文、分层摘要或连续性记忆，当前审稿结果不可作为质量门禁。
+- P0：Prisma 正文批量、重写、正文采用、全书审稿结果持久化和完结确认未形成真实 MySQL 完整链路。
+- 已关闭边界：RP-04C 已在 E5 证明全书审稿读取 12 章权威正文、章节特征和连续性记忆，并用真实 DeepSeek 与浏览器链完成跨章冲突识别和完结阻断；E6/MySQL 不在该关闭范围。
 - P0/P1：小说 provider-backed action 已完成 RP-02A preclaim、RP-02B1 ExecutionEnvelope/lease 仓储原语、RP-02B2a1 registry/strict ABI/retry freeze 和 RP-02B2a2 authenticated actor/authority reload/stale gate 的限定 E3；快速返回、dispatcher、worker loop、checkpoint/finalize、restart/retry child 和真实 MySQL/多进程仍未实现或未证明。
 - P1：章节目录只有顺序分块，没有持久 checkpoint 和失败段续跑。
 - P1：正文目标字数、长期记忆和真实 DeepSeek 稳定性未形成质量门禁。
@@ -117,6 +117,7 @@ next_decision: select_result_linked_package
 ### 已完成资产
 
 - `creationSource` 已完成：UI、请求、校验、权威持久化、列表/详情回显和刷新恢复已贯通。
+- RP-04C 已完成：PR #63/#64 正常合并，真实 DeepSeek E5 脱敏摘要、浏览器 M-01..M-11 + R-01、三方独立验收和 main 四路 required checks 全部通过；`RMD-NOV-REVIEW-001` 已关闭。
 - 正式合同：`docs/modules/novel-creation-source-contract.md`。
 - 开工包：`docs/modules/novel-creation-source-implementation-package.md`。
 - 正式验收：`docs/reviews/creation-source-acceptance-closure-2026-07-11.md`。
@@ -154,7 +155,7 @@ next_decision: select_result_linked_package
 ## 4. 测试与验收
 
 - 全栈研发：`RP-02B1`、`RP-02B2a0`、`RP-02B2a1` 与 `RP-02B2a2` 实现链已按各自限定阶段推送；A2 admitted candidate `e8e37cd` 通过 PR #51 交付为 `dc193db`，PR #53 以 `9f04986` 修正可信重放区间。原 B2a partial diff 与 rejected `0a583c8` 均不得复用；B2a3-B2a5/B2b/B2c/B3 不得自动继续。
-- 独立测试/质量 agent：A2 最终 ARCH/SECURITY `APPROVED 0/0/1`、TEST/QUALITY `APPROVED 0/0/0`；trusted replay A2 core 272/272，本地 clean-install 复跑 272/272。真实 MySQL、多进程、dispatcher/worker loop、restart/真实 retry 仍为 not_proven。
+- 独立测试/质量 agent：RP-04C 最终 PRODUCT/TEST/QUALITY 均 `P0=0/P1=0` 并批准关闭；A2 历史阶段仍为 ARCH/SECURITY `APPROVED 0/0/1`、TEST/QUALITY `APPROVED 0/0/0`。真实 MySQL、多进程、dispatcher/worker loop、restart/真实 retry 仍为 not_proven。
 - `P10-R1` 验收准备保留，但当前不是推荐开工项。
 - 五类专业复盘与二次复盘已完成；执行状态以 `docs/remediation/issue-ledger.md` 为唯一事实源。
 - 每个研发包完成后必须由测试会话独立验收，研发自测不能替代正式结论。
@@ -162,7 +163,7 @@ next_decision: select_result_linked_package
 
 ## 5. 工程质量与工作树
 
-- 最新工程质量：当前总账 43 项 PB/RB/QG/DEBT 和专项验证缺口；RMD-NOV-UX-001 已关闭，当前关闭 11/43、PB 0/7、RB 1/12；真实 MySQL/provider/media 缺口仍保留。
+- 最新工程质量：当前总账 43 项 PB/RB/QG/DEBT 和专项验证缺口；RMD-NOV-REVIEW-001 已关闭，当前关闭 12/43、PB 1/7、RB 1/12；E6/MySQL、进程恢复与媒体缺口仍保留。
 - `.playwright-cli/` 已安全忽略；源码、migration、测试和文档未被 ignore。
 - 已创建并推送检查点分支 `codex/aishortvideo-checkpoint-20260711`；P10-R0 检查点 `68957be` 及后续 R1 准入文档均纳入该远程分支。
 - RP-00B 的 `Remediation governance` 已在远程 push runs `29196618102`、`29196969050` 成功执行，Git 预算与 SLA 门禁不再只有本地证据。
@@ -176,6 +177,8 @@ next_decision: select_result_linked_package
 - RP-02B2a2 closeout 已由 PR #56 squash 合并为 `0ff9107`，tree `58ad3981`；四路 main push required checks 成功，PR #54 已关闭且不得复用。
 - PR #57 已将 RP-01C 候选检查与 main delivery 检查分离并 squash 合并为 `8940d6d`。PR #58 的治理资产合并为 `b2b9dad` 后暴露历史 A2 receipt 劫持普通 main push；PR #59 以 `e3cdc9a` 修复并通过 PR required checks，随后同头 main runs `30717159482`/`30717159488`/`30717159479`/`30717159477` 全部 success。该闭环关闭 RMD-GOV-STATUS-001，但不改变 PB/RB。
 - RP-05B1 第七代码候选 `d09b9aa` 经 PRODUCT/TEST/QUALITY 全部清零 P0/P1；PR #61 最终 head `5a18f87` 的 governance/admin-dom/backend-e2e/rp01c-fixtures 全绿，正常 squash 合并为 `91751dd`，tree 与验收包 `ae968dcf` 一致。该闭环只关闭 RMD-NOV-UX-001，不关闭真实 MySQL/provider/media 问题。
+- RP-04C 最终候选 `4b13612` / tree `315e8e9` 经 PRODUCT/TEST/QUALITY 全部清零 P0/P1；PR #63 正常 squash 合并为 `5e42d5f`。真实 DeepSeek E5 单次调用覆盖 12/12 章，安全摘要 SHA256 为 `fb72a9c8...`；浏览器 M-01..M-11 + R-01 全绿。
+- PR #64 以 `f98f532` 正常 squash 修复 RP-01C main delivery 的 ADR budget 绑定；main runs RP-01A `30801863814`、governance `30801863047`、RP-01B `30801863058`、RP-01C `30801863049` 全部 success。该闭环关闭 RMD-NOV-REVIEW-001，不关闭 RMD-NOV-DB-001。
 - 工程质量任务已对远程检查点执行一次性只读复核：本地与 upstream 同步，未发现敏感信息、浏览器产物、一次性配置或 P10/P12 可执行越界误纳管，结论为 `passed`，无 P0/P1。
 - 一次性 `apps/api/tsconfig.testrun.json` 已由 RP-00B 完成归因和安全删除，未加入 ignore；独立 TEST/QUALITY 已复核。`.playwright-cli/` 继续作为本地浏览器运行产物忽略。
 - `docs/modules/video-p10-r1-implementation-package.md` 与多会话评审记录已安全归因并纳入远程基线；它们是需求资产，不是已授权业务实现。
@@ -222,18 +225,9 @@ next_decision: select_result_linked_package
 
 ## 7. 当前唯一推荐动作
 
-1. 只执行结果进度重置：校准 `execution-scoreboard.json`、通过 `GOV-PROGRESS-01`、归因共享工作树未提交内容并取得独立 QUALITY 复核。
-2. `RP-02B2a3`、P9-real、P10-R1 和其他业务包均不自动启动；下一包必须先声明 `target_issue_ids`、`expected_ledger_transition`、用户结果和证据桶。
-3. 下一包选择以能够明确推进 PB/P0 或 RB/P0/P1 为第一目标；若不能说明总账状态收益，则保持 `not_authorized`。
-4. 真实 MySQL 与真实模型费用调用已有后续授权，但只有在选定结果链需要且隔离测试库、可回滚写集、单次费用上限、密钥脱敏和禁用自动付费重试全部满足时才执行。
-g0_evidence_parent_sha: 056a8d28910c765c9887a245e2dc4269859e5ec2
-g0_evidence_rp01a_run: 29955581285
-g0_evidence_rp01b_run: 29955581242
-g0_evidence_rp01c_run: 29955581254
-g0_evidence_governance_run: 29955581239
-g0_evidence_a2_authorization: not_authorized
-g0_evidence_issue_closed_count: 9/42
-g0_evidence_rmd_task_002: partial
-g0_evidence_rmd_task_003: open
+1. RP-04C 关闭资产完成独立复核和正常合并后，从剩余 PB/P0 或 RB/P0/P1 中选择第二条结果链。
+2. 第二包必须先声明 `target_issue_ids`、`expected_ledger_transition`、用户结果、E0-E6 目标和所有 not_proven；不能按编号自动启动 RP-02B2a3、P9-real 或 P10-R1。
+3. 候选优先级以两天内可形成用户可感知闭环并正式关闭总账项为准；若不能说明状态收益，保持 `not_authorized`。
+4. 真实 MySQL 与真实模型费用调用已有后续授权，但只有在候选链需要且隔离测试库、可回滚写集、费用上限、密钥脱敏和禁用自动付费重试全部满足时执行；外部媒体和发布能力仍需单独授权。
 
-不得提前执行尚未满足依赖的子包、`P9-real`、`P10-R1`、CS-L1、真实 MySQL/provider 或外部发布能力。
+不得把 RP-04C 的 E5 结论外推为 E6/MySQL、进程恢复、真实媒体或发布通过。

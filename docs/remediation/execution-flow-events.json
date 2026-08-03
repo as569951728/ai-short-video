@@ -80,6 +80,28 @@
       "issueId": "RMD-NOV-UX-001",
       "closureHead": "91751dd1f4d08d3b4eb38971cd2f060836b98cfe",
       "closedCountAfterEvent": 11
+    },
+    {
+      "id": "pr-63-merged",
+      "type": "pull_request_merged",
+      "pullRequest": 63,
+      "mergeSha": "5e42d5f32de308dff4e3c9531aed428c815bd279",
+      "authorityEventId": "MCE-20260803-RP04C-NOV-REVIEW-CLOSED"
+    },
+    {
+      "id": "pr-64-merged",
+      "type": "pull_request_merged",
+      "pullRequest": 64,
+      "mergeSha": "f98f53245ce3382b93d10938e2d82d745031a4e4",
+      "authorityEventId": "MCE-20260803-RP04C-NOV-REVIEW-CLOSED"
+    },
+    {
+      "id": "ledger-closure-rmd-nov-review-001-2026-08-03",
+      "type": "ledger_closure",
+      "authorityEventId": "MCE-20260803-RP04C-NOV-REVIEW-CLOSED",
+      "issueId": "RMD-NOV-REVIEW-001",
+      "closureHead": "f98f53245ce3382b93d10938e2d82d745031a4e4",
+      "closedCountAfterEvent": 12
     }
   ]
 }
