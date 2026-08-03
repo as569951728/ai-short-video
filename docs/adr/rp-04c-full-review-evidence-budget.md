@@ -8,7 +8,7 @@ hard_max_files: 28
 hard_max_net_additions: 6000
 exceeded_budget: changed_files,net_additions
 actual_files: 28
-actual_net_additions: 5999
+actual_net_additions: 6000
 split_reason: Full-review evidence loading, authority validation, strict provider and persistence ABI validation, deterministic conflict fixtures, authoritative refresh recovery, replayable browser acceptance, actionable issue location, and privacy evidence form one fail-closed user result chain. Independent PRODUCT/TEST/QUALITY review added the failed-call recovery contract, explicit in-memory seed guard, stale-source rejection, safe E5 summaries, and M-01..M-11 runner; splitting those fixes would allow duplicate paid calls, unsafe acceptance writes, incomplete gates, or an unverified browser success path to land independently.
 owner: MC + DEV + PRODUCT + TEST + QUALITY
 valid_until: 2026-08-04
@@ -32,10 +32,10 @@ valid_until: 2026-08-04
 
 - 不修改 Prisma schema，不连接真实 MySQL，不宣称 E6。
 - 不保存完整 prompt、完整正文或 raw provider response。
-- 不自动重试或扩大真实模型费用；当前 E5 `schema_invalid` 必须保持 merge blocker。
+- 不自动重试或扩大真实模型费用；E5 未通过前必须保持 merge blocker。
 - 不关闭 `RMD-NOV-REVIEW-001`，不提高总账进度，不准入第二包。
 - 不推进视频、TTS、字幕、渲染、导出、发布或数据回填。
 
 ## 4. 退出条件
 
-ADR 只放宽 diff 预算，不放宽产品和质量门禁。PR 仍需 API、Admin、DOM、typecheck、browser M-01..M-11、真实 DeepSeek E5，以及固定 SHA 的 PRODUCT/TEST/QUALITY 独立结论全部通过；任一项阻塞时保持 Draft。
+ADR 只放宽 diff 预算，不放宽产品和质量门禁。PR 仍需 API、Admin、DOM、typecheck、browser M-01..M-11/R-01、真实 DeepSeek E5，以及固定 SHA 的 PRODUCT/TEST/QUALITY 独立结论全部通过；任一项阻塞时保持 Draft。
