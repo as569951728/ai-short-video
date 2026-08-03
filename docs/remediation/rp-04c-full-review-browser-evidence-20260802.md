@@ -21,16 +21,16 @@
 
 | 字段 | 值 |
 | --- | --- |
-| run_id | `rp04c-2026-08-02T23-57-00-582Z` |
-| git_sha | `606f194129db98bee0e916380b888bc056ec38f8` |
-| git_tree | `383d02f5109eecb0bdc604c20b628d9f6e3f9edc` |
+| run_id | `rp04c-2026-08-03T00-41-10-512Z` |
+| git_sha | `3e184fdb42b82bb159f008b567c84146c034fd3f` |
+| git_tree | `d1ff9a7881c2bd8109aa1d78d0bda2c3174353f2` |
 | worktree_dirty | `false` |
-| executable_scope_hash | `7589028113169c2753b38ae226fa25a0420077c22679fac67ea274ab548a444d` |
+| executable_scope_hash | `acdbcaa7669a7e1091c14db0394a2da6c4f71b9b9e88334dacaae4b0ef64f263` |
 | fixture_version | `rp04c-browser-12ch-v1` |
 | provider | `deterministic-delay-provider`，45 秒延迟 |
-| evidence_hash | `4e0d91f866cee706eac402f7120d76a0beb42a48d956b928314f9a5158e5cca3` |
-| safe_summary_sha256 | `16657d4912b07037b10010d37e934b139abec0f3c378061b8e57c682f8aff81c` |
-| safe_summary | `output/playwright/rp-04c/rp04c-2026-08-02T23-57-00-582Z/safe-evidence.json` |
+| evidence_hash | `eff557551bf5eb1154e2e129676173ac0547654f8df88e01dad454c551b83b9c` |
+| safe_summary_sha256 | `166b91c7f8b912dd7211413c132531513d01059cbea1c8f6d5cc825295d00517` |
+| safe_summary | `output/playwright/rp-04c/rp04c-2026-08-03T00-41-10-512Z/safe-evidence.json` |
 
 说明：安全摘要明确记录 `worktree.dirty=false`，并绑定上述 `git_sha`、`git_tree` 与 `executable_scope_hash`。该身份只证明本次本地确定性浏览器运行对应的干净候选，不替代远程 checks、E5 或独立复核。证据不包含文件正文或 diff。
 
@@ -57,7 +57,7 @@
 
 - `coveredChapterNos` 为 1 至 12，连续、无重复。
 - 正文版本、feature card、单章 review 证据计数均为 12；长期 memory 计数为 1。
-- `manifestHash=a60b84ca80e5aee28ab4964b31e7ef229882a7ee8fd0bad57c961d58eff59388`。
+- `manifestHash=43108c3ee5dcb5d7253206bf00c1bbb2dc9a3a8965b8783da6aba1f59888d951`。
 - 浏览器 full-review POST 为 2：成功链 HTTP 200 且 task 始终为 `task_000175`，R-01 受控失败 HTTP 500 且 task 为 `task_000358`；completion POST 为 0。
 - M-06 四个 `startActionDisabled*` 均为 `true`，五个 task 状态均为 `processing`，`providerActiveThroughout=true`，`providerCallCount=1`。
 - M-11 在源正文和 raw model canary 均已确认的前提下扫描 50 个相关 Network JSON；DOM/Console/Storage/Cookie/Network 敏感命中和页面错误均为 0。
