@@ -2207,6 +2207,23 @@ describe('novel package 5 trial writing routes', () => {
     await app.close();
   });
 
+  it('rechecks every trial chapter against current targets before confirming', async () => {
+    const repository = createInMemoryNovelRepository(); const app = await buildApp({ logger: false, novelRepository: repository });
+    try {
+      const { novelId } = await createNovelReadyForTrial(app, '试写确认字符数门禁'); const first = await postTrialGenerate(app, novelId);
+      const selected = first.trialRun.chapterOneCandidates.find((candidate: any) => candidate.isAiRecommended);
+      const followup = await postTrialGenerate(app, novelId, { trialRunId: first.trialRun.id, selectedCandidateId: selected.id });
+      const chapter = repository.getNovelChapters().find((item) => item.novelId === novelId && item.chapterNo === 2)!;
+      const result = (await repository.listTrialChapterResults('tenant_test', followup.trialRun.id)).find((item) => item.chapterId === chapter.id)!;
+      const content = repository.getChapterContentVersions().find((item) => item.id === result.contentVersionId)!;
+      chapter.wordTarget = countChapterLength(content.content) * 2;
+      const snapshot = () => JSON.stringify({ versions: repository.getCreativeVersions(), decisions: repository.getAssetDecisionRecords(), logs: repository.getOperationLogs(), run: repository.getTrialRuns().find((item) => item.id === followup.trialRun.id) });
+      const before = snapshot(); const response = await app.inject({ method: 'POST', url: `/novels/${novelId}/trial/confirm`, payload: { trialRunId: followup.trialRun.id, decision: 'confirm_pass' } });
+      assert.deepEqual([response.statusCode, response.json().error.details.reasonCode, response.json().error.details.lengthStatus], [409, 'NOVEL_CONTENT_LENGTH_OUT_OF_RANGE', 'too_short']);
+      assert.equal(snapshot(), before);
+    } finally { await app.close(); }
+  });
+
   it('fails closed before trial providers when an authoritative chapter target is missing', async () => {
     const repository = createInMemoryNovelRepository();
     const app = await buildApp({ logger: false, novelRepository: repository });
@@ -2305,11 +2322,13 @@ describe('novel package 5 trial writing routes', () => {
             [409, ErrorCode.GateBlocked, 'NOVEL_CONTENT_LENGTH_OUT_OF_RANGE'],
             `${action}:${testCase.status}`
           );
+          assertPublicLengthFailure(response, testCase.status);
           const rawKey = `trial-length-${action}-${testCase.status}`;
           const task = repository.getGenerationTasks().find((item) =>
             item.idempotencyToken === testActorScopedIdempotencyToken(action, objectId, rawKey)
           );
           assert.ok(task, `${action}:${testCase.status}`);
+          assert.equal(response.json().error.details.taskId, task.id);
           assert.equal(providerCalls, 1, `${action}:${testCase.status}`);
           await assertPersistedLengthFailure(app, task, testCase.status);
           assert.equal(snapshotFormalChapterAssets(repository, novelId), formalAssetsBefore, `${action}:${testCase.status}`);
@@ -2647,10 +2666,12 @@ describe('novel package 6 body generation routes', () => {
             [409, ErrorCode.GateBlocked, 'NOVEL_CONTENT_LENGTH_OUT_OF_RANGE'],
             `${action}:${testCase.status}`
           );
+          assertPublicLengthFailure(response, testCase.status);
           const task = repository.getGenerationTasks().find((item) =>
             item.idempotencyToken === testActorScopedIdempotencyToken(action, objectId, rawKey)
           );
           assert.ok(task, `${action}:${testCase.status}`);
+          assert.equal(response.json().error.details.taskId, task.id);
           assert.equal(providerCalls, 1, `${action}:${testCase.status}`);
           await assertPersistedLengthFailure(app, task, testCase.status);
           assert.equal(snapshotFormalChapterAssets(repository, novelId), formalAssetsBefore, `${action}:${testCase.status}`);
@@ -2664,6 +2685,37 @@ describe('novel package 6 body generation routes', () => {
           await app.close();
         }
       }
+    }
+  });
+  it('uses the claimed chapter target and rejects a stale target before provider dispatch', async () => {
+    const repository = createInMemoryNovelRepository();
+    const app = await buildApp({ logger: false, novelRepository: repository });
+    const originalLoad = repository.loadGenerationAuthority.bind(repository);
+    const originalGenerate = MockBodyProvider.prototype.generateBodyChapter;
+    let providerCalls = 0;
+    try {
+      const { novelId, strategySnapshot } = await createNovelReadyForBody(app, '权威章节目标快照', 8);
+      const chapter = repository.getNovelChapters().find((item) => item.novelId === novelId && item.chapterNo === 4)!;
+      MockBodyProvider.prototype.generateBodyChapter = async function(input) { providerCalls += 1; return originalGenerate.call(this, input); };
+      let loads = 0;
+      repository.loadGenerationAuthority = async (input) => { if (input.action === 'chapter_body_generate' && ++loads === 1) chapter.wordTarget = 800; return originalLoad(input); };
+      const accepted = await app.inject({ method: 'POST', url: `/novels/${novelId}/chapters/${chapter.id}/generate`, payload: { strategySnapshotId: strategySnapshot.id, expectedStrategySnapshotVersion: strategySnapshot.versionNo, idempotencyKey: 'authority-target-current-accepted' } });
+      assert.equal(accepted.statusCode, 200, accepted.body);
+      const acceptedContent = repository.getChapterContentVersions().findLast((item) => item.chapterId === chapter.id)!;
+      assert.deepEqual([evaluateChapterLength(acceptedContent.content, chapter.wordTarget).status, chapter.wordTarget, providerCalls], ['pass', 800, 1]);
+
+      repository.loadGenerationAuthority = originalLoad;
+      const { novelId: staleNovelId, strategySnapshot: staleStrategy } = await createNovelReadyForBody(app, '陈旧章节目标阻断', 8);
+      const staleChapter = repository.getNovelChapters().find((item) => item.novelId === staleNovelId && item.chapterNo === 4)!;
+      loads = 0;
+      const before = { tasks: repository.getGenerationTasks().length, assets: snapshotFormalChapterAssets(repository, staleNovelId), providerCalls };
+      repository.loadGenerationAuthority = async (input) => { if (input.action === 'chapter_body_generate' && ++loads === 2) staleChapter.wordTarget = 1000; return originalLoad(input); };
+      const stale = await app.inject({ method: 'POST', url: `/novels/${staleNovelId}/chapters/${staleChapter.id}/generate`, payload: { strategySnapshotId: staleStrategy.id, expectedStrategySnapshotVersion: staleStrategy.versionNo, idempotencyKey: 'authority-target-stale-rejected' } });
+      assert.deepEqual([stale.statusCode, stale.json().error.code, stale.json().error.details.code], [409, ErrorCode.VersionConflict, 'SOURCE_STALE']);
+      assert.deepEqual({ tasks: repository.getGenerationTasks().length, assets: snapshotFormalChapterAssets(repository, staleNovelId), providerCalls }, before);
+    } finally {
+      MockBodyProvider.prototype.generateBodyChapter = originalGenerate;
+      await app.close();
     }
   });
   it('fails closed before body providers and adoption when an authoritative chapter target is missing', async () => {
@@ -2717,6 +2769,26 @@ describe('novel package 6 body generation routes', () => {
       const rewrite = await app.inject({ method: 'POST', url: `/novels/${novelId}/chapters/${chapter.id}/rewrite`, payload: { currentContentVersionId: chapter.currentContentVersionId, instruction: '仅优化表达', reason: '生成历史候选', idempotencyKey: 'body-length-target-valid-rewrite' } });
       assert.equal(rewrite.statusCode, 200, rewrite.body);
       const candidateId = rewrite.json().data.candidate.id;
+      const candidate = repository.getChapterContentVersions().find((item) => item.id === candidateId)!;
+      const actual = countChapterLength(candidate.content);
+      for (const [status, changedTarget] of [
+        ['too_short', actual * 2],
+        ['too_long', Math.max(1, Math.floor(actual / 2))]
+      ] as const) {
+        chapter.wordTarget = changedTarget;
+        const beforeChangedTargetAdopt = snapshotFormalChapterAssets(repository, novelId);
+        const blockedChangedTargetAdopt = await app.inject({
+          method: 'POST',
+          url: `/novels/${novelId}/chapters/${chapter.id}/content-versions/${candidateId}/adopt`,
+          payload: { currentContentVersionId: chapter.currentContentVersionId, reason: '验证目标变化后历史候选采用门禁', idempotencyKey: `body-length-target-changed-adopt-${status}` }
+        });
+        assert.deepEqual(
+          [blockedChangedTargetAdopt.statusCode, blockedChangedTargetAdopt.json().error.details.reasonCode, blockedChangedTargetAdopt.json().error.details.lengthStatus],
+          [409, 'NOVEL_CONTENT_LENGTH_OUT_OF_RANGE', status]
+        );
+        assert.equal(snapshotFormalChapterAssets(repository, novelId), beforeChangedTargetAdopt);
+        assert.equal(providerCalls, 0);
+      }
       chapter.wordTarget = null;
       MockBodyProvider.prototype.assessImpact = async function(input) {
         providerCalls += 1;
@@ -4233,12 +4305,26 @@ async function assertPersistedLengthFailure(
   const detailResponse = await app.inject({ method: 'GET', url: `/tasks/${task.id}` });
   assert.equal(detailResponse.statusCode, 200, detailResponse.body);
   const detail = detailResponse.json().data;
+  const persistedGate = (task.metadata as { lengthGate: { actual: number; lowerBound: number; upperBound: number } }).lengthGate;
   assert.deepEqual(
     [detail.failureCategory, detail.errorCode, detail.errorMessage],
     [task.failureCategory, task.errorCode, task.errorMessage]
   );
   assert.match(detail.currentStep, expectedStatus === 'too_short' ? /偏短/ : /偏长/);
+  assert.deepEqual(
+    [detail.lengthGate.status, detail.lengthGate.actual, detail.lengthGate.lowerBound, detail.lengthGate.upperBound, detail.trace.taskId],
+    [expectedStatus, persistedGate.actual, persistedGate.lowerBound, persistedGate.upperBound, task.id]
+  );
   assert.equal(detail.retryable, false);
+}
+function assertPublicLengthFailure(response: { json(): any }, status: 'too_short' | 'too_long') {
+  const body = response.json();
+  const details = body.error.details;
+  assert.deepEqual(
+    [details.lengthStatus, details.countMode, details.targetCount, details.actualCount, details.lowerBound, details.upperBound],
+    [status, CHAPTER_LENGTH_COUNT_METRIC, details.lengthGate.target, details.lengthGate.actual, details.lengthGate.lowerBound, details.lengthGate.upperBound]
+  );
+  assert.deepEqual([typeof body.requestId, details.requestId, typeof details.taskId], ['string', body.requestId, 'string']);
 }
 async function createDraft(app: Awaited<ReturnType<typeof buildApp>>, title: string, chapterLimit = 80) {
   const response = await app.inject({

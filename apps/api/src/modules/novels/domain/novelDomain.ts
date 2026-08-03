@@ -830,6 +830,7 @@ export interface TaskFailureInput {
   errorMessage: string;
   failureCategory?: string;
   statusNote?: string;
+  lengthGate?: ChapterLengthGateDTO;
   context: RequestContext;
   now: Date;
 }

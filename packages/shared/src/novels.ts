@@ -635,6 +635,7 @@ export interface RecentTaskSummaryDTO {
   failureCategoryText?: string | null;
   errorCode?: string | null;
   errorMessage?: string | null;
+  lengthGate?: ChapterLengthGateDTO | null;
   createdAt?: string;
   updatedAt?: string;
 }

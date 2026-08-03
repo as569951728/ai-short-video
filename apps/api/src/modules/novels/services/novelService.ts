@@ -148,6 +148,7 @@ import {
   projectPreferencesProviderInput,
   validateFullReviewDraftForPersistence,
   type BodyChapterProviderDraft,
+  type ChapterProviderInputV1,
   type FullReviewDraftPersistenceAuthority,
   type NovelProviderActionInputFor,
   type NovelProviderSet,
@@ -777,8 +778,12 @@ export class NovelService {
         context,
         now: this.now,
         providerCapability: this.trialProvider,
-        provider: (authoritativeInput) => executeNovelProviderAction(this.getProviderSet(), authoritativeInput as typeof providerInput)
-          .then((candidates) => bindTrialChapterOneCandidates(chapters, candidates)),
+        provider: (authoritativeInput) => {
+          const authoritative = authoritativeInput as typeof providerInput;
+          const authoritativeChapters = bindAuthoritativeChapters(chapters, authoritative.chapters);
+          return executeNovelProviderAction(this.getProviderSet(), authoritative)
+            .then((candidates) => bindTrialChapterOneCandidates(authoritativeChapters, candidates));
+        },
         finalize: (task, candidates) => this.options.repository.createTrialChapterOneCandidates({
           novel,
           task,
@@ -870,10 +875,14 @@ export class NovelService {
       now: this.now,
       providerCapability: this.trialProvider,
       prepare: () => Promise.resolve(),
-      provider: (authoritativeInput) => executeNovelProviderAction(this.getProviderSet(), authoritativeInput as typeof providerInput).then((followup) => ({
-        ...followup,
-        chapters: bindTrialFollowupChapters(trialScopeChapters, followup.chapters, followup.review)
-      })),
+      provider: (authoritativeInput) => {
+        const authoritative = authoritativeInput as typeof providerInput;
+        const authoritativeChapters = bindAuthoritativeChapters(trialScopeChapters, authoritative.chapters);
+        return executeNovelProviderAction(this.getProviderSet(), authoritative).then((followup) => ({
+          ...followup,
+          chapters: bindTrialFollowupChapters(authoritativeChapters, followup.chapters, followup.review)
+        }));
+      },
       finalize: (task, followup) => this.options.repository.selectTrialChapterOneAndGenerateFollowup({ novel, trialRun, task, selectedCandidate, chapters: followup.chapters, review: followup.review, context, now: this.now() })
     });
     if (execution.reused) return this.toTrialActionResult(novel, execution.task, trialRun);
@@ -927,6 +936,16 @@ export class NovelService {
     }
     assertChapterLengthGate(selectedCandidate.content, selectedChapter.wordTarget);
 
+    const trialChapters = (await this.options.repository.listNovelChapters(context.tenantId, novelId)).filter((chapter) => chapter.chapterNo <= trialRun.trialChapterCount);
+    const trialResults = await this.options.repository.listTrialChapterResults(context.tenantId, trialRun.id);
+    for (const chapter of trialChapters) {
+      const trialResultRecord = trialResults.find((item) => item.chapterId === chapter.id);
+      const content = trialResultRecord?.contentVersionId ? await this.options.repository.findChapterContentVersionById(context.tenantId, novelId, trialResultRecord.contentVersionId) : null;
+      if (!content || content.chapterId !== chapter.id) {
+        throw new BusinessError(ErrorCode.GateBlocked, `第 ${chapter.chapterNo} 章试写结果缺失，不能确认试写。`, { chapterId: chapter.id, chapterNo: chapter.chapterNo });
+      }
+      assertChapterLengthGate(content.content, chapter.wordTarget);
+    }
     const result = await this.options.repository.confirmTrial({
       novel,
       trialRun,
@@ -1030,8 +1049,9 @@ export class NovelService {
         const drafts: BodyChapterDraft[] = [];
         let previousContent = authoritative.previousContent;
         for (const providerChapter of authoritative.targetChapters) {
-          const chapter = targetChapters.find((item) => item.id === providerChapter.id);
-          if (!chapter) throw new BusinessError(ErrorCode.VersionConflict, '章节权威投影已变化，请刷新后重试。');
+          const sourceChapter = targetChapters.find((item) => item.id === providerChapter.id);
+          if (!sourceChapter) throw new BusinessError(ErrorCode.VersionConflict, '章节权威投影已变化，请刷新后重试。');
+          const chapter = bindAuthoritativeChapter(sourceChapter, providerChapter);
           const providerDraft = await executeNovelProviderAction(this.getProviderSet(), {
             action,
             novel: authoritative.novel,
@@ -1242,12 +1262,20 @@ export class NovelService {
       context,
       now: this.now,
       providerCapability: this.bodyProvider,
-      provider: (authoritativeInput) => executeNovelProviderAction(this.getProviderSet(), authoritativeInput as typeof providerInput)
-        .then((rewrite) => ({ ...rewrite, candidate: bindGeneratedBodyChapter(chapter, rewrite.candidate) })),
+      provider: async (authoritativeInput) => {
+        const authoritative = authoritativeInput as typeof providerInput;
+        const authoritativeChapter = bindAuthoritativeChapter(chapter, authoritative.chapter);
+        const rewrite = await executeNovelProviderAction(this.getProviderSet(), authoritative);
+        return {
+          ...rewrite,
+          authoritativeChapter,
+          candidate: bindGeneratedBodyChapter(authoritativeChapter, rewrite.candidate)
+        };
+      },
       finalize: (task, rewrite) => this.options.repository.rewriteChapter({
         novel,
         task,
-        chapter,
+        chapter: rewrite.authoritativeChapter,
         currentContent,
         candidate: rewrite.candidate,
         instruction: request.instruction?.trim() || '',
@@ -1375,15 +1403,22 @@ export class NovelService {
       context,
       now: this.now,
       providerCapability: this.bodyProvider,
-      provider: (authoritativeInput) => executeNovelProviderAction(this.getProviderSet(), authoritativeInput as typeof providerInput),
-      finalize: (task, impact) => {
+      provider: async (authoritativeInput) => {
+        const authoritative = authoritativeInput as typeof providerInput;
+        const authoritativeChapter = bindAuthoritativeChapter(chapter, authoritative.chapter);
+        assertChapterLengthGate(candidate.content, authoritativeChapter.wordTarget);
+        const impact = await executeNovelProviderAction(this.getProviderSet(), authoritative);
+        return { impact, authoritativeChapter };
+      },
+      finalize: (task, result) => {
+        const { impact, authoritativeChapter } = result;
         if ((impact.impactLevel === 'medium' || impact.impactLevel === 'severe') && !reason) {
           throw new BusinessError(ErrorCode.GateBlocked, '采用可能影响后续章节的候选必须填写原因');
         }
         return this.options.repository.adoptChapterContent({
           novel,
           task,
-          chapter,
+          chapter: authoritativeChapter,
           currentContent,
           candidate,
           reason: reason || '采用章节候选正文',
@@ -4367,6 +4402,25 @@ function bindTrialChapterOneCandidates(chapters: NovelChapterRecord[], candidate
     return { ...candidate, chapterId: chapter.id, chapterNo: chapter.chapterNo };
   });
 }
+
+function bindAuthoritativeChapters(chapters: NovelChapterRecord[], authoritativeChapters: ChapterProviderInputV1[]): NovelChapterRecord[] {
+  if (chapters.length !== authoritativeChapters.length) {
+    throw new BusinessError(ErrorCode.VersionConflict, '章节权威投影已变化，请刷新后重试。');
+  }
+  return authoritativeChapters.map((authoritative) => {
+    const chapter = chapters.find((item) => item.id === authoritative.id);
+    if (!chapter) throw new BusinessError(ErrorCode.VersionConflict, '章节权威投影已变化，请刷新后重试。');
+    return bindAuthoritativeChapter(chapter, authoritative);
+  });
+}
+
+function bindAuthoritativeChapter(chapter: NovelChapterRecord, authoritative: ChapterProviderInputV1): NovelChapterRecord {
+  if (chapter.id !== authoritative.id || chapter.chapterNo !== authoritative.chapterNo) {
+    throw new BusinessError(ErrorCode.VersionConflict, '章节权威投影已变化，请刷新后重试。');
+  }
+  return { ...chapter, title: authoritative.title, wordTarget: authoritative.wordTarget, statusNote: authoritative.statusNote };
+}
+
 function bindGeneratedBodyChapter(chapter: NovelChapterRecord, draft: BodyChapterProviderDraft): BodyChapterDraft {
   const providerChapter = draft.chapter;
   if (providerChapter.id !== chapter.id || providerChapter.chapterNo !== chapter.chapterNo) {
@@ -4438,7 +4492,8 @@ function assertChapterLengthGate(content: string, target: number | null): Chapte
       lengthGate.status === 'unconfigured'
         ? lengthGate.statusText
         : `${lengthGate.statusText} 本次结果未保存，请调整生成要求后重新生成。`,
-      { reasonCode, lengthGate }
+      { reasonCode, lengthStatus: lengthGate.status, countMode: lengthGate.metric, targetCount: lengthGate.target,
+        actualCount: lengthGate.actual, lowerBound: lengthGate.lowerBound, upperBound: lengthGate.upperBound, lengthGate }
     );
   }
   return lengthGate;

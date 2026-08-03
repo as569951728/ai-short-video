@@ -18,6 +18,7 @@ import {
   validateExecutionEnvelopeV1_1ForTask,
   WorkerPayloadUnsupportedError
 } from '../domain/executionContract.js';
+import { sanitizeChapterLengthGate } from '../domain/chapterLengthPolicy.js';
 import type {
   ChapterFeatureCardRecord,
   ChapterContentVersionRecord,
@@ -310,7 +311,9 @@ export async function executeClaimedGeneration<TProviderResult, TFinalResult>(
     providerResult = await input.provider(finalProviderInput);
   } catch (error) {
     await failClaimedTask(input, claim.task, error, 'provider_error');
-    throw error instanceof BusinessError ? error : createPublicProviderFailure(error);
+    throw error instanceof BusinessError
+      ? withClaimTrace(error, claim.task, input.context.requestId)
+      : createPublicProviderFailure(error);
   }
 
   const latestTask = await input.repository.findTaskById(input.context.tenantId, claim.task.id);
@@ -337,7 +340,9 @@ export async function executeClaimedGeneration<TProviderResult, TFinalResult>(
     return { reused: false, task: claim.task, value };
   } catch (error) {
     await failClaimedTask(input, claim.task, error, 'save_failed');
-    throw error;
+    throw error instanceof BusinessError
+      ? withClaimTrace(error, claim.task, input.context.requestId)
+      : error;
   }
 }
 
@@ -958,6 +963,14 @@ function sourceStale() {
   });
 }
 
+function withClaimTrace(error: BusinessError, task: GenerationTaskRecord, requestId: string) {
+  return new BusinessError(error.code, error.message, {
+    ...toRecord(error.details),
+    taskId: task.id,
+    requestId
+  });
+}
+
 async function failClaimedTask<TProviderResult, TFinalResult>(
   input: ExecuteClaimedGenerationInput<TProviderResult, TFinalResult>,
   task: GenerationTaskRecord,
@@ -1019,7 +1032,8 @@ function getChapterLengthFailure(error: unknown) {
   if (!(error instanceof BusinessError)) return null;
   const details = toRecord(error.details);
   if (details.reasonCode !== 'NOVEL_CONTENT_LENGTH_OUT_OF_RANGE') return null;
-  const gate = toRecord(details.lengthGate);
+  const gate = sanitizeChapterLengthGate(details.lengthGate);
+  if (!gate) return null;
   const status = gate.status;
   const actual = gate.actual;
   const lowerBound = gate.lowerBound;
@@ -1036,7 +1050,8 @@ function getChapterLengthFailure(error: unknown) {
     errorCode: 'NOVEL_CONTENT_LENGTH_OUT_OF_RANGE',
     errorMessage: message,
     failureCategory: 'content_length_out_of_range',
-    statusNote: message
+    statusNote: message,
+    lengthGate: gate
   };
 }
 

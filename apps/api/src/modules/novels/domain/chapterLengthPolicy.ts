@@ -52,3 +52,20 @@ export function evaluateChapterLength(
     canAdopt: status === 'pass'
   };
 }
+
+export function sanitizeChapterLengthGate(value: unknown): ChapterLengthGateDTO | null {
+  const gate = value && typeof value === 'object' ? value as Record<string, unknown> : null;
+  if (!gate || gate.metric !== CHAPTER_LENGTH_COUNT_METRIC
+    || (gate.target !== null && !Number.isInteger(gate.target))
+    || (gate.lowerBound !== null && !Number.isInteger(gate.lowerBound))
+    || (gate.upperBound !== null && !Number.isInteger(gate.upperBound))
+    || !Number.isInteger(gate.actual)
+    || !['unconfigured', 'pass', 'too_short', 'too_long'].includes(String(gate.status))
+    || typeof gate.statusText !== 'string' || typeof gate.canAdopt !== 'boolean') return null;
+  return {
+    metric: CHAPTER_LENGTH_COUNT_METRIC,
+    target: gate.target as number | null, lowerBound: gate.lowerBound as number | null,
+    upperBound: gate.upperBound as number | null, actual: gate.actual as number,
+    status: gate.status as ChapterLengthGateDTO['status'], statusText: gate.statusText, canAdopt: gate.canAdopt
+  };
+}

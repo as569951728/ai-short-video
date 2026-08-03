@@ -3,6 +3,7 @@ import {
   TaskStatus,
   type CancelTaskRequest,
   type CancelTaskResultDTO,
+  type ChapterLengthGateDTO,
   type RecommendedActionDTO,
   type RetryTaskRequest,
   type RetryTaskResultDTO,
@@ -18,6 +19,7 @@ import type {
   NovelRepository,
   RequestContext
 } from '../../novels/domain/novelDomain.js';
+import { sanitizeChapterLengthGate } from '../../novels/domain/chapterLengthPolicy.js';
 import { listActionExecutionPlans } from '../../novels/services/actionExecutionPlan.js';
 
 export interface TaskServiceOptions {
@@ -179,6 +181,7 @@ export class TaskService {
       failureCategoryText: getFailureCategoryText(task.failureCategory),
       errorCode: providerBackedFailed ? getProviderFailureErrorCode(task) : task.errorCode,
       errorMessage: providerBackedFailed ? providerFailureMessage : task.errorMessage,
+      lengthGate: getTaskLengthGate(task),
       userFailureReason: getUserFailureReason(task, sourceStale),
       retryable,
       cancellable,
@@ -212,6 +215,7 @@ export function toRecentTaskSummaryDTO(task: GenerationTaskRecord) {
     failureCategoryText: getFailureCategoryText(task.failureCategory),
     errorCode: providerBackedFailed ? getProviderFailureErrorCode(task) : task.errorCode,
     errorMessage: providerBackedFailed ? providerFailureMessage : task.errorMessage,
+    lengthGate: getTaskLengthGate(task),
     createdAt: task.createdAt.toISOString(),
     updatedAt: task.updatedAt.toISOString()
   };
@@ -367,4 +371,10 @@ function getProviderFailureErrorCode(task: GenerationTaskRecord) {
 function isContentLengthFailure(task: GenerationTaskRecord) {
   return task.failureCategory === CONTENT_LENGTH_FAILURE_CATEGORY
     && task.errorCode === CONTENT_LENGTH_FAILURE_ERROR_CODE;
+}
+
+function getTaskLengthGate(task: GenerationTaskRecord): ChapterLengthGateDTO | null {
+  if (!isContentLengthFailure(task)) return null;
+  const metadata = task.metadata && typeof task.metadata === 'object' ? task.metadata as Record<string, unknown> : {};
+  return sanitizeChapterLengthGate(metadata.lengthGate);
 }
