@@ -57,7 +57,10 @@ describe('RP-01C fixture factory contract', () => {
     assert.match(workflow, /\[\[ "\$B2A_AUTHORIZED_CANDIDATE_REF" =~ \^refs\/tags\/rp02b2a-admitted-\[a-f0-9\]\{12,40\}\$ \]\]/);
     assert.match(workflow, /git fetch --no-tags --force origin "\$B2A_AUTHORIZED_CANDIDATE_REF:refs\/remotes\/origin\/rp02b2a-admitted-candidate"/);
     assert.match(workflow, /test "\$\(git rev-parse refs\/remotes\/origin\/rp02b2a-admitted-candidate\^\{commit\}\)" = "\$B2A_AUTHORIZED_CANDIDATE_SHA"/);
-    assert.match(workflow, /run: npm run governance:git-budget/);
+    assert.match(workflow, /name: Check package diff budget/);
+    assert.match(workflow, /git diff --name-only -z "\$GOVERNANCE_BASE_SHA" "\$GOVERNANCE_HEAD_SHA"/);
+    assert.match(workflow, /ADR_ARGS\+=\(--adr "\$path"\)/);
+    assert.match(workflow, /governance:git-budget -- --base "\$GOVERNANCE_BASE_SHA" --head "\$GOVERNANCE_HEAD_SHA"/);
   });
 
   it('keeps the scenario catalogue complete and classified', () => {
