@@ -565,6 +565,45 @@ describe('DeepSeek novel provider', () => {
     }
   });
 
+  it('requests immutable memory facts explicitly and does not promote generic facts into them', async () => {
+    const requests: ChatCompletionRequest[] = [];
+    const provider = new DeepSeekNovelProvider({
+      client: {
+        async chat(request) {
+          requests.push(request);
+          return {
+            content: JSON.stringify({
+              ...createBodyChapterJson(),
+              memory: {
+                summary: '第4章获得线索。',
+                facts: ['主角怀疑旧同事'],
+                factsCannotContradict: ['第4章合同已签署'],
+                plantedForeshadowing: ['合同附页尚未公开']
+              }
+            }),
+            model: request.model
+          };
+        }
+      }
+    });
+
+    const draft = await provider.generateBodyChapter({
+      novel: createNovel(),
+      chapter: createChapter(4),
+      strategySnapshot: {},
+      previousContent: null,
+      previousMemory: null,
+      previousBatchNotes: [],
+      enhancedReview: false
+    });
+
+    const hint = JSON.parse(requests[0].messages[1].content).outputSchemaHint as string;
+    assert.match(hint, /factsCannotContradict/);
+    assert.match(hint, /不可推翻/);
+    assert.deepEqual(draft.memory.factsCannotContradict, ['第4章合同已签署']);
+    assert.deepEqual(draft.memory.plantedForeshadowing, ['合同附页尚未公开']);
+  });
+
   it('summarizes adopted direction context before setting generation', async () => {
     const requests: ChatCompletionRequest[] = [];
     const provider = new DeepSeekNovelProvider({
