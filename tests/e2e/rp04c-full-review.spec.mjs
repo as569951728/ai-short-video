@@ -560,7 +560,7 @@ async function processingState(page, startedAt) {
   const panel = page.locator('.step-side-panel .task-progress-panel');
   await expect(panel.locator('.task-progress-label')).toHaveText('生成中');
   await expect(panel).toContainText('当前不展示精确百分比');
-  await expect(panel).toContainText('可能需要 1-3 分钟');
+  await expect(panel).toContainText('可能需要 2-5 分钟');
   const visibleText = await panel.innerText();
   expect(visibleText).not.toMatch(/\b(?:12|38|65|82)%\b/);
   return { elapsedSeconds: Math.floor((Date.now() - startedAt) / 1000), status: 'processing' };
