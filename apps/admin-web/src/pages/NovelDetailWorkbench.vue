@@ -838,10 +838,36 @@
                   :loading="generatingBodyBatch"
                   @click="handleGenerateBodyBatch"
                 >
-                  {{ bodyGeneration?.recommendedAction.label || '开始本批生成' }}
+                  {{ bodyGenerationActionLabel }}
                 </el-button>
                 <el-button :disabled="!latestBodyBatch" @click="bodySummaryDrawer.open = true">查看批次总结</el-button>
               </div>
+
+              <el-alert
+                v-if="isAuthoritativeBodyGenerationInFlight"
+                data-body-recovery="processing"
+                class="mb-16"
+                title="正文任务仍在执行，请等待结果"
+                type="info"
+                show-icon
+                :closable="false"
+              >
+                <p>生成可能需要 2-5 分钟；刷新页面后任务状态仍会保留，完成前不能重复发起。</p>
+                <el-button v-if="bodyGenerationTask" size="small" @click="openTaskDrawer(bodyGenerationTask.id)">查看任务进度</el-button>
+              </el-alert>
+              <el-alert
+                v-else-if="failedBodyGenerationTask"
+                data-body-recovery="failed"
+                class="mb-16"
+                title="本批正文生成失败，请核对原因后重新生成"
+                type="warning"
+                show-icon
+                :closable="false"
+              >
+                <p>{{ failedBodyGenerationTask.errorMessage || failedBodyGenerationTask.currentStep || '本次任务未完成。' }}</p>
+                <p>失败结果不会成为新的正式正文；已完成章节仍会保留。下一次将从 {{ bodyGeneration?.nextBatchRange.text || '未完成章节' }} 继续。</p>
+                <el-button size="small" @click="openTaskDrawer(failedBodyGenerationTask.id)">查看失败任务</el-button>
+              </el-alert>
 
               <el-alert
                 v-if="!bodyGeneration?.strategySnapshot"
@@ -1366,7 +1392,7 @@
                   plain
                   @click="router.push(`/novels/${novelId}/chapters/${row.chapterId}`)"
                 >
-                  重写本章
+                  处理本章
                 </el-button>
                 <el-button size="small" @click="router.push(`/novels/${novelId}/chapters/${row.chapterId}`)">章节详情</el-button>
               </template>
@@ -1667,6 +1693,16 @@ const visibleOutlineRows = computed(() => (activeSubStep.value.key === 'stages' 
 const chapterPlanRows = computed(() => structureRows.value.filter((asset) => asset.objectType === 'chapter_plan'))
 const bodyGeneration = computed(() => detail.value?.bodyGeneration ?? null)
 const latestBodyBatch = computed(() => bodyGeneration.value?.latestBatch ?? null)
+const bodyGenerationTask = computed(() => resolveTaskSummaryForAction(pendingTask.value, detail.value, 'body_batch_generate'))
+const authoritativeBodyGenerationTask = computed(() => resolveTaskSummaryForAction(null, detail.value, 'body_batch_generate'))
+const isAuthoritativeBodyGenerationInFlight = computed(() =>
+  authoritativeBodyGenerationTask.value?.status === TaskStatus.Queued ||
+  authoritativeBodyGenerationTask.value?.status === TaskStatus.Processing,
+)
+const failedBodyGenerationTask = computed(() => bodyGenerationTask.value?.status === TaskStatus.Failed ? bodyGenerationTask.value : null)
+const bodyGenerationActionLabel = computed(() => failedBodyGenerationTask.value
+  ? '重新生成未完成章节'
+  : bodyGeneration.value?.recommendedAction.label || '开始本批生成')
 const latestBodyBatchChapterRows = computed(() => (latestBodyBatch.value?.summary.chapterResults ?? []).map(toBodyBatchChapterResultRow))
 const authoritativeLengthGateByChapterId = computed(() => new Map(
   latestBodyBatchChapterRows.value
@@ -1744,7 +1780,9 @@ const canStartBodyBatch = computed(() => Boolean(
   bodyGeneration.value.nextBatchRange.startChapterNo &&
   bodyGeneration.value.nextBatchRange.endChapterNo &&
   !bodyGeneration.value.recommendedAction.disabled &&
-  bodyGeneration.value.openImpactCases.length === 0,
+  bodyGeneration.value.openImpactCases.length === 0 &&
+  !isAuthoritativeBodyGenerationInFlight.value &&
+  !hasLocalPendingWait.value,
 ))
 const canStartFullReview = computed(() => detail.value?.creationStage === NovelCreationStage.Body && detail.value.stageStatus === StageStatus.Completed)
 const canConfirmCompletion = computed(() => Boolean(latestFullReview.value?.gate.allowCompletion && detail.value?.creationStage === NovelCreationStage.CompletionConfirm && detail.value.stageStatus === StageStatus.WaitingUser))
@@ -2004,7 +2042,7 @@ const primaryGenerateAction = computed(() => {
 
   if (detail.value.creationStage === NovelCreationStage.Body && detail.value.stageStatus !== StageStatus.Completed) {
     return {
-      label: detail.value.bodyGeneration?.recommendedAction.label ?? '开始本批生成',
+      label: bodyGenerationActionLabel.value,
       loading: generatingBodyBatch.value,
       disabled: !canStartBodyBatch.value,
       run: handleGenerateBodyBatch,
@@ -2948,6 +2986,10 @@ async function promptHighRiskReason(options: {
 }
 
 async function handleGenerateBodyBatch() {
+  if (isAuthoritativeBodyGenerationInFlight.value) {
+    ElMessage.info('正文任务仍在执行中，请查看任务进度，完成后再发起新任务。')
+    return
+  }
   if (hasLocalPendingWait.value) {
     ElMessage.info('已有生成任务在等待中，请先查看最近任务或取消等待。')
     return

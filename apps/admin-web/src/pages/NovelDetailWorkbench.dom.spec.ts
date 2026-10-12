@@ -820,7 +820,7 @@ describe('NovelDetailWorkbench DOM behavior', () => {
     expect(wrapper.find('[data-length-gate-status="too_long"] .el-tag--danger').exists()).toBe(true)
     await wrapper.findAll('button').find((button) => button.text() === '查看批次总结')?.trigger('click')
     await flushPromises()
-    expect(wrapper.findAll('button').map((button) => button.text())).toContain('重写本章')
+    expect(wrapper.findAll('button').map((button) => button.text())).toContain('处理本章')
   })
 
   it('starts a new body batch after a confirmed length failure but reuses the key after network uncertainty', async () => {
@@ -857,6 +857,72 @@ describe('NovelDetailWorkbench DOM behavior', () => {
     } finally {
       confirmSpy.mockRestore()
     }
+  })
+
+  it('shows a recoverable failed body batch after refresh when an overlong result was not saved', async () => {
+    mocks.route.query = { step: 'body' }
+    const bodyGeneration = {
+      ...createBodyGenerationFixture({ status: 'pending' }),
+      latestBatch: null,
+      nextBatchRange: { startChapterNo: 4, endChapterNo: 8, text: '第 4-8 章' },
+    }
+    mocks.getNovelDetail.mockResolvedValue(createNovelDetail({
+      creationStage: NovelCreationStage.Body,
+      bodyGeneration,
+      recentTask: {
+        id: 'body-length-failed',
+        taskType: 'body_batch_generate',
+        status: TaskStatus.Failed,
+        statusText: '失败',
+        progress: 0,
+        currentStep: '第 4 章字符数偏多，本次结果未保存。',
+        errorMessage: '第 4 章实际 2880 字，超过合格上限 2645 字。',
+        resultVersionIds: [],
+      },
+    }))
+
+    wrapper = mount(NovelDetailWorkbench, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(wrapper.find('[data-body-recovery="failed"]').text()).toContain('第 4 章实际 2880 字，超过合格上限 2645 字。')
+    expect(wrapper.find('[data-body-recovery="failed"]').text()).toContain('下一次将从 第 4-8 章 继续')
+    const retryButton = wrapper.findAll('button').find((button) => button.text() === '重新生成未完成章节')
+    expect(retryButton).toBeTruthy()
+    expect(retryButton?.attributes('disabled')).toBeUndefined()
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    try {
+      await retryButton?.trigger('click')
+      await flushPromises()
+      expect(mocks.generateBodyBatch).toHaveBeenCalledWith('novel-dom-001', expect.objectContaining({
+        startChapterNo: 4,
+        endChapterNo: 8,
+      }))
+    } finally {
+      confirmSpy.mockRestore()
+    }
+  })
+
+  it('blocks duplicate body generation after refresh while the authoritative task is processing', async () => {
+    mocks.route.query = { step: 'body' }
+    mocks.getNovelDetail.mockResolvedValue(createNovelDetail({
+      creationStage: NovelCreationStage.Body,
+      bodyGeneration: createBodyGenerationFixture({ status: 'pending' }),
+      recentTask: {
+        id: 'body-task-processing',
+        taskType: 'chapter_body_generate',
+        status: TaskStatus.Processing,
+        statusText: '生成中',
+        progress: 30,
+        currentStep: '正在调用模型',
+        resultVersionIds: [],
+      },
+    }))
+
+    wrapper = mount(NovelDetailWorkbench, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(wrapper.find('[data-body-recovery="processing"]').text()).toContain('正文任务仍在执行')
+    expect(wrapper.findAll('button').find((button) => button.text() === '生成下一批')?.attributes('disabled')).toBeDefined()
   })
 
   it('does not overlay a stale body length gate after the authoritative chapter target changes', async () => {

@@ -366,7 +366,7 @@ function getTaskFamily(taskType: string) {
   if (taskType.includes('outline') && !taskType.includes('stage_outline')) return 'outline'
   if (taskType.includes('trial_followup')) return 'trial_followup'
   if (taskType.includes('trial')) return 'trial'
-  if (taskType.includes('body_batch')) return 'body_batch'
+  if (taskType.includes('body_batch') || taskType.includes('chapter_body')) return 'body_batch'
   if (taskType.includes('full_review')) return 'full_review'
   if (taskType.includes('video_readiness')) return 'video_readiness'
   return ''
@@ -401,7 +401,7 @@ function isTaskForNovelAction(task: RecentTaskSummaryDTO | null | undefined, act
   if (action === 'direction_optimize') return normalized.includes('direction') && normalized.includes('optimize')
   if (action === 'trial_generate') return normalized.includes('trial') && isGeneration
   if (action === 'trial_followup_generate') return normalized.includes('trial_followup')
-  if (action === 'body_batch_generate') return normalized.includes('body_batch')
+  if (action === 'body_batch_generate') return normalized.includes('body_batch') || normalized.includes('chapter_body')
   if (action === 'full_review') return normalized.includes('full_review')
   if (action === 'video_readiness_recheck') return normalized.includes('video_readiness') && normalized.includes('check')
   if (action === 'video_readiness_confirm') return normalized.includes('video_readiness') && normalized.includes('confirm')

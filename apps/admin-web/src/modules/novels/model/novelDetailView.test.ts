@@ -250,6 +250,27 @@ describe('novel detail view model', () => {
     assert.equal(visible?.status, TaskStatus.Failed)
   })
 
+  it('treats a single-chapter body task as the authoritative body generation task', () => {
+    const pending = createLocalPendingTaskSummary({
+      taskType: 'body_batch_generate',
+      label: '生成正文',
+      action: 'body_batch_generate',
+      startedAt: '2026-06-19T10:00:00.000Z',
+    })
+    const chapterTask: RecentTaskSummaryDTO = {
+      id: 'chapter-body-real',
+      taskType: 'chapter_body_generate',
+      status: TaskStatus.Failed,
+      statusText: '失败',
+      progress: 0,
+      currentStep: '单章正文超长，本次结果未保存',
+      updatedAt: '2026-06-19T10:01:00.000Z',
+    }
+
+    assert.equal(resolveVisibleTaskSummary(pending, { recentTask: chapterTask, recentTasks: [chapterTask] })?.id, chapterTask.id)
+    assert.equal(resolveTaskSummaryForAction(pending, { recentTask: chapterTask, recentTasks: [chapterTask] }, 'body_batch_generate')?.id, chapterTask.id)
+  })
+
   it('builds a local pending task detail with a safe recovery hint and no provider payload', () => {
     const pending = createLocalPendingTaskSummary({
       taskType: 'novel_direction_generate',

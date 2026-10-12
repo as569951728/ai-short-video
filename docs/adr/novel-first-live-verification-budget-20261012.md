@@ -2,8 +2,8 @@
 
 package_id: NOVEL-FIRST-LIVE-20261012
 exceeded_budget: changed_files
-actual_files: 38
-actual_net_additions: 1219
+actual_files: 41
+actual_net_additions: 1385
 split_reason: 真实模型输出边界、隔离库试写正式化、浏览器长等待与结果承接需要在同一候选分支内回归；拆开会失去本次端到端证据对应的固定代码版本。
 owner: MC
 valid_until: 2026-10-19

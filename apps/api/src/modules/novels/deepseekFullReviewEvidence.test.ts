@@ -65,7 +65,9 @@ describe('DeepSeek full-review evidence boundary', () => {
       prompt.chapterIdCatalog,
       input.chapterEvidence.map((item) => ({ id: item.chapter.id, chapterNo: item.chapter.chapterNo }))
     );
-    assert.deepEqual(prompt.payload.coverageManifest, input.coverageManifest);
+    const { tenantId: _tenantId, ...externalCoverageManifest } = input.coverageManifest;
+    assert.deepEqual(prompt.payload.coverageManifest, externalCoverageManifest);
+    assert.equal(Object.hasOwn(prompt.payload.coverageManifest, 'tenantId'), false);
     assert.equal(prompt.payload.chapterEvidence.length, 45);
     assert.deepEqual(
       prompt.payload.chapterEvidence.map((item: { chapter: { chapterNo: number } }) => item.chapter.chapterNo),

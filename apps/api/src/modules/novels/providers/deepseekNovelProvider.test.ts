@@ -915,6 +915,28 @@ describe('DeepSeek novel provider', () => {
     assert.match(prompt.instruction, /不得替换主角/);
     assert.equal(request.maxTokens, 8050);
   });
+
+  it('omits internal tenant scope from the external full-review prompt', async () => {
+    let request: ChatCompletionRequest | undefined;
+    const provider = new DeepSeekNovelProvider({
+      client: {
+        async chat(nextRequest) {
+          request = nextRequest;
+          return { content: '不是 JSON', model: nextRequest.model };
+        }
+      }
+    });
+    const evidence = withFullReviewContinuity(createFullReviewEvidenceFixture());
+
+    await assert.rejects(
+      () => provider.generateFullReview(evidence),
+      (error) => error instanceof LlmProviderError && error.category === 'output_parse_failed'
+    );
+    assert.ok(request);
+    const prompt = JSON.parse(request.messages[1].content);
+    assert.equal(typeof evidence.coverageManifest.tenantId, 'string');
+    assert.equal(Object.hasOwn(prompt.payload.coverageManifest, 'tenantId'), false);
+  });
 });
 
 function withFullReviewContinuity<T extends ReturnType<typeof createFullReviewEvidenceFixture>>(input: T): T {

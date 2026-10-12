@@ -353,6 +353,7 @@ function createFullReviewMessages(
   payload: FullReviewEvidencePayload,
   expectedReviewPolicyVersionId: string
 ) {
+  const { tenantId: _tenantId, ...modelCoverageManifest } = payload.coverageManifest;
   const prompt = {
     instruction: [
       '基于 coverage manifest 与每个计划章节的完整有界证据，生成全书审稿报告、门禁结论和首条视频建议。',
@@ -371,7 +372,7 @@ function createFullReviewMessages(
       expectedReviewPolicyVersionId
     ),
     novel: { id: novel.id, title: novel.title, genres: novel.genres, chapterLimit: novel.chapterLimit },
-    payload
+    payload: { ...payload, coverageManifest: modelCoverageManifest }
   };
   const content = JSON.stringify(prompt);
   if (content.length > FULL_REVIEW_MAX_PROMPT_CHARACTERS) {
