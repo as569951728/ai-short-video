@@ -85,6 +85,7 @@ export class OpenAiCompatibleChatClient implements LlmClient {
         return {
           content,
           model: payload.model ?? request.model,
+          finishReason: choice?.finish_reason ?? null,
           usage: {
             promptTokens: payload.usage?.prompt_tokens,
             completionTokens: payload.usage?.completion_tokens,

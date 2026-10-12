@@ -24,6 +24,7 @@ export interface ChatCompletionUsage {
 export interface ChatCompletionResult {
   content: string;
   model: string;
+  finishReason?: string | null;
   usage?: ChatCompletionUsage;
 }
 

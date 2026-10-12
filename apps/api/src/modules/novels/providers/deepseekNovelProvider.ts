@@ -252,10 +252,16 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
       model: this.model,
       ...SINGLE_PAID_CALL_JSON_POLICY,
       thinkingMode: 'disabled',
-      messages: createMessages('生成单章正文、特性卡、单章审稿和长篇记忆摘要，只返回 JSON。', input.novel, {
+      messages: createMessages('严格遵循已确认的正文策略和章节标题，生成单章正文、特性卡、单章审稿和长篇记忆摘要。不得替换主角、核心事件或故事类型；只返回 JSON。', input.novel, {
         chapter: pickChapter(input.chapter),
         wordTargetPolicy,
-        strategySnapshotId: input.strategySnapshot.id,
+        strategySnapshot: {
+          id: input.strategySnapshot.id,
+          versionNo: input.strategySnapshot.versionNo,
+          title: input.strategySnapshot.title,
+          summary: input.strategySnapshot.summary,
+          riskTags: input.strategySnapshot.riskTags
+        },
         previousContentSummary: input.previousContent?.summary,
         previousMemory: input.previousMemory,
         previousBatchNotes: input.previousBatchNotes,
@@ -1254,11 +1260,11 @@ function createWordTargetPolicy(novel: NovelProviderInputV1, chapterTarget?: num
 }
 
 function getBodyChapterMaxTokens(target: number): number {
-  return Math.max(3600, Math.min(9000, Math.ceil(target * 2.4)));
+  return Math.max(3600, Math.min(9000, Math.ceil(target * 3.5)));
 }
 
 function getChapterSetMaxTokens(targets: number[]): number {
-  const total = targets.reduce((sum, target) => sum + getBodyChapterMaxTokens(target), 0);
+  const total = targets.reduce((sum, target) => sum + Math.max(3600, Math.min(9000, Math.ceil(target * 2.4))), 0);
   return Math.max(4200, Math.min(32000, total));
 }
 

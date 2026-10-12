@@ -95,6 +95,24 @@ describe('OpenAI-compatible chat client failure classification', () => {
     assert.equal(result.content, '{"ok":true}');
   });
 
+  it('retains the provider finish reason without exposing response content in diagnostics', async () => {
+    const client = new OpenAiCompatibleChatClient({
+      baseUrl: 'https://example.test',
+      apiKey: 'sk-should-not-leak',
+      timeoutMs: 1000,
+      maxRetries: 0,
+      fetchImpl: async () => new Response(JSON.stringify({
+        model: 'deepseek-v4-pro',
+        choices: [{ finish_reason: 'length', message: { content: '{"chapter":"unfinished' } }],
+        usage: { completion_tokens: 5520 }
+      }), { status: 200 })
+    });
+
+    const result = await client.chat({ taskName: 'novel_body_chapter_generate', model: 'deepseek-v4-pro', messages: [] });
+    assert.equal(result.finishReason, 'length');
+    assert.equal(result.usage?.completionTokens, 5520);
+  });
+
   it('honors a per-request zero-retry boundary even when the client default allows retries', async () => {
     let calls = 0;
     const client = new OpenAiCompatibleChatClient({

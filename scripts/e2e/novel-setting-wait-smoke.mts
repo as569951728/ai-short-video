@@ -10,6 +10,10 @@ import type { ChatCompletionRequest } from '../../apps/api/src/modules/ai/llmCli
 if (process.env.DATABASE_URL || process.env.DEEPSEEK_API_KEY) {
   throw new Error('Novel wait smoke requires an isolated in-memory backend and fake model.');
 }
+const holdMs = Number(process.env.NOVEL_WAIT_HOLD_MS ?? 5_500);
+if (!Number.isInteger(holdMs) || holdMs < 5_500 || holdMs > 300_000) {
+  throw new Error('NOVEL_WAIT_HOLD_MS must be an integer between 5500 and 300000.');
+}
 
 const repository = createInMemoryNovelRepository();
 let settingCalls = 0;
@@ -105,21 +109,23 @@ try {
   const taskId = repository.getGenerationTasks().find((task) => task.taskType === 'novel_setting_generate')?.id;
   assert.ok(taskId);
 
-  await page.reload();
   await expect(page.getByText('设定正在生成中')).toBeVisible();
-  await expect(page.getByRole('button', { name: '查看任务进度' })).toBeVisible();
   await expect(page.getByRole('button', { name: '生成设定', exact: true })).toBeDisabled();
   const secondPage = await context.newPage();
   await secondPage.goto(`http://127.0.0.1:${adminPort}/novels/${novelId}?step=setting`);
   await expect(secondPage.getByText('设定正在生成中')).toBeVisible();
+  await secondPage.reload();
+  await expect(secondPage.getByText('设定正在生成中')).toBeVisible();
   await secondPage.getByRole('button', { name: '查看任务进度' }).click();
   await expect(secondPage.getByText(taskId)).toBeVisible();
-  await secondPage.waitForTimeout(5_500);
+  await secondPage.waitForTimeout(holdMs);
   assert.equal(repository.getGenerationTasks().find((task) => task.id === taskId)?.status, 'processing');
   assert.equal(settingCalls, 1);
+  await expect(page.getByText('设定正在生成中')).toBeVisible();
 
   releaseSetting?.();
   await expect.poll(() => repository.getGenerationTasks().find((task) => task.id === taskId)?.status).toBe('waiting_confirmation');
+  await expect(page.getByText('人物设定', { exact: true }).first()).toBeVisible();
   await secondPage.reload();
   await expect(secondPage.getByText('人物设定', { exact: true }).first()).toBeVisible();
   assert.equal(repository.getGenerationTasks().filter((task) => task.taskType === 'novel_setting_generate').length, 1);

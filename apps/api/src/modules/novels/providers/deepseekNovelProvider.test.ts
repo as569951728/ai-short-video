@@ -878,6 +878,43 @@ describe('DeepSeek novel provider', () => {
       );
     }
   });
+
+  it('includes the adopted strategy title and summary in the body-generation prompt', async () => {
+    let request: ChatCompletionRequest | undefined;
+    const provider = new DeepSeekNovelProvider({
+      client: {
+        async chat(nextRequest) {
+          request = nextRequest;
+          return { content: '不是 JSON', model: nextRequest.model };
+        }
+      }
+    });
+    await assert.rejects(
+      () => provider.generateBodyChapter({
+        action: 'chapter_body_generate',
+        novel: createNovel(),
+        chapter: { ...createChapter(4), wordTarget: 2300 },
+        strategySnapshot: {
+          id: 'strategy-2',
+          versionNo: 2,
+          title: '仓库旧账反转',
+          summary: '主角林越必须在父亲签字前找到账页被替换的证据。',
+          riskTags: []
+        },
+        previousContent: null,
+        previousMemory: null,
+        previousBatchNotes: [],
+        enhancedReview: false
+      }),
+      (error) => error instanceof LlmProviderError && error.category === 'output_parse_failed'
+    );
+    assert.ok(request);
+    const prompt = JSON.parse(request.messages[1].content);
+    assert.equal(prompt.payload.strategySnapshot.title, '仓库旧账反转');
+    assert.equal(prompt.payload.strategySnapshot.summary, '主角林越必须在父亲签字前找到账页被替换的证据。');
+    assert.match(prompt.instruction, /不得替换主角/);
+    assert.equal(request.maxTokens, 8050);
+  });
 });
 
 function withFullReviewContinuity<T extends ReturnType<typeof createFullReviewEvidenceFixture>>(input: T): T {

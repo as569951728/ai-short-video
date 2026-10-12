@@ -95,6 +95,8 @@ apps/api/src/modules/novels/providers/deepseekNovelProvider.ts
 - 不破坏现有 `DirectionProvider`、`StructureProvider`、`TrialProvider`、`BodyProvider`、`FullReviewProvider` 接口。
 - DeepSeek provider 可以一个类实现多个接口，也可以按职责拆分；以最少重复和易测试为准。
 - 每个 provider 调用都必须要求结构化 JSON 输出，并用 zod 或现有 DTO 类型做运行时校验。
+- 正文生成请求必须包含已采用策略的标题和摘要；仅发送策略版本 ID 不足以约束人物、核心事件和题材。长度合格也不能替代内容承接验收。
+- 若 provider 因输出 token 上限截断 JSON，任务须明确归类为不完整输出并安全失败；诊断只保留结束原因、token 数、响应字符数等元数据，不回传原文。单章正文预算可独立调整，不能顺带抬高试写候选预算。
 - 解析失败、格式不合法、缺字段、低质量空文本要归类为 provider_error / schema_error，不能生成半可信资产。
 - 普通日志只能记录任务类型、模型 key、耗时、token 摘要、错误码和摘要，不能记录完整 prompt / 完整响应。
 
