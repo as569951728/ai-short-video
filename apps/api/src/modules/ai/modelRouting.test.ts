@@ -13,6 +13,8 @@ describe('AI model routing', () => {
     assert.equal(config.model, 'deepseek-v4-pro');
     assert.equal(config.structureModel, 'deepseek-v4-pro');
     assert.equal(config.reasonerModel, 'deepseek-v4-pro');
+    assert.equal(config.timeoutMs, 360000);
+    assert.equal(config.maxRetries, 0);
   });
 
   it('keeps explicit DeepSeek model overrides', () => {
@@ -27,5 +29,11 @@ describe('AI model routing', () => {
     assert.equal(config.model, 'deepseek-v4-flash');
     assert.equal(config.structureModel, 'deepseek-v4-pro');
     assert.equal(config.reasonerModel, 'deepseek-v4-pro');
+  });
+
+  it('allows operators to override the bounded model wait and transport retry count', () => {
+    const config = resolveDeepSeekConfig({ DEEPSEEK_TIMEOUT_MS: '420000', DEEPSEEK_MAX_RETRIES: '1' });
+    assert.equal(config.timeoutMs, 420000);
+    assert.equal(config.maxRetries, 1);
   });
 });

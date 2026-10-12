@@ -35,6 +35,7 @@ import { MockStructureProvider } from './providers/mockStructureProvider.js';
 import { MockTrialProvider } from './providers/mockTrialProvider.js';
 import { DeepSeekNovelProvider } from './providers/deepseekNovelProvider.js';
 import { createFullReviewEvidenceFixture } from './testSupport/fullReviewEvidenceFixture.js';
+import { NovelService } from './services/novelService.js';
 type MockBodyChapter = Awaited<ReturnType<MockBodyProvider['generateBodyChapter']>>;
 type MockTrialFollowup = Awaited<ReturnType<MockTrialProvider['generateFollowup']>>;
 type MockFullReviewDraft = Awaited<ReturnType<MockFullReviewProvider['generateFullReview']>>;
@@ -47,20 +48,28 @@ describe('chapter length policy', () => {
     assert.equal(countChapterLength(' e\u0301\n\t😀\u00a0中 '), 3);
   });
 
-  it('uses the frozen inclusive boundaries', () => {
-    assert.deepEqual(evaluateChapterLength('字'.repeat(89), 100), {
+  it('uses inclusive 85%-115% boundaries', () => {
+    assert.deepEqual(evaluateChapterLength('字'.repeat(84), 100), {
       metric: CHAPTER_LENGTH_COUNT_METRIC,
       target: 100,
-      lowerBound: 90,
+      lowerBound: 85,
       upperBound: 115,
-      actual: 89,
+      actual: 84,
       status: 'too_short',
-      statusText: '正文字符数不足：实际 89，允许范围 90-115。',
+      statusText: '正文字符数不足：实际 84，允许范围 85-115。',
       canAdopt: false
     });
-    assert.equal(evaluateChapterLength('字'.repeat(90), 100).status, 'pass');
+    assert.equal(evaluateChapterLength('字'.repeat(85), 100).status, 'pass');
     assert.equal(evaluateChapterLength('字'.repeat(115), 100).status, 'pass');
     assert.equal(evaluateChapterLength('字'.repeat(116), 100).status, 'too_long');
+    assert.deepEqual(
+      [1954, 1955, 2645, 2646].map((actual) => evaluateChapterLength('字'.repeat(actual), 2300).status),
+      ['too_short', 'pass', 'pass', 'too_long']
+    );
+    assert.deepEqual(
+      [evaluateChapterLength('字'.repeat(85), 101).lowerBound, evaluateChapterLength('字'.repeat(116), 101).upperBound],
+      [86, 116]
+    );
   });
 
   it('fails closed without a target while preserving the measured count', () => {
@@ -2482,7 +2491,7 @@ describe('novel package 6 body generation routes', () => {
     assert.equal(during.statusSummary.stageStatus, 'processing');
     assert.equal(during.recentTask.taskType, 'body_batch_generate');
     assert.equal(during.recentTask.status, TaskStatus.Processing);
-    assert.match(during.recentTask.currentStep, /第 4-5 章正文/);
+    assert.match(during.recentTask.currentStep, /第 4-8 章正文/);
     assert.equal(repository.getGenerationTasks().filter((task) => task.taskType === 'body_batch_generate').length, 1);
     assert.equal(delayedClient.getBodyCallCount(), 1);
 
@@ -2534,7 +2543,7 @@ describe('novel package 6 body generation routes', () => {
     assert.equal(generated.task.id, during.recentTask.id);
     assert.equal(generated.task.status, TaskStatus.Completed);
     assert.equal(generated.batch.startChapterNo, 4);
-    assert.equal(generated.batch.endChapterNo, 5);
+    assert.equal(generated.batch.endChapterNo, 8);
     await app.close();
   });
 
@@ -2684,6 +2693,56 @@ describe('novel package 6 body generation routes', () => {
           MockBodyProvider.prototype.rewriteChapter = originalRewrite;
           await app.close();
         }
+      }
+    }
+  });
+
+  it('never promotes an experimental overlong revision into formal chapter content', async () => {
+    for (const revisionPasses of [true, false]) {
+      const repository = createInMemoryNovelRepository();
+      const app = await buildApp({ logger: false, novelRepository: repository });
+      try {
+        const { novelId, strategySnapshot } = await createNovelReadyForBody(app, `正文限次修订-${revisionPasses}`, 8);
+        const chapter = repository.getNovelChapters().find((item) => item.novelId === novelId && item.chapterNo === 4)!;
+        const target = chapter.wordTarget!;
+        const upperBound = evaluateChapterLength('', target).upperBound!;
+        const deletion = `${'冗'.repeat(130)}。`;
+        const prefix = `开头。${'甲'.repeat(150)}。`;
+        const ending = '结尾。';
+        const original = `${prefix}${deletion}${'乙'.repeat(upperBound + 100 - prefix.length - deletion.length - ending.length)}${ending}`;
+        const requests: string[] = [];
+        const provider = new DeepSeekNovelProvider({
+          experimentalOverlongRevision: true,
+          client: {
+            async chat(request) {
+              requests.push(request.taskName);
+              return {
+                content: JSON.stringify(requests.length === 1
+                  ? { content: original }
+                  : { sentenceIds: revisionPasses ? ['s1'] : [] }),
+                model: request.model
+              };
+            }
+          }
+        });
+        const service = new NovelService({ repository, bodyProvider: provider });
+        const generate = () => service.generateChapterBody(novelId, chapter.id, {
+          strategySnapshotId: strategySnapshot.id,
+          expectedStrategySnapshotVersion: strategySnapshot.versionNo,
+          idempotencyKey: `body-revise-${revisionPasses}`
+        }, { tenantId: 'tenant_test', userId: 'user_test', requestId: `body-revise-${revisionPasses}` });
+
+        await assert.rejects(
+          generate,
+          revisionPasses
+            ? (error) => error instanceof BusinessError && error.code === ErrorCode.GateBlocked
+            : undefined
+        );
+        assert.equal(chapter.currentContentVersionId, null);
+        assert.equal(repository.getChapterContentVersions().filter((item) => item.chapterId === chapter.id).length, 0);
+        assert.deepEqual(requests, ['novel_body_chapter_generate', 'novel_body_chapter_shorten']);
+      } finally {
+        await app.close();
       }
     }
   });
@@ -3006,6 +3065,65 @@ describe('novel package 6 body generation routes', () => {
     assert.ok(chapter.featureCard.oneLineSummary.length > 0);
     assert.ok(chapter.reviewReport.totalScore >= 60);
     assert.ok(chapter.longTermMemory.summary.length > 0);
+    await app.close();
+  });
+
+  it('passes each generated chapter memory to the next chapter in the same batch', async () => {
+    const repository = createInMemoryNovelRepository();
+    const app = await buildApp({ logger: false, novelRepository: repository });
+    const { novelId, strategySnapshot } = await createNovelReadyForBody(app, '批内长篇记忆连续性测试', 8);
+    const thirdChapter = repository.getNovelChapters().find((chapter) => chapter.novelId === novelId && chapter.chapterNo === 3);
+    assert.ok(thirdChapter);
+    repository.getLongTermMemories().push({
+      id: 'memory_before_batch', tenantId: 'tenant_test', novelId, chapterId: thirdChapter.id,
+      sourceContentVersionId: thirdChapter.currentContentVersionId, previousSummary: '前三章确认的事实',
+      characterStates: [], relationshipStates: [], locations: [], organizations: [], items: [],
+      plantedForeshadowing: [], resolvedForeshadowing: [], unresolvedConflicts: [], newSettings: [],
+      factsCannotContradict: ['第3章已确认事实'], status: VersionStatus.Current,
+      staleLevel: StaleLevel.None, sourceTaskId: null, createdAt: new Date(), metadata: {}
+    });
+    const startingMemory = await repository.findLatestLongTermMemory('tenant_test', novelId);
+    assert.ok(startingMemory?.factsCannotContradict.length);
+    const mock = new MockBodyProvider();
+    const inputs: Array<{ chapterNo: number; previousMemory: { factsCannotContradict: string[] } | null }> = [];
+    const service = new NovelService({
+      repository,
+      bodyProvider: {
+        generateBodyChapter: async (input) => {
+          inputs.push({ chapterNo: input.chapter.chapterNo, previousMemory: structuredClone(input.previousMemory) });
+          const draft = await mock.generateBodyChapter(input);
+          return {
+            ...draft,
+            memory: {
+              ...draft.memory,
+              factsCannotContradict: [...draft.memory.factsCannotContradict, `第${input.chapter.chapterNo}章新增事实`]
+            }
+          };
+        },
+        rewriteChapter: (input) => mock.rewriteChapter(input),
+        assessImpact: (input) => mock.assessImpact(input)
+      }
+    });
+
+    await service.generateBodyBatch(novelId, {
+      strategySnapshotId: strategySnapshot.id,
+      expectedStrategySnapshotVersion: strategySnapshot.versionNo,
+      startChapterNo: 4,
+      endChapterNo: 6,
+      idempotencyKey: 'body-memory-forward-1'
+    }, { tenantId: 'tenant_test', userId: 'user_test', requestId: 'body-memory-forward-1' });
+
+    assert.deepEqual(inputs.map((input) => input.chapterNo), [4, 5, 6]);
+    assert.equal(inputs[1]?.previousMemory?.factsCannotContradict.includes('第4章新增事实'), true);
+    assert.equal(inputs[2]?.previousMemory?.factsCannotContradict.includes('第4章新增事实'), true);
+    assert.equal(inputs[2]?.previousMemory?.factsCannotContradict.includes('第5章新增事实'), true);
+    const savedMemory = await repository.findLatestLongTermMemory('tenant_test', novelId);
+    assert.equal(savedMemory?.factsCannotContradict.includes('第4章新增事实'), true);
+    assert.equal(savedMemory?.factsCannotContradict.includes('第5章新增事实'), true);
+    assert.equal(savedMemory?.factsCannotContradict.includes('第6章新增事实'), true);
+    for (const fact of startingMemory.factsCannotContradict) {
+      assert.equal(savedMemory?.factsCannotContradict.includes(fact), true);
+    }
     await app.close();
   });
 
@@ -4721,8 +4839,12 @@ function createFakeDeepSeekPayload(taskName: string): Record<string, unknown> {
     };
   }
   if (taskName.startsWith('novel_structure_chapter_plan_')) {
+    const match = taskName.match(/_(\d+)_(\d+)$/);
+    if (!match) throw new Error('Invalid chapter plan fixture task name');
+    const start = Number(match[1]);
+    const end = Number(match[2]);
     return {
-      chapters: [1, 2, 3, 4, 5].map((chapterNo) => ({
+      chapters: Array.from({ length: end - start + 1 }, (_, index) => start + index).map((chapterNo) => ({
         chapterNo,
         stageIndex: 1,
         title: `第${chapterNo}章`,
@@ -4740,10 +4862,10 @@ function createFakeDeepSeekPayload(taskName: string): Record<string, unknown> {
       summary: '结构清晰，能支撑 5 章短篇闭环。',
       content: {
         sections: [
-          { title: '开局', summary: '误解爆发并留下证据钩子。' },
-          { title: '反击', summary: '主角逐步拿回主动权。' }
+          { title: '开局', body: '误解爆发并留下证据钩子。', summary: '误解爆发并留下证据钩子。' },
+          { title: '反击', body: '主角逐步拿回主动权。', summary: '主角逐步拿回主动权。' }
         ],
-        stages: [{ title: '第一阶段', chapterRange: '1-5', goal: '完成翻盘闭环' }],
+        stages: [{ stageIndex: 1, title: '第一阶段', chapterRange: '1-5', goal: '完成翻盘闭环', conflict: '外界质疑升级', payoff: '公开证据反击' }],
         chapters: [1, 2, 3, 4, 5].map((chapterNo) => ({
           chapterNo,
           title: `第${chapterNo}章`,
@@ -5312,7 +5434,21 @@ describe('RP-02B2a1 registry and strict provider ABI', () => {
     assert.equal((captured.find((item) => item.action === 'novel_full_review')?.payload.sourceVersionRefs as { bodyStrategySnapshotId: string | null }).bodyStrategySnapshotId, null);
     const chapterPlanInput = captured.find((item) => item.action === 'chapter_plan_generate')!.payload, projectedStage = (chapterPlanInput.currentAssets as { stageOutline: { content: { sections: unknown[]; stages: unknown[]; chapters: unknown[] } } }).stageOutline.content;
     assert.deepEqual([projectedStage.sections.length, projectedStage.stages.length, projectedStage.chapters.length], [4, 5, 8]);
-    const prompts = new Map<string, any>(); let providerCalls = 0; const deepseek = new DeepSeekNovelProvider({ client: { chat: async (request) => { providerCalls += 1; prompts.set(request.taskName, JSON.parse(request.messages[1]?.content ?? '{}')); return { content: request.taskName.includes('chapter_plan') ? '{"chapters":[{"chapterNo":1}]}' : request.taskName === 'novel_body_chapter_generate' ? '{"content":"正文"}' : '{}', model: request.model }; } } });
+    const prompts = new Map<string, any>(); let providerCalls = 0; const deepseek = new DeepSeekNovelProvider({ client: { chat: async (request) => {
+      providerCalls += 1;
+      const prompt = JSON.parse(request.messages[1]?.content ?? '{}');
+      prompts.set(request.taskName, prompt);
+      const payload = createFakeDeepSeekPayload(request.taskName);
+      if (request.taskName === 'novel_body_chapter_generate') {
+        const target = prompt.payload.wordTargetPolicy.target as number;
+        payload.content = '林舟证据'.repeat(Math.ceil(target / 4)).slice(0, target);
+      }
+      if (request.taskName.includes('chapter_plan')) {
+        const wordTarget = prompt.payload.wordTargetPolicy.defaultTarget;
+        (payload.chapters as Array<{ wordTarget: number }>).forEach((chapter) => { chapter.wordTarget = wordTarget; });
+      }
+      return { content: JSON.stringify(payload), model: request.model };
+    } } });
     for (const action of ['setting_generate', 'outline_generate', 'stage_outline_generate', 'chapter_plan_generate'] as const) await Reflect.apply(deepseek.generateAsset, deepseek, [captured.find((item) => item.action === action)!.payload]); await Reflect.apply(deepseek.generateBodyChapter, deepseek, [captured.find((item) => item.action === 'body_batch_generate')!.payload]);
     const assets = (task: string) => prompts.get(task).payload.currentAssets as Record<string, any>;
     assert.deepEqual(exactKeys(assets('novel_structure_setting')), ['direction']); assert.equal(assets('novel_structure_setting').direction.logline, 'DIRECTION_LOGLINE_CANARY'); assert.equal(assets('novel_structure_setting').direction.coreHook, 'DIRECTION_HOOK_CANARY');

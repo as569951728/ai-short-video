@@ -18,6 +18,7 @@ import type {
   TrialReviewDraft
 } from '../domain/novelDomain.js';
 import { DEFAULT_POLICY_PROFILE_VERSION_ID } from '../domain/novelDomain.js';
+import { evaluateChapterLength } from '../domain/chapterLengthPolicy.js';
 import {
   FullReviewEvidenceValidationError,
   projectStructureCurrentAssetsPrompt,
@@ -52,6 +53,7 @@ interface DeepSeekNovelProviderOptions {
   model?: string;
   structureModel?: string;
   reasonerModel?: string;
+  experimentalOverlongRevision?: boolean;
 }
 
 const SINGLE_PAID_CALL_JSON_POLICY = {
@@ -88,7 +90,13 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
       : reasonerActions.has(action)
         ? this.reasonerModel
         : this.model;
-    const routeVersion = action === 'novel_full_review' ? 'route-v5' : 'route-v1';
+    const routeVersion = action === 'novel_full_review'
+      ? 'route-v5'
+      : this.options.experimentalOverlongRevision && ['body_batch_generate', 'chapter_body_generate'].includes(action)
+        ? 'route-v5'
+        : ['body_batch_generate', 'chapter_body_generate', 'chapter_rewrite'].includes(action)
+          ? 'route-v2'
+        : 'route-v1';
     return `deepseek:${model}:${routeVersion}`;
   }
 
@@ -164,7 +172,7 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
           wordTargetPolicy
         }, M1_OUTPUT_SCHEMA_HINT.chapterPlanChunk),
         maxTokens: 2200,
-        validate: (value) => readArray(value, 'chapters').map((chapter, index) => toStructureChapterDraft(chapter, start + index, '章节推进主线。', wordTargetPolicy.defaultTarget))
+        validate: (value) => validateChapterPlanChunk(value, start, end, wordTargetPolicy)
       });
       chapters.push(...chunk);
     }
@@ -243,14 +251,21 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
 
   async generateBodyChapter(input: BodyGenerateInput): Promise<BodyChapterProviderDraft> {
     const wordTargetPolicy = createWordTargetPolicy(input.novel, input.chapter.wordTarget ?? undefined);
-    return requestJsonOutput(this.options.client, {
+    const original = await requestJsonOutput(this.options.client, {
       taskName: 'novel_body_chapter_generate',
       model: this.model,
       ...SINGLE_PAID_CALL_JSON_POLICY,
-      messages: createMessages('生成单章正文、特性卡、单章审稿和长篇记忆摘要，只返回 JSON。', input.novel, {
+      thinkingMode: 'disabled',
+      messages: createMessages('严格遵循已确认的正文策略和章节标题，生成单章正文、特性卡、单章审稿和长篇记忆摘要。不得替换主角、核心事件或故事类型；只返回 JSON。', input.novel, {
         chapter: pickChapter(input.chapter),
         wordTargetPolicy,
-        strategySnapshotId: input.strategySnapshot.id,
+        strategySnapshot: {
+          id: input.strategySnapshot.id,
+          versionNo: input.strategySnapshot.versionNo,
+          title: input.strategySnapshot.title,
+          summary: input.strategySnapshot.summary,
+          riskTags: input.strategySnapshot.riskTags
+        },
         previousContentSummary: input.previousContent?.summary,
         previousMemory: input.previousMemory,
         previousBatchNotes: input.previousBatchNotes,
@@ -258,6 +273,59 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
       }, M1_OUTPUT_SCHEMA_HINT.body),
       maxTokens: getBodyChapterMaxTokens(wordTargetPolicy.target),
       validate: (value) => toBodyDraft(value, input.novel, input.chapter)
+    });
+    const originalLength = evaluateChapterLength(original.content, input.chapter.wordTarget);
+    if (originalLength.status !== 'too_long' || !this.options.experimentalOverlongRevision) return original;
+    const minimumRemoval = originalLength.actual - wordTargetPolicy.upperBound;
+    if (minimumRemoval > Math.floor(originalLength.actual * 0.12)) return original;
+    const maximumRemoval = minimumRemoval + Math.max(40, Math.ceil(wordTargetPolicy.target * 0.04));
+    const eligibleSentences = listEligibleBodySentences(original.content);
+    if (eligibleSentences.length === 0) return original;
+
+    const revisionMessages = createMessages(
+      `原稿共 ${originalLength.actual} 个非空白字符，上限 ${wordTargetPolicy.upperBound}。只能从 eligibleSentences 中挑选可安全删除的冗余句候选，最多 12 个编号；服务端会从中选择删减 ${minimumRemoval}-${maximumRemoval} 字的最小组合。只返回 {"sentenceIds":["s1"]}；不得输出改写、摘要、新正文或句子文本。不得选择人物首次出场、关键事实、因果转折和伏笔。没有足够安全的冗余句就返回空数组，不要勉强。`,
+      input.novel,
+      {
+        chapter: pickChapter(input.chapter),
+        strategySnapshot: {
+          title: input.strategySnapshot.title,
+          summary: input.strategySnapshot.summary
+        },
+        original: {
+          content: original.content,
+          factsCannotChange: original.featureCard.factsCannotChange,
+          factsCannotContradict: original.memory.factsCannotContradict
+        },
+        eligibleSentences: eligibleSentences.map(({ id, text }) => ({ id, text }))
+      },
+      '{"sentenceIds":["s1"]}'
+    );
+    const revisionPrompt = JSON.parse(revisionMessages[1].content) as { payload: { original: { content: string } } };
+    revisionPrompt.payload.original.content = original.content;
+    revisionMessages[1].content = JSON.stringify(revisionPrompt);
+    if (revisionMessages.reduce((total, message) => total + message.content.length, 0) > 40_000) return original;
+
+    return requestJsonOutput(this.options.client, {
+      taskName: 'novel_body_chapter_shorten',
+      model: this.model,
+      ...SINGLE_PAID_CALL_JSON_POLICY,
+      thinkingMode: 'disabled',
+      messages: revisionMessages,
+      maxTokens: 700,
+      validate: (value) => {
+        const patch = asRecord(value);
+        if (Object.keys(patch).length !== 1 || !Object.hasOwn(patch, 'sentenceIds')) throw new Error('body deletion output has unexpected fields');
+        const content = applyBodySentenceIds(original.content, eligibleSentences, readArray(patch, 'sentenceIds'), minimumRemoval, maximumRemoval);
+        const length = evaluateChapterLength(content, input.chapter.wordTarget);
+        if (length.status !== 'pass') throw new Error('body deletion result is outside the chapter length gate');
+        return {
+          ...original,
+          content,
+          firstSentence: firstSentence(content),
+          first300Summary: content.slice(0, 300),
+          experimentalRevisionRequiresConfirmation: true
+        };
+      }
     });
   }
 
@@ -267,6 +335,7 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
       taskName: 'novel_chapter_rewrite',
       model: this.model,
       ...SINGLE_PAID_CALL_JSON_POLICY,
+      thinkingMode: 'disabled',
       messages: createMessages('生成完整章节重写候选和摘要对比，只返回 JSON。candidate.content 必须是可直接采用的完整正文，不得只返回改动片段、提纲或摘要。', input.novel, {
         chapter: pickChapter(input.chapter),
         wordTargetPolicy,
@@ -341,6 +410,7 @@ function createFullReviewMessages(
   payload: FullReviewEvidencePayload,
   expectedReviewPolicyVersionId: string
 ) {
+  const { tenantId: _tenantId, ...modelCoverageManifest } = payload.coverageManifest;
   const prompt = {
     instruction: [
       '基于 coverage manifest 与每个计划章节的完整有界证据，生成全书审稿报告、门禁结论和首条视频建议。',
@@ -359,7 +429,7 @@ function createFullReviewMessages(
       expectedReviewPolicyVersionId
     ),
     novel: { id: novel.id, title: novel.title, genres: novel.genres, chapterLimit: novel.chapterLimit },
-    payload
+    payload: { ...payload, coverageManifest: modelCoverageManifest }
   };
   const content = JSON.stringify(prompt);
   if (content.length > FULL_REVIEW_MAX_PROMPT_CHARACTERS) {
@@ -464,7 +534,7 @@ const M1_OUTPUT_SCHEMA_HINT = {
   trialFollowup:
     '第2-3章试写返回 {"chapters":[{"chapterNo":2,"title","content","summary","openingStrategy","openingHighlight","firstSentence","first300Summary","endingHook","riskLevel","riskTags":[],"aiRecommendedReason","scoring":{"totalScore","dimensions":[]},"featureCard":{},"review":{"totalScore","issues":[],"suggestions":[],"riskLevel"},"hardFailed":false,"hardFailureReasons":[]}],"review":{"totalScore","trialResult":"pass|pass_with_suggestions|blocked|return_upstream","summary","strengths":[],"problems":[],"suggestions":[],"recommendedAction","allowNextStep":true,"requiresRiskConfirmation":false,"chapterScores":[{"chapterNo","score","hardFailed":false}]}}。每章 content 必须遵守 payload.chapterWordTargetPolicies 中对应 chapterId/chapterNo 的 target/lowerBound/upperBound 并提供完整正文。',
   body:
-    '正文/重写返回 {"title","content","summary","openingStrategy","openingHighlight","firstSentence","first300Summary","endingHook","riskLevel","riskTags":[],"aiRecommendedReason","scoring":{"totalScore","dimensions":[]},"featureCard":{},"review":{"totalScore","issues":[],"suggestions":[],"riskLevel"},"memory":{"summary","facts":[],"foreshadows":[]},"hardFailed":false,"hardFailureReasons":[]}',
+    '正文/重写返回 {"title","content","summary","openingStrategy","openingHighlight","firstSentence","first300Summary","endingHook","riskLevel","riskTags":[],"aiRecommendedReason","scoring":{"totalScore","dimensions":[]},"featureCard":{},"review":{"totalScore","issues":[],"suggestions":[],"riskLevel"},"memory":{"summary","characterStates":[],"relationshipStates":[],"unresolvedConflicts":[],"factsCannotContradict":[],"plantedForeshadowing":[]},"hardFailed":false,"hardFailureReasons":[]}。memory.factsCannotContradict 只记录正文中已确定、后续章节不可推翻的事实；不得把猜测、计划或一般状态放入该字段，且不得遗漏输入 previousMemory 中仍有效的不可矛盾事实。',
   impact:
     '影响评估返回 {"impactLevel":"none|minor|medium|severe","summary","changedFacts":[],"affectedChapterIds":[],"affectedVideoReferenceIds":[],"recommendedHandling","suggestedActions":[],"blocksFullReview":false}',
   fullReview:
@@ -503,8 +573,8 @@ function toDirectionDraft(value: unknown): DirectionCandidateDraft {
       riskTags: readStringArray(content, 'riskTags', readStringArray(item, 'riskTags')),
       recommendation: readOptionalString(content, 'recommendation') ?? readOptionalString(item, 'recommendedReason') ?? summary
     },
-    score: readNumber(item, 'score'),
-    marketScore: readOptionalNumber(item, 'marketScore') ?? readNumber(item, 'score'),
+    score: readScore(item, 'score'),
+    marketScore: readOptionalScore(item, 'marketScore') ?? readScore(item, 'score'),
     riskLevel: readRiskLevel(item, 'riskLevel'),
     riskTags: readStringArray(item, 'riskTags'),
     recommendedReason: readString(item, 'recommendedReason')
@@ -513,29 +583,31 @@ function toDirectionDraft(value: unknown): DirectionCandidateDraft {
 
 function toStructureDraft(objectType: StructureAssetType, value: unknown): StructureAssetDraft {
   const item = asRecord(value);
-  const rawContent = asRecord(item.content ?? {});
-  const title = readOptionalString(item, 'title') ?? readOptionalString(rawContent, 'title') ?? getStructureAssetLabel(objectType);
-  const summary = readOptionalString(item, 'summary') ?? readOptionalString(rawContent, 'summary') ?? readOptionalString(item, 'description') ?? `${title} 已生成。`;
+  const rawContent = readObject(item, 'content');
+  const title = readString(item, 'title');
+  const summary = readString(item, 'summary');
+  const sections = readArray(rawContent, 'sections');
+  const stages = objectType === 'stage_outline' ? readArray(rawContent, 'stages') : readPlainArray(rawContent, 'stages');
   const content: StructureAssetContentDTO = {
     title: readOptionalString(rawContent, 'title') ?? title,
     summary: readOptionalString(rawContent, 'summary') ?? summary,
-    sections: readPlainArray(rawContent, 'sections').map((section, index) => {
+    sections: sections.map((section) => {
       const record = asRecord(section);
       return {
-        title: readOptionalString(record, 'title') ?? `结构段落 ${index + 1}`,
-        body: readOptionalString(record, 'body') ?? readOptionalString(record, 'summary') ?? summary,
+        title: readString(record, 'title'),
+        body: readString(record, 'body'),
         items: readStringArray(record, 'items', [])
       };
     }),
-    stages: readPlainArray(rawContent, 'stages').map((stage, index) => {
+    stages: stages.map((stage, index) => {
       const record = asRecord(stage);
       return {
-        stageIndex: readOptionalNumber(record, 'stageIndex') ?? index + 1,
-        title: readOptionalString(record, 'title') ?? `阶段 ${index + 1}`,
-        chapterRange: readOptionalString(record, 'chapterRange') ?? '1-5',
-        goal: readOptionalString(record, 'goal') ?? readOptionalString(record, 'summary') ?? summary,
-        conflict: readOptionalString(record, 'conflict') ?? '主角与外部压力升级',
-        payoff: readOptionalString(record, 'payoff') ?? '阶段反击兑现'
+        stageIndex: objectType === 'stage_outline' ? readPositiveInteger(record, 'stageIndex') : readOptionalNumber(record, 'stageIndex') ?? index + 1,
+        title: objectType === 'stage_outline' ? readString(record, 'title') : readOptionalString(record, 'title') ?? `阶段 ${index + 1}`,
+        chapterRange: objectType === 'stage_outline' ? readString(record, 'chapterRange') : readOptionalString(record, 'chapterRange') ?? '1-5',
+        goal: objectType === 'stage_outline' ? readString(record, 'goal') : readOptionalString(record, 'goal') ?? summary,
+        conflict: objectType === 'stage_outline' ? readString(record, 'conflict') : readOptionalString(record, 'conflict') ?? '主角与外部压力升级',
+        payoff: objectType === 'stage_outline' ? readString(record, 'payoff') : readOptionalString(record, 'payoff') ?? '阶段反击兑现'
       };
     }),
     chapters: readPlainArray(rawContent, 'chapters').map((chapter, index) => {
@@ -544,22 +616,12 @@ function toStructureDraft(objectType: StructureAssetType, value: unknown): Struc
     riskTags: readStringArray(rawContent, 'riskTags', readStringArray(item, 'riskTags')),
     recommendation: readOptionalString(rawContent, 'recommendation') ?? readOptionalString(item, 'recommendedReason') ?? summary
   };
-  if (content.sections.length === 0) {
-    content.sections.push({ title, body: summary, items: [] });
-  }
-  if (content.stages.length === 0) {
-    content.stages.push({ stageIndex: 1, title: '第一阶段', chapterRange: '1-5', goal: summary, conflict: '主线压力升级', payoff: '阶段反击兑现' });
-  }
-  if (content.chapters.length === 0) {
-    content.chapters.push({ chapterNo: 1, stageIndex: 1, title: '第1章', wordTarget: 1200, goal: summary, conflict: '开篇冲突', hook: '结尾钩子' });
-  }
-
   return {
     objectType,
     title,
     summary,
     content,
-    score: readOptionalNumber(item, 'score') ?? 80,
+    score: readScore(item, 'score'),
     riskLevel: readRiskLevel(item, 'riskLevel'),
     riskTags: readStringArray(item, 'riskTags'),
     recommendedReason: readOptionalString(item, 'recommendedReason') ?? summary
@@ -693,6 +755,29 @@ function toStructureChapterDraft(value: unknown, fallbackChapterNo: number, summ
     conflict: truncateText(readOptionalString(record, 'conflict') ?? '主角继续反击', 80) ?? '主角继续反击',
     hook: truncateText(readOptionalString(record, 'hook') ?? '留下下一章钩子', 80) ?? '留下下一章钩子'
   };
+}
+
+function validateChapterPlanChunk(value: unknown, start: number, end: number, policy: WordTargetPolicy): StructureAssetContentDTO['chapters'] {
+  const chapters = readArray(value, 'chapters');
+  if (chapters.length !== end - start + 1) throw new Error('chapter_count_invalid');
+  return chapters.map((chapter, index) => {
+    const record = asRecord(chapter);
+    const chapterNo = readPositiveInteger(record, 'chapterNo');
+    if (chapterNo !== start + index) throw new Error('chapter_sequence_invalid');
+    const wordTarget = readOptionalNumber(record, 'wordTarget') ?? policy.defaultTarget;
+    if (!Number.isInteger(wordTarget) || wordTarget < policy.min || wordTarget > policy.max) {
+      throw new Error('chapter_word_target_out_of_range');
+    }
+    return {
+      chapterNo,
+      stageIndex: readPositiveInteger(record, 'stageIndex'),
+      title: readString(record, 'title'),
+      wordTarget,
+      goal: readString(record, 'goal'),
+      conflict: readString(record, 'conflict'),
+      hook: readString(record, 'hook')
+    };
+  });
 }
 
 function createChapterPlanStructureDraft(
@@ -1214,7 +1299,7 @@ function createWordTargetPolicy(novel: NovelProviderInputV1, chapterTarget?: num
   const max = clampInteger(Math.max(novel.chapterWordMax ?? 2600, min), min, 30000);
   const defaultTarget = Math.round((min + max) / 2);
   const target = clampInteger(chapterTarget ?? defaultTarget, 100, 30000);
-  const lowerBound = Math.max(100, Math.ceil((target * 90) / 100));
+  const lowerBound = Math.ceil((target * 85) / 100);
   const upperBound = Math.floor((target * 115) / 100);
   const preferredLowerBound = Math.max(lowerBound, Math.ceil((target * 95) / 100));
   const preferredUpperBound = target;
@@ -1233,11 +1318,11 @@ function createWordTargetPolicy(novel: NovelProviderInputV1, chapterTarget?: num
 }
 
 function getBodyChapterMaxTokens(target: number): number {
-  return Math.max(3600, Math.min(9000, Math.ceil(target * 2.4)));
+  return Math.max(3600, Math.min(9000, Math.ceil(target * 3.5)));
 }
 
 function getChapterSetMaxTokens(targets: number[]): number {
-  const total = targets.reduce((sum, target) => sum + getBodyChapterMaxTokens(target), 0);
+  const total = targets.reduce((sum, target) => sum + Math.max(3600, Math.min(9000, Math.ceil(target * 2.4))), 0);
   return Math.max(4200, Math.min(32000, total));
 }
 
@@ -1248,6 +1333,51 @@ function clampInteger(value: number, min: number, max: number): number {
 
 function firstSentence(content: string): string {
   return content.split(/[。！？\n]/).find(Boolean)?.trim() ?? content.slice(0, 40);
+}
+
+type EligibleBodySentence = { id: string; text: string; start: number; end: number };
+
+function listEligibleBodySentences(original: string): EligibleBodySentence[] {
+  const protectedEdge = Math.min(60, Math.floor(original.length * 0.05));
+  const sentences: EligibleBodySentence[] = [];
+  for (const match of original.matchAll(/[^。！？\n\r]+[。！？][”’」]?/gu)) {
+    const start = match.index;
+    const text = match[0];
+    const end = start + text.length;
+    if (start < protectedEdge || end > original.length - protectedEdge || text.length < 10 || /\d/u.test(text)) continue;
+    sentences.push({ id: `s${sentences.length + 1}`, text, start, end });
+  }
+  return sentences;
+}
+
+function applyBodySentenceIds(original: string, eligible: EligibleBodySentence[], values: unknown[], minimumRemoval: number, maximumRemoval: number): string {
+  if (values.length > 12) throw new Error('body deletion count exceeds the limit');
+  const byId = new Map(eligible.map((sentence) => [sentence.id, sentence]));
+  const seen = new Set<string>();
+  const candidates = values.map((value) => {
+    if (typeof value !== 'string' || seen.has(value) || !byId.has(value)) throw new Error('body deletion id is invalid');
+    seen.add(value);
+    return byId.get(value)!;
+  });
+  const candidateLengths = candidates.map((sentence) => evaluateChapterLength(sentence.text, 100).actual);
+  let best: EligibleBodySentence[] | null = null;
+  let bestRemoval = Infinity;
+  for (let mask = 1; mask < 1 << candidates.length; mask++) {
+    const spans = candidates.filter((_, index) => (mask & (1 << index)) !== 0);
+    if (best && spans.length > best.length) continue;
+    const removed = candidateLengths.reduce((sum, length, index) => sum + ((mask & (1 << index)) !== 0 ? length : 0), 0);
+    if (removed < minimumRemoval || removed > maximumRemoval) continue;
+    if (!best || spans.length < best.length || removed < bestRemoval) {
+      best = spans;
+      bestRemoval = removed;
+    }
+  }
+  if (!best) throw new Error('body deletion size is outside the bounded range');
+  let content = original;
+  for (const span of best.sort((a, b) => b.start - a.start)) content = `${content.slice(0, span.start)}${content.slice(span.end)}`;
+  const removed = evaluateChapterLength(original, 100).actual - evaluateChapterLength(content, 100).actual;
+  if (removed < minimumRemoval || removed > maximumRemoval) throw new Error('body deletion size is outside the bounded range');
+  return content;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -1294,6 +1424,23 @@ function readNumber(value: unknown, field: string): number {
     throw new Error(`${field} is required`);
   }
   return result;
+}
+
+function readPositiveInteger(value: unknown, field: string): number {
+  const result = readNumber(value, field);
+  if (!Number.isInteger(result) || result <= 0) throw new Error(`${field} must be a positive integer`);
+  return result;
+}
+
+function readScore(value: unknown, field: string): number {
+  const result = readNumber(value, field);
+  if (result < 0 || result > 100) throw new Error(`${field} is out of range`);
+  return result;
+}
+
+function readOptionalScore(record: Record<string, unknown>, field: string): number | null {
+  if (record[field] === undefined || record[field] === null) return null;
+  return readScore(record, field);
 }
 
 function readOptionalNumber(record: Record<string, unknown>, field: string): number | null {

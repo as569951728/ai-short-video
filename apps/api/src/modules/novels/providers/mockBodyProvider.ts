@@ -230,7 +230,7 @@ function createBodyContent(
 
 function fitToChapterTarget(content: string, target: number | null): string {
   if (!target || target <= 0) return content;
-  const lowerBound = Math.ceil(target * 0.9);
+  const lowerBound = Math.ceil(target * 0.85);
   const upperBound = Math.floor(target * 1.15);
   const actual = countChapterLength(content);
   if (actual >= lowerBound && actual <= upperBound) return content;

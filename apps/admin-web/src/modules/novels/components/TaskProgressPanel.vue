@@ -37,7 +37,7 @@
 
       <el-alert
         v-if="isProcessing"
-        title="正在调用模型生成内容，可能需要 1-3 分钟，可以稍后回来查看"
+        title="正在调用模型生成内容，可能需要 2-5 分钟；若等待过久，请刷新查看任务状态"
         type="info"
         show-icon
         :closable="false"

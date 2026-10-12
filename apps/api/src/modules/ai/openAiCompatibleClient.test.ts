@@ -95,6 +95,24 @@ describe('OpenAI-compatible chat client failure classification', () => {
     assert.equal(result.content, '{"ok":true}');
   });
 
+  it('retains the provider finish reason without exposing response content in diagnostics', async () => {
+    const client = new OpenAiCompatibleChatClient({
+      baseUrl: 'https://example.test',
+      apiKey: 'sk-should-not-leak',
+      timeoutMs: 1000,
+      maxRetries: 0,
+      fetchImpl: async () => new Response(JSON.stringify({
+        model: 'deepseek-v4-pro',
+        choices: [{ finish_reason: 'length', message: { content: '{"chapter":"unfinished' } }],
+        usage: { completion_tokens: 5520 }
+      }), { status: 200 })
+    });
+
+    const result = await client.chat({ taskName: 'novel_body_chapter_generate', model: 'deepseek-v4-pro', messages: [] });
+    assert.equal(result.finishReason, 'length');
+    assert.equal(result.usage?.completionTokens, 5520);
+  });
+
   it('honors a per-request zero-retry boundary even when the client default allows retries', async () => {
     let calls = 0;
     const client = new OpenAiCompatibleChatClient({
@@ -131,7 +149,8 @@ describe('OpenAI-compatible chat client failure classification', () => {
         calls += 1;
         return new Response(JSON.stringify({
           model: 'deepseek-v4-pro',
-          choices: [{ message: { content: '' } }]
+          choices: [{ finish_reason: 'length', message: { content: '' } }],
+          usage: { completion_tokens: 3600, completion_tokens_details: { reasoning_tokens: 3600 } }
         }), { status: 200 });
       }
     });
@@ -143,8 +162,45 @@ describe('OpenAI-compatible chat client failure classification', () => {
         messages: [],
         maxRetries: 0
       }),
-      (error) => error instanceof LlmProviderError && error.category === 'provider_error'
+      (error) => {
+        assert.ok(error instanceof LlmProviderError);
+        assert.equal(error.category, 'provider_error');
+        assert.deepEqual(error.details, {
+          taskName: 'novel_body_chapter_generate',
+          status: 200,
+          finishReason: 'length',
+          completionTokens: 3600,
+          reasoningTokens: 3600
+        });
+        assert.doesNotMatch(JSON.stringify(error.details), /sk-should-not-leak/);
+        return true;
+      }
     );
     assert.equal(calls, 1);
+  });
+
+  it('sends non-thinking mode only for an explicitly bounded request', async () => {
+    let sentBody: any;
+    const client = new OpenAiCompatibleChatClient({
+      baseUrl: 'https://example.test',
+      apiKey: 'sk-should-not-leak',
+      timeoutMs: 1000,
+      maxRetries: 0,
+      fetchImpl: async (_url, init) => {
+        sentBody = JSON.parse(String(init?.body));
+        return new Response(JSON.stringify({ choices: [{ message: { content: '{"ok":true}' } }] }));
+      }
+    });
+
+    await client.chat({
+      taskName: 'novel_body_chapter_generate',
+      model: 'deepseek-v4-pro',
+      messages: [{ role: 'user', content: 'json' }],
+      thinkingMode: 'disabled'
+    });
+    assert.deepEqual(sentBody.thinking, { type: 'disabled' });
+
+    await client.chat({ taskName: 'novel_full_review', model: 'deepseek-v4-pro', messages: [] });
+    assert.equal(Object.hasOwn(sentBody, 'thinking'), false);
   });
 });

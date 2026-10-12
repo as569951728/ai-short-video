@@ -123,7 +123,7 @@ describe('novel service data source switching', () => {
     assert.equal(blocked?.canSelect, false)
     assert.equal(blocked?.lengthGate?.actualText, '1420')
     assert.equal(blocked?.lengthGate?.targetText, '2200')
-    assert.equal(blocked?.lengthGate?.rangeText, '1980-2530')
+    assert.equal(blocked?.lengthGate?.rangeText, '1870-2530')
     assert.equal(refreshedRows.find((candidate) => candidate.id === blocked?.id)?.canSelect, false)
   })
 
@@ -394,7 +394,7 @@ describe('novel service data source switching', () => {
     assert.equal(chapter.wordTarget, '2200')
     assert.equal(chapter.lengthGate.metricText, '忽略空白、含标点')
     assert.equal(chapter.lengthGate.actualText, '尚未生成')
-    assert.equal(chapter.lengthGate.rangeText, '1980-2530')
+    assert.equal(chapter.lengthGate.rangeText, '1870-2530')
     assert.equal(chapter.lengthGate.statusText, '待生成')
 
     const integerBoundary = toNovelChapterPlanRow({
@@ -411,7 +411,7 @@ describe('novel service data source switching', () => {
       createdAt: '2026-06-17T12:00:00.000Z',
       updatedAt: '2026-06-17T12:00:00.000Z',
     })
-    assert.equal(integerBoundary.lengthGate.rangeText, '720-920')
+    assert.equal(integerBoundary.lengthGate.rangeText, '680-920')
   })
 
   it('maps authoritative length gates and fails closed for invalid gate payloads', () => {
@@ -419,7 +419,7 @@ describe('novel service data source switching', () => {
       lengthGate: {
         metric: 'unicode_code_point_non_whitespace_nfc_v1',
         target: 2200,
-        lowerBound: 1980,
+        lowerBound: 1870,
         upperBound: 2530,
         actual: 1420,
         status: 'too_short',
@@ -465,7 +465,7 @@ describe('novel service data source switching', () => {
     assert.equal(candidateRow.canSelectByStatus, true)
     assert.equal(candidateRow.canSelect, false)
     assert.equal(candidateRow.lengthGate?.tagType, 'warning')
-    assert.match(candidateRow.selectDisabledReason ?? '', /实际 1420.*1980-2530/)
+    assert.match(candidateRow.selectDisabledReason ?? '', /实际 1420.*1870-2530/)
     assert.equal(trialResultRow.lengthGate?.status, 'too_short')
     assert.equal(bodyRow.lengthGate?.tagType, 'danger')
     assert.equal(bodyRow.lengthGate?.actualText, '2800')
@@ -1408,8 +1408,8 @@ function createTrialCandidateDTO(): TrialChapterCandidateDTO {
     lengthGate: {
       metric: 'unicode_code_point_non_whitespace_nfc_v1',
       target: 2000,
-      lowerBound: 1800,
-      upperBound: 2200,
+      lowerBound: 1700,
+      upperBound: 2300,
       actual: 1800,
       status: 'pass',
       statusText: '字符数合格',

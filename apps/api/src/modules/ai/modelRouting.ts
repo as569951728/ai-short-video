@@ -39,8 +39,8 @@ export function resolveDeepSeekConfig(envLike: AiProviderEnv = process.env): Dee
     model,
     structureModel: (envLike.DEEPSEEK_STRUCTURE_MODEL ?? model).trim() || model,
     reasonerModel: (envLike.DEEPSEEK_REASONER_MODEL ?? 'deepseek-v4-pro').trim() || model,
-    timeoutMs: parsePositiveInt(envLike.DEEPSEEK_TIMEOUT_MS, 60000),
-    maxRetries: parseNonNegativeInt(envLike.DEEPSEEK_MAX_RETRIES, 1)
+    timeoutMs: parsePositiveInt(envLike.DEEPSEEK_TIMEOUT_MS, 360000),
+    maxRetries: parseNonNegativeInt(envLike.DEEPSEEK_MAX_RETRIES, 0)
   };
 }
 

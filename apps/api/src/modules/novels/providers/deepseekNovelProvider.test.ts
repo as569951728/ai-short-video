@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { LlmProviderError, type ChatCompletionRequest, type LlmClient } from '../../ai/llmClient.js';
 import { hashCanonicalJson } from '../domain/executionContract.js';
+import { evaluateChapterLength } from '../domain/chapterLengthPolicy.js';
 import { FULL_REVIEW_CANONICAL_DIMENSION_KEYS } from '../services/actionExecutionPlan.js';
 import { createFullReviewEvidenceFixture } from '../testSupport/fullReviewEvidenceFixture.js';
 import { DeepSeekNovelProvider } from './deepseekNovelProvider.js';
@@ -18,7 +19,12 @@ describe('DeepSeek novel provider', () => {
     assert.equal(provider.getModelRoutingVersion('direction_generate'), 'deepseek:deepseek-general-test:route-v1');
     assert.equal(provider.getModelRoutingVersion('chapter_plan_generate'), 'deepseek:deepseek-structure-test:route-v1');
     assert.equal(provider.getModelRoutingVersion('chapter_impact_assess'), 'deepseek:deepseek-reasoner-test:route-v1');
+    assert.equal(provider.getModelRoutingVersion('body_batch_generate'), 'deepseek:deepseek-general-test:route-v2');
+    assert.equal(provider.getModelRoutingVersion('chapter_body_generate'), 'deepseek:deepseek-general-test:route-v2');
+    assert.equal(provider.getModelRoutingVersion('chapter_rewrite'), 'deepseek:deepseek-general-test:route-v2');
     assert.equal(provider.getModelRoutingVersion('novel_full_review'), 'deepseek:deepseek-reasoner-test:route-v5');
+    const experimental = new DeepSeekNovelProvider({ client: createQueueClient([]), model: 'deepseek-general-test', experimentalOverlongRevision: true });
+    assert.equal(experimental.getModelRoutingVersion('chapter_body_generate'), 'deepseek:deepseek-general-test:route-v5');
   });
 
   it('maps fake DeepSeek JSON into direction, structure, trial, body, impact, and full-review drafts', async () => {
@@ -41,7 +47,7 @@ describe('DeepSeek novel provider', () => {
         JSON.stringify({
           title: '设定档案',
           summary: '主角、对手和世界规则清晰。',
-          content: { protagonist: '林舟', antagonist: '旧公司', rules: ['每章一个反击点'] },
+          content: { sections: [{ title: '人物关系', body: '林舟与旧公司对抗。', items: ['每章一个反击点'] }], stages: [], chapters: [] },
           score: 84,
           riskLevel: 'low',
           riskTags: ['设定稳定'],
@@ -199,7 +205,7 @@ describe('DeepSeek novel provider', () => {
 
     const structure = await provider.generateAsset({ objectType: 'setting', novel, preferences: [], currentAssets: {} });
     assert.equal(structure.title, '设定档案');
-    assert.equal(structure.content.sections[0].title, '设定档案');
+    assert.equal(structure.content.sections[0].title, '人物关系');
 
     const trial = await provider.generateChapterOneCandidates({ novel, preferences: [], chapters: [createChapter(1)], chapterCount: 3 });
     assert.equal(trial[0].isAiRecommended, true);
@@ -398,7 +404,7 @@ describe('DeepSeek novel provider', () => {
                   chapterNo,
                   stageIndex: Math.ceil(chapterNo / 20),
                   title: `第${chapterNo}章`,
-                  wordTarget: 1200,
+                  wordTarget: 2200,
                   goal: `目标${chapterNo}`,
                   conflict: `冲突${chapterNo}`,
                   hook: `钩子${chapterNo}`
@@ -486,6 +492,53 @@ describe('DeepSeek novel provider', () => {
     assert.equal(result.content.chapters[0].wordTarget, 2700);
   });
 
+  it('rejects empty or out-of-range structure output instead of fabricating an adoptable candidate', async () => {
+    const validContent = { sections: [{ title: '人物关系', body: '主角与对手有明确冲突。', items: [] }], stages: [], chapters: [] };
+    for (const payload of [
+      {},
+      { title: '人物设定', summary: '人物关系', content: validContent, score: 101 },
+      { title: '人物设定', summary: '人物关系', content: { sections: [], stages: [], chapters: [] }, score: 80 }
+    ]) {
+      const response = JSON.stringify(payload);
+      const provider = new DeepSeekNovelProvider({ client: createQueueClient([response, response]) });
+      await assert.rejects(
+        provider.generateAsset({ objectType: 'setting', novel: createNovel(), preferences: [], currentAssets: {} }),
+        (error) => error instanceof LlmProviderError && error.category === 'output_parse_failed'
+      );
+    }
+  });
+
+  it('rejects an out-of-range direction score before creating candidates', async () => {
+    const response = JSON.stringify({ candidates: [{
+      title: '逆袭方向', summary: '主角重生后反击。', content: '重生后完成商业逆袭。',
+      score: -1, marketScore: 80, riskLevel: 'low', recommendedReason: '冲突清楚。'
+    }] });
+    const provider = new DeepSeekNovelProvider({ client: createQueueClient([response, response]) });
+    await assert.rejects(
+      provider.generateCandidates({ novel: createNovel(), preferences: [] }),
+      (error) => error instanceof LlmProviderError && error.category === 'output_parse_failed'
+    );
+  });
+
+  it('rejects missing, duplicate, or out-of-range chapter plan entries before an asset can be adopted', async () => {
+    const chapter = (chapterNo: number, wordTarget = 2200) => ({
+      chapterNo, stageIndex: 1, title: `第${chapterNo}章`, wordTarget,
+      goal: '明确目标', conflict: '遭遇阻力', hook: '留下悬念'
+    });
+    for (const chapters of [
+      [chapter(1)],
+      [chapter(1), chapter(1)],
+      [chapter(1), chapter(2, 40000)]
+    ]) {
+      const response = JSON.stringify({ chapters });
+      const provider = new DeepSeekNovelProvider({ client: createQueueClient([response, response]) });
+      await assert.rejects(
+        provider.generateAsset({ objectType: 'chapter_plan', novel: { ...createNovel(), chapterLimit: 2 }, preferences: [], currentAssets: {} }),
+        (error) => error instanceof LlmProviderError && error.category === 'output_parse_failed'
+      );
+    }
+  });
+
   it('sends chapter word target constraints when generating a body chapter', async () => {
     const requests: ChatCompletionRequest[] = [];
     const provider = new DeepSeekNovelProvider({
@@ -528,14 +581,14 @@ describe('DeepSeek novel provider', () => {
     const payload = JSON.parse(requests[0].messages[1].content);
     assert.equal(payload.payload.chapter.wordTarget, 2600);
     assert.match(payload.payload.wordTargetPolicy.instruction, /2600/);
-    assert.match(payload.payload.wordTargetPolicy.instruction, /不能少于 2340/);
+    assert.match(payload.payload.wordTargetPolicy.instruction, /不能少于 2210/);
     assert.match(payload.payload.wordTargetPolicy.instruction, /不能超过 2990/);
   });
 
   it('preserves authoritative chapter targets outside the novel default range', async () => {
     for (const expected of [
-      { target: 900, lowerBound: 810, upperBound: 1035 },
-      { target: 4000, lowerBound: 3600, upperBound: 4600 }
+      { target: 900, lowerBound: 765, upperBound: 1035 },
+      { target: 4000, lowerBound: 3400, upperBound: 4600 }
     ]) {
       const requests: ChatCompletionRequest[] = [];
       const provider = new DeepSeekNovelProvider({
@@ -563,6 +616,45 @@ describe('DeepSeek novel provider', () => {
         expected
       );
     }
+  });
+
+  it('requests immutable memory facts explicitly and does not promote generic facts into them', async () => {
+    const requests: ChatCompletionRequest[] = [];
+    const provider = new DeepSeekNovelProvider({
+      client: {
+        async chat(request) {
+          requests.push(request);
+          return {
+            content: JSON.stringify({
+              ...createBodyChapterJson(),
+              memory: {
+                summary: '第4章获得线索。',
+                facts: ['主角怀疑旧同事'],
+                factsCannotContradict: ['第4章合同已签署'],
+                plantedForeshadowing: ['合同附页尚未公开']
+              }
+            }),
+            model: request.model
+          };
+        }
+      }
+    });
+
+    const draft = await provider.generateBodyChapter({
+      novel: createNovel(),
+      chapter: createChapter(4),
+      strategySnapshot: {},
+      previousContent: null,
+      previousMemory: null,
+      previousBatchNotes: [],
+      enhancedReview: false
+    });
+
+    const hint = JSON.parse(requests[0].messages[1].content).outputSchemaHint as string;
+    assert.match(hint, /factsCannotContradict/);
+    assert.match(hint, /不可推翻/);
+    assert.deepEqual(draft.memory.factsCannotContradict, ['第4章合同已签署']);
+    assert.deepEqual(draft.memory.plantedForeshadowing, ['合同附页尚未公开']);
   });
 
   it('summarizes adopted direction context before setting generation', async () => {
@@ -676,7 +768,7 @@ describe('DeepSeek novel provider', () => {
     const payload = JSON.parse(capturedRequest!.messages[1].content).payload;
     assert.deepEqual(
       { target: payload.wordTargetPolicy.target, lowerBound: payload.wordTargetPolicy.lowerBound, upperBound: payload.wordTargetPolicy.upperBound },
-      { target: 2200, lowerBound: 1980, upperBound: 2530 }
+      { target: 2200, lowerBound: 1870, upperBound: 2530 }
     );
     assert.deepEqual(
       { preferredLowerBound: payload.wordTargetPolicy.preferredLowerBound, preferredUpperBound: payload.wordTargetPolicy.preferredUpperBound },
@@ -776,6 +868,11 @@ describe('DeepSeek novel provider', () => {
       );
       assert.equal(requests.length, 1, testCase.label);
       assert.equal(requests[0].maxRetries, 0, testCase.label);
+      assert.equal(
+        requests[0].thinkingMode,
+        ['body_batch_generate', 'chapter_body_generate', 'chapter_rewrite'].includes(testCase.label) ? 'disabled' : undefined,
+        testCase.label
+      );
       const payload = JSON.parse(requests[0].messages[1].content).payload;
       assert.deepEqual(
         testCase.readTargets(payload),
@@ -783,6 +880,229 @@ describe('DeepSeek novel provider', () => {
         `${testCase.label}: authoritative target outside novel default range`
       );
     }
+  });
+
+  it('includes the adopted strategy title and summary in the body-generation prompt', async () => {
+    let request: ChatCompletionRequest | undefined;
+    const provider = new DeepSeekNovelProvider({
+      client: {
+        async chat(nextRequest) {
+          request = nextRequest;
+          return { content: '不是 JSON', model: nextRequest.model };
+        }
+      }
+    });
+    await assert.rejects(
+      () => provider.generateBodyChapter({
+        action: 'chapter_body_generate',
+        novel: createNovel(),
+        chapter: { ...createChapter(4), wordTarget: 2300 },
+        strategySnapshot: {
+          id: 'strategy-2',
+          versionNo: 2,
+          title: '仓库旧账反转',
+          summary: '主角林越必须在父亲签字前找到账页被替换的证据。',
+          riskTags: []
+        },
+        previousContent: null,
+        previousMemory: null,
+        previousBatchNotes: [],
+        enhancedReview: false
+      }),
+      (error) => error instanceof LlmProviderError && error.category === 'output_parse_failed'
+    );
+    assert.ok(request);
+    const prompt = JSON.parse(request.messages[1].content);
+    assert.equal(prompt.payload.strategySnapshot.title, '仓库旧账反转');
+    assert.equal(prompt.payload.strategySnapshot.summary, '主角林越必须在父亲签字前找到账页被替换的证据。');
+    assert.match(prompt.instruction, /不得替换主角/);
+    assert.equal(request.maxTokens, 8050);
+  });
+
+  it('makes exactly one bounded revision call for an overlong body chapter', async () => {
+    const requests: ChatCompletionRequest[] = [];
+    const { original, deletion } = createOverlongDeletionFixture(1000);
+    const responses = [JSON.stringify({ content: original }), JSON.stringify({ sentenceIds: ['s1'] })];
+    const provider = new DeepSeekNovelProvider({
+      experimentalOverlongRevision: true,
+      client: {
+        async chat(request) {
+          requests.push(request);
+          return { content: responses.shift()!, model: request.model };
+        }
+      }
+    });
+
+    const draft = await provider.generateBodyChapter(bodyInputForLengthTest(1000));
+
+    assert.equal(draft.content, original.replace(deletion, ''));
+    assert.equal(draft.experimentalRevisionRequiresConfirmation, true);
+    assert.equal(evaluateChapterLength(draft.content, 1000).status, 'pass');
+    assert.deepEqual(requests.map((request) => request.taskName), ['novel_body_chapter_generate', 'novel_body_chapter_shorten']);
+    assert.deepEqual(requests.map((request) => request.maxRetries), [0, 0]);
+    assert.equal(requests[1].maxTokens, 700);
+    const prompt = JSON.parse(requests[1].messages[1].content);
+    assert.equal(prompt.payload.original.content, original);
+    assert.deepEqual(prompt.payload.eligibleSentences, [{ id: 's1', text: deletion }]);
+    assert.match(prompt.instruction, /只能从 eligibleSentences 中挑选/);
+    assert.match(prompt.instruction, /只返回/);
+  });
+
+  it('keeps overlong automatic revision disabled in the production default', async () => {
+    const requests: ChatCompletionRequest[] = [];
+    const provider = new DeepSeekNovelProvider({
+      client: {
+        async chat(request) {
+          requests.push(request);
+          return { content: JSON.stringify({ content: '字'.repeat(170) }), model: request.model };
+        }
+      }
+    });
+
+    const draft = await provider.generateBodyChapter(bodyInputForLengthTest(100));
+
+    assert.equal(requests.length, 1);
+    assert.equal(evaluateChapterLength(draft.content, 100).status, 'too_long');
+  });
+
+  it('uses the smallest valid subset of model-selected sentence ids', async () => {
+    const { original, deletion } = createOverlongDeletionFixture(1000, true);
+    const responses = [JSON.stringify({ content: original }), JSON.stringify({ sentenceIds: ['s1', 's2'] })];
+    const provider = new DeepSeekNovelProvider({
+      experimentalOverlongRevision: true,
+      client: { async chat(request) { return { content: responses.shift()!, model: request.model }; } }
+    });
+
+    const draft = await provider.generateBodyChapter(bodyInputForLengthTest(1000));
+    assert.equal(draft.content, original.replace(deletion, ''));
+    assert.equal(draft.experimentalRevisionRequiresConfirmation, true);
+  });
+
+  it('does not revise a passing or too-short body', async () => {
+    for (const [initialLength, expectedStatus] of [[115, 'pass'], [84, 'too_short']] as const) {
+      const requests: ChatCompletionRequest[] = [];
+      const provider = new DeepSeekNovelProvider({
+        experimentalOverlongRevision: true,
+        client: {
+          async chat(request) {
+            requests.push(request);
+            return { content: JSON.stringify({ content: '字'.repeat(initialLength) }), model: request.model };
+          }
+        }
+      });
+      const draft = await provider.generateBodyChapter(bodyInputForLengthTest(100));
+      assert.equal(requests.length, 1);
+      assert.equal(evaluateChapterLength(draft.content, 100).status, expectedStatus);
+    }
+  });
+
+  it('rejects a deletion that is too small without making a third call', async () => {
+    const requests: ChatCompletionRequest[] = [];
+    const { original } = createOverlongDeletionFixture(1000);
+    const responses = [JSON.stringify({ content: original }), JSON.stringify({ sentenceIds: [] })];
+    const provider = new DeepSeekNovelProvider({
+      experimentalOverlongRevision: true,
+      client: { async chat(request) { requests.push(request); return { content: responses.shift()!, model: request.model }; } }
+    });
+    await assert.rejects(
+      () => provider.generateBodyChapter(bodyInputForLengthTest(1000)),
+      (error) => error instanceof LlmProviderError && error.category === 'output_parse_failed'
+    );
+    assert.equal(requests.length, 2);
+  });
+
+  it('rejects invented, repeated, or non-string sentence ids', async () => {
+    const { original } = createOverlongDeletionFixture(1000);
+    for (const sentenceIds of [
+      ['s999'],
+      ['s1', 's1'],
+      [1]
+    ] as const) {
+      const responses = [JSON.stringify({ content: original }), JSON.stringify({ sentenceIds })];
+      const provider = new DeepSeekNovelProvider({
+        experimentalOverlongRevision: true,
+        client: { async chat(request) { return { content: responses.shift()!, model: request.model }; } }
+      });
+      await assert.rejects(
+        () => provider.generateBodyChapter(bodyInputForLengthTest(1000)),
+        (error) => error instanceof LlmProviderError && error.details?.reason === 'body deletion id is invalid'
+      );
+    }
+  });
+
+  it('rejects an extra rewrite field in the deletion response', async () => {
+    const { original } = createOverlongDeletionFixture(1000);
+    const responses = [JSON.stringify({ content: original }), JSON.stringify({ sentenceIds: ['s1'], content: '额外正文' })];
+    const provider = new DeepSeekNovelProvider({
+      experimentalOverlongRevision: true,
+      client: { async chat(request) { return { content: responses.shift()!, model: request.model }; } }
+    });
+    await assert.rejects(
+      () => provider.generateBodyChapter(bodyInputForLengthTest(1000)),
+      (error) => error instanceof LlmProviderError && error.details?.reason === 'body deletion output has unexpected fields'
+    );
+  });
+
+  it('does not spend a second call when the revision context exceeds its prompt budget', async () => {
+    const requests: ChatCompletionRequest[] = [];
+    const provider = new DeepSeekNovelProvider({
+      experimentalOverlongRevision: true,
+      client: {
+        async chat(request) {
+          requests.push(request);
+          return { content: JSON.stringify({ content: '字'.repeat(38_000) }), model: request.model };
+        }
+      }
+    });
+    const input = bodyInputForLengthTest(30_000);
+    input.strategySnapshot.summary = '主线'.repeat(2_000);
+    const draft = await provider.generateBodyChapter(input);
+
+    assert.equal(requests.length, 1);
+    assert.equal(evaluateChapterLength(draft.content, 30_000).status, 'too_long');
+  });
+
+  it('sends the complete overlong source to a bounded revision, including its ending', async () => {
+    const requests: ChatCompletionRequest[] = [];
+    const { original } = createOverlongDeletionFixture(4_000);
+    const provider = new DeepSeekNovelProvider({
+      experimentalOverlongRevision: true,
+      client: {
+        async chat(request) {
+          requests.push(request);
+          return { content: JSON.stringify(requests.length === 1 ? { content: original } : { sentenceIds: ['s1'] }), model: request.model };
+        }
+      }
+    });
+
+    await provider.generateBodyChapter(bodyInputForLengthTest(4_000));
+
+    assert.equal(requests.length, 2);
+    const prompt = JSON.parse(requests[1].messages[1].content);
+    assert.equal(prompt.payload.original.content, original);
+    assert.match(prompt.payload.original.content, /结尾。$/);
+  });
+
+  it('omits internal tenant scope from the external full-review prompt', async () => {
+    let request: ChatCompletionRequest | undefined;
+    const provider = new DeepSeekNovelProvider({
+      client: {
+        async chat(nextRequest) {
+          request = nextRequest;
+          return { content: '不是 JSON', model: nextRequest.model };
+        }
+      }
+    });
+    const evidence = withFullReviewContinuity(createFullReviewEvidenceFixture());
+
+    await assert.rejects(
+      () => provider.generateFullReview(evidence),
+      (error) => error instanceof LlmProviderError && error.category === 'output_parse_failed'
+    );
+    assert.ok(request);
+    const prompt = JSON.parse(request.messages[1].content);
+    assert.equal(typeof evidence.coverageManifest.tenantId, 'string');
+    assert.equal(Object.hasOwn(prompt.payload.coverageManifest, 'tenantId'), false);
   });
 });
 
@@ -898,4 +1218,27 @@ function createChapter(chapterNo: number): any {
     chapterNo,
     title: `第${chapterNo}章`
   };
+}
+
+function bodyInputForLengthTest(wordTarget: number): any {
+  return {
+    action: 'chapter_body_generate',
+    novel: createNovel(),
+    chapter: { ...createChapter(4), wordTarget },
+    strategySnapshot: { id: 'strategy-1', versionNo: 1, title: '主线', summary: '保留关键因果。', riskTags: [] },
+    previousContent: null,
+    previousMemory: null,
+    previousBatchNotes: [],
+    enhancedReview: false
+  };
+}
+
+function createOverlongDeletionFixture(wordTarget: number, withExtraSentence = false) {
+  const upperBound = Math.floor(wordTarget * 1.15);
+  const deletion = `${'冗'.repeat(54)}。`;
+  const prefix = `开头。${'甲'.repeat(400)}。`;
+  const ending = '结尾。';
+  const extra = withExtraSentence ? `${'杂'.repeat(80)}。` : '';
+  const filler = '乙'.repeat(upperBound + 35 - prefix.length - deletion.length - extra.length - ending.length);
+  return { original: `${prefix}${deletion}${extra}${filler}${ending}`, deletion };
 }

@@ -12,6 +12,7 @@ export interface ChatCompletionRequest {
   temperature?: number;
   maxTokens?: number;
   maxRetries?: number;
+  thinkingMode?: 'enabled' | 'disabled';
 }
 
 export interface ChatCompletionUsage {
@@ -23,6 +24,7 @@ export interface ChatCompletionUsage {
 export interface ChatCompletionResult {
   content: string;
   model: string;
+  finishReason?: string | null;
   usage?: ChatCompletionUsage;
 }
 

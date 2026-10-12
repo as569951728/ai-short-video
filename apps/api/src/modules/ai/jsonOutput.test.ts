@@ -86,6 +86,38 @@ describe('AI JSON output helper', () => {
     );
   });
 
+  it('reports bounded metadata for a truncated JSON response', async () => {
+    const client: LlmClient = {
+      async chat() {
+        return {
+          content: '{"chapter":"FULL_MODEL_RESPONSE_SHOULD_NOT_LEAK',
+          model: 'fake-model',
+          finishReason: 'length',
+          usage: { completionTokens: 5520 }
+        };
+      }
+    };
+    await assert.rejects(
+      () => requestJsonOutput(client, {
+        taskName: 'novel_body_chapter_generate',
+        model: 'fake-model',
+        messages: [{ role: 'user', content: 'FULL_PROMPT_SHOULD_NOT_LEAK' }],
+        outputRepairRetries: 0,
+        validate: (value) => value
+      }),
+      (error) => {
+        assert.ok(error instanceof LlmProviderError);
+        assert.match(error.message, /长度上限/);
+        assert.equal(error.details?.outputKind, 'truncated_json');
+        assert.equal(error.details?.finishReason, 'length');
+        assert.equal(error.details?.completionTokens, 5520);
+        assert.equal(error.details?.responseCharacters, 47);
+        assert.doesNotMatch(JSON.stringify(error.details), /FULL_MODEL_RESPONSE_SHOULD_NOT_LEAK|FULL_PROMPT_SHOULD_NOT_LEAK/);
+        return true;
+      }
+    );
+  });
+
   it('classifies schema validation failures without leaking raw model output', async () => {
     const client = createFakeClient('{"title":"缺少内容","raw":"FULL_MODEL_RESPONSE_SHOULD_NOT_LEAK"}');
 

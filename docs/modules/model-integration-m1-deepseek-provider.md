@@ -47,8 +47,8 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-v4-pro
 DEEPSEEK_STRUCTURE_MODEL=deepseek-v4-pro
 DEEPSEEK_REASONER_MODEL=deepseek-v4-pro
-DEEPSEEK_TIMEOUT_MS=60000
-DEEPSEEK_MAX_RETRIES=1
+DEEPSEEK_TIMEOUT_MS=360000
+DEEPSEEK_MAX_RETRIES=0
 ```
 
 说明：
@@ -58,6 +58,7 @@ DEEPSEEK_MAX_RETRIES=1
 - 模型名称允许通过环境变量覆盖，避免把供应商模型版本写死；结构任务可通过 `DEEPSEEK_STRUCTURE_MODEL` 单独切换到更快模型。
 - 2026-06-18 本地握手确认当前账号可见模型为 `deepseek-v4-flash`、`deepseek-v4-pro`；首期默认使用 `deepseek-v4-pro`，后续可将正文批量任务切到 `deepseek-v4-flash` 做成本优化。
 - 如果 `AI_PROVIDER_MODE=deepseek` 但没有 `DEEPSEEK_API_KEY`，服务启动可以成功，但实际调用应返回明确配置错误，不能静默用假数据伪装真实调用。
+- 默认等待窗口覆盖通常的 2-5 分钟响应，并留 1 分钟余量；默认不自动重发超时请求，避免重复模型费用。这里仅延长单次 provider 调用，**不等于**持久化后台队列；长请求仍占用 HTTP 处理流程，进程重启后的恢复和立即返回真实任务 ID 仍需单独验收。
 
 ## 首期固定路由
 
@@ -94,6 +95,8 @@ apps/api/src/modules/novels/providers/deepseekNovelProvider.ts
 - 不破坏现有 `DirectionProvider`、`StructureProvider`、`TrialProvider`、`BodyProvider`、`FullReviewProvider` 接口。
 - DeepSeek provider 可以一个类实现多个接口，也可以按职责拆分；以最少重复和易测试为准。
 - 每个 provider 调用都必须要求结构化 JSON 输出，并用 zod 或现有 DTO 类型做运行时校验。
+- 正文生成请求必须包含已采用策略的标题和摘要；仅发送策略版本 ID 不足以约束人物、核心事件和题材。长度合格也不能替代内容承接验收。
+- 若 provider 因输出 token 上限截断 JSON，任务须明确归类为不完整输出并安全失败；诊断只保留结束原因、token 数、响应字符数等元数据，不回传原文。单章正文预算可独立调整，不能顺带抬高试写候选预算。
 - 解析失败、格式不合法、缺字段、低质量空文本要归类为 provider_error / schema_error，不能生成半可信资产。
 - 普通日志只能记录任务类型、模型 key、耗时、token 摘要、错误码和摘要，不能记录完整 prompt / 完整响应。
 
@@ -167,7 +170,7 @@ apps/api/src/modules/novels/providers/deepseekNovelProvider.ts
 
 - 用户点击生成后，主按钮可以短暂 loading，但必须尽快切换为任务进度展示，不能只靠按钮 loading 等待模型返回。
 - 小说列表、小说详情、章节详情至少能看到最近任务状态、当前步骤、已耗时、失败原因和重试入口。
-- 长时间处理中要给出通俗文案，例如“正在调用模型生成内容，可能需要 1-3 分钟，可以先停留或稍后回来查看”。
+- 长时间处理中要给出通俗文案，例如“正在调用模型生成内容，可能需要 2-5 分钟；若等待过久，请刷新查看任务状态”。
 - 如果任务超过前端预期等待时间但后端仍在 processing，页面应显示“仍在生成中”，提供刷新/查看任务详情/取消入口，而不是报错。
 - 如果后端超时或失败，页面应展示失败分类、下一步建议和重试按钮；不能停留在 loading 状态。
 - 对高成本重试要提示可能再次消耗模型额度。

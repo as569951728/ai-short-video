@@ -1,0 +1,46 @@
+{
+  "schemaVersion": "1.0.0",
+  "fixtureId": "trial-continuity-001",
+  "fixtureVersion": "1.0.0",
+  "goldVersion": "1.0.0",
+  "rubricVersion": "trial-character-continuity-v1",
+  "evidenceOffsetUnit": "utf16_code_units",
+  "reviewStatus": "pending_human_review",
+  "annotationBasis": "manually_specified_from_chapter_text_not_model_score",
+  "contentSha256": {
+    "clean": "1db0c8fbce66d3cadcdb6c4f9e58aa32b8dab9a1ff786b37636f8f6bc22068fb",
+    "contradiction": "b8af60a0f50fc3f356e3e80942edb5d9622d94ce0b74a9b27af10548c66457bf"
+  },
+  "labels": {
+    "clean": {
+      "characterContinuity": 2,
+      "referenceDisposition": "continue",
+      "issues": []
+    },
+    "contradiction": {
+      "characterContinuity": 0,
+      "referenceDisposition": "revise_before_continue",
+      "issues": [
+        {
+          "code": "character_continuity",
+          "severity": "blocking",
+          "reason": "第二章使用第一章明确已不存在、重生后也未恢复的左手食指操作指纹锁，且没有解释或修复情节。",
+          "evidence": [
+            {
+              "chapterNo": 1,
+              "charStart": 32,
+              "charEnd": 70,
+              "quote": "五年前的工伤让她的左手食指齐根截断，重生后的身体仍保留旧伤，也从未装过义指。"
+            },
+            {
+              "chapterNo": 2,
+              "charStart": 16,
+              "charEnd": 37,
+              "quote": "林岚用左手食指按住指纹锁，仓库门应声而开。"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

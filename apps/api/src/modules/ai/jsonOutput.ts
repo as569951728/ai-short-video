@@ -8,6 +8,7 @@ export interface JsonOutputRequest<T> {
   maxTokens?: number;
   outputRepairRetries?: number;
   transportRetries?: number;
+  thinkingMode?: 'enabled' | 'disabled';
   validate: (value: unknown) => T;
 }
 
@@ -26,7 +27,8 @@ export async function requestJsonOutput<T>(
       messages: attempt === 0 ? request.messages : createRepairMessages(request.messages),
       temperature: attempt === 0 ? request.temperature : 0.1,
       maxTokens: request.maxTokens,
-      maxRetries: request.transportRetries
+      maxRetries: request.transportRetries,
+      thinkingMode: request.thinkingMode
     });
     lastModel = result.model;
     const text = extractJsonText(result.content);
@@ -38,10 +40,14 @@ export async function requestJsonOutput<T>(
       if (attempt < maxAttempts - 1) {
         continue;
       }
-      throw new LlmProviderError('output_parse_failed', `模型输出不是合法 JSON：${request.taskName}`, {
+      const truncated = result.finishReason === 'length';
+      throw new LlmProviderError('output_parse_failed', `${truncated ? '模型输出达到长度上限，内容不完整' : '模型输出不是合法 JSON'}：${request.taskName}`, {
         taskName: request.taskName,
         model: lastModel,
-        outputKind: 'non_json'
+        outputKind: truncated ? 'truncated_json' : 'non_json',
+        finishReason: result.finishReason ?? null,
+        completionTokens: result.usage?.completionTokens ?? null,
+        responseCharacters: result.content.length
       });
     }
 

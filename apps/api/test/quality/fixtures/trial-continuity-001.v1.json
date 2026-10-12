@@ -1,0 +1,67 @@
+{
+  "schemaVersion": "1.0.0",
+  "fixtureId": "trial-continuity-001",
+  "fixtureVersion": "1.0.0",
+  "rubricVersion": "trial-character-continuity-v1",
+  "scope": "trial_chapters_1_3",
+  "origin": "synthetic_original_text",
+  "context": {
+    "genre": "都市逆袭/重生",
+    "worldRule": "林岚重生后仍保留旧伤；没有义指、替身或指纹伪造情节。",
+    "characterFact": "林岚的左手食指已齐根截断，重生后仍未恢复，也从未装过义指。",
+    "chapterPlan": [
+      { "chapterNo": 1, "goal": "重生后的林岚寻找翻盘证据，并确立不变的身体事实。" },
+      { "chapterNo": 2, "goal": "进入仓库并取得伪造债务的账页线索。" },
+      { "chapterNo": 3, "goal": "沿账页线索准备在董事会公开反击。" }
+    ]
+  },
+  "singleChange": {
+    "chapterNo": 2,
+    "cleanSentence": "林岚用右手食指按住指纹锁，仓库门应声而开。",
+    "contradictionSentence": "林岚用左手食指按住指纹锁，仓库门应声而开。"
+  },
+  "variants": {
+    "clean": {
+      "chapters": [
+        {
+          "chapterNo": 1,
+          "content": "林岚重生回到被逐出公司的那一夜，知道旧账页是洗清债务的唯一证据。五年前的工伤让她的左手食指齐根截断，重生后的身体仍保留旧伤，也从未装过义指。她离职前录入的右手指纹还在仓库备用系统里，门口读卡器却突然断电。"
+        },
+        {
+          "chapterNo": 2,
+          "content": "林岚沿墙摸到由电池供电的紧急门。林岚用右手食指按住指纹锁，仓库门应声而开。账页只剩半张，她记下伪造债务的转账日期，先退到消防梯。"
+        },
+        {
+          "chapterNo": 3,
+          "content": "天亮前，林岚把日期交给旧友，换来董事会的开会记录。账上那笔钱仍在流动，她决定当众揭穿继兄伪造的债务。会议室的门打开时，曾亲手赶她出公司的父亲也坐在主位。"
+        }
+      ],
+      "mockModelSelfAssessment": {
+        "totalScore": 92,
+        "trialResult": "pass",
+        "hardFailed": false
+      }
+    },
+    "contradiction": {
+      "chapters": [
+        {
+          "chapterNo": 1,
+          "content": "林岚重生回到被逐出公司的那一夜，知道旧账页是洗清债务的唯一证据。五年前的工伤让她的左手食指齐根截断，重生后的身体仍保留旧伤，也从未装过义指。她离职前录入的右手指纹还在仓库备用系统里，门口读卡器却突然断电。"
+        },
+        {
+          "chapterNo": 2,
+          "content": "林岚沿墙摸到由电池供电的紧急门。林岚用左手食指按住指纹锁，仓库门应声而开。账页只剩半张，她记下伪造债务的转账日期，先退到消防梯。"
+        },
+        {
+          "chapterNo": 3,
+          "content": "天亮前，林岚把日期交给旧友，换来董事会的开会记录。账上那笔钱仍在流动，她决定当众揭穿继兄伪造的债务。会议室的门打开时，曾亲手赶她出公司的父亲也坐在主位。"
+        }
+      ],
+      "mockModelSelfAssessment": {
+        "totalScore": 92,
+        "trialResult": "pass",
+        "hardFailed": false
+      }
+    }
+  }
+}

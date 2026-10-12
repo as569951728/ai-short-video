@@ -2,7 +2,8 @@ import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import ElementPlus, { ElMessageBox } from 'element-plus'
 import { nextTick } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { NovelCreationStage, StageStatus, StaleLevel, TaskStatus, VersionStatus } from '@ai-shortvideo/shared'
+import { ErrorCode, NovelCreationStage, StageStatus, StaleLevel, TaskStatus, VersionStatus } from '@ai-shortvideo/shared'
+import { ApiClientError } from '../shared/services/http'
 import NovelDetailWorkbench from './NovelDetailWorkbench.vue'
 
 const mocks = vi.hoisted(() => ({
@@ -18,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   editDirectionCandidate: vi.fn(),
   fuseDirections: vi.fn(),
   generateDirections: vi.fn(),
+  generateBodyBatch: vi.fn(),
   generateOutline: vi.fn(),
   optimizeDirection: vi.fn(),
   startFullReview: vi.fn(),
@@ -50,7 +52,7 @@ vi.mock('../modules/novels/services/novelService', () => {
     editStructureAsset: noopAction,
     forcePassFullReview: noopAction,
     fuseDirections: mocks.fuseDirections,
-    generateBodyBatch: noopAction,
+    generateBodyBatch: mocks.generateBodyBatch,
     generateChapterPlan: noopAction,
     generateDirections: mocks.generateDirections,
     generateOutline: mocks.generateOutline,
@@ -139,6 +141,7 @@ afterEach(() => {
   mocks.editDirectionCandidate.mockReset()
   mocks.fuseDirections.mockReset()
   mocks.generateDirections.mockReset()
+  mocks.generateBodyBatch.mockReset()
   mocks.generateOutline.mockReset()
   mocks.optimizeDirection.mockReset()
   mocks.startFullReview.mockReset()
@@ -154,6 +157,34 @@ beforeEach(() => {
 })
 
 describe('NovelDetailWorkbench DOM behavior', () => {
+  it('shows task progress without a false cancel or regenerate action while setting generation is processing', async () => {
+    mocks.route.query = { step: 'setting' }
+    mocks.getNovelDetail.mockResolvedValue(createNovelDetail({
+      creationStage: NovelCreationStage.Setting,
+      currentAssets: { direction: { id: 'direction-current' }, setting: null, outline: null, stageOutline: null, chapterPlan: null },
+      recentTask: {
+        id: 'setting-task-processing',
+        taskType: 'novel_setting_generate',
+        status: TaskStatus.Processing,
+        statusText: '生成中',
+        progress: 30,
+        currentStep: '正在调用模型',
+        resultVersionIds: [],
+      },
+    }))
+
+    wrapper = mount(NovelDetailWorkbench, {
+      attachTo: document.body,
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+
+    const pendingPanel = wrapper.find('.empty-pending-panel')
+    expect(pendingPanel.exists()).toBe(true)
+    expect(pendingPanel.text()).toContain('当前请求未结束前不能再次生成')
+    expect(pendingPanel.findAll('button').map((button) => button.text())).toEqual(['查看任务进度'])
+  })
+
   it('sets real loading state when the refresh button is clicked instead of treating MouseEvent as silent=true', async () => {
     mocks.getNovelDetail.mockResolvedValueOnce(createNovelDetail())
     wrapper = mount(NovelDetailWorkbench, {
@@ -359,7 +390,7 @@ describe('NovelDetailWorkbench DOM behavior', () => {
     await wrapper.findAll('button').find((button) => button.text() === '任务详情')?.trigger('click')
     await flushPromises()
     expect(mocks.getTaskDetail).toHaveBeenCalledWith('task-outline-older')
-    const viewButtons = wrapper.findAll('button').filter((button) => button.text() === '查看大纲候选')
+    const viewButtons = wrapper.findAll('button').filter((button) => button.text() === '查看全书大纲候选')
     await viewButtons.at(-1)?.trigger('click')
     await nextTick()
     expect(document.getElementById('structure-candidate-outline-older')).toBeNull()
@@ -726,11 +757,11 @@ describe('NovelDetailWorkbench DOM behavior', () => {
       metric: 'non_whitespace_characters',
       metricText: '忽略空白、含标点',
       target: 2200,
-      lowerBound: 1980,
+      lowerBound: 1870,
       upperBound: 2530,
       actual: null,
       targetText: '2200',
-      rangeText: '1980-2530',
+      rangeText: '1870-2530',
       actualText: '尚未生成',
       status: 'pending',
       statusText: '待生成',
@@ -762,7 +793,7 @@ describe('NovelDetailWorkbench DOM behavior', () => {
     expect(wrapper.text()).toContain('长度门禁（忽略空白、含标点）')
     expect(wrapper.text()).toContain('实际 尚未生成')
     expect(wrapper.text()).toContain('目标 2200')
-    expect(wrapper.text()).toContain('合格区间 1980-2530')
+    expect(wrapper.text()).toContain('合格区间 1870-2530')
     wrapper.unmount()
 
     mocks.route.query = { step: 'body' }
@@ -789,19 +820,121 @@ describe('NovelDetailWorkbench DOM behavior', () => {
     expect(wrapper.find('[data-length-gate-status="too_long"] .el-tag--danger').exists()).toBe(true)
     await wrapper.findAll('button').find((button) => button.text() === '查看批次总结')?.trigger('click')
     await flushPromises()
-    expect(wrapper.findAll('button').map((button) => button.text())).toContain('重写本章')
+    expect(wrapper.findAll('button').map((button) => button.text())).toContain('处理本章')
+  })
+
+  it('starts a new body batch after a confirmed length failure but reuses the key after network uncertainty', async () => {
+    mocks.route.query = { step: 'body' }
+    mocks.getNovelDetail.mockResolvedValue(createNovelDetail({
+      creationStage: NovelCreationStage.Body,
+      stageStatus: StageStatus.NotStarted,
+      currentAssets: { direction: {}, setting: {}, outline: {}, stageOutline: {}, chapterPlan: { id: 'chapter-plan-current' } },
+      bodyGeneration: createBodyGenerationFixture({ status: 'pending' }),
+    }))
+    mocks.generateBodyBatch
+      .mockRejectedValueOnce(new ApiClientError('NETWORK_ERROR', '网络中断'))
+      .mockRejectedValueOnce(new ApiClientError(ErrorCode.GateBlocked, '正文字符数偏长', undefined, {
+        reasonCode: 'NOVEL_CONTENT_LENGTH_OUT_OF_RANGE',
+      }))
+      .mockResolvedValueOnce({})
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+
+    try {
+      wrapper = mount(NovelDetailWorkbench, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+      await flushPromises()
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const generateButton = wrapper.findAll('button').find((button) => button.text() === '生成下一批')
+        expect(generateButton?.attributes('disabled')).toBeUndefined()
+        await generateButton?.trigger('click')
+        await flushPromises()
+      }
+
+      expect(mocks.generateBodyBatch).toHaveBeenCalledTimes(3)
+      const keys = mocks.generateBodyBatch.mock.calls.map((call) => call[1].idempotencyKey)
+      expect(keys[1]).toBe(keys[0])
+      expect(keys[2]).not.toBe(keys[1])
+      expect(confirmSpy).toHaveBeenCalledTimes(3)
+    } finally {
+      confirmSpy.mockRestore()
+    }
+  })
+
+  it('shows a recoverable failed body batch after refresh when an overlong result was not saved', async () => {
+    mocks.route.query = { step: 'body' }
+    const bodyGeneration = {
+      ...createBodyGenerationFixture({ status: 'pending' }),
+      latestBatch: null,
+      nextBatchRange: { startChapterNo: 4, endChapterNo: 8, text: '第 4-8 章' },
+    }
+    mocks.getNovelDetail.mockResolvedValue(createNovelDetail({
+      creationStage: NovelCreationStage.Body,
+      bodyGeneration,
+      recentTask: {
+        id: 'body-length-failed',
+        taskType: 'body_batch_generate',
+        status: TaskStatus.Failed,
+        statusText: '失败',
+        progress: 0,
+        currentStep: '第 4 章字符数偏多，本次结果未保存。',
+        errorMessage: '第 4 章实际 2880 字，超过合格上限 2645 字。',
+        resultVersionIds: [],
+      },
+    }))
+
+    wrapper = mount(NovelDetailWorkbench, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(wrapper.find('[data-body-recovery="failed"]').text()).toContain('第 4 章实际 2880 字，超过合格上限 2645 字。')
+    expect(wrapper.find('[data-body-recovery="failed"]').text()).toContain('下一次将从 第 4-8 章 继续')
+    const retryButton = wrapper.findAll('button').find((button) => button.text() === '重新生成未完成章节')
+    expect(retryButton).toBeTruthy()
+    expect(retryButton?.attributes('disabled')).toBeUndefined()
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    try {
+      await retryButton?.trigger('click')
+      await flushPromises()
+      expect(mocks.generateBodyBatch).toHaveBeenCalledWith('novel-dom-001', expect.objectContaining({
+        startChapterNo: 4,
+        endChapterNo: 8,
+      }))
+    } finally {
+      confirmSpy.mockRestore()
+    }
+  })
+
+  it('blocks duplicate body generation after refresh while the authoritative task is processing', async () => {
+    mocks.route.query = { step: 'body' }
+    mocks.getNovelDetail.mockResolvedValue(createNovelDetail({
+      creationStage: NovelCreationStage.Body,
+      bodyGeneration: createBodyGenerationFixture({ status: 'pending' }),
+      recentTask: {
+        id: 'body-task-processing',
+        taskType: 'chapter_body_generate',
+        status: TaskStatus.Processing,
+        statusText: '生成中',
+        progress: 30,
+        currentStep: '正在调用模型',
+        resultVersionIds: [],
+      },
+    }))
+
+    wrapper = mount(NovelDetailWorkbench, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(wrapper.find('[data-body-recovery="processing"]').text()).toContain('正文任务仍在执行')
+    expect(wrapper.findAll('button').find((button) => button.text() === '生成下一批')?.attributes('disabled')).toBeDefined()
   })
 
   it('does not overlay a stale body length gate after the authoritative chapter target changes', async () => {
     mocks.route.query = { step: 'chapterPlan' }
     const plannedGate = {
       metric: 'non_whitespace_characters', metricText: '忽略空白、含标点', target: 2600,
-      lowerBound: 2340, upperBound: 2990, actual: null, targetText: '2600', rangeText: '2340-2990',
+      lowerBound: 2210, upperBound: 2990, actual: null, targetText: '2600', rangeText: '2210-2990',
       actualText: '尚未生成', status: 'pending', statusText: '待生成', tagType: 'info',
       canAdopt: false, adoptDisabledReason: null, authoritative: false,
     }
     const staleGeneratedGate = {
-      ...plannedGate, target: 2200, lowerBound: 1980, upperBound: 2530, targetText: '2200', rangeText: '1980-2530',
+      ...plannedGate, target: 2200, lowerBound: 1870, upperBound: 2530, targetText: '2200', rangeText: '1870-2530',
       actual: 2240, actualText: '2240', status: 'qualified', statusText: '字符数合格', tagType: 'success', canAdopt: true, authoritative: true,
     }
     mocks.getNovelDetail.mockResolvedValue(createNovelDetail({
@@ -820,7 +953,7 @@ describe('NovelDetailWorkbench DOM behavior', () => {
     const chapterGate = wrapper.find('[data-length-gate-status="pending"]')
     expect(chapterGate.text()).toContain('实际 尚未生成')
     expect(chapterGate.text()).toContain('目标 2600')
-    expect(chapterGate.text()).toContain('合格区间 2340-2990')
+    expect(chapterGate.text()).toContain('合格区间 2210-2990')
     expect(chapterGate.text()).not.toContain('2240')
   })
 
@@ -1485,11 +1618,11 @@ function createTrialRunFixture() {
           metric: 'non_whitespace_characters',
           metricText: '忽略空白、含标点',
           target: 2000,
-          lowerBound: 1800,
-          upperBound: 2200,
+          lowerBound: 1700,
+          upperBound: 2300,
           actual: 1900,
           targetText: '2000',
-          rangeText: '1800-2200',
+          rangeText: '1700-2300',
           actualText: '1900',
           status: 'qualified',
           statusText: '字符数合格',

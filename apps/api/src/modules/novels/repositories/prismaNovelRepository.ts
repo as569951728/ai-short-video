@@ -1399,7 +1399,7 @@ export class PrismaNovelRepository implements NovelRepository {
     await createTaskEvent(this.prisma, {
       task,
       eventType: 'calling_model',
-      message: '正在调用模型生成内容，可能需要 1-3 分钟，可以稍后回来查看。',
+      message: '正在调用模型生成内容，可能需要 2-5 分钟；若等待过久，请刷新查看任务状态。',
       progress: 0,
       requestId: input.context.requestId,
       createdAt: input.now
@@ -2239,7 +2239,7 @@ export class PrismaNovelRepository implements NovelRepository {
         tenantId: input.context.tenantId,
         data: {
           status: PrismaTaskStatus.PROCESSING,
-          statusNote: '正在调用模型继续试写第2-3章并生成试写总评，可能需要 1-3 分钟，可以稍后回来查看。',
+          statusNote: '正在调用模型继续试写第2-3章并生成试写总评，可能需要 2-5 分钟；若等待过久，请刷新查看任务状态。',
           progress: 18,
           resultVersionId: input.selectedCandidate.id,
           resultObjectType: 'trial_run',
@@ -2251,7 +2251,7 @@ export class PrismaNovelRepository implements NovelRepository {
       await createTaskEvent(tx, {
         task,
         eventType: 'calling_model',
-        message: '正在调用模型继续试写第2-3章并生成试写总评，可能需要 1-3 分钟，可以稍后回来查看。',
+        message: '正在调用模型继续试写第2-3章并生成试写总评，可能需要 2-5 分钟；若等待过久，请刷新查看任务状态。',
         progress: 18,
         requestId: input.context.requestId,
         createdAt: input.now
@@ -2651,6 +2651,38 @@ export class PrismaNovelRepository implements NovelRepository {
           }
         }
       });
+      if (!isReturnUpstream) {
+        const trialResults = await tx.trialChapterResult.findMany({
+          where: { tenantId: input.context.tenantId, trialRunId: input.trialRun.id },
+          select: { chapterId: true, contentVersionId: true, status: true }
+        });
+        if (trialResults.length !== input.trialRun.trialChapterCount) {
+          throw new BusinessError(ErrorCode.VersionConflict, '试写章节结果已变化，请刷新后重试。');
+        }
+        for (const result of trialResults) {
+          if (result.status !== 'completed' || !result.contentVersionId) {
+            throw new BusinessError(ErrorCode.GateBlocked, '试写章节尚未全部完成，不能进入批量正文。');
+          }
+          const promoted = await tx.novelChapter.updateMany({
+            where: {
+              id: result.chapterId,
+              tenantId: input.context.tenantId,
+              novelId: input.novel.id,
+              currentContentVersionId: result.contentVersionId,
+              mainStatus: 'trial_written',
+              deletedAt: null
+            },
+            data: {
+              mainStatus: 'completed',
+              statusNote: '试写已确认，作为批量正文前置正式版本。',
+              updatedAt: input.now
+            }
+          });
+          if (promoted.count !== 1) {
+            throw new BusinessError(ErrorCode.VersionConflict, '试写章节正文版本已变化，请刷新后重试。');
+          }
+        }
+      }
       const sourceTask = input.trialRun.sourceTaskId
         ? await tx.generationTask.findFirst({
             where: {
@@ -3799,7 +3831,7 @@ function createStructureGenerationTaskData(options: {
     objectType: options.input.objectType,
     objectId: options.input.objectType,
     status: options.status,
-    statusNote: '正在调用模型生成内容，可能需要 1-3 分钟，可以稍后回来查看。',
+    statusNote: '正在调用模型生成内容，可能需要 2-5 分钟；若等待过久，请刷新查看任务状态。',
     progress: 0,
     currentStep: options.currentStep,
     triggerSource: 'manual',
@@ -4001,7 +4033,7 @@ async function createTaskProgressEvents(
   await createTaskEvent(tx, {
     task,
     eventType: 'calling_model',
-    message: '正在调用模型生成内容，可能需要 1-3 分钟，可以稍后回来查看。',
+    message: '正在调用模型生成内容，可能需要 2-5 分钟；若等待过久，请刷新查看任务状态。',
     progress: 35,
     requestId,
     createdAt: new Date(timestamp + 1)

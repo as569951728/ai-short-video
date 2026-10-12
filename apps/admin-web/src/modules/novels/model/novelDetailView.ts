@@ -54,7 +54,7 @@ export interface LocalPendingTaskSummary extends RecentTaskSummaryDTO {
   statusNote: string
 }
 
-export const LONG_RUNNING_MODEL_STATUS_NOTE = '正在调用模型生成内容，可能需要 1-3 分钟，可以稍后回来查看。'
+export const LONG_RUNNING_MODEL_STATUS_NOTE = '正在调用模型生成内容，可能需要 2-5 分钟；若等待过久，请刷新查看任务状态。'
 
 const PENDING_ACTION_META: Record<NovelLongRunningAction, { taskType: string; label: string }> = {
   direction_generate: { taskType: 'novel_direction_generate', label: '生成方向' },
@@ -231,9 +231,10 @@ export function getTaskResultPlacement(task: (Pick<RecentTaskSummaryDTO, 'status
         ? { summary: '阶段大纲已采用，下一步可生成章节目录。', actionLabel: '进入章节目录', stepKey: 'chapterPlan' }
         : { summary: '全书大纲已采用，下一步需要生成并采用阶段大纲。', actionLabel: '生成阶段大纲', stepKey: 'outline' }
     }
+    const isStageOutline = taskType.includes('stage_outline')
     return {
-      summary: '新大纲候选已进入候选池，请查看后决定是否采用。',
-      actionLabel: '查看大纲候选',
+      summary: isStageOutline ? '阶段大纲候选已进入候选池，请查看后决定是否采用。' : '全书大纲候选已进入候选池，请查看后决定是否采用。',
+      actionLabel: isStageOutline ? '查看阶段大纲候选' : '查看全书大纲候选',
       stepKey: 'outline',
     }
   }
@@ -244,6 +245,14 @@ export function getTaskResultPlacement(task: (Pick<RecentTaskSummaryDTO, 'status
       summary: adopted ? '章节目录已采用，下一步可进入试写调试。' : '新章节目录候选已进入候选池，请查看后决定是否采用。',
       actionLabel: adopted ? '进入试写' : '查看章节目录',
       stepKey: adopted ? 'trial' : 'chapterPlan',
+    }
+  }
+
+  if (taskType.includes('trial_chapter_one') || (taskType === 'trial_writing_generate' && task.currentStep?.includes('第1章候选'))) {
+    return {
+      summary: '第 1 章候选已生成，请比较正文并选定一版，再继续生成第 2-3 章。',
+      actionLabel: '查看第 1 章候选',
+      stepKey: 'trial',
     }
   }
 
@@ -357,7 +366,7 @@ function getTaskFamily(taskType: string) {
   if (taskType.includes('outline') && !taskType.includes('stage_outline')) return 'outline'
   if (taskType.includes('trial_followup')) return 'trial_followup'
   if (taskType.includes('trial')) return 'trial'
-  if (taskType.includes('body_batch')) return 'body_batch'
+  if (taskType.includes('body_batch') || taskType.includes('chapter_body')) return 'body_batch'
   if (taskType.includes('full_review')) return 'full_review'
   if (taskType.includes('video_readiness')) return 'video_readiness'
   return ''
@@ -392,7 +401,7 @@ function isTaskForNovelAction(task: RecentTaskSummaryDTO | null | undefined, act
   if (action === 'direction_optimize') return normalized.includes('direction') && normalized.includes('optimize')
   if (action === 'trial_generate') return normalized.includes('trial') && isGeneration
   if (action === 'trial_followup_generate') return normalized.includes('trial_followup')
-  if (action === 'body_batch_generate') return normalized.includes('body_batch')
+  if (action === 'body_batch_generate') return normalized.includes('body_batch') || normalized.includes('chapter_body')
   if (action === 'full_review') return normalized.includes('full_review')
   if (action === 'video_readiness_recheck') return normalized.includes('video_readiness') && normalized.includes('check')
   if (action === 'video_readiness_confirm') return normalized.includes('video_readiness') && normalized.includes('confirm')

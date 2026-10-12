@@ -118,7 +118,7 @@ export function actionSpec(action: NovelProviderAction, novelId: string) {
   switch (action) {
     case 'direction_generate': return { objectId: novelId, effectiveRequest: {}, sourceVersionRefs: { currentDirectionVersionId: null } };
     case 'direction_fuse': return { objectId: novelId, effectiveRequest: { versionIds: ['direction_a', 'direction_b'] }, sourceVersionRefs: { sourceVersionIds: ['direction_a', 'direction_b'] } };
-    case 'direction_optimize': return { objectId: 'direction_a', effectiveRequest: { versionId: 'direction_a' }, sourceVersionRefs: { sourceVersionIds: ['direction_a'] } };
+    case 'direction_optimize': return { objectId: 'direction_a', effectiveRequest: { versionId: 'direction_a', instruction: '保持主线并改善方向表达' }, sourceVersionRefs: { sourceVersionIds: ['direction_a'] } };
     case 'setting_generate': return { objectId: novelId, effectiveRequest: {}, sourceVersionRefs: { ...structure, objectType: 'setting' } };
     case 'outline_generate': return { objectId: novelId, effectiveRequest: {}, sourceVersionRefs: { ...structure, objectType: 'outline' } };
     case 'stage_outline_generate': return { objectId: novelId, effectiveRequest: {}, sourceVersionRefs: { ...structure, objectType: 'stage_outline' } };

@@ -122,6 +122,13 @@ describe('RP-02B2a2 authoritative claim', () => {
         for (const invocation of invocations) {
           assert.equal(hasNestedKey(invocation.input, 'sourceIdentities'), false, `${action}:authority refs stay outside provider DTO`);
           for (const rawEntityKey of ['tenantId', 'createdAt', 'updatedAt', 'deletedAt', 'sourceTaskId', 'metadata']) {
+            if (action === 'novel_full_review' && rawEntityKey === 'tenantId') {
+              const input = invocation.input as { coverageManifest: { tenantId: string } };
+              assert.equal(input.coverageManifest.tenantId, 'tenant_test', `${action}:manifest remains tenant scoped internally`);
+              const withoutManifestTenant = { ...input, coverageManifest: omitKey(input.coverageManifest, 'tenantId') };
+              assert.equal(hasNestedKey(withoutManifestTenant, 'tenantId'), false, `${action}:tenant scope stays in manifest only`);
+              continue;
+            }
             assert.equal(hasNestedKey(invocation.input, rawEntityKey), false, `${action}:no raw repository ${rawEntityKey}`);
           }
         }
@@ -902,7 +909,8 @@ async function loadPrismaAuthorityThroughInMemoryData(
   const facade = Object.create(PrismaNovelRepository.prototype) as PrismaNovelRepository & Record<string, unknown>;
   for (const method of [
     'findById', 'findPreferencesByNovelId', 'listDirectionVersions', 'listStructureVersions', 'listNovelChapters',
-    'findChapterContentVersionById', 'findTrialRunById', 'findStructureVersionById', 'findLatestLongTermMemory', 'findLatestBodyBatch'
+    'findChapterContentVersionById', 'findFeatureCardById', 'findReviewReportById', 'findTrialRunById',
+    'findStructureVersionById', 'findLatestLongTermMemory', 'findLatestBodyBatch'
   ]) {
     (facade as Record<string, unknown>)[method] = (...args: unknown[]) => (repository as unknown as Record<string, (...values: unknown[]) => unknown>)[method]!(...args);
   }

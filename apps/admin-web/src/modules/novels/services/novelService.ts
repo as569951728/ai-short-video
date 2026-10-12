@@ -873,7 +873,7 @@ function createPlannedLengthGateRow(chapter: NovelChapterDTO): ChapterLengthGate
   const hasContent = Boolean(chapter.currentContentVersionId)
   const target = chapter.wordTarget
   const isConfigured = target !== null
-  const lowerBound = isConfigured ? Math.ceil((target * 90) / 100) : null
+  const lowerBound = isConfigured ? Math.ceil((target * 85) / 100) : null
   const upperBound = isConfigured ? Math.floor((target * 115) / 100) : null
   return {
     metric: 'unicode_code_point_non_whitespace_nfc_v1',
@@ -1324,7 +1324,7 @@ function applyHighRiskConfirmationFixture(detail: NovelDetailDTO, novelId: strin
     shortCandidate.lengthGate = {
       metric: 'unicode_code_point_non_whitespace_nfc_v1',
       target: 2200,
-      lowerBound: 1980,
+      lowerBound: 1870,
       upperBound: 2530,
       actual: 1420,
       status: 'too_short',
@@ -1882,8 +1882,8 @@ function createMockTrialCandidate(score: number, index: number, selectedId?: str
     lengthGate: {
       metric: 'unicode_code_point_non_whitespace_nfc_v1',
       target: actualLength,
-      lowerBound: Math.max(0, actualLength - 20),
-      upperBound: actualLength + 20,
+      lowerBound: Math.ceil(actualLength * 0.85),
+      upperBound: Math.floor(actualLength * 1.15),
       actual: actualLength,
       status: 'pass' as const,
       statusText: '字符数合格',
@@ -2077,7 +2077,7 @@ function createMockBodyBatchChapterResult(chapterNo: number) {
     lengthGate: {
       metric: 'unicode_code_point_non_whitespace_nfc_v1' as const,
       target: 2200,
-      lowerBound: 1980,
+      lowerBound: 1870,
       upperBound: 2530,
       actual: 2240,
       status: 'pass' as const,

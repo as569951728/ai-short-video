@@ -312,11 +312,8 @@
                       <strong>设定正在生成中</strong>
                       <el-tag type="warning" effect="plain">生成中</el-tag>
                     </div>
-                    <p>刷新或新开页面后会继续保留等待状态。生成结果会进入设定候选池，点击“采用”后才会成为正式设定。</p>
-                    <div class="empty-pending-actions">
-                      <el-button @click="cancelLocalPendingWait">取消等待</el-button>
-                      <el-button type="warning" plain @click="restartStructureGeneration('setting')">重新生成</el-button>
-                    </div>
+                    <p>刷新或新开页面后可查看任务进度。当前请求未结束前不能再次生成；失败或超时后可以重试。结果进入候选池，点击“采用”后才成为正式设定。</p>
+                    <el-button @click="openTaskDrawer(activeRecentTask?.id)">查看任务进度</el-button>
                   </div>
                   <div v-else class="empty-generate-panel">
                     <p>方向采用后可生成设定候选，生成结果不会自动覆盖正式设定。</p>
@@ -667,7 +664,7 @@
                   <p class="muted">先比较第 1 章候选，选定后才继续生成第 2-3 章和试写总评。</p>
                 </div>
                 <div class="task-notice-actions">
-                  <el-button v-if="showTrialAuthoringActions" :disabled="!canGenerateTrial" :loading="generatingTrial" @click="() => handleRegenerateTrial('重新生成第 1 章候选')">重新生成 3 个</el-button>
+                  <el-button v-if="showTrialAuthoringActions && detail?.latestTrialRun" :disabled="!canGenerateTrial" :loading="generatingTrial" @click="() => handleRegenerateTrial('重新生成第 1 章候选')">重新生成 3 个</el-button>
                 </div>
               </div>
 
@@ -841,10 +838,36 @@
                   :loading="generatingBodyBatch"
                   @click="handleGenerateBodyBatch"
                 >
-                  {{ bodyGeneration?.recommendedAction.label || '开始本批生成' }}
+                  {{ bodyGenerationActionLabel }}
                 </el-button>
                 <el-button :disabled="!latestBodyBatch" @click="bodySummaryDrawer.open = true">查看批次总结</el-button>
               </div>
+
+              <el-alert
+                v-if="isAuthoritativeBodyGenerationInFlight"
+                data-body-recovery="processing"
+                class="mb-16"
+                title="正文任务仍在执行，请等待结果"
+                type="info"
+                show-icon
+                :closable="false"
+              >
+                <p>生成可能需要 2-5 分钟；刷新页面后任务状态仍会保留，完成前不能重复发起。</p>
+                <el-button v-if="bodyGenerationTask" size="small" @click="openTaskDrawer(bodyGenerationTask.id)">查看任务进度</el-button>
+              </el-alert>
+              <el-alert
+                v-else-if="failedBodyGenerationTask"
+                data-body-recovery="failed"
+                class="mb-16"
+                title="本批正文生成失败，请核对原因后重新生成"
+                type="warning"
+                show-icon
+                :closable="false"
+              >
+                <p>{{ failedBodyGenerationTask.errorMessage || failedBodyGenerationTask.currentStep || '本次任务未完成。' }}</p>
+                <p>失败结果不会成为新的正式正文；已完成章节仍会保留。下一次将从 {{ bodyGeneration?.nextBatchRange.text || '未完成章节' }} 继续。</p>
+                <el-button size="small" @click="openTaskDrawer(failedBodyGenerationTask.id)">查看失败任务</el-button>
+              </el-alert>
 
               <el-alert
                 v-if="!bodyGeneration?.strategySnapshot"
@@ -1369,7 +1392,7 @@
                   plain
                   @click="router.push(`/novels/${novelId}/chapters/${row.chapterId}`)"
                 >
-                  重写本章
+                  处理本章
                 </el-button>
                 <el-button size="small" @click="router.push(`/novels/${novelId}/chapters/${row.chapterId}`)">章节详情</el-button>
               </template>
@@ -1405,7 +1428,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { NovelCreationStage, StageStatus, TaskStatus, VersionStatus, type FullReviewIssueDTO, type RecentTaskSummaryDTO, type StructureAssetType, type TaskDetailDTO } from '@ai-shortvideo/shared'
+import { ErrorCode, NovelCreationStage, StageStatus, TaskStatus, VersionStatus, type FullReviewIssueDTO, type RecentTaskSummaryDTO, type StructureAssetType, type TaskDetailDTO } from '@ai-shortvideo/shared'
 import { ApiClientError } from '../shared/services/http'
 import TaskProgressPanel from '../modules/novels/components/TaskProgressPanel.vue'
 import {
@@ -1670,6 +1693,16 @@ const visibleOutlineRows = computed(() => (activeSubStep.value.key === 'stages' 
 const chapterPlanRows = computed(() => structureRows.value.filter((asset) => asset.objectType === 'chapter_plan'))
 const bodyGeneration = computed(() => detail.value?.bodyGeneration ?? null)
 const latestBodyBatch = computed(() => bodyGeneration.value?.latestBatch ?? null)
+const bodyGenerationTask = computed(() => resolveTaskSummaryForAction(pendingTask.value, detail.value, 'body_batch_generate'))
+const authoritativeBodyGenerationTask = computed(() => resolveTaskSummaryForAction(null, detail.value, 'body_batch_generate'))
+const isAuthoritativeBodyGenerationInFlight = computed(() =>
+  authoritativeBodyGenerationTask.value?.status === TaskStatus.Queued ||
+  authoritativeBodyGenerationTask.value?.status === TaskStatus.Processing,
+)
+const failedBodyGenerationTask = computed(() => bodyGenerationTask.value?.status === TaskStatus.Failed ? bodyGenerationTask.value : null)
+const bodyGenerationActionLabel = computed(() => failedBodyGenerationTask.value
+  ? '重新生成未完成章节'
+  : bodyGeneration.value?.recommendedAction.label || '开始本批生成')
 const latestBodyBatchChapterRows = computed(() => (latestBodyBatch.value?.summary.chapterResults ?? []).map(toBodyBatchChapterResultRow))
 const authoritativeLengthGateByChapterId = computed(() => new Map(
   latestBodyBatchChapterRows.value
@@ -1747,7 +1780,9 @@ const canStartBodyBatch = computed(() => Boolean(
   bodyGeneration.value.nextBatchRange.startChapterNo &&
   bodyGeneration.value.nextBatchRange.endChapterNo &&
   !bodyGeneration.value.recommendedAction.disabled &&
-  bodyGeneration.value.openImpactCases.length === 0,
+  bodyGeneration.value.openImpactCases.length === 0 &&
+  !isAuthoritativeBodyGenerationInFlight.value &&
+  !hasLocalPendingWait.value,
 ))
 const canStartFullReview = computed(() => detail.value?.creationStage === NovelCreationStage.Body && detail.value.stageStatus === StageStatus.Completed)
 const canConfirmCompletion = computed(() => Boolean(latestFullReview.value?.gate.allowCompletion && detail.value?.creationStage === NovelCreationStage.CompletionConfirm && detail.value.stageStatus === StageStatus.WaitingUser))
@@ -1792,8 +1827,7 @@ const canGenerateOutline = computed(() => Boolean(detail.value?.currentAssets.se
 const canGenerateStageOutline = computed(() => Boolean(detail.value?.currentAssets.outline))
 const canGenerateChapterPlan = computed(() => Boolean(detail.value?.currentAssets.stageOutline))
 const canGenerateTrial = computed(() => Boolean(detail.value?.currentAssets.chapterPlan) && detail.value?.creationStage === NovelCreationStage.Trial)
-const pendingAction = computed(() => pendingTask.value?.action ?? '')
-const hasLocalPendingWait = computed(() => Boolean(pendingTask.value && activeRecentTask.value?.id === pendingTask.value.id))
+const hasLocalPendingWait = computed(() => [TaskStatus.Queued, TaskStatus.Processing].includes(activeRecentTask.value?.status as TaskStatus))
 const settingGenerationPending = computed(() => isNovelActionRunning('setting_generate'))
 watch(
   activeRecentTask,
@@ -2008,7 +2042,7 @@ const primaryGenerateAction = computed(() => {
 
   if (detail.value.creationStage === NovelCreationStage.Body && detail.value.stageStatus !== StageStatus.Completed) {
     return {
-      label: detail.value.bodyGeneration?.recommendedAction.label ?? '开始本批生成',
+      label: bodyGenerationActionLabel.value,
       loading: generatingBodyBatch.value,
       disabled: !canStartBodyBatch.value,
       run: handleGenerateBodyBatch,
@@ -2116,7 +2150,7 @@ const workbenchSteps = computed<WorkbenchStepView[]>(() => {
       key: 'outline',
       name: '大纲设计',
       description: '规划全书主线、阶段目标、反转和节奏。',
-      gateText: hasStageOutline ? '阶段大纲已采用，下一步进入章节目录规划。' : hasStageOutlineCandidate ? '阶段大纲候选已生成，请查看后采用。' : hasOutline ? '需要采用阶段大纲，才会进入章节目录规划。' : '需要先采用小说设定。',
+      gateText: hasStageOutline ? '阶段大纲已采用，下一步进入章节目录规划。' : hasStageOutlineCandidate ? '阶段大纲候选已生成，请查看后采用。' : hasOutline ? '生成并采用阶段大纲后，章节目录才会解锁。' : hasSetting ? '生成并采用全书大纲，再生成并采用阶段大纲。' : '需要先采用小说设定。',
       nextAction: hasStageOutline ? '全书大纲和阶段大纲已确认。' : hasStageOutlineCandidate ? '查看阶段大纲候选，确认是否采用。' : hasOutline ? '生成并采用阶段大纲。' : hasSetting ? '生成全书大纲并采用。' : '先完成小说设定。',
       primaryActionLabel: hasStageOutlineCandidate ? '查看阶段大纲候选' : hasOutline ? '生成阶段大纲' : '生成全书大纲',
       primaryAction: hasStageOutlineCandidate ? () => setActiveSubStep('stages') : () => handleGenerateStructure(hasOutline ? 'stage_outline' : 'outline'),
@@ -2536,35 +2570,8 @@ function clearLocalPendingTask(taskId = pendingTask.value?.id) {
 }
 
 function isNovelActionRunning(action: NovelLongRunningAction) {
-  return hasLocalPendingWait.value && pendingAction.value === action
-}
-
-function cancelLocalPendingWait() {
-  clearLocalPendingTask()
-  ElMessage.info('已取消本地等待状态；如果旧模型请求稍后返回，请刷新查看候选池。')
-}
-
-async function restartStructureGeneration(objectType: StructureAssetType) {
-  if (structureGeneratingType.value) {
-    ElMessage.info('当前页面仍在等待模型返回，请先等待或刷新后再操作。')
-    return
-  }
-
-  try {
-    await ElMessageBox.confirm(
-      '这只会放弃当前页面的等待状态，不能保证中止已经发出的模型请求。新的生成结果仍会进入候选池，最终需要手动采用。',
-      '放弃等待并重新生成？',
-      {
-        confirmButtonText: '重新生成',
-        cancelButtonText: '先不处理',
-        type: 'warning',
-      },
-    )
-  } catch {
-    return
-  }
-  clearLocalPendingTask()
-  await handleGenerateStructure(objectType, '用户放弃等待后重新生成')
+  const task = resolveTaskSummaryForAction(pendingTask.value, detail.value, action)
+  return [TaskStatus.Queued, TaskStatus.Processing].includes(task?.status as TaskStatus)
 }
 
 async function openTaskDrawer(taskId?: string | null) {
@@ -2979,6 +2986,10 @@ async function promptHighRiskReason(options: {
 }
 
 async function handleGenerateBodyBatch() {
+  if (isAuthoritativeBodyGenerationInFlight.value) {
+    ElMessage.info('正文任务仍在执行中，请查看任务进度，完成后再发起新任务。')
+    return
+  }
   if (hasLocalPendingWait.value) {
     ElMessage.info('已有生成任务在等待中，请先查看最近任务或取消等待。')
     return
@@ -3025,6 +3036,16 @@ async function handleGenerateBodyBatch() {
     bodyBatchIdempotencyKey.value = ''
     await loadDetail()
   } catch (error) {
+    if (
+      error instanceof ApiClientError &&
+      error.code === ErrorCode.GateBlocked &&
+      error.details &&
+      typeof error.details === 'object' &&
+      'reasonCode' in error.details &&
+      error.details.reasonCode === 'NOVEL_CONTENT_LENGTH_OUT_OF_RANGE'
+    ) {
+      bodyBatchIdempotencyKey.value = ''
+    }
     apiError.value = formatApiError(error)
     await loadDetail(true)
   } finally {
