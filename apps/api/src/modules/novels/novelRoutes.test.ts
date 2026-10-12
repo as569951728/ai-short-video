@@ -2483,7 +2483,7 @@ describe('novel package 6 body generation routes', () => {
     assert.equal(during.statusSummary.stageStatus, 'processing');
     assert.equal(during.recentTask.taskType, 'body_batch_generate');
     assert.equal(during.recentTask.status, TaskStatus.Processing);
-    assert.match(during.recentTask.currentStep, /第 4-5 章正文/);
+    assert.match(during.recentTask.currentStep, /第 4-8 章正文/);
     assert.equal(repository.getGenerationTasks().filter((task) => task.taskType === 'body_batch_generate').length, 1);
     assert.equal(delayedClient.getBodyCallCount(), 1);
 
@@ -2535,7 +2535,7 @@ describe('novel package 6 body generation routes', () => {
     assert.equal(generated.task.id, during.recentTask.id);
     assert.equal(generated.task.status, TaskStatus.Completed);
     assert.equal(generated.batch.startChapterNo, 4);
-    assert.equal(generated.batch.endChapterNo, 5);
+    assert.equal(generated.batch.endChapterNo, 8);
     await app.close();
   });
 
@@ -4781,8 +4781,12 @@ function createFakeDeepSeekPayload(taskName: string): Record<string, unknown> {
     };
   }
   if (taskName.startsWith('novel_structure_chapter_plan_')) {
+    const match = taskName.match(/_(\d+)_(\d+)$/);
+    if (!match) throw new Error('Invalid chapter plan fixture task name');
+    const start = Number(match[1]);
+    const end = Number(match[2]);
     return {
-      chapters: [1, 2, 3, 4, 5].map((chapterNo) => ({
+      chapters: Array.from({ length: end - start + 1 }, (_, index) => start + index).map((chapterNo) => ({
         chapterNo,
         stageIndex: 1,
         title: `第${chapterNo}章`,
@@ -4800,10 +4804,10 @@ function createFakeDeepSeekPayload(taskName: string): Record<string, unknown> {
       summary: '结构清晰，能支撑 5 章短篇闭环。',
       content: {
         sections: [
-          { title: '开局', summary: '误解爆发并留下证据钩子。' },
-          { title: '反击', summary: '主角逐步拿回主动权。' }
+          { title: '开局', body: '误解爆发并留下证据钩子。', summary: '误解爆发并留下证据钩子。' },
+          { title: '反击', body: '主角逐步拿回主动权。', summary: '主角逐步拿回主动权。' }
         ],
-        stages: [{ title: '第一阶段', chapterRange: '1-5', goal: '完成翻盘闭环' }],
+        stages: [{ stageIndex: 1, title: '第一阶段', chapterRange: '1-5', goal: '完成翻盘闭环', conflict: '外界质疑升级', payoff: '公开证据反击' }],
         chapters: [1, 2, 3, 4, 5].map((chapterNo) => ({
           chapterNo,
           title: `第${chapterNo}章`,
@@ -5372,7 +5376,17 @@ describe('RP-02B2a1 registry and strict provider ABI', () => {
     assert.equal((captured.find((item) => item.action === 'novel_full_review')?.payload.sourceVersionRefs as { bodyStrategySnapshotId: string | null }).bodyStrategySnapshotId, null);
     const chapterPlanInput = captured.find((item) => item.action === 'chapter_plan_generate')!.payload, projectedStage = (chapterPlanInput.currentAssets as { stageOutline: { content: { sections: unknown[]; stages: unknown[]; chapters: unknown[] } } }).stageOutline.content;
     assert.deepEqual([projectedStage.sections.length, projectedStage.stages.length, projectedStage.chapters.length], [4, 5, 8]);
-    const prompts = new Map<string, any>(); let providerCalls = 0; const deepseek = new DeepSeekNovelProvider({ client: { chat: async (request) => { providerCalls += 1; prompts.set(request.taskName, JSON.parse(request.messages[1]?.content ?? '{}')); return { content: request.taskName.includes('chapter_plan') ? '{"chapters":[{"chapterNo":1}]}' : request.taskName === 'novel_body_chapter_generate' ? '{"content":"正文"}' : '{}', model: request.model }; } } });
+    const prompts = new Map<string, any>(); let providerCalls = 0; const deepseek = new DeepSeekNovelProvider({ client: { chat: async (request) => {
+      providerCalls += 1;
+      const prompt = JSON.parse(request.messages[1]?.content ?? '{}');
+      prompts.set(request.taskName, prompt);
+      const payload = createFakeDeepSeekPayload(request.taskName);
+      if (request.taskName.includes('chapter_plan')) {
+        const wordTarget = prompt.payload.wordTargetPolicy.defaultTarget;
+        (payload.chapters as Array<{ wordTarget: number }>).forEach((chapter) => { chapter.wordTarget = wordTarget; });
+      }
+      return { content: JSON.stringify(payload), model: request.model };
+    } } });
     for (const action of ['setting_generate', 'outline_generate', 'stage_outline_generate', 'chapter_plan_generate'] as const) await Reflect.apply(deepseek.generateAsset, deepseek, [captured.find((item) => item.action === action)!.payload]); await Reflect.apply(deepseek.generateBodyChapter, deepseek, [captured.find((item) => item.action === 'body_batch_generate')!.payload]);
     const assets = (task: string) => prompts.get(task).payload.currentAssets as Record<string, any>;
     assert.deepEqual(exactKeys(assets('novel_structure_setting')), ['direction']); assert.equal(assets('novel_structure_setting').direction.logline, 'DIRECTION_LOGLINE_CANARY'); assert.equal(assets('novel_structure_setting').direction.coreHook, 'DIRECTION_HOOK_CANARY');

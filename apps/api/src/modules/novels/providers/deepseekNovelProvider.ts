@@ -168,7 +168,7 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
           wordTargetPolicy
         }, M1_OUTPUT_SCHEMA_HINT.chapterPlanChunk),
         maxTokens: 2200,
-        validate: (value) => readArray(value, 'chapters').map((chapter, index) => toStructureChapterDraft(chapter, start + index, '章节推进主线。', wordTargetPolicy.defaultTarget))
+        validate: (value) => validateChapterPlanChunk(value, start, end, wordTargetPolicy)
       });
       chapters.push(...chunk);
     }
@@ -509,8 +509,8 @@ function toDirectionDraft(value: unknown): DirectionCandidateDraft {
       riskTags: readStringArray(content, 'riskTags', readStringArray(item, 'riskTags')),
       recommendation: readOptionalString(content, 'recommendation') ?? readOptionalString(item, 'recommendedReason') ?? summary
     },
-    score: readNumber(item, 'score'),
-    marketScore: readOptionalNumber(item, 'marketScore') ?? readNumber(item, 'score'),
+    score: readScore(item, 'score'),
+    marketScore: readOptionalScore(item, 'marketScore') ?? readScore(item, 'score'),
     riskLevel: readRiskLevel(item, 'riskLevel'),
     riskTags: readStringArray(item, 'riskTags'),
     recommendedReason: readString(item, 'recommendedReason')
@@ -519,29 +519,31 @@ function toDirectionDraft(value: unknown): DirectionCandidateDraft {
 
 function toStructureDraft(objectType: StructureAssetType, value: unknown): StructureAssetDraft {
   const item = asRecord(value);
-  const rawContent = asRecord(item.content ?? {});
-  const title = readOptionalString(item, 'title') ?? readOptionalString(rawContent, 'title') ?? getStructureAssetLabel(objectType);
-  const summary = readOptionalString(item, 'summary') ?? readOptionalString(rawContent, 'summary') ?? readOptionalString(item, 'description') ?? `${title} 已生成。`;
+  const rawContent = readObject(item, 'content');
+  const title = readString(item, 'title');
+  const summary = readString(item, 'summary');
+  const sections = readArray(rawContent, 'sections');
+  const stages = objectType === 'stage_outline' ? readArray(rawContent, 'stages') : readPlainArray(rawContent, 'stages');
   const content: StructureAssetContentDTO = {
     title: readOptionalString(rawContent, 'title') ?? title,
     summary: readOptionalString(rawContent, 'summary') ?? summary,
-    sections: readPlainArray(rawContent, 'sections').map((section, index) => {
+    sections: sections.map((section) => {
       const record = asRecord(section);
       return {
-        title: readOptionalString(record, 'title') ?? `结构段落 ${index + 1}`,
-        body: readOptionalString(record, 'body') ?? readOptionalString(record, 'summary') ?? summary,
+        title: readString(record, 'title'),
+        body: readString(record, 'body'),
         items: readStringArray(record, 'items', [])
       };
     }),
-    stages: readPlainArray(rawContent, 'stages').map((stage, index) => {
+    stages: stages.map((stage, index) => {
       const record = asRecord(stage);
       return {
-        stageIndex: readOptionalNumber(record, 'stageIndex') ?? index + 1,
-        title: readOptionalString(record, 'title') ?? `阶段 ${index + 1}`,
-        chapterRange: readOptionalString(record, 'chapterRange') ?? '1-5',
-        goal: readOptionalString(record, 'goal') ?? readOptionalString(record, 'summary') ?? summary,
-        conflict: readOptionalString(record, 'conflict') ?? '主角与外部压力升级',
-        payoff: readOptionalString(record, 'payoff') ?? '阶段反击兑现'
+        stageIndex: objectType === 'stage_outline' ? readPositiveInteger(record, 'stageIndex') : readOptionalNumber(record, 'stageIndex') ?? index + 1,
+        title: objectType === 'stage_outline' ? readString(record, 'title') : readOptionalString(record, 'title') ?? `阶段 ${index + 1}`,
+        chapterRange: objectType === 'stage_outline' ? readString(record, 'chapterRange') : readOptionalString(record, 'chapterRange') ?? '1-5',
+        goal: objectType === 'stage_outline' ? readString(record, 'goal') : readOptionalString(record, 'goal') ?? summary,
+        conflict: objectType === 'stage_outline' ? readString(record, 'conflict') : readOptionalString(record, 'conflict') ?? '主角与外部压力升级',
+        payoff: objectType === 'stage_outline' ? readString(record, 'payoff') : readOptionalString(record, 'payoff') ?? '阶段反击兑现'
       };
     }),
     chapters: readPlainArray(rawContent, 'chapters').map((chapter, index) => {
@@ -550,22 +552,12 @@ function toStructureDraft(objectType: StructureAssetType, value: unknown): Struc
     riskTags: readStringArray(rawContent, 'riskTags', readStringArray(item, 'riskTags')),
     recommendation: readOptionalString(rawContent, 'recommendation') ?? readOptionalString(item, 'recommendedReason') ?? summary
   };
-  if (content.sections.length === 0) {
-    content.sections.push({ title, body: summary, items: [] });
-  }
-  if (content.stages.length === 0) {
-    content.stages.push({ stageIndex: 1, title: '第一阶段', chapterRange: '1-5', goal: summary, conflict: '主线压力升级', payoff: '阶段反击兑现' });
-  }
-  if (content.chapters.length === 0) {
-    content.chapters.push({ chapterNo: 1, stageIndex: 1, title: '第1章', wordTarget: 1200, goal: summary, conflict: '开篇冲突', hook: '结尾钩子' });
-  }
-
   return {
     objectType,
     title,
     summary,
     content,
-    score: readOptionalNumber(item, 'score') ?? 80,
+    score: readScore(item, 'score'),
     riskLevel: readRiskLevel(item, 'riskLevel'),
     riskTags: readStringArray(item, 'riskTags'),
     recommendedReason: readOptionalString(item, 'recommendedReason') ?? summary
@@ -699,6 +691,29 @@ function toStructureChapterDraft(value: unknown, fallbackChapterNo: number, summ
     conflict: truncateText(readOptionalString(record, 'conflict') ?? '主角继续反击', 80) ?? '主角继续反击',
     hook: truncateText(readOptionalString(record, 'hook') ?? '留下下一章钩子', 80) ?? '留下下一章钩子'
   };
+}
+
+function validateChapterPlanChunk(value: unknown, start: number, end: number, policy: WordTargetPolicy): StructureAssetContentDTO['chapters'] {
+  const chapters = readArray(value, 'chapters');
+  if (chapters.length !== end - start + 1) throw new Error('chapter_count_invalid');
+  return chapters.map((chapter, index) => {
+    const record = asRecord(chapter);
+    const chapterNo = readPositiveInteger(record, 'chapterNo');
+    if (chapterNo !== start + index) throw new Error('chapter_sequence_invalid');
+    const wordTarget = readOptionalNumber(record, 'wordTarget') ?? policy.defaultTarget;
+    if (!Number.isInteger(wordTarget) || wordTarget < policy.min || wordTarget > policy.max) {
+      throw new Error('chapter_word_target_out_of_range');
+    }
+    return {
+      chapterNo,
+      stageIndex: readPositiveInteger(record, 'stageIndex'),
+      title: readString(record, 'title'),
+      wordTarget,
+      goal: readString(record, 'goal'),
+      conflict: readString(record, 'conflict'),
+      hook: readString(record, 'hook')
+    };
+  });
 }
 
 function createChapterPlanStructureDraft(
@@ -1300,6 +1315,23 @@ function readNumber(value: unknown, field: string): number {
     throw new Error(`${field} is required`);
   }
   return result;
+}
+
+function readPositiveInteger(value: unknown, field: string): number {
+  const result = readNumber(value, field);
+  if (!Number.isInteger(result) || result <= 0) throw new Error(`${field} must be a positive integer`);
+  return result;
+}
+
+function readScore(value: unknown, field: string): number {
+  const result = readNumber(value, field);
+  if (result < 0 || result > 100) throw new Error(`${field} is out of range`);
+  return result;
+}
+
+function readOptionalScore(record: Record<string, unknown>, field: string): number | null {
+  if (record[field] === undefined || record[field] === null) return null;
+  return readScore(record, field);
 }
 
 function readOptionalNumber(record: Record<string, unknown>, field: string): number | null {

@@ -47,8 +47,8 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-v4-pro
 DEEPSEEK_STRUCTURE_MODEL=deepseek-v4-pro
 DEEPSEEK_REASONER_MODEL=deepseek-v4-pro
-DEEPSEEK_TIMEOUT_MS=60000
-DEEPSEEK_MAX_RETRIES=1
+DEEPSEEK_TIMEOUT_MS=360000
+DEEPSEEK_MAX_RETRIES=0
 ```
 
 说明：
@@ -58,6 +58,7 @@ DEEPSEEK_MAX_RETRIES=1
 - 模型名称允许通过环境变量覆盖，避免把供应商模型版本写死；结构任务可通过 `DEEPSEEK_STRUCTURE_MODEL` 单独切换到更快模型。
 - 2026-06-18 本地握手确认当前账号可见模型为 `deepseek-v4-flash`、`deepseek-v4-pro`；首期默认使用 `deepseek-v4-pro`，后续可将正文批量任务切到 `deepseek-v4-flash` 做成本优化。
 - 如果 `AI_PROVIDER_MODE=deepseek` 但没有 `DEEPSEEK_API_KEY`，服务启动可以成功，但实际调用应返回明确配置错误，不能静默用假数据伪装真实调用。
+- 默认等待窗口覆盖通常的 2-5 分钟响应，并留 1 分钟余量；默认不自动重发超时请求，避免重复模型费用。这里仅延长单次 provider 调用，**不等于**持久化后台队列；长请求仍占用 HTTP 处理流程，进程重启后的恢复和立即返回真实任务 ID 仍需单独验收。
 
 ## 首期固定路由
 

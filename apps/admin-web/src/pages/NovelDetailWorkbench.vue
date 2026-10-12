@@ -312,11 +312,12 @@
                       <strong>设定正在生成中</strong>
                       <el-tag type="warning" effect="plain">生成中</el-tag>
                     </div>
-                    <p>刷新或新开页面后会继续保留等待状态。生成结果会进入设定候选池，点击“采用”后才会成为正式设定。</p>
-                    <div class="empty-pending-actions">
+                    <p>刷新或新开页面后可查看任务进度。生成结果会进入设定候选池，点击“采用”后才会成为正式设定。</p>
+                    <div v-if="activeRecentTask?.id === pendingTask?.id" class="empty-pending-actions">
                       <el-button @click="cancelLocalPendingWait">取消等待</el-button>
                       <el-button type="warning" plain @click="restartStructureGeneration('setting')">重新生成</el-button>
                     </div>
+                    <el-button v-else @click="openTaskDrawer(activeRecentTask?.id)">查看任务进度</el-button>
                   </div>
                   <div v-else class="empty-generate-panel">
                     <p>方向采用后可生成设定候选，生成结果不会自动覆盖正式设定。</p>
@@ -1792,8 +1793,7 @@ const canGenerateOutline = computed(() => Boolean(detail.value?.currentAssets.se
 const canGenerateStageOutline = computed(() => Boolean(detail.value?.currentAssets.outline))
 const canGenerateChapterPlan = computed(() => Boolean(detail.value?.currentAssets.stageOutline))
 const canGenerateTrial = computed(() => Boolean(detail.value?.currentAssets.chapterPlan) && detail.value?.creationStage === NovelCreationStage.Trial)
-const pendingAction = computed(() => pendingTask.value?.action ?? '')
-const hasLocalPendingWait = computed(() => Boolean(pendingTask.value && activeRecentTask.value?.id === pendingTask.value.id))
+const hasLocalPendingWait = computed(() => [TaskStatus.Queued, TaskStatus.Processing].includes(activeRecentTask.value?.status as TaskStatus))
 const settingGenerationPending = computed(() => isNovelActionRunning('setting_generate'))
 watch(
   activeRecentTask,
@@ -2536,7 +2536,8 @@ function clearLocalPendingTask(taskId = pendingTask.value?.id) {
 }
 
 function isNovelActionRunning(action: NovelLongRunningAction) {
-  return hasLocalPendingWait.value && pendingAction.value === action
+  const task = resolveTaskSummaryForAction(pendingTask.value, detail.value, action)
+  return [TaskStatus.Queued, TaskStatus.Processing].includes(task?.status as TaskStatus)
 }
 
 function cancelLocalPendingWait() {

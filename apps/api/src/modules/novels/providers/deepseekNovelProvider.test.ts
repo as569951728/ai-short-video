@@ -44,7 +44,7 @@ describe('DeepSeek novel provider', () => {
         JSON.stringify({
           title: '设定档案',
           summary: '主角、对手和世界规则清晰。',
-          content: { protagonist: '林舟', antagonist: '旧公司', rules: ['每章一个反击点'] },
+          content: { sections: [{ title: '人物关系', body: '林舟与旧公司对抗。', items: ['每章一个反击点'] }], stages: [], chapters: [] },
           score: 84,
           riskLevel: 'low',
           riskTags: ['设定稳定'],
@@ -202,7 +202,7 @@ describe('DeepSeek novel provider', () => {
 
     const structure = await provider.generateAsset({ objectType: 'setting', novel, preferences: [], currentAssets: {} });
     assert.equal(structure.title, '设定档案');
-    assert.equal(structure.content.sections[0].title, '设定档案');
+    assert.equal(structure.content.sections[0].title, '人物关系');
 
     const trial = await provider.generateChapterOneCandidates({ novel, preferences: [], chapters: [createChapter(1)], chapterCount: 3 });
     assert.equal(trial[0].isAiRecommended, true);
@@ -401,7 +401,7 @@ describe('DeepSeek novel provider', () => {
                   chapterNo,
                   stageIndex: Math.ceil(chapterNo / 20),
                   title: `第${chapterNo}章`,
-                  wordTarget: 1200,
+                  wordTarget: 2200,
                   goal: `目标${chapterNo}`,
                   conflict: `冲突${chapterNo}`,
                   hook: `钩子${chapterNo}`
@@ -487,6 +487,53 @@ describe('DeepSeek novel provider', () => {
     assert.match(payload.instruction, /2200-3200/);
     assert.doesNotMatch(payload.instruction, /1000-1800/);
     assert.equal(result.content.chapters[0].wordTarget, 2700);
+  });
+
+  it('rejects empty or out-of-range structure output instead of fabricating an adoptable candidate', async () => {
+    const validContent = { sections: [{ title: '人物关系', body: '主角与对手有明确冲突。', items: [] }], stages: [], chapters: [] };
+    for (const payload of [
+      {},
+      { title: '人物设定', summary: '人物关系', content: validContent, score: 101 },
+      { title: '人物设定', summary: '人物关系', content: { sections: [], stages: [], chapters: [] }, score: 80 }
+    ]) {
+      const response = JSON.stringify(payload);
+      const provider = new DeepSeekNovelProvider({ client: createQueueClient([response, response]) });
+      await assert.rejects(
+        provider.generateAsset({ objectType: 'setting', novel: createNovel(), preferences: [], currentAssets: {} }),
+        (error) => error instanceof LlmProviderError && error.category === 'output_parse_failed'
+      );
+    }
+  });
+
+  it('rejects an out-of-range direction score before creating candidates', async () => {
+    const response = JSON.stringify({ candidates: [{
+      title: '逆袭方向', summary: '主角重生后反击。', content: '重生后完成商业逆袭。',
+      score: -1, marketScore: 80, riskLevel: 'low', recommendedReason: '冲突清楚。'
+    }] });
+    const provider = new DeepSeekNovelProvider({ client: createQueueClient([response, response]) });
+    await assert.rejects(
+      provider.generateCandidates({ novel: createNovel(), preferences: [] }),
+      (error) => error instanceof LlmProviderError && error.category === 'output_parse_failed'
+    );
+  });
+
+  it('rejects missing, duplicate, or out-of-range chapter plan entries before an asset can be adopted', async () => {
+    const chapter = (chapterNo: number, wordTarget = 2200) => ({
+      chapterNo, stageIndex: 1, title: `第${chapterNo}章`, wordTarget,
+      goal: '明确目标', conflict: '遭遇阻力', hook: '留下悬念'
+    });
+    for (const chapters of [
+      [chapter(1)],
+      [chapter(1), chapter(1)],
+      [chapter(1), chapter(2, 40000)]
+    ]) {
+      const response = JSON.stringify({ chapters });
+      const provider = new DeepSeekNovelProvider({ client: createQueueClient([response, response]) });
+      await assert.rejects(
+        provider.generateAsset({ objectType: 'chapter_plan', novel: { ...createNovel(), chapterLimit: 2 }, preferences: [], currentAssets: {} }),
+        (error) => error instanceof LlmProviderError && error.category === 'output_parse_failed'
+      );
+    }
   });
 
   it('sends chapter word target constraints when generating a body chapter', async () => {
