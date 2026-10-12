@@ -32,7 +32,7 @@ export function evaluateChapterLength(
     };
   }
 
-  const lowerBound = Math.ceil((normalizedTarget * 90) / 100);
+  const lowerBound = Math.ceil((normalizedTarget * 85) / 100);
   const upperBound = Math.floor((normalizedTarget * 115) / 100);
   const status = actual < lowerBound ? 'too_short' : actual > upperBound ? 'too_long' : 'pass';
 

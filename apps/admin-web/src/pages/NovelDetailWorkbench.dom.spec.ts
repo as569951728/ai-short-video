@@ -757,11 +757,11 @@ describe('NovelDetailWorkbench DOM behavior', () => {
       metric: 'non_whitespace_characters',
       metricText: '忽略空白、含标点',
       target: 2200,
-      lowerBound: 1980,
+      lowerBound: 1870,
       upperBound: 2530,
       actual: null,
       targetText: '2200',
-      rangeText: '1980-2530',
+      rangeText: '1870-2530',
       actualText: '尚未生成',
       status: 'pending',
       statusText: '待生成',
@@ -793,7 +793,7 @@ describe('NovelDetailWorkbench DOM behavior', () => {
     expect(wrapper.text()).toContain('长度门禁（忽略空白、含标点）')
     expect(wrapper.text()).toContain('实际 尚未生成')
     expect(wrapper.text()).toContain('目标 2200')
-    expect(wrapper.text()).toContain('合格区间 1980-2530')
+    expect(wrapper.text()).toContain('合格区间 1870-2530')
     wrapper.unmount()
 
     mocks.route.query = { step: 'body' }
@@ -863,12 +863,12 @@ describe('NovelDetailWorkbench DOM behavior', () => {
     mocks.route.query = { step: 'chapterPlan' }
     const plannedGate = {
       metric: 'non_whitespace_characters', metricText: '忽略空白、含标点', target: 2600,
-      lowerBound: 2340, upperBound: 2990, actual: null, targetText: '2600', rangeText: '2340-2990',
+      lowerBound: 2210, upperBound: 2990, actual: null, targetText: '2600', rangeText: '2210-2990',
       actualText: '尚未生成', status: 'pending', statusText: '待生成', tagType: 'info',
       canAdopt: false, adoptDisabledReason: null, authoritative: false,
     }
     const staleGeneratedGate = {
-      ...plannedGate, target: 2200, lowerBound: 1980, upperBound: 2530, targetText: '2200', rangeText: '1980-2530',
+      ...plannedGate, target: 2200, lowerBound: 1870, upperBound: 2530, targetText: '2200', rangeText: '1870-2530',
       actual: 2240, actualText: '2240', status: 'qualified', statusText: '字符数合格', tagType: 'success', canAdopt: true, authoritative: true,
     }
     mocks.getNovelDetail.mockResolvedValue(createNovelDetail({
@@ -887,7 +887,7 @@ describe('NovelDetailWorkbench DOM behavior', () => {
     const chapterGate = wrapper.find('[data-length-gate-status="pending"]')
     expect(chapterGate.text()).toContain('实际 尚未生成')
     expect(chapterGate.text()).toContain('目标 2600')
-    expect(chapterGate.text()).toContain('合格区间 2340-2990')
+    expect(chapterGate.text()).toContain('合格区间 2210-2990')
     expect(chapterGate.text()).not.toContain('2240')
   })
 
@@ -1552,11 +1552,11 @@ function createTrialRunFixture() {
           metric: 'non_whitespace_characters',
           metricText: '忽略空白、含标点',
           target: 2000,
-          lowerBound: 1800,
-          upperBound: 2200,
+          lowerBound: 1700,
+          upperBound: 2300,
           actual: 1900,
           targetText: '2000',
-          rangeText: '1800-2200',
+          rangeText: '1700-2300',
           actualText: '1900',
           status: 'qualified',
           statusText: '字符数合格',

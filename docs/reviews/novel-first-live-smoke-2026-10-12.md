@@ -2,6 +2,8 @@
 
 日期：2026-10-12。此记录只描述实际执行结果，不代表小说完本或内容质量验收通过。
 
+> 字数门禁后续按用户确认调整为目标值的上下各 15%，见 [现行章节字数规则](../modules/novel-chapter-length-policy.md)。下文 720-920 和 2,070-2,645 是调整前调用时的历史区间，不是当前验收阈值；2,300 字目标的现行区间为 1,955-2,645，历史 2,880 字样本仍不合格。
+
 ## 需求核对
 
 以 `docs/product-requirements.md`、`docs/modules/novel-batch-body-generation.md` 和 `docs/modules/novel-acceptance-test-matrix.md` 为本轮业务口径，并以 `docs/remediation/acceptance-matrix.md` 的 NOV 系列用例为验收门禁：

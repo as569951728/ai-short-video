@@ -578,14 +578,14 @@ describe('DeepSeek novel provider', () => {
     const payload = JSON.parse(requests[0].messages[1].content);
     assert.equal(payload.payload.chapter.wordTarget, 2600);
     assert.match(payload.payload.wordTargetPolicy.instruction, /2600/);
-    assert.match(payload.payload.wordTargetPolicy.instruction, /不能少于 2340/);
+    assert.match(payload.payload.wordTargetPolicy.instruction, /不能少于 2210/);
     assert.match(payload.payload.wordTargetPolicy.instruction, /不能超过 2990/);
   });
 
   it('preserves authoritative chapter targets outside the novel default range', async () => {
     for (const expected of [
-      { target: 900, lowerBound: 810, upperBound: 1035 },
-      { target: 4000, lowerBound: 3600, upperBound: 4600 }
+      { target: 900, lowerBound: 765, upperBound: 1035 },
+      { target: 4000, lowerBound: 3400, upperBound: 4600 }
     ]) {
       const requests: ChatCompletionRequest[] = [];
       const provider = new DeepSeekNovelProvider({
@@ -765,7 +765,7 @@ describe('DeepSeek novel provider', () => {
     const payload = JSON.parse(capturedRequest!.messages[1].content).payload;
     assert.deepEqual(
       { target: payload.wordTargetPolicy.target, lowerBound: payload.wordTargetPolicy.lowerBound, upperBound: payload.wordTargetPolicy.upperBound },
-      { target: 2200, lowerBound: 1980, upperBound: 2530 }
+      { target: 2200, lowerBound: 1870, upperBound: 2530 }
     );
     assert.deepEqual(
       { preferredLowerBound: payload.wordTargetPolicy.preferredLowerBound, preferredUpperBound: payload.wordTargetPolicy.preferredUpperBound },

@@ -1241,7 +1241,7 @@ function createWordTargetPolicy(novel: NovelProviderInputV1, chapterTarget?: num
   const max = clampInteger(Math.max(novel.chapterWordMax ?? 2600, min), min, 30000);
   const defaultTarget = Math.round((min + max) / 2);
   const target = clampInteger(chapterTarget ?? defaultTarget, 100, 30000);
-  const lowerBound = Math.max(100, Math.ceil((target * 90) / 100));
+  const lowerBound = Math.max(100, Math.ceil((target * 85) / 100));
   const upperBound = Math.floor((target * 115) / 100);
   const preferredLowerBound = Math.max(lowerBound, Math.ceil((target * 95) / 100));
   const preferredUpperBound = target;

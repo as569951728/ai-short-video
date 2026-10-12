@@ -48,20 +48,28 @@ describe('chapter length policy', () => {
     assert.equal(countChapterLength(' e\u0301\n\t😀\u00a0中 '), 3);
   });
 
-  it('uses the frozen inclusive boundaries', () => {
-    assert.deepEqual(evaluateChapterLength('字'.repeat(89), 100), {
+  it('uses inclusive 85%-115% boundaries', () => {
+    assert.deepEqual(evaluateChapterLength('字'.repeat(84), 100), {
       metric: CHAPTER_LENGTH_COUNT_METRIC,
       target: 100,
-      lowerBound: 90,
+      lowerBound: 85,
       upperBound: 115,
-      actual: 89,
+      actual: 84,
       status: 'too_short',
-      statusText: '正文字符数不足：实际 89，允许范围 90-115。',
+      statusText: '正文字符数不足：实际 84，允许范围 85-115。',
       canAdopt: false
     });
-    assert.equal(evaluateChapterLength('字'.repeat(90), 100).status, 'pass');
+    assert.equal(evaluateChapterLength('字'.repeat(85), 100).status, 'pass');
     assert.equal(evaluateChapterLength('字'.repeat(115), 100).status, 'pass');
     assert.equal(evaluateChapterLength('字'.repeat(116), 100).status, 'too_long');
+    assert.deepEqual(
+      [1954, 1955, 2645, 2646].map((actual) => evaluateChapterLength('字'.repeat(actual), 2300).status),
+      ['too_short', 'pass', 'pass', 'too_long']
+    );
+    assert.deepEqual(
+      [evaluateChapterLength('字'.repeat(85), 101).lowerBound, evaluateChapterLength('字'.repeat(116), 101).upperBound],
+      [86, 116]
+    );
   });
 
   it('fails closed without a target while preserving the measured count', () => {

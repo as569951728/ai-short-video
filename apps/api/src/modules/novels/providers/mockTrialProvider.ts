@@ -320,7 +320,7 @@ function createChapterBody(novelTitle: string, chapter: ChapterProviderInputV1, 
 
 function extendToChapterTarget(content: string, target: number | null): string {
   if (!target || target <= 0) return content;
-  const lowerBound = Math.ceil(target * 0.9);
+  const lowerBound = Math.ceil(target * 0.85);
   const missing = lowerBound - countChapterLength(content);
   if (missing <= 0) return content;
   const filler = '主角继续核对证据推进冲突并确认人物选择';
