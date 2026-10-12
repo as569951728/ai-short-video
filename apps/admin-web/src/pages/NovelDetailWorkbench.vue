@@ -312,12 +312,8 @@
                       <strong>设定正在生成中</strong>
                       <el-tag type="warning" effect="plain">生成中</el-tag>
                     </div>
-                    <p>刷新或新开页面后可查看任务进度。生成结果会进入设定候选池，点击“采用”后才会成为正式设定。</p>
-                    <div v-if="activeRecentTask?.id === pendingTask?.id" class="empty-pending-actions">
-                      <el-button @click="cancelLocalPendingWait">取消等待</el-button>
-                      <el-button type="warning" plain @click="restartStructureGeneration('setting')">重新生成</el-button>
-                    </div>
-                    <el-button v-else @click="openTaskDrawer(activeRecentTask?.id)">查看任务进度</el-button>
+                    <p>刷新或新开页面后可查看任务进度。当前请求未结束前不能再次生成；失败或超时后可以重试。结果进入候选池，点击“采用”后才成为正式设定。</p>
+                    <el-button @click="openTaskDrawer(activeRecentTask?.id)">查看任务进度</el-button>
                   </div>
                   <div v-else class="empty-generate-panel">
                     <p>方向采用后可生成设定候选，生成结果不会自动覆盖正式设定。</p>
@@ -668,7 +664,7 @@
                   <p class="muted">先比较第 1 章候选，选定后才继续生成第 2-3 章和试写总评。</p>
                 </div>
                 <div class="task-notice-actions">
-                  <el-button v-if="showTrialAuthoringActions" :disabled="!canGenerateTrial" :loading="generatingTrial" @click="() => handleRegenerateTrial('重新生成第 1 章候选')">重新生成 3 个</el-button>
+                  <el-button v-if="showTrialAuthoringActions && detail?.latestTrialRun" :disabled="!canGenerateTrial" :loading="generatingTrial" @click="() => handleRegenerateTrial('重新生成第 1 章候选')">重新生成 3 个</el-button>
                 </div>
               </div>
 
@@ -2116,7 +2112,7 @@ const workbenchSteps = computed<WorkbenchStepView[]>(() => {
       key: 'outline',
       name: '大纲设计',
       description: '规划全书主线、阶段目标、反转和节奏。',
-      gateText: hasStageOutline ? '阶段大纲已采用，下一步进入章节目录规划。' : hasStageOutlineCandidate ? '阶段大纲候选已生成，请查看后采用。' : hasOutline ? '需要采用阶段大纲，才会进入章节目录规划。' : '需要先采用小说设定。',
+      gateText: hasStageOutline ? '阶段大纲已采用，下一步进入章节目录规划。' : hasStageOutlineCandidate ? '阶段大纲候选已生成，请查看后采用。' : hasOutline ? '生成并采用阶段大纲后，章节目录才会解锁。' : hasSetting ? '生成并采用全书大纲，再生成并采用阶段大纲。' : '需要先采用小说设定。',
       nextAction: hasStageOutline ? '全书大纲和阶段大纲已确认。' : hasStageOutlineCandidate ? '查看阶段大纲候选，确认是否采用。' : hasOutline ? '生成并采用阶段大纲。' : hasSetting ? '生成全书大纲并采用。' : '先完成小说设定。',
       primaryActionLabel: hasStageOutlineCandidate ? '查看阶段大纲候选' : hasOutline ? '生成阶段大纲' : '生成全书大纲',
       primaryAction: hasStageOutlineCandidate ? () => setActiveSubStep('stages') : () => handleGenerateStructure(hasOutline ? 'stage_outline' : 'outline'),
@@ -2538,34 +2534,6 @@ function clearLocalPendingTask(taskId = pendingTask.value?.id) {
 function isNovelActionRunning(action: NovelLongRunningAction) {
   const task = resolveTaskSummaryForAction(pendingTask.value, detail.value, action)
   return [TaskStatus.Queued, TaskStatus.Processing].includes(task?.status as TaskStatus)
-}
-
-function cancelLocalPendingWait() {
-  clearLocalPendingTask()
-  ElMessage.info('已取消本地等待状态；如果旧模型请求稍后返回，请刷新查看候选池。')
-}
-
-async function restartStructureGeneration(objectType: StructureAssetType) {
-  if (structureGeneratingType.value) {
-    ElMessage.info('当前页面仍在等待模型返回，请先等待或刷新后再操作。')
-    return
-  }
-
-  try {
-    await ElMessageBox.confirm(
-      '这只会放弃当前页面的等待状态，不能保证中止已经发出的模型请求。新的生成结果仍会进入候选池，最终需要手动采用。',
-      '放弃等待并重新生成？',
-      {
-        confirmButtonText: '重新生成',
-        cancelButtonText: '先不处理',
-        type: 'warning',
-      },
-    )
-  } catch {
-    return
-  }
-  clearLocalPendingTask()
-  await handleGenerateStructure(objectType, '用户放弃等待后重新生成')
 }
 
 async function openTaskDrawer(taskId?: string | null) {

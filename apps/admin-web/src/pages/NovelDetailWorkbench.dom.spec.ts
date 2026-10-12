@@ -154,6 +154,34 @@ beforeEach(() => {
 })
 
 describe('NovelDetailWorkbench DOM behavior', () => {
+  it('shows task progress without a false cancel or regenerate action while setting generation is processing', async () => {
+    mocks.route.query = { step: 'setting' }
+    mocks.getNovelDetail.mockResolvedValue(createNovelDetail({
+      creationStage: NovelCreationStage.Setting,
+      currentAssets: { direction: { id: 'direction-current' }, setting: null, outline: null, stageOutline: null, chapterPlan: null },
+      recentTask: {
+        id: 'setting-task-processing',
+        taskType: 'novel_setting_generate',
+        status: TaskStatus.Processing,
+        statusText: '生成中',
+        progress: 30,
+        currentStep: '正在调用模型',
+        resultVersionIds: [],
+      },
+    }))
+
+    wrapper = mount(NovelDetailWorkbench, {
+      attachTo: document.body,
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+
+    const pendingPanel = wrapper.find('.empty-pending-panel')
+    expect(pendingPanel.exists()).toBe(true)
+    expect(pendingPanel.text()).toContain('当前请求未结束前不能再次生成')
+    expect(pendingPanel.findAll('button').map((button) => button.text())).toEqual(['查看任务进度'])
+  })
+
   it('sets real loading state when the refresh button is clicked instead of treating MouseEvent as silent=true', async () => {
     mocks.getNovelDetail.mockResolvedValueOnce(createNovelDetail())
     wrapper = mount(NovelDetailWorkbench, {
@@ -359,7 +387,7 @@ describe('NovelDetailWorkbench DOM behavior', () => {
     await wrapper.findAll('button').find((button) => button.text() === '任务详情')?.trigger('click')
     await flushPromises()
     expect(mocks.getTaskDetail).toHaveBeenCalledWith('task-outline-older')
-    const viewButtons = wrapper.findAll('button').filter((button) => button.text() === '查看大纲候选')
+    const viewButtons = wrapper.findAll('button').filter((button) => button.text() === '查看全书大纲候选')
     await viewButtons.at(-1)?.trigger('click')
     await nextTick()
     expect(document.getElementById('structure-candidate-outline-older')).toBeNull()

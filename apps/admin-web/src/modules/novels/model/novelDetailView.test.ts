@@ -357,6 +357,17 @@ describe('novel detail view model', () => {
     })
     assert.equal(getTaskResultPlacement({ ...baseTask, taskType: 'novel_setting_generate' })?.stepKey, 'setting')
     assert.equal(getTaskResultPlacement({ ...baseTask, taskType: 'chapter_plan_generate' })?.stepKey, 'chapterPlan')
+    assert.deepEqual(getTaskResultPlacement({ ...baseTask, taskType: 'trial_chapter_one_generate' }), {
+      summary: '第 1 章候选已生成，请比较正文并选定一版，再继续生成第 2-3 章。',
+      actionLabel: '查看第 1 章候选',
+      stepKey: 'trial',
+    })
+    assert.equal(getTaskResultPlacement({ ...baseTask, taskType: 'trial_writing_generate', currentStep: '第1章候选已生成，等待选择' })?.actionLabel, '查看第 1 章候选')
+    assert.deepEqual(getTaskResultPlacement({ ...baseTask, taskType: 'novel_stage_outline_generate' }), {
+      summary: '阶段大纲候选已进入候选池，请查看后决定是否采用。',
+      actionLabel: '查看阶段大纲候选',
+      stepKey: 'outline',
+    })
     assert.equal(getTaskResultPlacement({ ...baseTask, taskType: 'trial_writing_generate' })?.stepKey, 'trial')
     assert.equal(getTaskResultPlacement({ ...baseTask, taskType: 'body_batch_generate' })?.stepKey, 'body')
     assert.equal(getTaskResultPlacement({ ...baseTask, taskType: 'novel_full_review' })?.stepKey, 'fullReview')

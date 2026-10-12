@@ -1116,7 +1116,7 @@ export function createInMemoryNovelRepository(): InMemoryNovelRepository {
         progress: 0,
         currentStep: `${getStructureObjectText(input.objectType)}正在生成中`
       });
-      task.statusNote = '正在调用模型生成内容，可能需要 1-3 分钟，可以稍后回来查看。';
+      task.statusNote = '正在调用模型生成内容，可能需要 2-5 分钟；若等待过久，请刷新查看任务状态。';
 
       generationTasks.unshift(task);
       appendTaskEvent(task, {
@@ -1600,7 +1600,7 @@ export function createInMemoryNovelRepository(): InMemoryNovelRepository {
       const sourceVersionRefs = createTrialFollowupSourceVersionRefs(input.novel, input.selectedCandidate.id);
       const task = requireClaimedTask(input.task, input.context.tenantId);
       task.status = TaskStatus.Processing;
-      task.statusNote = '正在调用模型继续试写第2-3章并生成试写总评，可能需要 1-3 分钟，可以稍后回来查看。';
+      task.statusNote = '正在调用模型继续试写第2-3章并生成试写总评，可能需要 2-5 分钟；若等待过久，请刷新查看任务状态。';
       task.progress = 18;
       task.outputSummary = null;
       task.resultObjectType = 'trial_run';
@@ -2073,7 +2073,7 @@ export function createInMemoryNovelRepository(): InMemoryNovelRepository {
       const task = requireClaimedTask(input.task, input.context.tenantId);
       task.progress = 8;
       task.currentStep = `正在生成第 ${input.startChapterNo}-${input.endChapterNo} 章正文`;
-      task.statusNote = '正在调用模型生成本批正文，可能需要 1-3 分钟，可以稍后回来查看。';
+      task.statusNote = '正在调用模型生成本批正文，可能需要 2-5 分钟；若等待过久，请刷新查看任务状态。';
       task.outputSummary = null;
       task.resultObjectType = 'body_batch';
       task.updatedAt = input.now;
@@ -2147,6 +2147,7 @@ export function createInMemoryNovelRepository(): InMemoryNovelRepository {
       fullReviewGates.unshift(gate);
       task.status = TaskStatus.Completed;
       task.statusNote = '全书审稿完成，已生成完成门禁。';
+      task.currentStep = gate.allowCompletion ? '全书审稿已完成，可确认小说完成。' : '全书审稿已完成，请先处理阻塞问题。';
       task.progress = 100;
       task.outputSummary = input.draft.summary;
       task.resultObjectType = 'full_review';
@@ -2483,7 +2484,7 @@ export function createInMemoryNovelRepository(): InMemoryNovelRepository {
       }
       appendModelTaskLifecycleEvents(task, input.context.requestId, input.now, {
         preparing: `批量正文任务已创建，本批第 ${input.startChapterNo}-${input.endChapterNo} 章。`,
-        calling: '正在调用模型生成正文，可能需要 1-3 分钟，可以稍后回来查看。',
+        calling: '正在调用模型生成正文，可能需要 2-5 分钟；若等待过久，请刷新查看任务状态。',
         parsing: '模型返回后正在解析章节正文和审稿结构。',
         quality: '正在检查章节评分、风险和硬失败门禁。',
         saving: '正在保存正文版本、章节特性卡、单章审稿和长篇记忆。'
@@ -3831,7 +3832,7 @@ export function createInMemoryNovelRepository(): InMemoryNovelRepository {
     });
     appendTaskEvent(task, {
       eventType: 'calling_model',
-      message: messages.calling ?? '正在调用模型生成内容，可能需要 1-3 分钟，可以稍后回来查看。',
+      message: messages.calling ?? '正在调用模型生成内容，可能需要 2-5 分钟；若等待过久，请刷新查看任务状态。',
       progress: 35,
       requestId,
       createdAt: new Date(createdAt + 1)
@@ -4510,7 +4511,7 @@ export function createInMemoryNovelRepository(): InMemoryNovelRepository {
   function appendNovelTaskEvents(task: GenerationTaskRecord, requestId: string, now: Date, createdMessage: string, doneMessage: string) {
     appendModelTaskLifecycleEvents(task, requestId, now, {
       preparing: createdMessage,
-      calling: '正在调用模型进行审稿或检查，可能需要 1-3 分钟，可以稍后回来查看。',
+      calling: '正在调用模型进行审稿或检查，可能需要 2-5 分钟；若等待过久，请刷新查看任务状态。',
       parsing: '模型返回后正在解析审稿或检查结果。',
       quality: '正在检查门禁、风险和下一步建议。',
       saving: doneMessage
