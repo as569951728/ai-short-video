@@ -2,12 +2,25 @@
 
 日期：2026-10-12。此记录只描述实际执行结果，不代表小说完本或内容质量验收通过。
 
+## 需求核对
+
+以 `docs/product-requirements.md`、`docs/modules/novel-batch-body-generation.md` 和 `docs/modules/novel-acceptance-test-matrix.md` 为本轮业务口径，并以 `docs/remediation/acceptance-matrix.md` 的 NOV 系列用例为验收门禁：
+
+| 需求 | 本轮证据与结论 |
+| --- | --- |
+| 分层创作，候选采用后才改变正式资产 | 隔离库验证方向候选采用；设定、大纲、目录、试写、正文和完结的 Prisma 全链路未验证 |
+| 同类型候选并发采用后只能有一个 current，旧候选保留历史 | 3 轮 MySQL 并发采用和一次新进程回读通过；属于 `NOV-CURRENT-01` 的小范围烟测，不覆盖所有资产类型 |
+| 常规章节建议 2,000-3,500 字，按章承接设定、大纲、目录和长篇记忆 | 800 字 canary 只检查调用和短目标长度；没有验证常规章节目标或上游上下文完整性 |
+| 分批正文每章落库、失败保留与恢复、章节审稿和长篇记忆更新 | Prisma 正文写链未实现；`NOV-BATCH-RESUME-01` 和 `NOV-DB-E2E-01` 均未通过 |
+| 全书审稿有效且用户确认后才算完成，内容质量须有人审复核 | 尚未做真实完本、冲突检出和人工盲评；不能据模型字数或自评分判断小说精彩 |
+
 ## 隔离 MySQL
 
 - 本机 Docker MySQL 8.4.11，数据库 `ai_shortvideo_novel_test`，端口仅绑定 `127.0.0.1`；未连接生产库。容器为一次性测试容器，未保存数据库密码到仓库。
 - 从空库执行 `prisma migrate deploy`，按顺序成功应用 7 条迁移，包括独立分支 `codex/novel-db-baseline-20261012` 的初始迁移草案 `c2d8efa`。
 - 迁移后的数据库与当前 Prisma schema 对比：小说相关只有 `create_novel_preferences` 的索引名称差异；另有 5 张视频表及视频字段缺口。不能声称整个当前 schema 已对齐。
 - Prisma 模式下创建小说草稿返回 201，详情读取返回 200；关闭应用后在新进程中再次读取详情和列表，均返回 200。该样本仅覆盖草稿持久化，未覆盖正文、全书审稿或完本写入。
+- 使用 mock provider 和合成都市逆袭草稿，在 MySQL 中对同一小说的两个方向候选并发提交采用，连续 3 轮均为一次 200、一次 409 `VERSION_CONFLICT`；每轮只有一个 current，另外三个候选为 historical。另一次独立运行的新进程读取为 200、`creationStage=setting`，current 指针与唯一当前候选一致。没有消耗真实模型额度，也没有测试其他资产类型的并发采用。
 
 ## 真实模型
 
