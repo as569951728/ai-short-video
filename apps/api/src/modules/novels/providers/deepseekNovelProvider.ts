@@ -93,7 +93,7 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
     const routeVersion = action === 'novel_full_review'
       ? 'route-v5'
       : this.options.experimentalOverlongRevision && ['body_batch_generate', 'chapter_body_generate'].includes(action)
-        ? 'route-v3'
+        ? 'route-v5'
         : ['body_batch_generate', 'chapter_body_generate', 'chapter_rewrite'].includes(action)
           ? 'route-v2'
         : 'route-v1';
@@ -276,29 +276,29 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
     });
     const originalLength = evaluateChapterLength(original.content, input.chapter.wordTarget);
     if (originalLength.status !== 'too_long' || !this.options.experimentalOverlongRevision) return original;
+    const minimumRemoval = originalLength.actual - wordTargetPolicy.upperBound;
+    if (minimumRemoval > Math.floor(originalLength.actual * 0.12)) return original;
+    const maximumRemoval = minimumRemoval + Math.max(40, Math.ceil(wordTargetPolicy.target * 0.04));
+    const eligibleSentences = listEligibleBodySentences(original.content);
+    if (eligibleSentences.length === 0) return original;
 
     const revisionMessages = createMessages(
-      `原稿共 ${originalLength.actual} 个非空白字符，上限 ${wordTargetPolicy.upperBound}，至少要删减 ${originalLength.actual - wordTargetPolicy.upperBound} 个；请把完整 content 重写到 ${wordTargetPolicy.preferredLowerBound}-${wordTargetPolicy.preferredUpperBound} 个非空白字符，建议删减 ${originalLength.actual - wordTargetPolicy.preferredUpperBound}-${originalLength.actual - wordTargetPolicy.preferredLowerBound} 个。严禁只改少量虚词或逐句复写原稿；合并重复场景、删去次要铺垫和重复心理描写，保留主要事件、因果、人物关系、关键事实和结尾钩子，不得改动时间线或增加新事实。同步更新摘要、特性卡、单章审稿和长篇记忆；只返回完整 JSON，不要片段、说明或字数报告。`,
+      `原稿共 ${originalLength.actual} 个非空白字符，上限 ${wordTargetPolicy.upperBound}。只能从 eligibleSentences 中挑选可安全删除的冗余句候选，最多 12 个编号；服务端会从中选择删减 ${minimumRemoval}-${maximumRemoval} 字的最小组合。只返回 {"sentenceIds":["s1"]}；不得输出改写、摘要、新正文或句子文本。不得选择人物首次出场、关键事实、因果转折和伏笔。没有足够安全的冗余句就返回空数组，不要勉强。`,
       input.novel,
       {
         chapter: pickChapter(input.chapter),
-        wordTargetPolicy,
         strategySnapshot: {
           title: input.strategySnapshot.title,
           summary: input.strategySnapshot.summary
         },
-        previousContentSummary: input.previousContent?.summary,
-        previousMemory: input.previousMemory,
-        previousBatchNotes: input.previousBatchNotes,
         original: {
           content: original.content,
-          summary: original.summary,
-          endingHook: original.endingHook,
           factsCannotChange: original.featureCard.factsCannotChange,
           factsCannotContradict: original.memory.factsCannotContradict
-        }
+        },
+        eligibleSentences: eligibleSentences.map(({ id, text }) => ({ id, text }))
       },
-      M1_OUTPUT_SCHEMA_HINT.body
+      '{"sentenceIds":["s1"]}'
     );
     const revisionPrompt = JSON.parse(revisionMessages[1].content) as { payload: { original: { content: string } } };
     revisionPrompt.payload.original.content = original.content;
@@ -311,8 +311,21 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
       ...SINGLE_PAID_CALL_JSON_POLICY,
       thinkingMode: 'disabled',
       messages: revisionMessages,
-      maxTokens: getBodyChapterMaxTokens(wordTargetPolicy.target),
-      validate: (value) => toBodyDraft(value, input.novel, input.chapter)
+      maxTokens: 700,
+      validate: (value) => {
+        const patch = asRecord(value);
+        if (Object.keys(patch).length !== 1 || !Object.hasOwn(patch, 'sentenceIds')) throw new Error('body deletion output has unexpected fields');
+        const content = applyBodySentenceIds(original.content, eligibleSentences, readArray(patch, 'sentenceIds'), minimumRemoval, maximumRemoval);
+        const length = evaluateChapterLength(content, input.chapter.wordTarget);
+        if (length.status !== 'pass') throw new Error('body deletion result is outside the chapter length gate');
+        return {
+          ...original,
+          content,
+          firstSentence: firstSentence(content),
+          first300Summary: content.slice(0, 300),
+          experimentalRevisionRequiresConfirmation: true
+        };
+      }
     });
   }
 
@@ -1320,6 +1333,51 @@ function clampInteger(value: number, min: number, max: number): number {
 
 function firstSentence(content: string): string {
   return content.split(/[。！？\n]/).find(Boolean)?.trim() ?? content.slice(0, 40);
+}
+
+type EligibleBodySentence = { id: string; text: string; start: number; end: number };
+
+function listEligibleBodySentences(original: string): EligibleBodySentence[] {
+  const protectedEdge = Math.min(60, Math.floor(original.length * 0.05));
+  const sentences: EligibleBodySentence[] = [];
+  for (const match of original.matchAll(/[^。！？\n\r]+[。！？][”’」]?/gu)) {
+    const start = match.index;
+    const text = match[0];
+    const end = start + text.length;
+    if (start < protectedEdge || end > original.length - protectedEdge || text.length < 10 || /\d/u.test(text)) continue;
+    sentences.push({ id: `s${sentences.length + 1}`, text, start, end });
+  }
+  return sentences;
+}
+
+function applyBodySentenceIds(original: string, eligible: EligibleBodySentence[], values: unknown[], minimumRemoval: number, maximumRemoval: number): string {
+  if (values.length > 12) throw new Error('body deletion count exceeds the limit');
+  const byId = new Map(eligible.map((sentence) => [sentence.id, sentence]));
+  const seen = new Set<string>();
+  const candidates = values.map((value) => {
+    if (typeof value !== 'string' || seen.has(value) || !byId.has(value)) throw new Error('body deletion id is invalid');
+    seen.add(value);
+    return byId.get(value)!;
+  });
+  const candidateLengths = candidates.map((sentence) => evaluateChapterLength(sentence.text, 100).actual);
+  let best: EligibleBodySentence[] | null = null;
+  let bestRemoval = Infinity;
+  for (let mask = 1; mask < 1 << candidates.length; mask++) {
+    const spans = candidates.filter((_, index) => (mask & (1 << index)) !== 0);
+    if (best && spans.length > best.length) continue;
+    const removed = candidateLengths.reduce((sum, length, index) => sum + ((mask & (1 << index)) !== 0 ? length : 0), 0);
+    if (removed < minimumRemoval || removed > maximumRemoval) continue;
+    if (!best || spans.length < best.length || removed < bestRemoval) {
+      best = spans;
+      bestRemoval = removed;
+    }
+  }
+  if (!best) throw new Error('body deletion size is outside the bounded range');
+  let content = original;
+  for (const span of best.sort((a, b) => b.start - a.start)) content = `${content.slice(0, span.start)}${content.slice(span.end)}`;
+  const removed = evaluateChapterLength(original, 100).actual - evaluateChapterLength(content, 100).actual;
+  if (removed < minimumRemoval || removed > maximumRemoval) throw new Error('body deletion size is outside the bounded range');
+  return content;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

@@ -141,13 +141,25 @@ async function main() {
 
 main().catch((error) => {
   if (isLlmProviderError(error)) {
+    const reason = error.details?.reason;
+    const safeReasons = new Set([
+      'deletions is required',
+      'body deletion output has unexpected fields',
+      'body deletion count exceeds the limit',
+      'body deletion is not a unique complete sentence',
+      'body deletion does not match a unique interior source',
+      'body deletions overlap',
+      'body deletion size is outside the bounded range',
+      'body deletion result is outside the chapter length gate'
+    ]);
     console.error(JSON.stringify({
       category: error.category,
       taskName: error.details?.taskName ?? null,
       outputKind: error.details?.outputKind ?? null,
       finishReason: error.details?.finishReason ?? null,
       completionTokens: error.details?.completionTokens ?? null,
-      responseCharacters: error.details?.responseCharacters ?? null
+      responseCharacters: error.details?.responseCharacters ?? null,
+      safeValidationReason: typeof reason === 'string' && safeReasons.has(reason) ? reason : null
     }));
   }
   console.error(error instanceof Error ? error.message : error);

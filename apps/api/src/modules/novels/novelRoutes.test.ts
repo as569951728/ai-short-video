@@ -2697,7 +2697,7 @@ describe('novel package 6 body generation routes', () => {
     }
   });
 
-  it('revises an overlong model body once in the same task and only saves a passing chapter', async () => {
+  it('never promotes an experimental overlong revision into formal chapter content', async () => {
     for (const revisionPasses of [true, false]) {
       const repository = createInMemoryNovelRepository();
       const app = await buildApp({ logger: false, novelRepository: repository });
@@ -2706,14 +2706,22 @@ describe('novel package 6 body generation routes', () => {
         const chapter = repository.getNovelChapters().find((item) => item.novelId === novelId && item.chapterNo === 4)!;
         const target = chapter.wordTarget!;
         const upperBound = evaluateChapterLength('', target).upperBound!;
+        const deletion = `${'冗'.repeat(130)}。`;
+        const prefix = `开头。${'甲'.repeat(150)}。`;
+        const ending = '结尾。';
+        const original = `${prefix}${deletion}${'乙'.repeat(upperBound + 100 - prefix.length - deletion.length - ending.length)}${ending}`;
         const requests: string[] = [];
         const provider = new DeepSeekNovelProvider({
           experimentalOverlongRevision: true,
           client: {
             async chat(request) {
               requests.push(request.taskName);
-              const count = requests.length === 1 ? upperBound + 100 : revisionPasses ? target : upperBound + 20;
-              return { content: JSON.stringify({ content: '字'.repeat(count) }), model: request.model };
+              return {
+                content: JSON.stringify(requests.length === 1
+                  ? { content: original }
+                  : { sentenceIds: revisionPasses ? ['s1'] : [] }),
+                model: request.model
+              };
             }
           }
         });
@@ -2724,17 +2732,14 @@ describe('novel package 6 body generation routes', () => {
           idempotencyKey: `body-revise-${revisionPasses}`
         }, { tenantId: 'tenant_test', userId: 'user_test', requestId: `body-revise-${revisionPasses}` });
 
-        if (revisionPasses) {
-          await generate();
-          const current = repository.getChapterContentVersions().find((item) => item.id === chapter.currentContentVersionId);
-          assert.ok(current);
-          assert.equal(evaluateChapterLength(current.content, target).status, 'pass');
-          assert.equal(repository.getChapterContentVersions().filter((item) => item.chapterId === chapter.id).length, 1);
-        } else {
-          await assert.rejects(generate, (error) => error instanceof BusinessError && error.details?.reasonCode === 'NOVEL_CONTENT_LENGTH_OUT_OF_RANGE');
-          assert.equal(chapter.currentContentVersionId, null);
-          assert.equal(repository.getChapterContentVersions().filter((item) => item.chapterId === chapter.id).length, 0);
-        }
+        await assert.rejects(
+          generate,
+          revisionPasses
+            ? (error) => error instanceof BusinessError && error.code === ErrorCode.GateBlocked
+            : undefined
+        );
+        assert.equal(chapter.currentContentVersionId, null);
+        assert.equal(repository.getChapterContentVersions().filter((item) => item.chapterId === chapter.id).length, 0);
         assert.deepEqual(requests, ['novel_body_chapter_generate', 'novel_body_chapter_shorten']);
       } finally {
         await app.close();

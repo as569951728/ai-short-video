@@ -1063,6 +1063,9 @@ export class NovelService {
             previousBatchNotes: authoritative.previousBatchNotes,
             enhancedReview: authoritative.enhancedReview && chapter.chapterNo <= 10
           });
+          if (providerDraft.experimentalRevisionRequiresConfirmation) {
+            throw new BusinessError(ErrorCode.GateBlocked, '修订稿需要先保存为候选并由用户采用；当前流程不会自动写入正式正文。');
+          }
           const draft = bindGeneratedBodyChapter(chapter, providerDraft);
           // A provider may return chapter-local memory; immutable facts must survive later chapters and the saved snapshot.
           draft.memory.factsCannotContradict = [...new Set([

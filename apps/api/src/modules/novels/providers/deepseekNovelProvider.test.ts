@@ -24,7 +24,7 @@ describe('DeepSeek novel provider', () => {
     assert.equal(provider.getModelRoutingVersion('chapter_rewrite'), 'deepseek:deepseek-general-test:route-v2');
     assert.equal(provider.getModelRoutingVersion('novel_full_review'), 'deepseek:deepseek-reasoner-test:route-v5');
     const experimental = new DeepSeekNovelProvider({ client: createQueueClient([]), model: 'deepseek-general-test', experimentalOverlongRevision: true });
-    assert.equal(experimental.getModelRoutingVersion('chapter_body_generate'), 'deepseek:deepseek-general-test:route-v3');
+    assert.equal(experimental.getModelRoutingVersion('chapter_body_generate'), 'deepseek:deepseek-general-test:route-v5');
   });
 
   it('maps fake DeepSeek JSON into direction, structure, trial, body, impact, and full-review drafts', async () => {
@@ -921,9 +921,8 @@ describe('DeepSeek novel provider', () => {
 
   it('makes exactly one bounded revision call for an overlong body chapter', async () => {
     const requests: ChatCompletionRequest[] = [];
-    const original = '长'.repeat(170);
-    const revised = '短'.repeat(100);
-    const responses = [JSON.stringify({ content: original }), JSON.stringify({ content: revised })];
+    const { original, deletion } = createOverlongDeletionFixture(1000);
+    const responses = [JSON.stringify({ content: original }), JSON.stringify({ sentenceIds: ['s1'] })];
     const provider = new DeepSeekNovelProvider({
       experimentalOverlongRevision: true,
       client: {
@@ -934,18 +933,19 @@ describe('DeepSeek novel provider', () => {
       }
     });
 
-    const draft = await provider.generateBodyChapter(bodyInputForLengthTest(100));
+    const draft = await provider.generateBodyChapter(bodyInputForLengthTest(1000));
 
-    assert.equal(draft.content, revised);
-    assert.equal(evaluateChapterLength(draft.content, 100).status, 'pass');
+    assert.equal(draft.content, original.replace(deletion, ''));
+    assert.equal(draft.experimentalRevisionRequiresConfirmation, true);
+    assert.equal(evaluateChapterLength(draft.content, 1000).status, 'pass');
     assert.deepEqual(requests.map((request) => request.taskName), ['novel_body_chapter_generate', 'novel_body_chapter_shorten']);
     assert.deepEqual(requests.map((request) => request.maxRetries), [0, 0]);
+    assert.equal(requests[1].maxTokens, 700);
     const prompt = JSON.parse(requests[1].messages[1].content);
     assert.equal(prompt.payload.original.content, original);
-    assert.deepEqual([prompt.payload.wordTargetPolicy.lowerBound, prompt.payload.wordTargetPolicy.upperBound], [85, 115]);
-    assert.match(prompt.instruction, /至少要删减 55 个/);
-    assert.match(prompt.instruction, /严禁只改少量虚词/);
-    assert.match(prompt.instruction, /不得改动时间线/);
+    assert.deepEqual(prompt.payload.eligibleSentences, [{ id: 's1', text: deletion }]);
+    assert.match(prompt.instruction, /只能从 eligibleSentences 中挑选/);
+    assert.match(prompt.instruction, /只返回/);
   });
 
   it('keeps overlong automatic revision disabled in the production default', async () => {
@@ -965,25 +965,82 @@ describe('DeepSeek novel provider', () => {
     assert.equal(evaluateChapterLength(draft.content, 100).status, 'too_long');
   });
 
-  it('does not revise a passing or too-short body, and never makes a third call', async () => {
-    for (const [initialLength, expectedCalls] of [[115, 1], [84, 1], [170, 2]] as const) {
+  it('uses the smallest valid subset of model-selected sentence ids', async () => {
+    const { original, deletion } = createOverlongDeletionFixture(1000, true);
+    const responses = [JSON.stringify({ content: original }), JSON.stringify({ sentenceIds: ['s1', 's2'] })];
+    const provider = new DeepSeekNovelProvider({
+      experimentalOverlongRevision: true,
+      client: { async chat(request) { return { content: responses.shift()!, model: request.model }; } }
+    });
+
+    const draft = await provider.generateBodyChapter(bodyInputForLengthTest(1000));
+    assert.equal(draft.content, original.replace(deletion, ''));
+    assert.equal(draft.experimentalRevisionRequiresConfirmation, true);
+  });
+
+  it('does not revise a passing or too-short body', async () => {
+    for (const [initialLength, expectedStatus] of [[115, 'pass'], [84, 'too_short']] as const) {
       const requests: ChatCompletionRequest[] = [];
-      const responses = [JSON.stringify({ content: '字'.repeat(initialLength) }), JSON.stringify({ content: '字'.repeat(160) })];
       const provider = new DeepSeekNovelProvider({
         experimentalOverlongRevision: true,
         client: {
           async chat(request) {
             requests.push(request);
-            return { content: responses.shift()!, model: request.model };
+            return { content: JSON.stringify({ content: '字'.repeat(initialLength) }), model: request.model };
           }
         }
       });
-
       const draft = await provider.generateBodyChapter(bodyInputForLengthTest(100));
-
-      assert.equal(requests.length, expectedCalls);
-      assert.equal(evaluateChapterLength(draft.content, 100).status, initialLength === 84 ? 'too_short' : initialLength === 170 ? 'too_long' : 'pass');
+      assert.equal(requests.length, 1);
+      assert.equal(evaluateChapterLength(draft.content, 100).status, expectedStatus);
     }
+  });
+
+  it('rejects a deletion that is too small without making a third call', async () => {
+    const requests: ChatCompletionRequest[] = [];
+    const { original } = createOverlongDeletionFixture(1000);
+    const responses = [JSON.stringify({ content: original }), JSON.stringify({ sentenceIds: [] })];
+    const provider = new DeepSeekNovelProvider({
+      experimentalOverlongRevision: true,
+      client: { async chat(request) { requests.push(request); return { content: responses.shift()!, model: request.model }; } }
+    });
+    await assert.rejects(
+      () => provider.generateBodyChapter(bodyInputForLengthTest(1000)),
+      (error) => error instanceof LlmProviderError && error.category === 'output_parse_failed'
+    );
+    assert.equal(requests.length, 2);
+  });
+
+  it('rejects invented, repeated, or non-string sentence ids', async () => {
+    const { original } = createOverlongDeletionFixture(1000);
+    for (const sentenceIds of [
+      ['s999'],
+      ['s1', 's1'],
+      [1]
+    ] as const) {
+      const responses = [JSON.stringify({ content: original }), JSON.stringify({ sentenceIds })];
+      const provider = new DeepSeekNovelProvider({
+        experimentalOverlongRevision: true,
+        client: { async chat(request) { return { content: responses.shift()!, model: request.model }; } }
+      });
+      await assert.rejects(
+        () => provider.generateBodyChapter(bodyInputForLengthTest(1000)),
+        (error) => error instanceof LlmProviderError && error.details?.reason === 'body deletion id is invalid'
+      );
+    }
+  });
+
+  it('rejects an extra rewrite field in the deletion response', async () => {
+    const { original } = createOverlongDeletionFixture(1000);
+    const responses = [JSON.stringify({ content: original }), JSON.stringify({ sentenceIds: ['s1'], content: '额外正文' })];
+    const provider = new DeepSeekNovelProvider({
+      experimentalOverlongRevision: true,
+      client: { async chat(request) { return { content: responses.shift()!, model: request.model }; } }
+    });
+    await assert.rejects(
+      () => provider.generateBodyChapter(bodyInputForLengthTest(1000)),
+      (error) => error instanceof LlmProviderError && error.details?.reason === 'body deletion output has unexpected fields'
+    );
   });
 
   it('does not spend a second call when the revision context exceeds its prompt budget', async () => {
@@ -993,36 +1050,37 @@ describe('DeepSeek novel provider', () => {
       client: {
         async chat(request) {
           requests.push(request);
-          return { content: JSON.stringify({ content: '字'.repeat(45_000) }), model: request.model };
+          return { content: JSON.stringify({ content: '字'.repeat(38_000) }), model: request.model };
         }
       }
     });
-    const input = bodyInputForLengthTest(100);
+    const input = bodyInputForLengthTest(30_000);
+    input.strategySnapshot.summary = '主线'.repeat(2_000);
     const draft = await provider.generateBodyChapter(input);
 
     assert.equal(requests.length, 1);
-    assert.equal(evaluateChapterLength(draft.content, 100).status, 'too_long');
+    assert.equal(evaluateChapterLength(draft.content, 30_000).status, 'too_long');
   });
 
   it('sends the complete overlong source to a bounded revision, including its ending', async () => {
     const requests: ChatCompletionRequest[] = [];
-    const original = `${'正文'.repeat(2_250)}结尾证据`;
+    const { original } = createOverlongDeletionFixture(4_000);
     const provider = new DeepSeekNovelProvider({
       experimentalOverlongRevision: true,
       client: {
         async chat(request) {
           requests.push(request);
-          return { content: JSON.stringify({ content: requests.length === 1 ? original : '修订'.repeat(1_500) }), model: request.model };
+          return { content: JSON.stringify(requests.length === 1 ? { content: original } : { sentenceIds: ['s1'] }), model: request.model };
         }
       }
     });
 
-    await provider.generateBodyChapter(bodyInputForLengthTest(3_000));
+    await provider.generateBodyChapter(bodyInputForLengthTest(4_000));
 
     assert.equal(requests.length, 2);
     const prompt = JSON.parse(requests[1].messages[1].content);
     assert.equal(prompt.payload.original.content, original);
-    assert.match(prompt.payload.original.content, /结尾证据$/);
+    assert.match(prompt.payload.original.content, /结尾。$/);
   });
 
   it('omits internal tenant scope from the external full-review prompt', async () => {
@@ -1173,4 +1231,14 @@ function bodyInputForLengthTest(wordTarget: number): any {
     previousBatchNotes: [],
     enhancedReview: false
   };
+}
+
+function createOverlongDeletionFixture(wordTarget: number, withExtraSentence = false) {
+  const upperBound = Math.floor(wordTarget * 1.15);
+  const deletion = `${'冗'.repeat(54)}。`;
+  const prefix = `开头。${'甲'.repeat(400)}。`;
+  const ending = '结尾。';
+  const extra = withExtraSentence ? `${'杂'.repeat(80)}。` : '';
+  const filler = '乙'.repeat(upperBound + 35 - prefix.length - deletion.length - extra.length - ending.length);
+  return { original: `${prefix}${deletion}${extra}${filler}${ending}`, deletion };
 }
