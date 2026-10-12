@@ -2,7 +2,8 @@ import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import ElementPlus, { ElMessageBox } from 'element-plus'
 import { nextTick } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { NovelCreationStage, StageStatus, StaleLevel, TaskStatus, VersionStatus } from '@ai-shortvideo/shared'
+import { ErrorCode, NovelCreationStage, StageStatus, StaleLevel, TaskStatus, VersionStatus } from '@ai-shortvideo/shared'
+import { ApiClientError } from '../shared/services/http'
 import NovelDetailWorkbench from './NovelDetailWorkbench.vue'
 
 const mocks = vi.hoisted(() => ({
@@ -18,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   editDirectionCandidate: vi.fn(),
   fuseDirections: vi.fn(),
   generateDirections: vi.fn(),
+  generateBodyBatch: vi.fn(),
   generateOutline: vi.fn(),
   optimizeDirection: vi.fn(),
   startFullReview: vi.fn(),
@@ -50,7 +52,7 @@ vi.mock('../modules/novels/services/novelService', () => {
     editStructureAsset: noopAction,
     forcePassFullReview: noopAction,
     fuseDirections: mocks.fuseDirections,
-    generateBodyBatch: noopAction,
+    generateBodyBatch: mocks.generateBodyBatch,
     generateChapterPlan: noopAction,
     generateDirections: mocks.generateDirections,
     generateOutline: mocks.generateOutline,
@@ -139,6 +141,7 @@ afterEach(() => {
   mocks.editDirectionCandidate.mockReset()
   mocks.fuseDirections.mockReset()
   mocks.generateDirections.mockReset()
+  mocks.generateBodyBatch.mockReset()
   mocks.generateOutline.mockReset()
   mocks.optimizeDirection.mockReset()
   mocks.startFullReview.mockReset()
@@ -818,6 +821,42 @@ describe('NovelDetailWorkbench DOM behavior', () => {
     await wrapper.findAll('button').find((button) => button.text() === '查看批次总结')?.trigger('click')
     await flushPromises()
     expect(wrapper.findAll('button').map((button) => button.text())).toContain('重写本章')
+  })
+
+  it('starts a new body batch after a confirmed length failure but reuses the key after network uncertainty', async () => {
+    mocks.route.query = { step: 'body' }
+    mocks.getNovelDetail.mockResolvedValue(createNovelDetail({
+      creationStage: NovelCreationStage.Body,
+      stageStatus: StageStatus.NotStarted,
+      currentAssets: { direction: {}, setting: {}, outline: {}, stageOutline: {}, chapterPlan: { id: 'chapter-plan-current' } },
+      bodyGeneration: createBodyGenerationFixture({ status: 'pending' }),
+    }))
+    mocks.generateBodyBatch
+      .mockRejectedValueOnce(new ApiClientError('NETWORK_ERROR', '网络中断'))
+      .mockRejectedValueOnce(new ApiClientError(ErrorCode.GateBlocked, '正文字符数偏长', undefined, {
+        reasonCode: 'NOVEL_CONTENT_LENGTH_OUT_OF_RANGE',
+      }))
+      .mockResolvedValueOnce({})
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+
+    try {
+      wrapper = mount(NovelDetailWorkbench, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+      await flushPromises()
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const generateButton = wrapper.findAll('button').find((button) => button.text() === '生成下一批')
+        expect(generateButton?.attributes('disabled')).toBeUndefined()
+        await generateButton?.trigger('click')
+        await flushPromises()
+      }
+
+      expect(mocks.generateBodyBatch).toHaveBeenCalledTimes(3)
+      const keys = mocks.generateBodyBatch.mock.calls.map((call) => call[1].idempotencyKey)
+      expect(keys[1]).toBe(keys[0])
+      expect(keys[2]).not.toBe(keys[1])
+      expect(confirmSpy).toHaveBeenCalledTimes(3)
+    } finally {
+      confirmSpy.mockRestore()
+    }
   })
 
   it('does not overlay a stale body length gate after the authoritative chapter target changes', async () => {

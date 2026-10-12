@@ -1402,7 +1402,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { NovelCreationStage, StageStatus, TaskStatus, VersionStatus, type FullReviewIssueDTO, type RecentTaskSummaryDTO, type StructureAssetType, type TaskDetailDTO } from '@ai-shortvideo/shared'
+import { ErrorCode, NovelCreationStage, StageStatus, TaskStatus, VersionStatus, type FullReviewIssueDTO, type RecentTaskSummaryDTO, type StructureAssetType, type TaskDetailDTO } from '@ai-shortvideo/shared'
 import { ApiClientError } from '../shared/services/http'
 import TaskProgressPanel from '../modules/novels/components/TaskProgressPanel.vue'
 import {
@@ -2994,6 +2994,16 @@ async function handleGenerateBodyBatch() {
     bodyBatchIdempotencyKey.value = ''
     await loadDetail()
   } catch (error) {
+    if (
+      error instanceof ApiClientError &&
+      error.code === ErrorCode.GateBlocked &&
+      error.details &&
+      typeof error.details === 'object' &&
+      'reasonCode' in error.details &&
+      error.details.reasonCode === 'NOVEL_CONTENT_LENGTH_OUT_OF_RANGE'
+    ) {
+      bodyBatchIdempotencyKey.value = ''
+    }
     apiError.value = formatApiError(error)
     await loadDetail(true)
   } finally {
