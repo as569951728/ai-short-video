@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { RiskLevel } from '@ai-shortvideo/shared';
@@ -9,7 +9,7 @@ import { evaluateChapterLength } from './domain/chapterLengthPolicy.js';
 import { DeepSeekNovelProvider } from './providers/deepseekNovelProvider.js';
 
 const TARGET = 2300;
-const MAX_CALLS = 1;
+const MAX_CALLS = 2;
 const MAX_COMPLETION_TOKENS = 9000;
 const MAX_PROMPT_CHARACTERS = 20_000;
 
@@ -21,9 +21,18 @@ async function main() {
 
   const client = createDeepSeekLlmClient({ ...config, maxRetries: 0 });
   if (!client) throw new Error('DeepSeek client 未配置。');
+  const replayOriginal = process.env.NOVEL_CANARY_REPLAY_ORIGINAL_PATH
+    ? readFileSync(process.env.NOVEL_CANARY_REPLAY_ORIGINAL_PATH, 'utf8')
+    : null;
+  if (replayOriginal && evaluateChapterLength(replayOriginal, TARGET).status !== 'too_long') {
+    throw new Error('Canary replay source must be overlong');
+  }
 
   let callCount = 0;
+  let paidCallCount = 0;
   let completion: ChatCompletionResult | null = null;
+  let originalContent: string | null = replayOriginal;
+  const usage: Array<ChatCompletionResult['usage']> = [];
   const budgetedClient: LlmClient = {
     async chat(request) {
       callCount += 1;
@@ -31,7 +40,20 @@ async function main() {
       const promptCharacters = request.messages.reduce((sum, message) => sum + message.content.length, 0);
       if (promptCharacters > MAX_PROMPT_CHARACTERS) throw new Error('Canary prompt budget exceeded');
       if ((request.maxTokens ?? 0) > MAX_COMPLETION_TOKENS) throw new Error('Canary output budget exceeded');
+      if (replayOriginal && callCount === 1) {
+        return { content: JSON.stringify({ content: replayOriginal }), model: config.model };
+      }
+      paidCallCount += 1;
       completion = await client.chat(request);
+      usage.push(completion.usage);
+      if (callCount === 1) {
+        try {
+          const parsed = JSON.parse(completion.content) as { content?: unknown };
+          if (typeof parsed.content === 'string') originalContent = parsed.content;
+        } catch {
+          originalContent = null;
+        }
+      }
       return completion;
     }
   };
@@ -40,7 +62,8 @@ async function main() {
     client: budgetedClient,
     model: config.model,
     structureModel: config.structureModel,
-    reasonerModel: config.reasonerModel
+    reasonerModel: config.reasonerModel,
+    experimentalOverlongRevision: true
   });
   const startedAt = Date.now();
   const draft = await provider.generateBodyChapter({
@@ -87,10 +110,12 @@ async function main() {
   const outputDir = mkdtempSync(join(tmpdir(), 'novel-urban-rebirth-canary-'));
   const chapterPath = join(outputDir, 'chapter-1.txt');
   writeFileSync(chapterPath, draft.content, { encoding: 'utf8', mode: 0o600 });
+  const originalPath = callCount === 2 && originalContent ? join(outputDir, 'chapter-1-original.txt') : null;
+  if (originalPath && originalContent) writeFileSync(originalPath, originalContent, { encoding: 'utf8', mode: 0o600 });
   const finalCompletion = completion as ChatCompletionResult | null;
   console.log(JSON.stringify({
-    success: gate.canAdopt && missingAnchors.length === 0 && callCount === MAX_CALLS,
-    evidence: 'REAL_MODEL_ONE_CALL_NO_DATABASE',
+    success: gate.canAdopt && missingAnchors.length === 0,
+    evidence: 'REAL_MODEL_AT_MOST_TWO_CALLS_NO_DATABASE',
     model: finalCompletion?.model ?? config.model,
     target: gate.target,
     actual: gate.actual,
@@ -100,12 +125,16 @@ async function main() {
     fixedFixtureMissingAnchors: missingAnchors,
     countMode: gate.metric,
     callCount,
+    paidCallCount,
+    replayedOriginal: Boolean(replayOriginal),
     retryCount: 0,
-    usage: finalCompletion?.usage ?? null,
+    usage,
     elapsedMs: Date.now() - startedAt,
     maxCompletionTokens: MAX_COMPLETION_TOKENS,
     resultHash: createHash('sha256').update(draft.content).digest('hex'),
-    chapterPath
+    chapterPath,
+    originalResultHash: originalContent ? createHash('sha256').update(originalContent).digest('hex') : null,
+    originalPath
   }, null, 2));
   if (!gate.canAdopt || missingAnchors.length > 0) throw new Error('都市重生章节未通过长度或固定样本情节锚点检查。');
 }

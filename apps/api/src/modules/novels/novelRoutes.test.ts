@@ -2696,6 +2696,51 @@ describe('novel package 6 body generation routes', () => {
       }
     }
   });
+
+  it('revises an overlong model body once in the same task and only saves a passing chapter', async () => {
+    for (const revisionPasses of [true, false]) {
+      const repository = createInMemoryNovelRepository();
+      const app = await buildApp({ logger: false, novelRepository: repository });
+      try {
+        const { novelId, strategySnapshot } = await createNovelReadyForBody(app, `正文限次修订-${revisionPasses}`, 8);
+        const chapter = repository.getNovelChapters().find((item) => item.novelId === novelId && item.chapterNo === 4)!;
+        const target = chapter.wordTarget!;
+        const upperBound = evaluateChapterLength('', target).upperBound!;
+        const requests: string[] = [];
+        const provider = new DeepSeekNovelProvider({
+          experimentalOverlongRevision: true,
+          client: {
+            async chat(request) {
+              requests.push(request.taskName);
+              const count = requests.length === 1 ? upperBound + 100 : revisionPasses ? target : upperBound + 20;
+              return { content: JSON.stringify({ content: '字'.repeat(count) }), model: request.model };
+            }
+          }
+        });
+        const service = new NovelService({ repository, bodyProvider: provider });
+        const generate = () => service.generateChapterBody(novelId, chapter.id, {
+          strategySnapshotId: strategySnapshot.id,
+          expectedStrategySnapshotVersion: strategySnapshot.versionNo,
+          idempotencyKey: `body-revise-${revisionPasses}`
+        }, { tenantId: 'tenant_test', userId: 'user_test', requestId: `body-revise-${revisionPasses}` });
+
+        if (revisionPasses) {
+          await generate();
+          const current = repository.getChapterContentVersions().find((item) => item.id === chapter.currentContentVersionId);
+          assert.ok(current);
+          assert.equal(evaluateChapterLength(current.content, target).status, 'pass');
+          assert.equal(repository.getChapterContentVersions().filter((item) => item.chapterId === chapter.id).length, 1);
+        } else {
+          await assert.rejects(generate, (error) => error instanceof BusinessError && error.details?.reasonCode === 'NOVEL_CONTENT_LENGTH_OUT_OF_RANGE');
+          assert.equal(chapter.currentContentVersionId, null);
+          assert.equal(repository.getChapterContentVersions().filter((item) => item.chapterId === chapter.id).length, 0);
+        }
+        assert.deepEqual(requests, ['novel_body_chapter_generate', 'novel_body_chapter_shorten']);
+      } finally {
+        await app.close();
+      }
+    }
+  });
   it('uses the claimed chapter target and rejects a stale target before provider dispatch', async () => {
     const repository = createInMemoryNovelRepository();
     const app = await buildApp({ logger: false, novelRepository: repository });
@@ -5389,6 +5434,10 @@ describe('RP-02B2a1 registry and strict provider ABI', () => {
       const prompt = JSON.parse(request.messages[1]?.content ?? '{}');
       prompts.set(request.taskName, prompt);
       const payload = createFakeDeepSeekPayload(request.taskName);
+      if (request.taskName === 'novel_body_chapter_generate') {
+        const target = prompt.payload.wordTargetPolicy.target as number;
+        payload.content = '林舟证据'.repeat(Math.ceil(target / 4)).slice(0, target);
+      }
       if (request.taskName.includes('chapter_plan')) {
         const wordTarget = prompt.payload.wordTargetPolicy.defaultTarget;
         (payload.chapters as Array<{ wordTarget: number }>).forEach((chapter) => { chapter.wordTarget = wordTarget; });

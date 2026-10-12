@@ -18,6 +18,7 @@ import type {
   TrialReviewDraft
 } from '../domain/novelDomain.js';
 import { DEFAULT_POLICY_PROFILE_VERSION_ID } from '../domain/novelDomain.js';
+import { evaluateChapterLength } from '../domain/chapterLengthPolicy.js';
 import {
   FullReviewEvidenceValidationError,
   projectStructureCurrentAssetsPrompt,
@@ -52,6 +53,7 @@ interface DeepSeekNovelProviderOptions {
   model?: string;
   structureModel?: string;
   reasonerModel?: string;
+  experimentalOverlongRevision?: boolean;
 }
 
 const SINGLE_PAID_CALL_JSON_POLICY = {
@@ -90,8 +92,10 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
         : this.model;
     const routeVersion = action === 'novel_full_review'
       ? 'route-v5'
-      : ['body_batch_generate', 'chapter_body_generate', 'chapter_rewrite'].includes(action)
-        ? 'route-v2'
+      : this.options.experimentalOverlongRevision && ['body_batch_generate', 'chapter_body_generate'].includes(action)
+        ? 'route-v3'
+        : ['body_batch_generate', 'chapter_body_generate', 'chapter_rewrite'].includes(action)
+          ? 'route-v2'
         : 'route-v1';
     return `deepseek:${model}:${routeVersion}`;
   }
@@ -247,7 +251,7 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
 
   async generateBodyChapter(input: BodyGenerateInput): Promise<BodyChapterProviderDraft> {
     const wordTargetPolicy = createWordTargetPolicy(input.novel, input.chapter.wordTarget ?? undefined);
-    return requestJsonOutput(this.options.client, {
+    const original = await requestJsonOutput(this.options.client, {
       taskName: 'novel_body_chapter_generate',
       model: this.model,
       ...SINGLE_PAID_CALL_JSON_POLICY,
@@ -267,6 +271,46 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
         previousBatchNotes: input.previousBatchNotes,
         enhancedReview: input.enhancedReview
       }, M1_OUTPUT_SCHEMA_HINT.body),
+      maxTokens: getBodyChapterMaxTokens(wordTargetPolicy.target),
+      validate: (value) => toBodyDraft(value, input.novel, input.chapter)
+    });
+    const originalLength = evaluateChapterLength(original.content, input.chapter.wordTarget);
+    if (originalLength.status !== 'too_long' || !this.options.experimentalOverlongRevision) return original;
+
+    const revisionMessages = createMessages(
+      `原稿共 ${originalLength.actual} 个非空白字符，上限 ${wordTargetPolicy.upperBound}，至少要删减 ${originalLength.actual - wordTargetPolicy.upperBound} 个；请把完整 content 重写到 ${wordTargetPolicy.preferredLowerBound}-${wordTargetPolicy.preferredUpperBound} 个非空白字符，建议删减 ${originalLength.actual - wordTargetPolicy.preferredUpperBound}-${originalLength.actual - wordTargetPolicy.preferredLowerBound} 个。严禁只改少量虚词或逐句复写原稿；合并重复场景、删去次要铺垫和重复心理描写，保留主要事件、因果、人物关系、关键事实和结尾钩子，不得改动时间线或增加新事实。同步更新摘要、特性卡、单章审稿和长篇记忆；只返回完整 JSON，不要片段、说明或字数报告。`,
+      input.novel,
+      {
+        chapter: pickChapter(input.chapter),
+        wordTargetPolicy,
+        strategySnapshot: {
+          title: input.strategySnapshot.title,
+          summary: input.strategySnapshot.summary
+        },
+        previousContentSummary: input.previousContent?.summary,
+        previousMemory: input.previousMemory,
+        previousBatchNotes: input.previousBatchNotes,
+        original: {
+          content: original.content,
+          summary: original.summary,
+          endingHook: original.endingHook,
+          factsCannotChange: original.featureCard.factsCannotChange,
+          factsCannotContradict: original.memory.factsCannotContradict
+        }
+      },
+      M1_OUTPUT_SCHEMA_HINT.body
+    );
+    const revisionPrompt = JSON.parse(revisionMessages[1].content) as { payload: { original: { content: string } } };
+    revisionPrompt.payload.original.content = original.content;
+    revisionMessages[1].content = JSON.stringify(revisionPrompt);
+    if (revisionMessages.reduce((total, message) => total + message.content.length, 0) > 40_000) return original;
+
+    return requestJsonOutput(this.options.client, {
+      taskName: 'novel_body_chapter_shorten',
+      model: this.model,
+      ...SINGLE_PAID_CALL_JSON_POLICY,
+      thinkingMode: 'disabled',
+      messages: revisionMessages,
       maxTokens: getBodyChapterMaxTokens(wordTargetPolicy.target),
       validate: (value) => toBodyDraft(value, input.novel, input.chapter)
     });
@@ -1242,7 +1286,7 @@ function createWordTargetPolicy(novel: NovelProviderInputV1, chapterTarget?: num
   const max = clampInteger(Math.max(novel.chapterWordMax ?? 2600, min), min, 30000);
   const defaultTarget = Math.round((min + max) / 2);
   const target = clampInteger(chapterTarget ?? defaultTarget, 100, 30000);
-  const lowerBound = Math.max(100, Math.ceil((target * 85) / 100));
+  const lowerBound = Math.ceil((target * 85) / 100);
   const upperBound = Math.floor((target * 115) / 100);
   const preferredLowerBound = Math.max(lowerBound, Math.ceil((target * 95) / 100));
   const preferredUpperBound = target;

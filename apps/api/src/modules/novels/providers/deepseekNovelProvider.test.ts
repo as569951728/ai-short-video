@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { LlmProviderError, type ChatCompletionRequest, type LlmClient } from '../../ai/llmClient.js';
 import { hashCanonicalJson } from '../domain/executionContract.js';
+import { evaluateChapterLength } from '../domain/chapterLengthPolicy.js';
 import { FULL_REVIEW_CANONICAL_DIMENSION_KEYS } from '../services/actionExecutionPlan.js';
 import { createFullReviewEvidenceFixture } from '../testSupport/fullReviewEvidenceFixture.js';
 import { DeepSeekNovelProvider } from './deepseekNovelProvider.js';
@@ -22,6 +23,8 @@ describe('DeepSeek novel provider', () => {
     assert.equal(provider.getModelRoutingVersion('chapter_body_generate'), 'deepseek:deepseek-general-test:route-v2');
     assert.equal(provider.getModelRoutingVersion('chapter_rewrite'), 'deepseek:deepseek-general-test:route-v2');
     assert.equal(provider.getModelRoutingVersion('novel_full_review'), 'deepseek:deepseek-reasoner-test:route-v5');
+    const experimental = new DeepSeekNovelProvider({ client: createQueueClient([]), model: 'deepseek-general-test', experimentalOverlongRevision: true });
+    assert.equal(experimental.getModelRoutingVersion('chapter_body_generate'), 'deepseek:deepseek-general-test:route-v3');
   });
 
   it('maps fake DeepSeek JSON into direction, structure, trial, body, impact, and full-review drafts', async () => {
@@ -916,6 +919,112 @@ describe('DeepSeek novel provider', () => {
     assert.equal(request.maxTokens, 8050);
   });
 
+  it('makes exactly one bounded revision call for an overlong body chapter', async () => {
+    const requests: ChatCompletionRequest[] = [];
+    const original = '长'.repeat(170);
+    const revised = '短'.repeat(100);
+    const responses = [JSON.stringify({ content: original }), JSON.stringify({ content: revised })];
+    const provider = new DeepSeekNovelProvider({
+      experimentalOverlongRevision: true,
+      client: {
+        async chat(request) {
+          requests.push(request);
+          return { content: responses.shift()!, model: request.model };
+        }
+      }
+    });
+
+    const draft = await provider.generateBodyChapter(bodyInputForLengthTest(100));
+
+    assert.equal(draft.content, revised);
+    assert.equal(evaluateChapterLength(draft.content, 100).status, 'pass');
+    assert.deepEqual(requests.map((request) => request.taskName), ['novel_body_chapter_generate', 'novel_body_chapter_shorten']);
+    assert.deepEqual(requests.map((request) => request.maxRetries), [0, 0]);
+    const prompt = JSON.parse(requests[1].messages[1].content);
+    assert.equal(prompt.payload.original.content, original);
+    assert.deepEqual([prompt.payload.wordTargetPolicy.lowerBound, prompt.payload.wordTargetPolicy.upperBound], [85, 115]);
+    assert.match(prompt.instruction, /至少要删减 55 个/);
+    assert.match(prompt.instruction, /严禁只改少量虚词/);
+    assert.match(prompt.instruction, /不得改动时间线/);
+  });
+
+  it('keeps overlong automatic revision disabled in the production default', async () => {
+    const requests: ChatCompletionRequest[] = [];
+    const provider = new DeepSeekNovelProvider({
+      client: {
+        async chat(request) {
+          requests.push(request);
+          return { content: JSON.stringify({ content: '字'.repeat(170) }), model: request.model };
+        }
+      }
+    });
+
+    const draft = await provider.generateBodyChapter(bodyInputForLengthTest(100));
+
+    assert.equal(requests.length, 1);
+    assert.equal(evaluateChapterLength(draft.content, 100).status, 'too_long');
+  });
+
+  it('does not revise a passing or too-short body, and never makes a third call', async () => {
+    for (const [initialLength, expectedCalls] of [[115, 1], [84, 1], [170, 2]] as const) {
+      const requests: ChatCompletionRequest[] = [];
+      const responses = [JSON.stringify({ content: '字'.repeat(initialLength) }), JSON.stringify({ content: '字'.repeat(160) })];
+      const provider = new DeepSeekNovelProvider({
+        experimentalOverlongRevision: true,
+        client: {
+          async chat(request) {
+            requests.push(request);
+            return { content: responses.shift()!, model: request.model };
+          }
+        }
+      });
+
+      const draft = await provider.generateBodyChapter(bodyInputForLengthTest(100));
+
+      assert.equal(requests.length, expectedCalls);
+      assert.equal(evaluateChapterLength(draft.content, 100).status, initialLength === 84 ? 'too_short' : initialLength === 170 ? 'too_long' : 'pass');
+    }
+  });
+
+  it('does not spend a second call when the revision context exceeds its prompt budget', async () => {
+    const requests: ChatCompletionRequest[] = [];
+    const provider = new DeepSeekNovelProvider({
+      experimentalOverlongRevision: true,
+      client: {
+        async chat(request) {
+          requests.push(request);
+          return { content: JSON.stringify({ content: '字'.repeat(45_000) }), model: request.model };
+        }
+      }
+    });
+    const input = bodyInputForLengthTest(100);
+    const draft = await provider.generateBodyChapter(input);
+
+    assert.equal(requests.length, 1);
+    assert.equal(evaluateChapterLength(draft.content, 100).status, 'too_long');
+  });
+
+  it('sends the complete overlong source to a bounded revision, including its ending', async () => {
+    const requests: ChatCompletionRequest[] = [];
+    const original = `${'正文'.repeat(2_250)}结尾证据`;
+    const provider = new DeepSeekNovelProvider({
+      experimentalOverlongRevision: true,
+      client: {
+        async chat(request) {
+          requests.push(request);
+          return { content: JSON.stringify({ content: requests.length === 1 ? original : '修订'.repeat(1_500) }), model: request.model };
+        }
+      }
+    });
+
+    await provider.generateBodyChapter(bodyInputForLengthTest(3_000));
+
+    assert.equal(requests.length, 2);
+    const prompt = JSON.parse(requests[1].messages[1].content);
+    assert.equal(prompt.payload.original.content, original);
+    assert.match(prompt.payload.original.content, /结尾证据$/);
+  });
+
   it('omits internal tenant scope from the external full-review prompt', async () => {
     let request: ChatCompletionRequest | undefined;
     const provider = new DeepSeekNovelProvider({
@@ -1050,5 +1159,18 @@ function createChapter(chapterNo: number): any {
     id: `chapter-${chapterNo}`,
     chapterNo,
     title: `第${chapterNo}章`
+  };
+}
+
+function bodyInputForLengthTest(wordTarget: number): any {
+  return {
+    action: 'chapter_body_generate',
+    novel: createNovel(),
+    chapter: { ...createChapter(4), wordTarget },
+    strategySnapshot: { id: 'strategy-1', versionNo: 1, title: '主线', summary: '保留关键因果。', riskTags: [] },
+    previousContent: null,
+    previousMemory: null,
+    previousBatchNotes: [],
+    enhancedReview: false
   };
 }
