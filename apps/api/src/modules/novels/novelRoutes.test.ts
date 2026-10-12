@@ -35,6 +35,7 @@ import { MockStructureProvider } from './providers/mockStructureProvider.js';
 import { MockTrialProvider } from './providers/mockTrialProvider.js';
 import { DeepSeekNovelProvider } from './providers/deepseekNovelProvider.js';
 import { createFullReviewEvidenceFixture } from './testSupport/fullReviewEvidenceFixture.js';
+import { NovelService } from './services/novelService.js';
 type MockBodyChapter = Awaited<ReturnType<MockBodyProvider['generateBodyChapter']>>;
 type MockTrialFollowup = Awaited<ReturnType<MockTrialProvider['generateFollowup']>>;
 type MockFullReviewDraft = Awaited<ReturnType<MockFullReviewProvider['generateFullReview']>>;
@@ -3006,6 +3007,65 @@ describe('novel package 6 body generation routes', () => {
     assert.ok(chapter.featureCard.oneLineSummary.length > 0);
     assert.ok(chapter.reviewReport.totalScore >= 60);
     assert.ok(chapter.longTermMemory.summary.length > 0);
+    await app.close();
+  });
+
+  it('passes each generated chapter memory to the next chapter in the same batch', async () => {
+    const repository = createInMemoryNovelRepository();
+    const app = await buildApp({ logger: false, novelRepository: repository });
+    const { novelId, strategySnapshot } = await createNovelReadyForBody(app, '批内长篇记忆连续性测试', 8);
+    const thirdChapter = repository.getNovelChapters().find((chapter) => chapter.novelId === novelId && chapter.chapterNo === 3);
+    assert.ok(thirdChapter);
+    repository.getLongTermMemories().push({
+      id: 'memory_before_batch', tenantId: 'tenant_test', novelId, chapterId: thirdChapter.id,
+      sourceContentVersionId: thirdChapter.currentContentVersionId, previousSummary: '前三章确认的事实',
+      characterStates: [], relationshipStates: [], locations: [], organizations: [], items: [],
+      plantedForeshadowing: [], resolvedForeshadowing: [], unresolvedConflicts: [], newSettings: [],
+      factsCannotContradict: ['第3章已确认事实'], status: VersionStatus.Current,
+      staleLevel: StaleLevel.None, sourceTaskId: null, createdAt: new Date(), metadata: {}
+    });
+    const startingMemory = await repository.findLatestLongTermMemory('tenant_test', novelId);
+    assert.ok(startingMemory?.factsCannotContradict.length);
+    const mock = new MockBodyProvider();
+    const inputs: Array<{ chapterNo: number; previousMemory: { factsCannotContradict: string[] } | null }> = [];
+    const service = new NovelService({
+      repository,
+      bodyProvider: {
+        generateBodyChapter: async (input) => {
+          inputs.push({ chapterNo: input.chapter.chapterNo, previousMemory: structuredClone(input.previousMemory) });
+          const draft = await mock.generateBodyChapter(input);
+          return {
+            ...draft,
+            memory: {
+              ...draft.memory,
+              factsCannotContradict: [...draft.memory.factsCannotContradict, `第${input.chapter.chapterNo}章新增事实`]
+            }
+          };
+        },
+        rewriteChapter: (input) => mock.rewriteChapter(input),
+        assessImpact: (input) => mock.assessImpact(input)
+      }
+    });
+
+    await service.generateBodyBatch(novelId, {
+      strategySnapshotId: strategySnapshot.id,
+      expectedStrategySnapshotVersion: strategySnapshot.versionNo,
+      startChapterNo: 4,
+      endChapterNo: 6,
+      idempotencyKey: 'body-memory-forward-1'
+    }, { tenantId: 'tenant_test', userId: 'user_test', requestId: 'body-memory-forward-1' });
+
+    assert.deepEqual(inputs.map((input) => input.chapterNo), [4, 5, 6]);
+    assert.equal(inputs[1]?.previousMemory?.factsCannotContradict.includes('第4章新增事实'), true);
+    assert.equal(inputs[2]?.previousMemory?.factsCannotContradict.includes('第4章新增事实'), true);
+    assert.equal(inputs[2]?.previousMemory?.factsCannotContradict.includes('第5章新增事实'), true);
+    const savedMemory = await repository.findLatestLongTermMemory('tenant_test', novelId);
+    assert.equal(savedMemory?.factsCannotContradict.includes('第4章新增事实'), true);
+    assert.equal(savedMemory?.factsCannotContradict.includes('第5章新增事实'), true);
+    assert.equal(savedMemory?.factsCannotContradict.includes('第6章新增事实'), true);
+    for (const fact of startingMemory.factsCannotContradict) {
+      assert.equal(savedMemory?.factsCannotContradict.includes(fact), true);
+    }
     await app.close();
   });
 
