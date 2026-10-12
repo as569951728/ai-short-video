@@ -39,7 +39,8 @@ export class OpenAiCompatibleChatClient implements LlmClient {
             messages: request.messages,
             temperature: request.temperature ?? 0.4,
             max_tokens: request.maxTokens,
-            response_format: { type: 'json_object' }
+            response_format: { type: 'json_object' },
+            ...(request.thinkingMode ? { thinking: { type: request.thinkingMode } } : {})
           }),
           signal: controller.signal
         });
@@ -58,21 +59,26 @@ export class OpenAiCompatibleChatClient implements LlmClient {
 
         const payload = (await response.json()) as {
           model?: string;
-          choices?: Array<{ message?: { content?: string } }>;
+          choices?: Array<{ finish_reason?: string; message?: { content?: string } }>;
           usage?: {
             prompt_tokens?: number;
             completion_tokens?: number;
             total_tokens?: number;
+            completion_tokens_details?: { reasoning_tokens?: number };
           };
         };
-        const content = payload.choices?.[0]?.message?.content;
+        const choice = payload.choices?.[0];
+        const content = choice?.message?.content;
         if (!content) {
           if (attempt < maxRetries) {
             continue;
           }
           throw new LlmProviderError('provider_error', '模型服务返回为空。', {
             taskName: request.taskName,
-            status: response.status
+            status: response.status,
+            finishReason: choice?.finish_reason ?? null,
+            completionTokens: payload.usage?.completion_tokens ?? null,
+            reasoningTokens: payload.usage?.completion_tokens_details?.reasoning_tokens ?? null
           });
         }
 

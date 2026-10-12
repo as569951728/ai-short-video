@@ -8,6 +8,7 @@ export interface JsonOutputRequest<T> {
   maxTokens?: number;
   outputRepairRetries?: number;
   transportRetries?: number;
+  thinkingMode?: 'enabled' | 'disabled';
   validate: (value: unknown) => T;
 }
 
@@ -26,7 +27,8 @@ export async function requestJsonOutput<T>(
       messages: attempt === 0 ? request.messages : createRepairMessages(request.messages),
       temperature: attempt === 0 ? request.temperature : 0.1,
       maxTokens: request.maxTokens,
-      maxRetries: request.transportRetries
+      maxRetries: request.transportRetries,
+      thinkingMode: request.thinkingMode
     });
     lastModel = result.model;
     const text = extractJsonText(result.content);

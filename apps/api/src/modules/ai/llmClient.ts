@@ -12,6 +12,7 @@ export interface ChatCompletionRequest {
   temperature?: number;
   maxTokens?: number;
   maxRetries?: number;
+  thinkingMode?: 'enabled' | 'disabled';
 }
 
 export interface ChatCompletionUsage {

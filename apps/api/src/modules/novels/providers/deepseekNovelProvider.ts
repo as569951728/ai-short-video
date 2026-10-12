@@ -88,7 +88,11 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
       : reasonerActions.has(action)
         ? this.reasonerModel
         : this.model;
-    const routeVersion = action === 'novel_full_review' ? 'route-v5' : 'route-v1';
+    const routeVersion = action === 'novel_full_review'
+      ? 'route-v5'
+      : ['body_batch_generate', 'chapter_body_generate', 'chapter_rewrite'].includes(action)
+        ? 'route-v2'
+        : 'route-v1';
     return `deepseek:${model}:${routeVersion}`;
   }
 
@@ -247,6 +251,7 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
       taskName: 'novel_body_chapter_generate',
       model: this.model,
       ...SINGLE_PAID_CALL_JSON_POLICY,
+      thinkingMode: 'disabled',
       messages: createMessages('生成单章正文、特性卡、单章审稿和长篇记忆摘要，只返回 JSON。', input.novel, {
         chapter: pickChapter(input.chapter),
         wordTargetPolicy,
@@ -267,6 +272,7 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
       taskName: 'novel_chapter_rewrite',
       model: this.model,
       ...SINGLE_PAID_CALL_JSON_POLICY,
+      thinkingMode: 'disabled',
       messages: createMessages('生成完整章节重写候选和摘要对比，只返回 JSON。candidate.content 必须是可直接采用的完整正文，不得只返回改动片段、提纲或摘要。', input.novel, {
         chapter: pickChapter(input.chapter),
         wordTargetPolicy,

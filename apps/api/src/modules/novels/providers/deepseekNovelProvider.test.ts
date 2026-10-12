@@ -18,6 +18,9 @@ describe('DeepSeek novel provider', () => {
     assert.equal(provider.getModelRoutingVersion('direction_generate'), 'deepseek:deepseek-general-test:route-v1');
     assert.equal(provider.getModelRoutingVersion('chapter_plan_generate'), 'deepseek:deepseek-structure-test:route-v1');
     assert.equal(provider.getModelRoutingVersion('chapter_impact_assess'), 'deepseek:deepseek-reasoner-test:route-v1');
+    assert.equal(provider.getModelRoutingVersion('body_batch_generate'), 'deepseek:deepseek-general-test:route-v2');
+    assert.equal(provider.getModelRoutingVersion('chapter_body_generate'), 'deepseek:deepseek-general-test:route-v2');
+    assert.equal(provider.getModelRoutingVersion('chapter_rewrite'), 'deepseek:deepseek-general-test:route-v2');
     assert.equal(provider.getModelRoutingVersion('novel_full_review'), 'deepseek:deepseek-reasoner-test:route-v5');
   });
 
@@ -815,6 +818,11 @@ describe('DeepSeek novel provider', () => {
       );
       assert.equal(requests.length, 1, testCase.label);
       assert.equal(requests[0].maxRetries, 0, testCase.label);
+      assert.equal(
+        requests[0].thinkingMode,
+        ['body_batch_generate', 'chapter_body_generate', 'chapter_rewrite'].includes(testCase.label) ? 'disabled' : undefined,
+        testCase.label
+      );
       const payload = JSON.parse(requests[0].messages[1].content).payload;
       assert.deepEqual(
         testCase.readTargets(payload),
