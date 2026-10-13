@@ -2189,8 +2189,26 @@ export function createInMemoryNovelRepository(options: {
     async failLeasedTask(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, authoritativeNow: Date, failure: LeasedTaskFailure) {
       const task = validLease(tenantId, taskId, leaseOwnerId, leaseToken, authoritativeNow);
       if (!task) return { outcome: 'fenced' as const, task: null };
-      applyLeaseFailure(task, failure, authoritativeNow);
-      return { outcome: 'applied' as const, task };
+      const before = { sequence, task: { ...task }, events: [...generationTaskEvents], logs: [...operationLogs] };
+      try {
+        applyLeaseFailure(task, failure, authoritativeNow);
+        options.onLeasedFailureStage?.('event');
+        operationLogs.unshift({
+          id: nextId('oplog'), tenantId: task.tenantId, userId: task.createdBy,
+          novelId: task.novelId, action: 'generation_task_failed', objectType: 'generation_task', objectId: task.id,
+          beforeSnapshot: null, afterSnapshot: { failureCategory: failure.failureCategory, errorCode: failure.errorCode },
+          reason: failure.statusNote, impactSummary: null, sourceTaskId: task.id,
+          requestId: `worker:${leaseOwnerId}`, ip: null, userAgent: null, createdAt: authoritativeNow
+        });
+        options.onLeasedFailureStage?.('operation_log');
+        return { outcome: 'applied' as const, task };
+      } catch (error) {
+        sequence = before.sequence;
+        Object.assign(task, before.task);
+        generationTaskEvents.splice(0, generationTaskEvents.length, ...before.events);
+        operationLogs.splice(0, operationLogs.length, ...before.logs);
+        throw error;
+      }
     },
 
     async getAuthoritativeTaskTime(): Promise<Date> {

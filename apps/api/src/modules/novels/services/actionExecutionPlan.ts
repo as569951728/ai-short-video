@@ -489,6 +489,15 @@ export function executeNovelProviderAction(
   return executionPlan.executeProvider(providers, strictProviderInput(input, executionPlan.action));
 }
 
+export function validateNovelProviderActionInput(input: unknown): NovelProviderActionInput {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Provider input is invalid');
+  const action = (input as { action?: unknown }).action;
+  if (typeof action !== 'string' || !Object.hasOwn(ACTION_EXECUTION_PLANS, action)) {
+    throw new Error('Provider action is unsupported');
+  }
+  return strictProviderInput(input as NovelProviderActionInput, action as NovelProviderAction);
+}
+
 export function projectStructureCurrentAssetsPrompt<A extends StructureProviderAction>(action: A, assets: unknown): Record<StructureAssetDependency<A>, Record<string, unknown>> {
   const source = exactRecord(assets, 'currentAssets', STRUCTURE_ASSET_SLOTS), required = STRUCTURE_ASSET_DEPENDENCIES[action] as readonly StructureAssetSlot[];
   for (const slot of STRUCTURE_ASSET_SLOTS) if (!required.includes(slot) && source[slot] !== null) throw new Error(`currentAssets.${slot} is forbidden for ${action}`);

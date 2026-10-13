@@ -669,7 +669,7 @@ export interface LeasedCreativeFinalizeInput {
   providerAttemptId: string;
   validatedResult: DirectionCandidateDraft[] | DirectionCandidateDraft | StructureAssetDraft | TrialChapterCandidateDraft[]
     | { chapters: TrialFollowupChapterProviderDraft[]; review: TrialReviewDraft } | ImpactAssessmentDraft | string
-    | { candidate: BodyChapterProviderDraft; summaryCompare: ChapterSummaryCompareDTO } | FullReviewDraft;
+    | BodyChapterProviderDraft | { candidate: BodyChapterProviderDraft; summaryCompare: ChapterSummaryCompareDTO } | FullReviewDraft;
 }
 
 export interface SafeResultReceiptV1 {

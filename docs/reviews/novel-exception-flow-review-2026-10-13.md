@@ -120,3 +120,11 @@ Prisma 首次补上 `direction_generate` 的 leased fenced finalize：事务内�
 `prepared -> provider_call_started` 现在统一经仓储原子派发：InMemory 和 Prisma 在同一写入边界内重新验证执行合同、当前来源、有效租约、截止时间和一次调用预算，再登记 attempt、派发时间及事件。旧检查点入口也委托这条安全路径。来源变化在预算消耗前写受控失败终态；重复派发和过期 owner 被围栏。新增只读 `GET /novels/async-transport-capability`，默认关闭；只在开发环境、mock provider、可信身份、足长 scope 密钥与 audience 全部满足时提供短期 HMAC 能力快照，不接入生成 POST/202。
 
 本检查点的 RP-02B2a 定向测试、后端常规 216 项与质量资产 4 项、整仓类型检查均通过；Prisma 原子性目前是注入式事务/CAS 测试，不等于真实 MySQL 验证。**E1 仍未完成**：仓储 action capability 保持关闭，生产 worker 执行回调与路由入队尚未接通，页面 2-5 分钟状态、进程重启故障注入、Prisma 全部业务结果落账和隔离 MySQL 证据仍缺失，不能宣称用户侧生成异常已经修复。
+
+## E1 第十四个执行检查点
+
+补上可注入的后台 action 执行回调：领取后先按持久执行合同重建并验证模型输入，来源不符或输入不合规在模型调用前安全失败；再经过 `leased -> prepared` 和原子 dispatch 扣减唯一一次调用预算，随后才调用 provider。返回结果必须在有效租约下进入 `provider_result_validated`，最终通过 fenced finalize 写候选；模型报错不自动重试，迟到结果和失租结果不写正式资产。数据库读取故障不再误判为输入不合规。失败任务、事件和操作日志同单元提交；审计写入故障整体回滚，由到期恢复逻辑归类结果未知。
+
+Prisma leased finalize 扩展至 `setting_generate`：在锁定来源与任务、复核租约/attempt/调用预算/截止时间/取消及设定字段后，仅新增待确认设定候选，不自动采用；候选、回执、任务、小说阶段、事件、审计任一步故障都回滚。InMemory 与 Prisma 的模型失败落账均补齐原子审计。RP-02B2a 定向隔离测试、后端常规 216 项和质量资产 4 项、整仓类型检查通过。
+
+**E1 仍为修复中，未对用户放行**：执行回调尚未接入生产 worker 生命周期，正式生成路由仍是同步请求；仓储 capability 仍关闭。上述 Prisma 测试使用事务/CAS 注入夹具，没有隔离 MySQL 并发、真实模型费用、进程重启或浏览器 2-5 分钟等待证据。后续需先补齐剩余 action 的数据库结果出口、路由 202/状态查询和恢复动作，再作页面及真实环境验收；不能以本检查点宣称异常恢复完成。
