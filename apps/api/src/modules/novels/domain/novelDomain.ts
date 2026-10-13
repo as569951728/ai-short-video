@@ -648,14 +648,14 @@ export interface LeasedActionFailureInput {
   reason: 'retry_not_available' | 'worker_payload_unsupported' | 'source_stale';
 }
 
-export interface LeasedDirectionFinalizeInput {
+export interface LeasedCreativeFinalizeInput {
   tenantId: string;
   taskId: string;
   leaseOwnerId: string;
   leaseToken: string;
   authoritativeNow: Date;
   providerAttemptId: string;
-  validatedResult: DirectionCandidateDraft[] | DirectionCandidateDraft;
+  validatedResult: DirectionCandidateDraft[] | DirectionCandidateDraft | StructureAssetDraft;
 }
 
 export interface SafeResultReceiptV1 {
@@ -1360,7 +1360,7 @@ export interface NovelRepository {
   heartbeatTask(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, now: Date, leaseUntil: Date): Promise<boolean>;
   checkpointLeasedTask(input: LeasedTaskCheckpointInput): Promise<LeasedTaskMutationResult>;
   failLeasedAction(input: LeasedActionFailureInput): Promise<LeasedTaskMutationResult>;
-  finalizeLeasedAction(input: LeasedDirectionFinalizeInput): Promise<LeasedTaskMutationResult>;
+  finalizeLeasedAction(input: LeasedCreativeFinalizeInput): Promise<LeasedTaskMutationResult>;
   finalizeLeasedTask(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, authoritativeNow: Date, result: HashedSafeResultReceipt): Promise<LeasedTaskMutationResult>;
   failLeasedTask(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, authoritativeNow: Date, failure: LeasedTaskFailure): Promise<LeasedTaskMutationResult>;
   recoverExpiredTask(observedTaskLease: ObservedTaskLease, authoritativeNow: Date): Promise<RecoverExpiredTaskResult>;

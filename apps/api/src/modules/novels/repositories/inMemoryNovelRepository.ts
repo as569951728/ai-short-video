@@ -11,6 +11,7 @@ import {
   type FirstVideoSuggestionDTO,
   type FullReviewIssueDTO,
   type StructureAssetContentDTO,
+  type StructureAssetType,
   type VideoReadinessCheckItemDTO
 } from '@ai-shortvideo/shared';
 import { evaluateChapterLength } from '../domain/chapterLengthPolicy.js';
@@ -74,7 +75,7 @@ import {
   type LeasedTaskFailure,
   type LeasedTaskCheckpointInput,
   type LeasedActionFailureInput,
-  type LeasedDirectionFinalizeInput,
+  type LeasedCreativeFinalizeInput,
   type ObservedTaskLease,
   type ChapterContentVersionRecord,
   type ChapterFeatureCardRecord,
@@ -147,19 +148,43 @@ export function isInMemoryNovelRepository(repository: NovelRepository): reposito
   return inMemoryNovelRepositories.has(repository);
 }
 
-function validLeasedDirectionDraft(value: DirectionCandidateDraft): boolean {
+function validLeasedDirectionDraft(value: unknown): value is DirectionCandidateDraft {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const draft = value as DirectionCandidateDraft;
   const text = (input: unknown) => typeof input === 'string' && input.trim().length > 0;
   const strings = (input: unknown) => Array.isArray(input) && input.every(text);
   const score = (input: unknown) => typeof input === 'number' && Number.isFinite(input) && input >= 0 && input <= 100;
-  const content = value.content;
-  return text(value.title) && text(value.summary) && text(value.recommendedReason)
-    && score(value.score) && score(value.marketScore)
-    && Object.values(RiskLevel).includes(value.riskLevel) && strings(value.riskTags)
+  const content = draft.content;
+  return text(draft.title) && text(draft.summary) && text(draft.recommendedReason)
+    && score(draft.score) && score(draft.marketScore)
+    && Object.values(RiskLevel).includes(draft.riskLevel) && strings(draft.riskTags)
     && !!content && typeof content === 'object' && !Array.isArray(content)
     && text(content.title) && text(content.logline) && text(content.coreHook)
     && text(content.audienceAppeal) && text(content.videoPotential)
     && strings(content.sellingPoints) && strings(content.riskTags) && text(content.recommendation);
+}
+
+function validLeasedStructureDraft(value: unknown, objectType: StructureAssetType): value is StructureAssetDraft {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const draft = value as StructureAssetDraft;
+  const text = (input: unknown) => typeof input === 'string' && input.trim().length > 0;
+  const strings = (input: unknown) => Array.isArray(input) && input.every(text);
+  const positiveInteger = (input: unknown) => Number.isInteger(input) && Number(input) > 0;
+  const content = draft.content;
+  return draft.objectType === objectType && text(draft.title) && text(draft.summary)
+    && text(draft.recommendedReason) && typeof draft.score === 'number' && Number.isFinite(draft.score)
+    && draft.score >= 0 && draft.score <= 100 && Object.values(RiskLevel).includes(draft.riskLevel)
+    && strings(draft.riskTags) && !!content && typeof content === 'object' && !Array.isArray(content)
+    && text(content.title) && text(content.summary) && text(content.recommendation)
+    && strings(content.riskTags) && Array.isArray(content.sections) && content.sections.length > 0
+    && content.sections.every((section) => !!section && text(section.title) && text(section.body) && strings(section.items))
+    && Array.isArray(content.stages) && content.stages.every((stage) => !!stage && positiveInteger(stage.stageIndex)
+      && text(stage.title) && text(stage.chapterRange) && text(stage.goal) && text(stage.conflict) && text(stage.payoff))
+    && Array.isArray(content.chapters) && content.chapters.every((chapter) => !!chapter && positiveInteger(chapter.chapterNo)
+      && positiveInteger(chapter.stageIndex) && positiveInteger(chapter.wordTarget)
+      && text(chapter.title) && text(chapter.goal) && text(chapter.conflict) && text(chapter.hook))
+    && (objectType === 'setting' || content.stages.length > 0)
+    && (objectType !== 'chapter_plan' || content.chapters.length > 0);
 }
 
 export function createInMemoryNovelRepository(options: {
@@ -825,7 +850,7 @@ export function createInMemoryNovelRepository(options: {
       }
     },
 
-    async finalizeLeasedAction(input: LeasedDirectionFinalizeInput) {
+    async finalizeLeasedAction(input: LeasedCreativeFinalizeInput) {
       const task = validLease(input.tenantId, input.taskId, input.leaseOwnerId, input.leaseToken, input.authoritativeNow);
       if (!task || task.providerAttemptPhase !== 'provider_result_validated' || task.providerAttemptId !== input.providerAttemptId
         || task.providerDispatchedAt == null || task.resultReceiptHash != null || task.retryOfTaskId !== null) {
@@ -837,7 +862,12 @@ export function createInMemoryNovelRepository(options: {
       } catch {
         return this.failLeasedAction({ ...input, expectedPhase: 'provider_result_validated', reason: 'worker_payload_unsupported' });
       }
-      if (!['direction_generate', 'direction_fuse', 'direction_optimize'].includes(envelope.action)) {
+      const structureType: StructureAssetType | null = envelope.action === 'setting_generate' ? 'setting'
+        : envelope.action === 'outline_generate' ? 'outline'
+          : envelope.action === 'stage_outline_generate' ? 'stage_outline'
+            : envelope.action === 'chapter_plan_generate' ? 'chapter_plan' : null;
+      const isDirection = ['direction_generate', 'direction_fuse', 'direction_optimize'].includes(envelope.action);
+      if (!isDirection && !structureType) {
         return { outcome: 'fenced' as const, task: null };
       }
       const authorityInput = {
@@ -852,12 +882,19 @@ export function createInMemoryNovelRepository(options: {
       if (!novel) return this.failLeasedAction({ ...input, expectedPhase: 'provider_result_validated', reason: 'source_stale' });
       const isBatch = envelope.action === 'direction_generate';
       const result = input.validatedResult;
-      const drafts = isBatch
-        ? Array.isArray(result) ? result : []
-        : Array.isArray(result) ? [] : [result];
-      if (drafts.length < 1 || drafts.length > 10 || drafts.some((draft) => !validLeasedDirectionDraft(draft))) {
+      const rawDrafts: unknown[] = isDirection
+        ? isBatch ? Array.isArray(result) ? result : [] : Array.isArray(result) ? [] : [result]
+        : [];
+      if (isDirection && (rawDrafts.length < 1 || rawDrafts.length > 10 || !rawDrafts.every(validLeasedDirectionDraft))) {
         return this.failLeasedAction({ ...input, expectedPhase: 'provider_result_validated', reason: 'worker_payload_unsupported' });
       }
+      if (structureType && (!validLeasedStructureDraft(result, structureType)
+        || (structureType === 'chapter_plan' && (result.content.chapters.length !== novel.chapterLimit
+          || result.content.chapters.some((chapter, index) => chapter.chapterNo !== index + 1))))) {
+        return this.failLeasedAction({ ...input, expectedPhase: 'provider_result_validated', reason: 'worker_payload_unsupported' });
+      }
+      const drafts = rawDrafts as DirectionCandidateDraft[];
+      const structureAsset = structureType ? result as StructureAssetDraft : null;
       const context = { tenantId: task.tenantId, userId: task.createdBy!, requestId: `worker:${input.leaseOwnerId}` };
       const refs = asRecord(envelope.sourceVersionRefs);
       const sourceVersionIds = Array.isArray(refs.sourceVersionIds) ? refs.sourceVersionIds.filter((id): id is string => typeof id === 'string') : [];
@@ -866,21 +903,30 @@ export function createInMemoryNovelRepository(options: {
       const changeReason = isBatch ? '模型生成方向候选'
         : typeof revisionReason === 'string' && revisionReason.trim() ? revisionReason.trim() : '模型生成方向候选';
       const baseInput = { novel, task, taskType: task.taskType, changeReason, context, now: input.authoritativeNow };
-      const versionInput: DirectionCreationInput | DirectionRevisionInput = isBatch
-        ? { ...baseInput, candidates: drafts }
-        : { ...baseInput, candidate: drafts[0]!, sourceVersionIds };
       // Restore every mutable store if any part of the asset/receipt/task/audit bundle fails.
       const before = {
         sequence, task: { ...task }, novel: { ...novel }, versions: [...creativeVersions],
         events: [...generationTaskEvents], logs: [...operationLogs]
       };
       try {
-        const versionNo = nextDirectionVersionNo(task.tenantId, novel.id);
-        const versions = drafts.map((draft, index) => createCreativeVersion({
-          id: nextId('cv'), input: versionInput, candidate: draft, taskId: task.id,
-          versionNo: versionNo + index,
-          sourceVersionRefs: isBatch ? { currentDirectionVersionId: novel.currentDirectionVersionId } : { sourceVersionIds }
-        }));
+        let versions: CreativeVersionRecord[];
+        if (structureAsset) {
+          const structureInput: StructureCreationInput = {
+            ...baseInput, asset: structureAsset, sourceVersionRefs: envelope.sourceVersionRefs
+          };
+          versions = [createStructureVersion({ id: nextId('cv'), input: structureInput, taskId: task.id,
+            versionNo: nextVersionNo(task.tenantId, novel.id, structureAsset.objectType) })];
+        } else {
+          const versionInput: DirectionCreationInput | DirectionRevisionInput = isBatch
+            ? { ...baseInput, candidates: drafts }
+            : { ...baseInput, candidate: drafts[0]!, sourceVersionIds };
+          const versionNo = nextDirectionVersionNo(task.tenantId, novel.id);
+          versions = drafts.map((draft, index) => createCreativeVersion({
+            id: nextId('cv'), input: versionInput, candidate: draft, taskId: task.id,
+            versionNo: versionNo + index,
+            sourceVersionRefs: isBatch ? { currentDirectionVersionId: novel.currentDirectionVersionId } : { sourceVersionIds }
+          }));
+        }
         creativeVersions.unshift(...versions);
         options.onLeasedFinalizeStage?.('asset');
         const receipt = createSafeResultReceipt(task, {
@@ -890,32 +936,37 @@ export function createInMemoryNovelRepository(options: {
         });
         options.onLeasedFinalizeStage?.('receipt');
         task.status = TaskStatus.WaitingConfirmation;
-        task.statusNote = '方向候选已生成，等待用户确认。';
+        const resultLabel = structureAsset ? getStructureObjectText(structureAsset.objectType) : '方向';
+        task.statusNote = `${resultLabel}候选已生成，等待用户确认。`;
         task.progress = 100;
-        task.currentStep = '方向候选已生成，等待选择';
+        task.currentStep = structureAsset ? getStructureGenerateStep(structureAsset.objectType) : '方向候选已生成，等待选择';
         task.resultObjectType = receipt.receipt.resultObjectType;
         task.resultObjectId = receipt.receipt.resultObjectId;
         task.resultVersionIds = receipt.receipt.resultVersionIds;
         task.resultReceiptHash = receipt.hash;
-        task.outputSummary = `${versions.length} 个方向候选已生成，等待用户采用。`;
+        task.outputSummary = structureAsset ? `${resultLabel}候选已生成，等待用户采用。`
+          : `${versions.length} 个方向候选已生成，等待用户采用。`;
         task.providerAttemptPhase = 'finalizing';
         task.finishedAt = input.authoritativeNow;
         task.updatedAt = input.authoritativeNow;
         clearLease(task);
-        if (!novel.currentDirectionVersionId) {
+        if (structureAsset) {
+          novel.creationStage = getGenerationStage(structureAsset.objectType);
+          novel.stageStatus = StageStatus.WaitingUser;
+        } else if (!novel.currentDirectionVersionId) {
           novel.creationStage = NovelCreationStage.Direction;
           novel.stageStatus = StageStatus.WaitingUser;
         }
         novel.updatedBy = context.userId;
         novel.updatedAt = input.authoritativeNow;
         options.onLeasedFinalizeStage?.('task');
-        appendLeaseEvent(task, 'task_finalized', '方向候选已生成，等待用户确认。', input.authoritativeNow);
+        appendLeaseEvent(task, 'task_finalized', task.statusNote, input.authoritativeNow);
         options.onLeasedFinalizeStage?.('event');
         operationLogs.unshift({
           id: nextId('oplog'), tenantId: task.tenantId, userId: context.userId, novelId: task.novelId,
           action: 'generation_task_finalized', objectType: 'generation_task', objectId: task.id,
           beforeSnapshot: null, afterSnapshot: { resultVersionIds: receipt.receipt.resultVersionIds, receiptHash: receipt.hash },
-          reason: '方向候选生成完成', impactSummary: null, sourceTaskId: task.id,
+          reason: `${resultLabel}候选生成完成`, impactSummary: null, sourceTaskId: task.id,
           requestId: context.requestId, ip: null, userAgent: null, createdAt: input.authoritativeNow
         });
         options.onLeasedFinalizeStage?.('operation_log');

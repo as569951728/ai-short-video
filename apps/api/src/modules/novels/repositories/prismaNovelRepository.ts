@@ -48,7 +48,7 @@ import {
   type LeasedTaskFailure,
   type LeasedTaskCheckpointInput,
   type LeasedActionFailureInput,
-  type LeasedDirectionFinalizeInput,
+  type LeasedCreativeFinalizeInput,
   type ObservedTaskLease,
   type CompletionConfirmationInput,
   type CompletionDecisionRecord,
@@ -897,7 +897,7 @@ export class PrismaNovelRepository implements NovelRepository {
     });
   }
 
-  async finalizeLeasedAction(input: LeasedDirectionFinalizeInput) {
+  async finalizeLeasedAction(input: LeasedCreativeFinalizeInput) {
     const task = await this.findTaskById(input.tenantId, input.taskId);
     if (!task?.providerAttemptPhase) return { outcome: 'fenced' as const, task: null };
     return this.failLeasedAction({ ...input, expectedPhase: task.providerAttemptPhase, reason: 'worker_payload_unsupported' });
