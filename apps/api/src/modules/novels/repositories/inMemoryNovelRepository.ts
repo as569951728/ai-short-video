@@ -8,6 +8,7 @@ import {
   TaskStatus,
   VersionStatus,
   type BodyBatchChapterResultDTO,
+  type ChapterSummaryCompareDTO,
   type FirstVideoSuggestionDTO,
   type FullReviewIssueDTO,
   type StructureAssetContentDTO,
@@ -16,6 +17,7 @@ import {
 } from '@ai-shortvideo/shared';
 import { evaluateChapterLength, isBoundedOverlengthRevision } from '../domain/chapterLengthPolicy.js';
 import { bindTrialFollowupChapters } from '../domain/trialFollowupBinding.js';
+import { bindGeneratedBodyChapter } from '../domain/bodyChapterBinding.js';
 import {
   DEFAULT_POLICY_PROFILE_VERSION_ID,
   leasedActionFailure,
@@ -244,6 +246,15 @@ function validLeasedImpactDraft(value: unknown): value is ImpactAssessmentDraft 
     && strings(draft.affectedVideoReferenceIds) && strings(draft.suggestedActions)
     && draft.suggestedActions.length > 0 && typeof draft.blocksFullReview === 'boolean'
     && draft.blocksFullReview === ['medium', 'severe'].includes(draft.impactLevel);
+}
+
+function validLeasedSummaryCompare(value: unknown): value is ChapterSummaryCompareDTO {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const compare = value as ChapterSummaryCompareDTO;
+  const text = (input: unknown) => typeof input === 'string' && input.trim().length > 0;
+  return typeof compare.currentSummary === 'string' && text(compare.candidateSummary)
+    && text(compare.benefit) && text(compare.possibleImpact) && text(compare.aiSuggestion)
+    && Array.isArray(compare.newRisks) && compare.newRisks.every(text);
 }
 
 export function createInMemoryNovelRepository(options: {
@@ -565,6 +576,53 @@ export function createInMemoryNovelRepository(options: {
     task.activeClaimKey = null;
     appendTaskProgressEvents(task, input.context.requestId, input.now);
     return { task, candidate };
+  }
+
+  function persistChapterRewrite(input: ChapterRewriteInput, leased: boolean): RewrittenChapterRecord {
+    if (!leased) assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task);
+    const task = requireClaimedTask(input.task, input.context.tenantId);
+    const candidate = createBodyContentVersion({
+      input: {
+        novel: input.novel,
+        strategySnapshot: createSyntheticStrategySnapshot(input.novel, input.context, input.now),
+        task,
+        chapters: [input.candidate],
+        idempotencyKey: `chapter-rewrite-${task.id}`,
+        requestFingerprint: {
+          taskType: 'chapter_body_rewrite',
+          taskId: task.id,
+          chapterId: input.chapter.id,
+          currentContentVersionId: input.currentContent.id
+        },
+        startChapterNo: input.chapter.chapterNo,
+        endChapterNo: input.chapter.chapterNo,
+        sourceVersionRefs: input.currentContent.sourceVersionRefs,
+        previousBatchSummary: null,
+        context: input.context,
+        now: input.now
+      },
+      taskId: task.id,
+      draft: input.candidate,
+      status: VersionStatus.Candidate,
+      rewriteReason: input.reason,
+      summaryCompare: input.summaryCompare
+    });
+    task.resultVersionIds = [candidate.id];
+    task.resultObjectType = 'chapter_content_version';
+    task.resultObjectId = candidate.id;
+    task.outputSummary = input.summaryCompare.candidateSummary;
+    task.status = TaskStatus.WaitingConfirmation;
+    task.statusNote = '章节重写候选已生成，等待采用';
+    task.progress = 100;
+    task.currentStep = '章节重写候选已生成，等待采用';
+    task.updatedAt = input.now;
+    task.activeClaimKey = null;
+    appendTaskProgressEvents(task, input.context.requestId, input.now);
+    chapterContentVersions.unshift(candidate);
+    return {
+      novel: cloneNovel(input.novel.id), task, chapter: input.chapter,
+      currentContent: input.currentContent, candidate, summaryCompare: input.summaryCompare
+    };
   }
 
   const repository: InMemoryNovelRepository = {
@@ -1016,9 +1074,10 @@ export function createInMemoryNovelRepository(options: {
       const isTrialChapterOne = envelope.action === 'trial_chapter_one_generate';
       const isTrialFollowup = envelope.action === 'trial_followup_generate';
       const isImpactAssessment = envelope.action === 'chapter_impact_assess';
+      const isChapterRewrite = envelope.action === 'chapter_rewrite';
       const isOverlengthRevision = envelope.action === 'chapter_overlength_revise';
       if (!isDirection && !structureType && !isTrialChapterOne && !isTrialFollowup
-        && !isImpactAssessment && !isOverlengthRevision) {
+        && !isImpactAssessment && !isChapterRewrite && !isOverlengthRevision) {
         return { outcome: 'fenced' as const, task: null };
       }
       const authorityInput = {
@@ -1031,6 +1090,72 @@ export function createInMemoryNovelRepository(options: {
       }
       const novel = novels.find((item) => item.tenantId === task.tenantId && item.id === task.novelId && !item.deletedAt);
       if (!novel) return this.failLeasedAction({ ...input, expectedPhase: 'provider_result_validated', reason: 'source_stale' });
+      if (isChapterRewrite) {
+        const chapter = chapters.find((item) => item.tenantId === task.tenantId && item.novelId === novel.id
+          && item.id === envelope.objectId);
+        const refs = asRecord(envelope.sourceVersionRefs);
+        const currentContent = chapterContentVersions.find((item) => item.tenantId === task.tenantId
+          && item.novelId === novel.id && item.chapterId === chapter?.id
+          && item.id === refs.currentContentVersionId && item.status === VersionStatus.Current);
+        if (!chapter || !currentContent || chapter.currentContentVersionId !== currentContent.id) {
+          return this.failLeasedAction({ ...input, expectedPhase: 'provider_result_validated', reason: 'source_stale' });
+        }
+        const raw = input.validatedResult;
+        let candidate;
+        try {
+          if (!raw || typeof raw !== 'object' || Array.isArray(raw)
+            || !('candidate' in raw) || !('summaryCompare' in raw)
+            || !validLeasedSummaryCompare(raw.summaryCompare)) {
+            throw new Error('unsupported chapter rewrite result');
+          }
+          candidate = bindGeneratedBodyChapter(chapter, raw.candidate);
+        } catch {
+          return this.failLeasedAction({ ...input, expectedPhase: 'provider_result_validated', reason: 'worker_payload_unsupported' });
+        }
+        const result = raw as { summaryCompare: ChapterSummaryCompareDTO };
+        const request = asRecord(envelope.normalizedRequest);
+        const context = { tenantId: task.tenantId, userId: task.createdBy!, requestId: `worker:${input.leaseOwnerId}` };
+        const beforeSequence = sequence;
+        const restore = [snapshotMutableArray(chapterContentVersions), snapshotMutableArray(generationTasks),
+          snapshotMutableArray(generationTaskEvents), snapshotMutableArray(operationLogs)];
+        try {
+          const generated = persistChapterRewrite({
+            novel, task, chapter, currentContent, candidate,
+            instruction: typeof request.instruction === 'string' ? request.instruction : '',
+            reason: typeof request.reason === 'string' && request.reason.trim()
+              ? request.reason.trim() : '生成章节重写候选',
+            summaryCompare: result.summaryCompare, context, now: input.authoritativeNow
+          }, true);
+          options.onLeasedFinalizeStage?.('asset');
+          const receipt = createSafeResultReceipt(task, {
+            status: 'waiting_confirmation', outcome: 'candidate_created',
+            resultObjectType: 'chapter_content_version', resultObjectId: generated.candidate.id,
+            resultVersionIds: [generated.candidate.id], resultCount: 1
+          });
+          options.onLeasedFinalizeStage?.('receipt');
+          task.resultReceiptHash = receipt.hash;
+          task.providerAttemptPhase = 'finalizing';
+          task.finishedAt = input.authoritativeNow;
+          task.updatedAt = input.authoritativeNow;
+          clearLease(task);
+          options.onLeasedFinalizeStage?.('task');
+          appendLeaseEvent(task, 'task_finalized', task.statusNote ?? '章节重写候选已生成。', input.authoritativeNow);
+          options.onLeasedFinalizeStage?.('event');
+          operationLogs.unshift({
+            id: nextId('oplog'), tenantId: task.tenantId, userId: context.userId, novelId: novel.id,
+            action: 'generation_task_finalized', objectType: 'generation_task', objectId: task.id,
+            beforeSnapshot: null, afterSnapshot: { resultVersionIds: [generated.candidate.id], receiptHash: receipt.hash },
+            reason: '章节重写候选生成完成', impactSummary: null, sourceTaskId: task.id,
+            requestId: context.requestId, ip: null, userAgent: null, createdAt: input.authoritativeNow
+          });
+          options.onLeasedFinalizeStage?.('operation_log');
+          return { outcome: 'applied' as const, task };
+        } catch (error) {
+          sequence = beforeSequence;
+          restore.forEach((restoreStore) => restoreStore());
+          throw error;
+        }
+      }
       if (isOverlengthRevision) {
         const chapter = chapters.find((item) => item.tenantId === task.tenantId && item.novelId === novel.id
           && item.id === envelope.objectId);
@@ -3405,55 +3530,7 @@ export function createInMemoryNovelRepository(options: {
     },
 
     async rewriteChapter(input: ChapterRewriteInput): Promise<RewrittenChapterRecord> {
-      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task);
-      const task = requireClaimedTask(input.task, input.context.tenantId);
-      const candidate = createBodyContentVersion({
-        input: {
-          novel: input.novel,
-          strategySnapshot: createSyntheticStrategySnapshot(input.novel, input.context, input.now),
-          task,
-          chapters: [input.candidate],
-          idempotencyKey: `chapter-rewrite-${task.id}`,
-          requestFingerprint: {
-            taskType: 'chapter_body_rewrite',
-            taskId: task.id,
-            chapterId: input.chapter.id,
-            currentContentVersionId: input.currentContent.id
-          },
-          startChapterNo: input.chapter.chapterNo,
-          endChapterNo: input.chapter.chapterNo,
-          sourceVersionRefs: input.currentContent.sourceVersionRefs,
-          previousBatchSummary: null,
-          context: input.context,
-          now: input.now
-        },
-        taskId: task.id,
-        draft: input.candidate,
-        status: VersionStatus.Candidate,
-        rewriteReason: input.reason,
-        summaryCompare: input.summaryCompare
-      });
-      task.resultVersionIds = [candidate.id];
-      task.resultObjectType = 'chapter_content_version';
-      task.resultObjectId = candidate.id;
-      task.outputSummary = input.summaryCompare.candidateSummary;
-      task.status = TaskStatus.WaitingConfirmation;
-      task.statusNote = '章节重写候选已生成，等待采用';
-      task.progress = 100;
-      task.currentStep = '章节重写候选已生成，等待采用';
-      task.updatedAt = input.now;
-      task.activeClaimKey = null;
-      appendTaskProgressEvents(task, input.context.requestId, input.now);
-      chapterContentVersions.unshift(candidate);
-
-      return {
-        novel: cloneNovel(input.novel.id),
-        task,
-        chapter: input.chapter,
-        currentContent: input.currentContent,
-        candidate,
-        summaryCompare: input.summaryCompare
-      };
+      return persistChapterRewrite(input, false);
     },
 
     async createOverlengthRevision(input: OverlengthRevisionInput): Promise<SavedOverlengthRevisionRecord> {

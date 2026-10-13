@@ -304,6 +304,55 @@ async function leasedImpactAssessment(onLeasedFinalizeStage?: (stage: FinalizeSt
   }
 }
 
+async function leasedChapterRewrite(onLeasedFinalizeStage?: (stage: FinalizeStage) => void) {
+  const repository = createInMemoryNovelRepository({ onLeasedFinalizeStage });
+  const fixture = await createRouteAuthorityFixture('chapter_rewrite', repository);
+  try {
+    const generated = await fixture.runSuccess('leased-chapter-rewrite');
+    assert.equal(generated.statusCode, 200, generated.body);
+    const task = repository.getGenerationTasks().find((item) => item.id === generated.json().data.task.id);
+    assert.ok(task);
+    const invocation = fixture.providerInvocations().find((item) => item.action === 'chapter_rewrite');
+    assert.ok(invocation);
+    const result = await new MockBodyProvider().rewriteChapter(
+      invocation.input as NovelProviderActionInputFor<'chapter_rewrite'>
+    );
+    const generatedIndex = repository.getChapterContentVersions().findIndex((item) => item.sourceTaskId === task.id);
+    assert.notEqual(generatedIndex, -1);
+    repository.getChapterContentVersions().splice(generatedIndex, 1);
+    const chapter = repository.getNovelChapters().find((item) => item.id === fixture.authorityObjectId);
+    assert.ok(chapter?.currentContentVersionId);
+    const currentVersionId = chapter.currentContentVersionId;
+    task.status = TaskStatus.Queued;
+    task.startedAt = null;
+    task.finishedAt = null;
+    task.providerAttemptId = null;
+    task.providerAttemptPhase = null;
+    task.providerDispatchedAt = null;
+    task.resultReceiptHash = null;
+    task.providerCallBudgetUsed = 0;
+    task.resultObjectType = null;
+    task.resultObjectId = null;
+    task.resultVersionIds = [];
+    assert.equal((await repository.leaseNextQueuedTask('worker-rewrite', 'lease-rewrite', at(0), at(60)))?.id, task.id);
+    const base = { tenantId: task.tenantId, taskId: task.id, leaseOwnerId: 'worker-rewrite', leaseToken: 'lease-rewrite' };
+    assert.equal((await repository.checkpointLeasedTask({ ...base, authoritativeNow: at(1), checkpoint: {
+      expectedPhase: 'leased', nextPhase: 'prepared'
+    } })).outcome, 'applied');
+    assert.equal((await repository.checkpointLeasedTask({ ...base, authoritativeNow: at(2), checkpoint: {
+      expectedPhase: 'prepared', nextPhase: 'provider_call_started', providerAttemptId: 'attempt-rewrite'
+    } })).outcome, 'applied');
+    assert.equal((await repository.checkpointLeasedTask({ ...base, authoritativeNow: at(3), checkpoint: {
+      expectedPhase: 'provider_call_started', nextPhase: 'provider_result_validated', providerAttemptId: 'attempt-rewrite'
+    } })).outcome, 'applied');
+    return { repository, task, chapter, currentVersionId, result, finalizeInput: {
+      ...base, authoritativeNow: at(4), providerAttemptId: 'attempt-rewrite', validatedResult: result
+    } };
+  } finally {
+    await fixture.app.close();
+  }
+}
+
 async function leasedOverlengthRevision(onLeasedFinalizeStage?: (stage: FinalizeStage) => void) {
   const repository = createInMemoryNovelRepository({ onLeasedFinalizeStage });
   const fixture = await createRouteAuthorityFixture('chapter_impact_assess', repository);
@@ -812,6 +861,73 @@ describe('RP-02B2a4 in-memory impact assessment fenced finalize', () => {
     assert.equal(stale.task.errorCode, 'SOURCE_STALE');
     assert.equal(stale.task.resultReceiptHash, null);
     assert.equal(stale.repository.getImpactCases().length, 0);
+  });
+});
+
+describe('RP-02B2a4 in-memory chapter rewrite fenced finalize', () => {
+  it('saves one rewrite candidate with a safe receipt without changing formal content', async () => {
+    const { repository, task, chapter, currentVersionId, finalizeInput } = await leasedChapterRewrite();
+    const before = repository.getChapterContentVersions().length;
+    assert.equal((await repository.finalizeLeasedAction(finalizeInput)).outcome, 'applied');
+    assert.equal(repository.getChapterContentVersions().length, before + 1);
+    const candidate = repository.getChapterContentVersions().find((item) => item.sourceTaskId === task.id);
+    assert.ok(candidate);
+    assert.equal(candidate.status, VersionStatus.Candidate);
+    assert.equal(chapter.currentContentVersionId, currentVersionId);
+    assert.equal(task.status, TaskStatus.WaitingConfirmation);
+    assert.deepEqual(task.resultVersionIds, [candidate.id]);
+    assert.match(task.resultReceiptHash ?? '', /^[0-9a-f]{64}$/);
+    assert.equal((await repository.finalizeLeasedAction(finalizeInput)).outcome, 'fenced');
+  });
+
+  for (const failAt of ['asset', 'receipt', 'task', 'event', 'operation_log'] as const) {
+    it(`rolls back chapter rewrite when ${failAt} fails`, async () => {
+      const { repository, task, chapter, currentVersionId, finalizeInput } = await leasedChapterRewrite((stage) => {
+        if (stage === failAt) throw new Error('injected rewrite fault');
+      });
+      const before = { versions: structuredClone(repository.getChapterContentVersions()),
+        events: repository.getGenerationTaskEvents().length, logs: repository.getOperationLogs().length };
+      await assert.rejects(repository.finalizeLeasedAction(finalizeInput), /injected rewrite fault/);
+      assert.deepEqual(repository.getChapterContentVersions(), before.versions);
+      assert.equal(repository.getGenerationTaskEvents().length, before.events);
+      assert.equal(repository.getOperationLogs().length, before.logs);
+      assert.equal(chapter.currentContentVersionId, currentVersionId);
+      assert.equal(task.status, TaskStatus.Processing);
+      assert.equal(task.resultReceiptHash, null);
+      assert.equal(task.leaseToken, 'lease-rewrite');
+    });
+  }
+
+  it('rejects mismatched chapter output and malformed comparison before saving', async () => {
+    for (const invalid of ['chapter', 'comparison'] as const) {
+      const { repository, task, result, finalizeInput } = await leasedChapterRewrite();
+      const before = repository.getChapterContentVersions().length;
+      const validatedResult = invalid === 'chapter'
+        ? { ...result, candidate: { ...result.candidate,
+          chapter: { ...result.candidate.chapter, id: 'wrong-chapter' } } }
+        : { ...result, summaryCompare: { ...result.summaryCompare, newRisks: 'not-an-array' } };
+      assert.equal((await repository.finalizeLeasedAction({ ...finalizeInput, validatedResult })).outcome, 'applied');
+      assert.equal(task.status, TaskStatus.Failed);
+      assert.equal(task.errorCode, 'WORKER_PAYLOAD_UNSUPPORTED');
+      assert.equal(repository.getChapterContentVersions().length, before);
+    }
+  });
+
+  it('fences cancelled or expired results and fails replaced source content', async () => {
+    const expired = await leasedChapterRewrite();
+    assert.equal((await expired.repository.finalizeLeasedAction({ ...expired.finalizeInput,
+      authoritativeNow: at(60) })).outcome, 'fenced');
+    expired.task.status = TaskStatus.Cancelled;
+    assert.equal((await expired.repository.finalizeLeasedAction(expired.finalizeInput)).outcome, 'fenced');
+    assert.equal(expired.repository.getChapterContentVersions().filter((item) => item.sourceTaskId === expired.task.id).length, 0);
+
+    const stale = await leasedChapterRewrite();
+    stale.chapter.currentContentVersionId = 'replaced-content';
+    assert.equal((await stale.repository.finalizeLeasedAction(stale.finalizeInput)).outcome, 'applied');
+    assert.equal(stale.task.status, TaskStatus.Failed);
+    assert.equal(stale.task.errorCode, 'SOURCE_STALE');
+    assert.equal(stale.task.resultReceiptHash, null);
+    assert.equal(stale.repository.getChapterContentVersions().filter((item) => item.sourceTaskId === stale.task.id).length, 0);
   });
 });
 

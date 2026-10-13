@@ -92,7 +92,8 @@ import {
 import { BusinessError } from '../../../shared/errors.js';
 import { hashCanonicalJson } from '../domain/executionContract.js';
 import { assertChapterLengthGate, evaluateChapterLength, isBoundedOverlengthRevision } from '../domain/chapterLengthPolicy.js';
-import { bindTrialFollowupChapters, constructTrialFollowupChapterDraft } from '../domain/trialFollowupBinding.js';
+import { bindTrialFollowupChapters } from '../domain/trialFollowupBinding.js';
+import { bindGeneratedBodyChapter } from '../domain/bodyChapterBinding.js';
 import {
   DEFAULT_TENANT_ID,
   DEFAULT_USER_ID,
@@ -151,7 +152,6 @@ import {
   projectNovelProviderInput,
   projectPreferencesProviderInput,
   validateFullReviewDraftForPersistence,
-  type BodyChapterProviderDraft,
   type ChapterProviderInputV1,
   type FullReviewDraftPersistenceAuthority,
   type NovelProviderActionInputFor,
@@ -4539,39 +4539,6 @@ function bindAuthoritativeChapter(chapter: NovelChapterRecord, authoritative: Ch
     throw new BusinessError(ErrorCode.VersionConflict, '章节权威投影已变化，请刷新后重试。');
   }
   return { ...chapter, title: authoritative.title, wordTarget: authoritative.wordTarget, statusNote: authoritative.statusNote };
-}
-
-function bindGeneratedBodyChapter(chapter: NovelChapterRecord, draft: BodyChapterProviderDraft, allowHardFailedLengthViolation = false): BodyChapterDraft {
-  const providerChapter = draft.chapter;
-  if (providerChapter.id !== chapter.id || providerChapter.chapterNo !== chapter.chapterNo) {
-    throw new BusinessError(ErrorCode.ValidationError, '模型返回的章节标识与请求章节不一致。');
-  }
-  if (draft.featureCard.chapterId !== chapter.id) throw new BusinessError(ErrorCode.ValidationError, '模型返回的章节特性卡与请求章节不一致。');
-  const lengthGate = allowHardFailedLengthViolation && draft.hardFailed
-    ? evaluateChapterLength(draft.content, chapter.wordTarget)
-    : assertChapterLengthGate(draft.content, chapter.wordTarget);
-  return {
-    ...constructTrialFollowupChapterDraft(chapter, draft),
-    lengthGate,
-    memory: {
-      previousSummary: draft.memory.previousSummary,
-      characterStates: [...draft.memory.characterStates],
-      relationshipStates: [...draft.memory.relationshipStates],
-      locations: [...draft.memory.locations],
-      organizations: [...draft.memory.organizations],
-      items: [...draft.memory.items],
-      plantedForeshadowing: [...draft.memory.plantedForeshadowing],
-      resolvedForeshadowing: [...draft.memory.resolvedForeshadowing],
-      unresolvedConflicts: [...draft.memory.unresolvedConflicts],
-      newSettings: [...draft.memory.newSettings],
-      factsCannotContradict: [...draft.memory.factsCannotContradict],
-      metadata: {
-        scoringStrategyVersion: draft.memory.metadata.scoringStrategyVersion,
-        hardFailed: draft.memory.metadata.hardFailed,
-        summary: draft.memory.metadata.summary
-      }
-    }
-  };
 }
 
 function assertChapterLengthTargetConfigured(target: number | null | undefined): asserts target is number {
