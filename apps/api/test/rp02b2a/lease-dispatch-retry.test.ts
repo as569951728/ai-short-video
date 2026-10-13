@@ -33,6 +33,9 @@ async function queuedTask() {
     task.providerAttemptId = null;
     task.providerAttemptPhase = null;
     task.providerDispatchedAt = null;
+    task.providerCallBudgetMax = 1;
+    task.providerCallBudgetUsed = 0;
+    task.durationDeadlineAt = at(120);
     return { repository, task };
   } finally {
     await app.close();
@@ -157,6 +160,76 @@ describe('RP-02B2a3 leased dispatch checkpoint', () => {
     assert.equal(await repository.leaseNextQueuedTask('worker-1', 'lease-2', at(2), at(30)), null);
     assert.equal(events.length, 1);
     assert.equal(logs.length, 1);
+  });
+
+  it('scans only bounded expired Prisma leases in deterministic order', async () => {
+    const queries: unknown[] = [];
+    const repository = Object.create(PrismaNovelRepository.prototype) as PrismaNovelRepository & { prisma: unknown };
+    Object.defineProperty(repository, 'prisma', { value: {
+      generationTask: { findMany: async (query: unknown) => {
+        queries.push(query);
+        return [{ tenantId: 'tenant-1', id: 'task-1', leaseOwnerId: 'worker-1',
+          leaseToken: 'lease-1', leaseExpiresAt: at(30) }];
+      } }
+    } });
+    assert.deepEqual(await repository.listExpiredTaskLeases(at(29), 0), []);
+    assert.equal(queries.length, 0);
+    assert.deepEqual(await repository.listExpiredTaskLeases(at(30), 500), [{
+      tenantId: 'tenant-1', taskId: 'task-1', leaseOwnerId: 'worker-1',
+      leaseToken: 'lease-1', leaseExpiresAt: at(30)
+    }]);
+    assert.deepEqual(queries[0], {
+      where: { status: 'PROCESSING', leaseOwnerId: { not: null },
+        leaseToken: { not: null }, leaseExpiresAt: { lte: at(30) } },
+      select: { tenantId: true, id: true, leaseOwnerId: true, leaseToken: true, leaseExpiresAt: true },
+      orderBy: [{ leaseExpiresAt: 'asc' }, { id: 'asc' }], take: 100
+    });
+  });
+
+  it('uses the database clock for recovery decisions and rejects an unavailable clock', async () => {
+    let queries = 0;
+    const repository = Object.create(PrismaNovelRepository.prototype) as PrismaNovelRepository & { prisma: unknown };
+    Object.defineProperty(repository, 'prisma', { configurable: true, value: {
+      $queryRaw: async () => { queries += 1; return [{ now_ms: BigInt(at(30).getTime()) }]; }
+    } });
+    assert.equal((await repository.getAuthoritativeTaskTime()).getTime(), at(30).getTime());
+    assert.equal(queries, 1);
+    Object.defineProperty(repository, 'prisma', { value: { $queryRaw: async () => [{ now_ms: null }] }, configurable: true });
+    await assert.rejects(repository.getAuthoritativeTaskTime(), /Database clock is unavailable/);
+  });
+
+  it('guards Prisma dispatch with a single paid-call budget and deadline in the same CAS', async () => {
+    const updates: Array<{ where: Record<string, unknown>; data: Record<string, unknown> }> = [];
+    const repository = Object.create(PrismaNovelRepository.prototype) as PrismaNovelRepository & { prisma: unknown };
+    Object.defineProperty(repository, 'prisma', { value: {
+      $transaction: async (callback: (tx: unknown) => Promise<unknown>) => callback({
+        generationTask: {
+          updateMany: async (query: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
+            updates.push(query);
+            return { count: 0 };
+          },
+          findFirstOrThrow: async () => { throw new Error('Fenced dispatch must not read a task'); }
+        }
+      })
+    } });
+    const input = {
+      tenantId: 'tenant-1', taskId: 'task-1', leaseOwnerId: 'worker-1', leaseToken: 'lease-1',
+      authoritativeNow: at(10), checkpoint: {
+        expectedPhase: 'prepared' as const, nextPhase: 'provider_call_started' as const,
+        providerAttemptId: 'attempt-1'
+      }
+    };
+    assert.equal((await repository.checkpointLeasedTask(input)).outcome, 'fenced');
+    assert.equal((await repository.checkpointLeasedTask(input)).outcome, 'fenced');
+    assert.equal(updates.length, 2);
+    for (const update of updates) {
+      assert.equal(update.where.providerCallBudgetUsed, 0);
+      assert.deepEqual(update.where.providerCallBudgetMax, { gt: 0 });
+      assert.deepEqual(update.where.durationDeadlineAt, { gt: at(10) });
+      assert.deepEqual(update.data.providerCallBudgetUsed, { increment: 1 });
+      assert.equal(update.data.providerAttemptId, 'attempt-1');
+      assert.deepEqual(update.where.leaseExpiresAt, { gt: at(10) });
+    }
   });
 
   it('records an attempt only at dispatch and fences duplicate or wrong-phase checkpoints', async () => {

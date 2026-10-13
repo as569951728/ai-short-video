@@ -180,7 +180,7 @@ describe('RP-02B2a2 A2 repository authority hardening', () => {
       assert.equal(queued.status, TaskStatus.Failed, `${label}:safe terminal state`);
     }
   });
-  it('gives malformed recovery zero mutation and zero recovery event', async () => {
+  it('safely terminates an expired malformed lease without calling a provider', async () => {
     const repository = createInMemoryNovelRepository();
     const queued = await seedQueuedTask(repository, 'recovery-invalid');
     const leased = (await repository.leaseNextQueuedTask('worker-a', 'lease-a', at(1), at(30)))!;
@@ -192,13 +192,19 @@ describe('RP-02B2a2 A2 repository authority hardening', () => {
       leaseExpiresAt: leased.leaseExpiresAt!
     };
     mutateActor(leased, 'legacy_recovery');
-    const before = structuredClone(leased);
     const beforeEvents = repository.getGenerationTaskEvents().length;
-    assert.deepEqual(await repository.recoverExpiredTask(observed, at(30)), { outcome: 'not_recovered', task: null });
-    assert.deepEqual(leased, before);
-    assert.equal(repository.getGenerationTaskEvents().length, beforeEvents);
+    const beforeLogs = repository.getOperationLogs().length;
+    const result = await repository.recoverExpiredTask(observed, at(30));
+    assert.equal(result.outcome, 'recovered');
+    assert.equal(result.task?.status, TaskStatus.Failed);
+    assert.equal(result.task?.errorCode, 'WORKER_PAYLOAD_UNSUPPORTED');
+    assert.equal(leased.leaseToken, null);
+    assert.equal(leased.activeClaimKey, null);
+    assert.equal(repository.getGenerationTaskEvents().length, beforeEvents + 1);
+    assert.equal(repository.getOperationLogs().length, beforeLogs + 1);
+    assert.deepEqual(await repository.recoverExpiredTask(observed, at(31)), { outcome: 'not_recovered', task: null });
   });
-  it('keeps Prisma legacy lease and recovery fail-closed before attempt or event creation', async () => {
+  it('rejects Prisma legacy lease and safely terminates malformed expired recovery', async () => {
     const source = createInMemoryNovelRepository();
     const legacy = await seedQueuedTask(source, 'prisma-legacy');
     legacy.executionEnvelopeJson = createExecutionEnvelope({
@@ -239,22 +245,75 @@ describe('RP-02B2a2 A2 repository authority hardening', () => {
     });
     recoverable.requestHash = hashCanonicalJson(recoverable.executionEnvelopeJson);
     const recoveryRow = toPrismaTask(recoverable);
+    let recoveryEvents = 0;
+    let recoveryLogs = 0;
     const recoveryRepository = prismaRepositoryWithTransaction({
       generationTask: {
-        findFirst: async () => recoveryRow,
-        updateMany: async () => { throw new Error('invalid recovery must not mutate'); }
+        findFirst: async () => recoveryRow.status === 'PROCESSING' ? recoveryRow : null,
+        findFirstOrThrow: async () => recoveryRow,
+        updateMany: async (input: { data: Record<string, unknown> }) => {
+          Object.assign(recoveryRow, input.data);
+          return { count: 1 };
+        }
       },
-      generationTaskEvent: { create: async () => { throw new Error('invalid recovery must not create event'); } }
+      generationTaskEvent: { create: async () => { recoveryEvents += 1; } },
+      operationLog: { create: async () => { recoveryLogs += 1; } }
     });
-    assert.deepEqual(await recoveryRepository.recoverExpiredTask({
+    const observedRecovery = {
       tenantId: recoverable.tenantId,
       taskId: recoverable.id,
       leaseOwnerId: 'worker-a',
       leaseToken: 'lease-recovery',
       leaseExpiresAt: at(30)
-    }, at(30)), { outcome: 'not_recovered', task: null });
+    };
+    const recovered = await recoveryRepository.recoverExpiredTask(observedRecovery, at(30));
+    assert.equal(recovered.outcome, 'recovered');
+    assert.equal(recovered.task?.errorCode, 'PROVIDER_OUTCOME_UNKNOWN');
     assert.equal(recoveryRow.providerAttemptId, 'attempt-existing');
-    assert.equal(recoveryRow.status, 'PROCESSING');
+    assert.equal(recoveryRow.status, 'FAILED');
+    assert.equal(recoveryRow.leaseToken, null);
+    assert.equal(recoveryEvents, 1);
+    assert.equal(recoveryLogs, 1);
+    assert.deepEqual(await recoveryRepository.recoverExpiredTask(observedRecovery, at(31)), { outcome: 'not_recovered', task: null });
+  });
+  it('marks an expired Prisma task with paid-call evidence as outcome-unknown even without a dispatch timestamp', async () => {
+    const source = createInMemoryNovelRepository();
+    const task = await seedQueuedTask(source, 'dispatched-damaged');
+    Object.assign(task, {
+      status: TaskStatus.Processing, leaseOwnerId: 'worker-old', leaseToken: 'lease-old',
+      leaseExpiresAt: at(30), providerAttemptId: 'attempt-paid',
+      providerAttemptPhase: 'provider_call_started', providerDispatchedAt: null,
+      providerCallBudgetUsed: 1,
+      executionEnvelopeJson: { schemaVersion: 'damaged' }
+    });
+    const row = toPrismaTask(task);
+    const events: unknown[] = [];
+    const logs: Array<{ data: { afterSnapshot: { errorCode: string } } }> = [];
+    const repository = prismaRepositoryWithTransaction({
+      generationTask: {
+        findFirst: async () => row.status === 'PROCESSING' ? row : null,
+        updateMany: async (input: { data: Record<string, unknown> }) => {
+          Object.assign(row, input.data);
+          return { count: 1 };
+        },
+        findFirstOrThrow: async () => row
+      },
+      generationTaskEvent: { create: async (input: unknown) => { events.push(input); } },
+      operationLog: { create: async (input: { data: { afterSnapshot: { errorCode: string } } }) => { logs.push(input); } }
+    });
+    const observed = { tenantId: task.tenantId, taskId: task.id,
+      leaseOwnerId: 'worker-old', leaseToken: 'lease-old', leaseExpiresAt: at(30) };
+    const recovered = await repository.recoverExpiredTask(observed, at(30));
+    assert.equal(recovered.outcome, 'recovered');
+    assert.equal(recovered.task?.errorCode, 'PROVIDER_OUTCOME_UNKNOWN');
+    assert.equal(row.status, 'FAILED');
+    assert.equal(row.leaseToken, null);
+    assert.equal(row.providerAttemptId, 'attempt-paid');
+    assert.equal(events.length, 1);
+    assert.equal(logs[0]?.data.afterSnapshot.errorCode, 'PROVIDER_OUTCOME_UNKNOWN');
+    assert.deepEqual(await repository.recoverExpiredTask(observed, at(31)), { outcome: 'not_recovered', task: null });
+    assert.equal(events.length, 1);
+    assert.equal(logs.length, 1);
   });
   it('keeps InMemory and Prisma authority-fence contracts aligned across dispatch and stale finalize', async () => {
     const context = { tenantId: 'tenant_fence', userId: 'user_fence', requestId: 'request-fence' };

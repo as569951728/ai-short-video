@@ -658,7 +658,7 @@ export interface LeasedCreativeFinalizeInput {
   providerAttemptId: string;
   validatedResult: DirectionCandidateDraft[] | DirectionCandidateDraft | StructureAssetDraft | TrialChapterCandidateDraft[]
     | { chapters: TrialFollowupChapterProviderDraft[]; review: TrialReviewDraft } | ImpactAssessmentDraft | string
-    | { candidate: BodyChapterProviderDraft; summaryCompare: ChapterSummaryCompareDTO };
+    | { candidate: BodyChapterProviderDraft; summaryCompare: ChapterSummaryCompareDTO } | FullReviewDraft;
 }
 
 export interface SafeResultReceiptV1 {
@@ -1366,6 +1366,8 @@ export interface NovelRepository {
   finalizeLeasedAction(input: LeasedCreativeFinalizeInput): Promise<LeasedTaskMutationResult>;
   finalizeLeasedTask(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, authoritativeNow: Date, result: HashedSafeResultReceipt): Promise<LeasedTaskMutationResult>;
   failLeasedTask(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, authoritativeNow: Date, failure: LeasedTaskFailure): Promise<LeasedTaskMutationResult>;
+  getAuthoritativeTaskTime(): Promise<Date>;
+  listExpiredTaskLeases(authoritativeNow: Date, limit: number): Promise<ObservedTaskLease[]>;
   recoverExpiredTask(observedTaskLease: ObservedTaskLease, authoritativeNow: Date): Promise<RecoverExpiredTaskResult>;
   findActiveTaskByConflict(tenantId: string, conflictScope: string, conflictKey: string): Promise<GenerationTaskRecord | null>;
   createDirectionCandidates(input: DirectionCreationInput): Promise<CreatedDirectionCandidatesRecord>;

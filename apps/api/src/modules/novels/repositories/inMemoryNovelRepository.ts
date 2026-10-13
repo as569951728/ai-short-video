@@ -50,6 +50,7 @@ import {
   type DraftCreationInput,
   type ForcedFullReviewRecord,
   type FullReviewCreationInput,
+  type FullReviewDraft,
   type FullReviewForcePassInput,
   type FullReviewGateRecord,
   type FullReviewIssueResolutionInput,
@@ -130,6 +131,7 @@ import {
   verifyHashedSafeResultReceipt
 } from '../domain/executionContract.js';
 import { BusinessError } from '../../../shared/errors.js';
+import { validateFullReviewDraftForPersistence } from '../services/actionExecutionPlan.js';
 
 export interface InMemoryNovelRepository extends NovelRepository {
   getOperationLogs(): OperationLogRecord[];
@@ -624,6 +626,276 @@ export function createInMemoryNovelRepository(options: {
       currentContent: input.currentContent, candidate, summaryCompare: input.summaryCompare
     };
   }
+  function persistTrialFollowup(input: TrialFollowupGenerationInput,
+    leasedAccess?: typeof leasedTrialFollowupAccess): GeneratedTrialFollowupRecord {
+    if (leasedAccess !== leasedTrialFollowupAccess) {
+      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task);
+    }
+    const selectedMetadata = toMutableMetadata(input.selectedCandidate.metadata);
+    selectedMetadata.trialStatus = 'selected_for_trial';
+    selectedMetadata.isSelected = true;
+    selectedMetadata.followupStatus = 'completed';
+    input.selectedCandidate.status = VersionStatus.Current;
+    input.selectedCandidate.metadata = selectedMetadata;
+
+    for (const version of chapterContentVersions) {
+      if (
+        version.tenantId === input.context.tenantId &&
+        version.novelId === input.novel.id &&
+        version.chapterId === input.selectedCandidate.chapterId &&
+        version.id !== input.selectedCandidate.id &&
+        getMetadataString(version.metadata, 'trialRunId') === input.trialRun.id &&
+        version.status === VersionStatus.Candidate
+      ) {
+        const metadata = toMutableMetadata(version.metadata);
+        metadata.trialStatus = 'historical';
+        metadata.isSelected = false;
+        version.status = VersionStatus.Historical;
+        version.metadata = metadata;
+      }
+    }
+
+    const existingTask = generationTasks.find((task) => task.id === input.trialRun.sourceTaskId);
+    if (existingTask && existingTask.status === TaskStatus.WaitingConfirmation) {
+      existingTask.status = TaskStatus.Completed;
+      existingTask.activeClaimKey = null;
+      existingTask.statusNote = '用户已选择第1章候选';
+      existingTask.currentStep = '第1章候选已选择，继续试写';
+      existingTask.userAcceptedResult = true;
+      existingTask.finishedAt = input.now;
+      existingTask.updatedAt = input.now;
+      appendTaskEvent(existingTask, {
+        eventType: 'task_completed',
+        message: '用户已选择第1章候选，任务完成。',
+        progress: 100,
+        requestId: input.context.requestId,
+        createdAt: input.now
+      });
+    }
+
+    const task = generationTasks.find((item) => item.id === input.task.id) ?? input.task;
+    const sourceVersionRefs = createTrialFollowupSourceVersionRefs(input.novel, input.selectedCandidate.id);
+    task.status = TaskStatus.WaitingConfirmation;
+    task.statusNote = '模型服务已生成试写结果，等待用户确认。';
+    task.progress = 100;
+    task.currentStep = input.review.trialResult === 'blocked' ? '第2章硬门槛未通过，试写暂停' : '前三章试写总评已生成，等待确认';
+    task.updatedAt = input.now;
+    task.activeClaimKey = null;
+    const createdContentVersions: ChapterContentVersionRecord[] = [];
+    const createdFeatureCards: ChapterFeatureCardRecord[] = [];
+    const createdReviewReports: ReviewReportRecord[] = [];
+    const createdResults: TrialChapterResultRecord[] = [];
+
+    for (const chapterDraft of input.chapters) {
+      const contentVersion =
+        chapterDraft.chapter.chapterNo === 1
+          ? input.selectedCandidate
+          : createChapterContentVersion({
+              input,
+              taskId: task.id,
+              chapterDraft,
+              sourceVersionRefs
+            });
+      if (chapterDraft.chapter.chapterNo !== 1) {
+        createdContentVersions.push(contentVersion);
+        chapterContentVersions.unshift(contentVersion);
+      }
+
+      const featureCard = createChapterFeatureCard({
+        input,
+        taskId: task.id,
+        chapterDraft
+      });
+      const reviewReport = createChapterReviewReport({
+        input,
+        taskId: task.id,
+        chapterDraft,
+        contentVersionId: contentVersion.id
+      });
+      const result: TrialChapterResultRecord = {
+        id: nextId('trialresult'),
+        tenantId: input.context.tenantId,
+        trialRunId: input.trialRun.id,
+        chapterId: chapterDraft.chapter.id,
+        contentVersionId: contentVersion.id,
+        featureCardVersionId: featureCard.id,
+        reviewReportId: reviewReport.id,
+        score: chapterDraft.scoring.totalScore,
+        status: chapterDraft.hardFailed ? 'hard_failed' : 'completed',
+        createdAt: input.now,
+        metadata: {
+          hardFailed: chapterDraft.hardFailed,
+          hardFailureReasons: chapterDraft.hardFailureReasons
+        }
+      };
+
+      chapterFeatureCards.unshift(featureCard);
+      reviewReports.unshift(reviewReport);
+      trialChapterResults.push(result);
+      createdFeatureCards.push(featureCard);
+      createdReviewReports.push(reviewReport);
+      createdResults.push(result);
+
+      const chapter = chapters.find((item) => item.id === chapterDraft.chapter.id);
+      if (chapter) {
+        chapter.currentContentVersionId = contentVersion.id;
+        chapter.currentFeatureCardVersionId = featureCard.id;
+        chapter.currentReviewReportId = reviewReport.id;
+        chapter.lastGenerationTaskId = task.id;
+        chapter.wordCount = contentVersion.wordCount;
+        chapter.mainStatus = chapterDraft.hardFailed ? 'blocked' : 'trial_written';
+        chapter.statusNote = chapterDraft.hardFailed ? '试写硬门槛未通过，暂停继续生成。' : '试写正文已生成，等待总评确认。';
+        chapter.updatedAt = input.now;
+      }
+    }
+
+    const trialReviewReport = createTrialReviewReport({
+      input,
+      taskId: task.id
+    });
+    reviewReports.unshift(trialReviewReport);
+    createdReviewReports.push(trialReviewReport);
+    task.resultVersionIds = [input.selectedCandidate.id, ...createdContentVersions.map((version) => version.id)];
+    task.resultObjectType = 'trial_run';
+    task.resultObjectId = input.trialRun.id;
+    task.outputSummary = input.review.summary;
+    appendTaskProgressEvents(task, input.context.requestId, input.now);
+
+    input.trialRun.status = input.review.trialResult === 'blocked' ? 'blocked' : 'review_ready';
+    input.trialRun.totalScore = input.review.totalScore;
+    input.trialRun.trialResult = input.review.trialResult;
+    input.trialRun.reviewReportId = trialReviewReport.id;
+    input.trialRun.sourceTaskId = task.id;
+    input.trialRun.updatedAt = input.now;
+    input.trialRun.metadata = {
+      ...toMutableMetadata(input.trialRun.metadata),
+      selectedChapterOneCandidateId: input.selectedCandidate.id,
+      currentStep: input.review.trialResult === 'blocked' ? '处理第2章硬失败' : '确认试写总评并生成正文策略快照',
+      blockingReason: input.review.trialResult === 'blocked' ? '第2章硬门槛未通过，不能继续第3章。' : null,
+      requiresRiskConfirmation: input.review.requiresRiskConfirmation
+    };
+
+    mutateNovel(input.novel.id, {
+      creationStage: NovelCreationStage.Trial,
+      stageStatus: input.review.trialResult === 'blocked' ? StageStatus.Blocked : StageStatus.WaitingUser,
+      updatedBy: input.context.userId,
+      updatedAt: input.now
+    });
+
+    const operationLog: OperationLogRecord = {
+      id: nextId('oplog'),
+      tenantId: input.context.tenantId,
+      userId: input.context.userId,
+      novelId: input.novel.id,
+      action: 'select_trial_chapter1_candidate',
+      objectType: 'trial_run',
+      objectId: input.trialRun.id,
+      beforeSnapshot: {
+        selectedChapterOneCandidateId: null
+      },
+      afterSnapshot: {
+        selectedChapterOneCandidateId: input.selectedCandidate.id,
+        trialResult: input.review.trialResult,
+        totalScore: input.review.totalScore
+      },
+      reason: '用户选择第1章候选并继续试写',
+      impactSummary: input.review.summary,
+      sourceTaskId: task.id,
+      requestId: input.context.requestId,
+      ip: input.context.ip ?? null,
+      userAgent: input.context.userAgent ?? null,
+      createdAt: input.now
+    };
+    operationLogs.unshift(operationLog);
+
+    return {
+      novel: cloneNovel(input.novel.id),
+      trialRun: input.trialRun,
+      task,
+      chapterResults: createdResults,
+      contentVersions: [input.selectedCandidate, ...createdContentVersions],
+      featureCards: createdFeatureCards,
+      reviewReports: createdReviewReports
+    };
+  }
+  function persistFullReview(input: FullReviewCreationInput): CreatedFullReviewRecord {
+    const task = requireClaimedTask(input.task, input.context.tenantId);
+    const reviewId = nextId('review');
+    const issueCards = input.draft.issues.map((issue) => ({
+      ...issue,
+      sourceReviewReportId: reviewId
+    }));
+    const reviewReport: ReviewReportRecord = {
+      id: reviewId,
+      tenantId: input.context.tenantId,
+      novelId: input.novel.id,
+      objectType: 'novel',
+      objectId: input.novel.id,
+      objectVersionId: null,
+      reviewLevel: 'full_novel',
+      totalScore: input.draft.totalScore,
+      subScores: input.draft.dimensionScores,
+      rating: input.draft.rating,
+      summary: input.draft.summary,
+      strengths: input.draft.strengths,
+      problems: input.draft.problems,
+      suggestions: input.draft.suggestions,
+      issueCards,
+      actionOptions: input.draft.suggestions,
+      recommendedAction: input.draft.gateResult === 'blocked' ? '优化全书问题' : '确认小说完成',
+      allowNextStep: input.draft.gateResult !== 'blocked',
+      blockingIssueCount: issueCards.filter((issue) => issue.blocking && issue.status === 'open').length,
+      resolvedStatus: 'open',
+      promptTemplateVersionId: null,
+      policyProfileVersionId: input.draft.reviewPolicyVersionId,
+      sourceTaskId: task.id,
+      createdAt: input.now,
+      metadata: {
+        version: 1,
+        reviewPolicyVersionId: input.draft.reviewPolicyVersionId,
+        videoSuggestion: input.draft.videoSuggestion,
+        firstVideoSuggestion: input.draft.firstVideoSuggestion,
+        platformRisks: input.draft.platformRisks,
+        originalityRisks: input.draft.originalityRisks,
+        aiFlavorRisks: input.draft.aiFlavorRisks,
+        lowScoreContinueRisks: input.draft.lowScoreContinueRisks,
+        sourceVersionRefs: input.sourceVersionRefs,
+        requestFingerprint: input.requestFingerprint
+      }
+    };
+    const gate = createFullReviewGateRecord({
+      input,
+      reviewReport,
+      gateResult: input.draft.gateResult,
+      forcePassReason: null
+    });
+    reviewReports.unshift(reviewReport);
+    fullReviewGates.unshift(gate);
+    task.status = TaskStatus.Completed;
+    task.statusNote = '全书审稿完成，已生成完成门禁。';
+    task.currentStep = gate.allowCompletion ? '全书审稿已完成，可确认小说完成。' : '全书审稿已完成，请先处理阻塞问题。';
+    task.progress = 100;
+    task.outputSummary = input.draft.summary;
+    task.resultObjectType = 'full_review';
+    task.resultObjectId = reviewReport.id;
+    task.finishedAt = input.now;
+    task.updatedAt = input.now;
+    task.activeClaimKey = null;
+    appendNovelTaskEvents(task, input.context.requestId, input.now, '全书审稿任务已创建。', '全书审稿完成，完成门禁已生成。');
+    mutateNovel(input.novel.id, {
+      creationStage: gate.allowCompletion ? NovelCreationStage.CompletionConfirm : NovelCreationStage.FullReview,
+      stageStatus: gate.allowCompletion ? StageStatus.WaitingUser : StageStatus.Blocked,
+      updatedBy: input.context.userId,
+      updatedAt: input.now
+    });
+
+    return {
+      novel: cloneNovel(input.novel.id),
+      task,
+      reviewReport,
+      gate
+    };
+  }
 
   const repository: InMemoryNovelRepository = {
     async createDraft(input: DraftCreationInput): Promise<CreatedDraftRecord> {
@@ -1007,10 +1279,17 @@ export function createInMemoryNovelRepository(options: {
         if (task.providerAttemptId !== null || task.providerDispatchedAt !== null) return { outcome: 'fenced' as const, task: null };
         task.providerAttemptPhase = 'prepared';
       } else if (checkpoint.expectedPhase === 'prepared') {
+        const budgetMax = task.providerCallBudgetMax;
+        const budgetUsed = task.providerCallBudgetUsed;
         if (!checkpoint.providerAttemptId.trim() || task.providerAttemptId !== null || task.providerDispatchedAt !== null ||
+          typeof budgetMax !== 'number' || typeof budgetUsed !== 'number' ||
+          !Number.isSafeInteger(budgetMax) || !Number.isSafeInteger(budgetUsed)
+          || budgetMax < 1 || budgetUsed < 0
+          || budgetUsed >= budgetMax ||
           generationTasks.some((other) => other.id !== task.id && other.tenantId === task.tenantId && other.providerAttemptId === checkpoint.providerAttemptId)) {
           return { outcome: 'fenced' as const, task: null };
         }
+        task.providerCallBudgetUsed = budgetUsed + 1;
         task.providerAttemptId = checkpoint.providerAttemptId;
         task.providerDispatchedAt = input.authoritativeNow;
         task.providerAttemptPhase = 'provider_call_started';
@@ -1074,10 +1353,12 @@ export function createInMemoryNovelRepository(options: {
       const isTrialChapterOne = envelope.action === 'trial_chapter_one_generate';
       const isTrialFollowup = envelope.action === 'trial_followup_generate';
       const isImpactAssessment = envelope.action === 'chapter_impact_assess';
+      const isAdoptImpactAssessment = envelope.action === 'chapter_adopt_impact_assess';
       const isChapterRewrite = envelope.action === 'chapter_rewrite';
       const isOverlengthRevision = envelope.action === 'chapter_overlength_revise';
+      const isFullReview = envelope.action === 'novel_full_review';
       if (!isDirection && !structureType && !isTrialChapterOne && !isTrialFollowup
-        && !isImpactAssessment && !isChapterRewrite && !isOverlengthRevision) {
+        && !isImpactAssessment && !isAdoptImpactAssessment && !isChapterRewrite && !isOverlengthRevision && !isFullReview) {
         return { outcome: 'fenced' as const, task: null };
       }
       const authorityInput = {
@@ -1090,6 +1371,193 @@ export function createInMemoryNovelRepository(options: {
       }
       const novel = novels.find((item) => item.tenantId === task.tenantId && item.id === task.novelId && !item.deletedAt);
       if (!novel) return this.failLeasedAction({ ...input, expectedPhase: 'provider_result_validated', reason: 'source_stale' });
+      if (isAdoptImpactAssessment) {
+        const chapter = chapters.find((item) => item.tenantId === task.tenantId && item.novelId === novel.id
+          && item.id === envelope.objectId && !item.deletedAt);
+        const refs = asRecord(envelope.sourceVersionRefs);
+        const currentContent = chapterContentVersions.find((item) => item.tenantId === task.tenantId
+          && item.novelId === novel.id && item.chapterId === chapter?.id
+          && item.id === refs.currentContentVersionId && item.status === VersionStatus.Current) ?? null;
+        const candidate = chapterContentVersions.find((item) => item.tenantId === task.tenantId
+          && item.novelId === novel.id && item.chapterId === chapter?.id
+          && item.id === refs.candidateVersionId && item.status === VersionStatus.Candidate);
+        if (!chapter || !candidate || chapter.currentContentVersionId !== (currentContent?.id ?? null)
+          || (refs.currentContentVersionId != null && !currentContent)
+          || evaluateChapterLength(candidate.content, chapter.wordTarget).status !== 'pass'
+          || asRecord(candidate.metadata).reviewRequired === true || candidate.sourceType?.startsWith('ai_overlength_')) {
+          return this.failLeasedAction({ ...input, expectedPhase: 'provider_result_validated', reason: 'source_stale' });
+        }
+        if (!validLeasedImpactDraft(input.validatedResult)) {
+          return this.failLeasedAction({ ...input, expectedPhase: 'provider_result_validated', reason: 'worker_payload_unsupported' });
+        }
+        const impact = input.validatedResult;
+        const request = asRecord(envelope.normalizedRequest);
+        const suppliedReason = typeof request.reason === 'string' ? request.reason.trim() : '';
+        if (impact.blocksFullReview && !suppliedReason) {
+          return this.failLeasedAction({ ...input, expectedPhase: 'provider_result_validated', reason: 'worker_payload_unsupported' });
+        }
+        const reason = suppliedReason || '采用章节候选正文';
+        const compare = asRecord(asRecord(candidate.metadata).summaryCompare);
+        const summaryCompare: ChapterSummaryCompareDTO = typeof compare.currentSummary === 'string'
+          && typeof compare.candidateSummary === 'string'
+          ? {
+              currentSummary: compare.currentSummary, candidateSummary: compare.candidateSummary,
+              benefit: typeof compare.benefit === 'string' ? compare.benefit : '',
+              newRisks: Array.isArray(compare.newRisks) ? compare.newRisks.filter((risk): risk is string => typeof risk === 'string') : [],
+              possibleImpact: typeof compare.possibleImpact === 'string' ? compare.possibleImpact : '',
+              aiSuggestion: typeof compare.aiSuggestion === 'string' ? compare.aiSuggestion : ''
+            }
+          : {
+              currentSummary: currentContent?.summary ?? '', candidateSummary: candidate.summary ?? '',
+              benefit: '候选版本优化了本章表达和钩子。', newRisks: [],
+              possibleImpact: '预计主要影响本章表达。', aiSuggestion: '采用前请确认摘要对比和影响提示。'
+            };
+        const context = { tenantId: task.tenantId, userId: task.createdBy!, requestId: `worker:${input.leaseOwnerId}` };
+        const beforeSequence = sequence;
+        const restore = [snapshotMutableArray(novels), snapshotMutableArray(chapters),
+          snapshotMutableArray(chapterContentVersions), snapshotMutableArray(assetDecisionRecords),
+          snapshotMutableArray(impactCases), snapshotMutableArray(generationTasks),
+          snapshotMutableArray(generationTaskEvents), snapshotMutableArray(operationLogs)];
+        try {
+          if (currentContent) currentContent.status = VersionStatus.Historical;
+          candidate.status = VersionStatus.Current;
+          const decisionRecord: AssetDecisionRecord = {
+            id: nextId('decision'), tenantId: task.tenantId, novelId: novel.id,
+            actionType: 'adopt_chapter_content', objectType: 'chapter_content', objectId: chapter.id,
+            candidateVersionId: candidate.id, currentVersionIdBefore: currentContent?.id ?? null,
+            currentVersionIdAfter: candidate.id, decisionReason: reason, isForced: impact.blocksFullReview,
+            riskSummary: summaryCompare.newRisks.join('；'), impactSummary: impact.summary,
+            pageVersionSnapshot: request.pageVersionSnapshot ?? { currentContentVersionId: currentContent?.id ?? null },
+            sourceTaskId: task.id, createdBy: context.userId, createdAt: input.authoritativeNow
+          };
+          const impactCase = createImpactCaseRecord({ input: {
+            novel, task, chapter, currentContent, candidate, reason, summaryCompare, impact,
+            context, now: input.authoritativeNow
+          }, taskId: task.id, decisionRecordId: decisionRecord.id });
+          candidate.decisionRecordId = decisionRecord.id;
+          assetDecisionRecords.unshift(decisionRecord);
+          impactCases.unshift(impactCase);
+          chapter.currentContentVersionId = candidate.id;
+          chapter.wordCount = candidate.wordCount;
+          chapter.mainStatus = impact.blocksFullReview ? 'pending' : 'completed';
+          chapter.statusNote = impact.blocksFullReview ? '重写采用后影响未关闭。' : '重写已采用，影响已同步。';
+          chapter.impactLevel = impact.impactLevel;
+          chapter.lastGenerationTaskId = task.id;
+          chapter.updatedAt = input.authoritativeNow;
+          mutateNovel(novel.id, {
+            creationStage: NovelCreationStage.Body,
+            stageStatus: impact.blocksFullReview ? StageStatus.Blocked : StageStatus.NotStarted,
+            updatedBy: context.userId, updatedAt: input.authoritativeNow
+          });
+          task.status = TaskStatus.Completed;
+          task.progress = 100;
+          task.outputSummary = impact.summary;
+          task.statusNote = '候选已采用，影响评估已记录。';
+          task.currentStep = '章节候选已采用';
+          task.resultVersionIds = [candidate.id];
+          task.resultObjectType = 'impact_case';
+          task.resultObjectId = impactCase.id;
+          task.metadata = { requestId: context.requestId, impactCaseId: impactCase.id };
+          task.finishedAt = input.authoritativeNow;
+          task.updatedAt = input.authoritativeNow;
+          task.activeClaimKey = null;
+          appendTaskProgressEvents(task, context.requestId, input.authoritativeNow);
+          options.onLeasedFinalizeStage?.('asset');
+          const receipt = createSafeResultReceipt(task, {
+            status: 'completed', outcome: 'completed', resultObjectType: 'impact_case',
+            resultObjectId: impactCase.id, resultVersionIds: [candidate.id], resultCount: 1
+          });
+          options.onLeasedFinalizeStage?.('receipt');
+          task.resultReceiptHash = receipt.hash;
+          task.providerAttemptPhase = 'finalizing';
+          clearLease(task);
+          options.onLeasedFinalizeStage?.('task');
+          appendLeaseEvent(task, 'task_finalized', '章节候选已采用，影响评估已记录。', input.authoritativeNow);
+          options.onLeasedFinalizeStage?.('event');
+          operationLogs.unshift({
+            id: nextId('oplog'), tenantId: task.tenantId, userId: context.userId, novelId: novel.id,
+            action: 'adopt_chapter_content', objectType: 'chapter', objectId: chapter.id,
+            beforeSnapshot: { currentContentVersionId: currentContent?.id ?? null },
+            afterSnapshot: { currentContentVersionId: candidate.id, impactCaseId: impactCase.id },
+            reason, impactSummary: impact.summary, sourceTaskId: task.id,
+            requestId: context.requestId, ip: null, userAgent: null, createdAt: input.authoritativeNow
+          });
+          operationLogs.unshift({
+            id: nextId('oplog'), tenantId: task.tenantId, userId: context.userId, novelId: novel.id,
+            action: 'generation_task_finalized', objectType: 'generation_task', objectId: task.id,
+            beforeSnapshot: null, afterSnapshot: { resultObjectId: impactCase.id, resultVersionIds: [candidate.id], receiptHash: receipt.hash },
+            reason: '章节候选采用与影响评估完成', impactSummary: impact.summary, sourceTaskId: task.id,
+            requestId: context.requestId, ip: null, userAgent: null, createdAt: input.authoritativeNow
+          });
+          options.onLeasedFinalizeStage?.('operation_log');
+          return { outcome: 'applied' as const, task };
+        } catch (error) {
+          sequence = beforeSequence;
+          restore.forEach((restoreStore) => restoreStore());
+          throw error;
+        }
+      }
+      if (isFullReview) {
+        const scopedChapters = chapters.filter((item) => item.tenantId === task.tenantId
+          && item.novelId === novel.id && !item.deletedAt)
+          .sort((left, right) => left.chapterNo - right.chapterNo || left.id.localeCompare(right.id));
+        const request = asRecord(envelope.normalizedRequest);
+        const expectedPolicyVersion = request.policyProfileVersionId;
+        const idempotencyKey = task.idempotencyToken;
+        if (!scopedChapters.length || scopedChapters.some((chapter, index) => chapter.chapterNo !== index + 1
+          || !chapter.currentContentVersionId || !chapter.currentFeatureCardVersionId || !chapter.currentReviewReportId)
+          || typeof expectedPolicyVersion !== 'string' || !expectedPolicyVersion.trim()
+          || typeof idempotencyKey !== 'string' || !idempotencyKey.trim()) {
+          return this.failLeasedAction({ ...input, expectedPhase: 'provider_result_validated', reason: 'source_stale' });
+        }
+        let draft: FullReviewDraft;
+        try {
+          draft = validateFullReviewDraftForPersistence(input.validatedResult as unknown as FullReviewDraft, {
+            expectedReviewPolicyVersionId: expectedPolicyVersion,
+            chapterManifest: scopedChapters.map((chapter) => ({ chapterId: chapter.id, chapterNo: chapter.chapterNo }))
+          });
+        } catch {
+          return this.failLeasedAction({ ...input, expectedPhase: 'provider_result_validated', reason: 'worker_payload_unsupported' });
+        }
+        const context = { tenantId: task.tenantId, userId: task.createdBy!, requestId: `worker:${input.leaseOwnerId}` };
+        const beforeSequence = sequence;
+        const restore = [snapshotMutableArray(novels), snapshotMutableArray(reviewReports),
+          snapshotMutableArray(fullReviewGates), snapshotMutableArray(generationTasks),
+          snapshotMutableArray(generationTaskEvents), snapshotMutableArray(operationLogs)];
+        try {
+          const generated = persistFullReview({
+            novel, task, chapters: scopedChapters, draft, idempotencyKey,
+            requestFingerprint: envelope.normalizedRequest, sourceVersionRefs: envelope.sourceVersionRefs,
+            context, now: input.authoritativeNow
+          });
+          options.onLeasedFinalizeStage?.('asset');
+          const receipt = createSafeResultReceipt(task, {
+            status: 'completed', outcome: 'review_created', resultObjectType: 'full_review',
+            resultObjectId: generated.reviewReport.id, resultVersionIds: [], resultCount: 1
+          });
+          options.onLeasedFinalizeStage?.('receipt');
+          task.resultReceiptHash = receipt.hash;
+          task.providerAttemptPhase = 'finalizing';
+          task.updatedAt = input.authoritativeNow;
+          clearLease(task);
+          options.onLeasedFinalizeStage?.('task');
+          appendLeaseEvent(task, 'task_finalized', task.statusNote ?? '全书审稿已生成。', input.authoritativeNow);
+          options.onLeasedFinalizeStage?.('event');
+          operationLogs.unshift({
+            id: nextId('oplog'), tenantId: task.tenantId, userId: context.userId, novelId: novel.id,
+            action: 'generation_task_finalized', objectType: 'generation_task', objectId: task.id,
+            beforeSnapshot: null, afterSnapshot: { resultObjectId: generated.reviewReport.id, receiptHash: receipt.hash },
+            reason: '全书审稿生成完成', impactSummary: null, sourceTaskId: task.id,
+            requestId: context.requestId, ip: null, userAgent: null, createdAt: input.authoritativeNow
+          });
+          options.onLeasedFinalizeStage?.('operation_log');
+          return { outcome: 'applied' as const, task };
+        } catch (error) {
+          sequence = beforeSequence;
+          restore.forEach((restoreStore) => restoreStore());
+          throw error;
+        }
+      }
       if (isChapterRewrite) {
         const chapter = chapters.find((item) => item.tenantId === task.tenantId && item.novelId === novel.id
           && item.id === envelope.objectId);
@@ -1300,11 +1768,7 @@ export function createInMemoryNovelRepository(options: {
           snapshotMutableArray(generationTaskEvents), snapshotMutableArray(operationLogs)
         ];
         try {
-          const persistFollowup = this.selectTrialChapterOneAndGenerateFollowup as (
-            input: TrialFollowupGenerationInput,
-            access: typeof leasedTrialFollowupAccess
-          ) => Promise<GeneratedTrialFollowupRecord>;
-          const generated = await persistFollowup({
+          const generated = persistTrialFollowup({
             novel, trialRun, task, selectedCandidate, chapters: bound,
             review: raw.review as TrialReviewDraft, context, now: input.authoritativeNow
           }, leasedTrialFollowupAccess);
@@ -1572,25 +2036,69 @@ export function createInMemoryNovelRepository(options: {
       return { outcome: 'applied' as const, task };
     },
 
+    async getAuthoritativeTaskTime(): Promise<Date> {
+      return new Date();
+    },
+
+    async listExpiredTaskLeases(authoritativeNow: Date, limit: number): Promise<ObservedTaskLease[]> {
+      if (!Number.isInteger(limit) || limit <= 0) return [];
+      return generationTasks
+        .filter((task) => task.status === TaskStatus.Processing && task.leaseOwnerId && task.leaseToken
+          && task.leaseExpiresAt instanceof Date && Number.isFinite(task.leaseExpiresAt.getTime())
+          && task.leaseExpiresAt.getTime() <= authoritativeNow.getTime())
+        .sort((left, right) => left.leaseExpiresAt!.getTime() - right.leaseExpiresAt!.getTime()
+          || left.id.localeCompare(right.id))
+        .slice(0, limit)
+        .map((task) => ({
+          tenantId: task.tenantId, taskId: task.id, leaseOwnerId: task.leaseOwnerId!,
+          leaseToken: task.leaseToken!, leaseExpiresAt: new Date(task.leaseExpiresAt!)
+        }));
+    },
+
     async recoverExpiredTask(observed: ObservedTaskLease, authoritativeNow: Date) {
       const task = generationTasks.find((item) => item.tenantId === observed.tenantId && item.id === observed.taskId);
       if (!task || task.status !== TaskStatus.Processing || task.leaseOwnerId !== observed.leaseOwnerId || task.leaseToken !== observed.leaseToken
         || task.leaseExpiresAt?.getTime() !== observed.leaseExpiresAt.getTime() || task.leaseExpiresAt.getTime() > authoritativeNow.getTime()) {
         return { outcome: 'not_recovered' as const, task: null };
       }
+      let validEnvelope = true;
       try {
         validateExecutionEnvelopeV1_1ForTask(task);
       } catch {
-        return { outcome: 'not_recovered' as const, task: null };
+        validEnvelope = false;
       }
-      const dispatched = task.providerDispatchedAt !== null;
-      applyLeaseFailure(task, {
-        failureCategory: dispatched ? 'provider_outcome_unknown' : 'worker_lease_expired',
-        errorCode: dispatched ? 'PROVIDER_OUTCOME_UNKNOWN' : 'WORKER_LEASE_EXPIRED',
-        errorMessage: dispatched ? 'Provider outcome is unknown.' : 'Worker lease expired.',
-        statusNote: dispatched ? 'Provider 结果未知，禁止自动重放。' : 'Worker 租约已过期。'
-      }, authoritativeNow, 'task_recovered');
-      return { outcome: 'recovered' as const, task };
+      const dispatched = task.providerDispatchedAt !== null || task.providerAttemptId !== null
+        || (task.providerCallBudgetUsed ?? 0) > 0
+        || ['provider_call_started', 'provider_result_validated', 'finalizing'].includes(task.providerAttemptPhase ?? '');
+      const failure = dispatched
+        ? { failureCategory: 'provider_outcome_unknown', errorCode: 'PROVIDER_OUTCOME_UNKNOWN',
+            errorMessage: 'Provider outcome is unknown.', statusNote: 'Provider 结果未知，禁止自动重放。' }
+        : validEnvelope
+          ? { failureCategory: 'worker_lease_expired', errorCode: 'WORKER_LEASE_EXPIRED',
+              errorMessage: 'Worker lease expired.', statusNote: 'Worker 租约已过期。' }
+          : { failureCategory: 'worker_payload_unsupported', errorCode: 'WORKER_PAYLOAD_UNSUPPORTED',
+              errorMessage: 'Execution envelope V1.1 or trusted audit actor is invalid.',
+              statusNote: '任务执行合同或可信身份无效，已安全失败。' };
+      const beforeSequence = sequence;
+      const restore = [snapshotMutableArray(generationTasks), snapshotMutableArray(generationTaskEvents),
+        snapshotMutableArray(operationLogs)];
+      try {
+        applyLeaseFailure(task, failure, authoritativeNow, 'task_recovered');
+        options.onLeasedFailureStage?.('event');
+        operationLogs.unshift({
+          id: nextId('oplog'), tenantId: task.tenantId, userId: task.createdBy,
+          novelId: task.novelId, action: 'generation_task_failed', objectType: 'generation_task', objectId: task.id,
+          beforeSnapshot: null, afterSnapshot: { failureCategory: failure.failureCategory, errorCode: failure.errorCode },
+          reason: failure.statusNote, impactSummary: null, sourceTaskId: task.id,
+          requestId: `worker:${observed.leaseOwnerId}`, ip: null, userAgent: null, createdAt: authoritativeNow
+        });
+        options.onLeasedFailureStage?.('operation_log');
+        return { outcome: 'recovered' as const, task };
+      } catch (error) {
+        sequence = beforeSequence;
+        restore.forEach((restoreStore) => restoreStore());
+        throw error;
+      }
     },
 
     async findActiveTaskByConflict(tenantId: string, conflictScope: string, conflictKey: string) {
@@ -2462,195 +2970,7 @@ export function createInMemoryNovelRepository(options: {
       input: TrialFollowupGenerationInput,
       leasedAccess?: typeof leasedTrialFollowupAccess
     ): Promise<GeneratedTrialFollowupRecord> {
-      if (leasedAccess !== leasedTrialFollowupAccess) {
-        assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task);
-      }
-      const selectedMetadata = toMutableMetadata(input.selectedCandidate.metadata);
-      selectedMetadata.trialStatus = 'selected_for_trial';
-      selectedMetadata.isSelected = true;
-      selectedMetadata.followupStatus = 'completed';
-      input.selectedCandidate.status = VersionStatus.Current;
-      input.selectedCandidate.metadata = selectedMetadata;
-
-      for (const version of chapterContentVersions) {
-        if (
-          version.tenantId === input.context.tenantId &&
-          version.novelId === input.novel.id &&
-          version.chapterId === input.selectedCandidate.chapterId &&
-          version.id !== input.selectedCandidate.id &&
-          getMetadataString(version.metadata, 'trialRunId') === input.trialRun.id &&
-          version.status === VersionStatus.Candidate
-        ) {
-          const metadata = toMutableMetadata(version.metadata);
-          metadata.trialStatus = 'historical';
-          metadata.isSelected = false;
-          version.status = VersionStatus.Historical;
-          version.metadata = metadata;
-        }
-      }
-
-      const existingTask = generationTasks.find((task) => task.id === input.trialRun.sourceTaskId);
-      if (existingTask && existingTask.status === TaskStatus.WaitingConfirmation) {
-        existingTask.status = TaskStatus.Completed;
-        existingTask.activeClaimKey = null;
-        existingTask.statusNote = '用户已选择第1章候选';
-        existingTask.currentStep = '第1章候选已选择，继续试写';
-        existingTask.userAcceptedResult = true;
-        existingTask.finishedAt = input.now;
-        existingTask.updatedAt = input.now;
-        appendTaskEvent(existingTask, {
-          eventType: 'task_completed',
-          message: '用户已选择第1章候选，任务完成。',
-          progress: 100,
-          requestId: input.context.requestId,
-          createdAt: input.now
-        });
-      }
-
-      const task = generationTasks.find((item) => item.id === input.task.id) ?? input.task;
-      const sourceVersionRefs = createTrialFollowupSourceVersionRefs(input.novel, input.selectedCandidate.id);
-      task.status = TaskStatus.WaitingConfirmation;
-      task.statusNote = '模型服务已生成试写结果，等待用户确认。';
-      task.progress = 100;
-      task.currentStep = input.review.trialResult === 'blocked' ? '第2章硬门槛未通过，试写暂停' : '前三章试写总评已生成，等待确认';
-      task.updatedAt = input.now;
-      task.activeClaimKey = null;
-      const createdContentVersions: ChapterContentVersionRecord[] = [];
-      const createdFeatureCards: ChapterFeatureCardRecord[] = [];
-      const createdReviewReports: ReviewReportRecord[] = [];
-      const createdResults: TrialChapterResultRecord[] = [];
-
-      for (const chapterDraft of input.chapters) {
-        const contentVersion =
-          chapterDraft.chapter.chapterNo === 1
-            ? input.selectedCandidate
-            : createChapterContentVersion({
-                input,
-                taskId: task.id,
-                chapterDraft,
-                sourceVersionRefs
-              });
-        if (chapterDraft.chapter.chapterNo !== 1) {
-          createdContentVersions.push(contentVersion);
-          chapterContentVersions.unshift(contentVersion);
-        }
-
-        const featureCard = createChapterFeatureCard({
-          input,
-          taskId: task.id,
-          chapterDraft
-        });
-        const reviewReport = createChapterReviewReport({
-          input,
-          taskId: task.id,
-          chapterDraft,
-          contentVersionId: contentVersion.id
-        });
-        const result: TrialChapterResultRecord = {
-          id: nextId('trialresult'),
-          tenantId: input.context.tenantId,
-          trialRunId: input.trialRun.id,
-          chapterId: chapterDraft.chapter.id,
-          contentVersionId: contentVersion.id,
-          featureCardVersionId: featureCard.id,
-          reviewReportId: reviewReport.id,
-          score: chapterDraft.scoring.totalScore,
-          status: chapterDraft.hardFailed ? 'hard_failed' : 'completed',
-          createdAt: input.now,
-          metadata: {
-            hardFailed: chapterDraft.hardFailed,
-            hardFailureReasons: chapterDraft.hardFailureReasons
-          }
-        };
-
-        chapterFeatureCards.unshift(featureCard);
-        reviewReports.unshift(reviewReport);
-        trialChapterResults.push(result);
-        createdFeatureCards.push(featureCard);
-        createdReviewReports.push(reviewReport);
-        createdResults.push(result);
-
-        const chapter = chapters.find((item) => item.id === chapterDraft.chapter.id);
-        if (chapter) {
-          chapter.currentContentVersionId = contentVersion.id;
-          chapter.currentFeatureCardVersionId = featureCard.id;
-          chapter.currentReviewReportId = reviewReport.id;
-          chapter.lastGenerationTaskId = task.id;
-          chapter.wordCount = contentVersion.wordCount;
-          chapter.mainStatus = chapterDraft.hardFailed ? 'blocked' : 'trial_written';
-          chapter.statusNote = chapterDraft.hardFailed ? '试写硬门槛未通过，暂停继续生成。' : '试写正文已生成，等待总评确认。';
-          chapter.updatedAt = input.now;
-        }
-      }
-
-      const trialReviewReport = createTrialReviewReport({
-        input,
-        taskId: task.id
-      });
-      reviewReports.unshift(trialReviewReport);
-      createdReviewReports.push(trialReviewReport);
-      task.resultVersionIds = [input.selectedCandidate.id, ...createdContentVersions.map((version) => version.id)];
-      task.resultObjectType = 'trial_run';
-      task.resultObjectId = input.trialRun.id;
-      task.outputSummary = input.review.summary;
-      appendTaskProgressEvents(task, input.context.requestId, input.now);
-
-      input.trialRun.status = input.review.trialResult === 'blocked' ? 'blocked' : 'review_ready';
-      input.trialRun.totalScore = input.review.totalScore;
-      input.trialRun.trialResult = input.review.trialResult;
-      input.trialRun.reviewReportId = trialReviewReport.id;
-      input.trialRun.sourceTaskId = task.id;
-      input.trialRun.updatedAt = input.now;
-      input.trialRun.metadata = {
-        ...toMutableMetadata(input.trialRun.metadata),
-        selectedChapterOneCandidateId: input.selectedCandidate.id,
-        currentStep: input.review.trialResult === 'blocked' ? '处理第2章硬失败' : '确认试写总评并生成正文策略快照',
-        blockingReason: input.review.trialResult === 'blocked' ? '第2章硬门槛未通过，不能继续第3章。' : null,
-        requiresRiskConfirmation: input.review.requiresRiskConfirmation
-      };
-
-      mutateNovel(input.novel.id, {
-        creationStage: NovelCreationStage.Trial,
-        stageStatus: input.review.trialResult === 'blocked' ? StageStatus.Blocked : StageStatus.WaitingUser,
-        updatedBy: input.context.userId,
-        updatedAt: input.now
-      });
-
-      const operationLog: OperationLogRecord = {
-        id: nextId('oplog'),
-        tenantId: input.context.tenantId,
-        userId: input.context.userId,
-        novelId: input.novel.id,
-        action: 'select_trial_chapter1_candidate',
-        objectType: 'trial_run',
-        objectId: input.trialRun.id,
-        beforeSnapshot: {
-          selectedChapterOneCandidateId: null
-        },
-        afterSnapshot: {
-          selectedChapterOneCandidateId: input.selectedCandidate.id,
-          trialResult: input.review.trialResult,
-          totalScore: input.review.totalScore
-        },
-        reason: '用户选择第1章候选并继续试写',
-        impactSummary: input.review.summary,
-        sourceTaskId: task.id,
-        requestId: input.context.requestId,
-        ip: input.context.ip ?? null,
-        userAgent: input.context.userAgent ?? null,
-        createdAt: input.now
-      };
-      operationLogs.unshift(operationLog);
-
-      return {
-        novel: cloneNovel(input.novel.id),
-        trialRun: input.trialRun,
-        task,
-        chapterResults: createdResults,
-        contentVersions: [input.selectedCandidate, ...createdContentVersions],
-        featureCards: createdFeatureCards,
-        reviewReports: createdReviewReports
-      };
+      return persistTrialFollowup(input, leasedAccess);
     },
 
     async confirmTrial(input: TrialConfirmationInput): Promise<ConfirmedTrialRecord> {
@@ -2924,82 +3244,7 @@ export function createInMemoryNovelRepository(options: {
     },
 
     async createFullReview(input: FullReviewCreationInput): Promise<CreatedFullReviewRecord> {
-      const task = requireClaimedTask(input.task, input.context.tenantId);
-      const reviewId = nextId('review');
-      const issueCards = input.draft.issues.map((issue) => ({
-        ...issue,
-        sourceReviewReportId: reviewId
-      }));
-      const reviewReport: ReviewReportRecord = {
-        id: reviewId,
-        tenantId: input.context.tenantId,
-        novelId: input.novel.id,
-        objectType: 'novel',
-        objectId: input.novel.id,
-        objectVersionId: null,
-        reviewLevel: 'full_novel',
-        totalScore: input.draft.totalScore,
-        subScores: input.draft.dimensionScores,
-        rating: input.draft.rating,
-        summary: input.draft.summary,
-        strengths: input.draft.strengths,
-        problems: input.draft.problems,
-        suggestions: input.draft.suggestions,
-        issueCards,
-        actionOptions: input.draft.suggestions,
-        recommendedAction: input.draft.gateResult === 'blocked' ? '优化全书问题' : '确认小说完成',
-        allowNextStep: input.draft.gateResult !== 'blocked',
-        blockingIssueCount: issueCards.filter((issue) => issue.blocking && issue.status === 'open').length,
-        resolvedStatus: 'open',
-        promptTemplateVersionId: null,
-        policyProfileVersionId: input.draft.reviewPolicyVersionId,
-        sourceTaskId: task.id,
-        createdAt: input.now,
-        metadata: {
-          version: 1,
-          reviewPolicyVersionId: input.draft.reviewPolicyVersionId,
-          videoSuggestion: input.draft.videoSuggestion,
-          firstVideoSuggestion: input.draft.firstVideoSuggestion,
-          platformRisks: input.draft.platformRisks,
-          originalityRisks: input.draft.originalityRisks,
-          aiFlavorRisks: input.draft.aiFlavorRisks,
-          lowScoreContinueRisks: input.draft.lowScoreContinueRisks,
-          sourceVersionRefs: input.sourceVersionRefs,
-          requestFingerprint: input.requestFingerprint
-        }
-      };
-      const gate = createFullReviewGateRecord({
-        input,
-        reviewReport,
-        gateResult: input.draft.gateResult,
-        forcePassReason: null
-      });
-      reviewReports.unshift(reviewReport);
-      fullReviewGates.unshift(gate);
-      task.status = TaskStatus.Completed;
-      task.statusNote = '全书审稿完成，已生成完成门禁。';
-      task.currentStep = gate.allowCompletion ? '全书审稿已完成，可确认小说完成。' : '全书审稿已完成，请先处理阻塞问题。';
-      task.progress = 100;
-      task.outputSummary = input.draft.summary;
-      task.resultObjectType = 'full_review';
-      task.resultObjectId = reviewReport.id;
-      task.finishedAt = input.now;
-      task.updatedAt = input.now;
-      task.activeClaimKey = null;
-      appendNovelTaskEvents(task, input.context.requestId, input.now, '全书审稿任务已创建。', '全书审稿完成，完成门禁已生成。');
-      mutateNovel(input.novel.id, {
-        creationStage: gate.allowCompletion ? NovelCreationStage.CompletionConfirm : NovelCreationStage.FullReview,
-        stageStatus: gate.allowCompletion ? StageStatus.WaitingUser : StageStatus.Blocked,
-        updatedBy: input.context.userId,
-        updatedAt: input.now
-      });
-
-      return {
-        novel: cloneNovel(input.novel.id),
-        task,
-        reviewReport,
-        gate
-      };
+      return persistFullReview(input);
     },
 
     async forcePassFullReview(input: FullReviewForcePassInput): Promise<ForcedFullReviewRecord> {

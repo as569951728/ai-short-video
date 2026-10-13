@@ -3,8 +3,9 @@ import { describe, it } from 'node:test';
 import { TaskStatus, VersionStatus, type DirectionCandidateContentDTO, type StructureAssetContentDTO, type StructureAssetType } from '@ai-shortvideo/shared';
 import { buildApp } from '../../src/app.js';
 import { evaluateChapterLength, isBoundedOverlengthRevision } from '../../src/modules/novels/domain/chapterLengthPolicy.js';
-import type { DirectionCandidateDraft, StructureAssetDraft } from '../../src/modules/novels/domain/novelDomain.js';
+import type { DirectionCandidateDraft, LeasedCreativeFinalizeInput, StructureAssetDraft } from '../../src/modules/novels/domain/novelDomain.js';
 import { MockBodyProvider } from '../../src/modules/novels/providers/mockBodyProvider.js';
+import { MockFullReviewProvider } from '../../src/modules/novels/providers/mockFullReviewProvider.js';
 import { MockTrialProvider } from '../../src/modules/novels/providers/mockTrialProvider.js';
 import { createInMemoryNovelRepository } from '../../src/modules/novels/repositories/inMemoryNovelRepository.js';
 import type { NovelProviderActionInputFor } from '../../src/modules/novels/services/actionExecutionPlan.js';
@@ -57,6 +58,7 @@ async function leasedDirection(onLeasedFinalizeStage?: (stage: FinalizeStage) =>
     task.providerDispatchedAt = null;
     task.resultReceiptHash = null;
     task.providerCallBudgetUsed = 0;
+    task.providerCallBudgetMax = 1;
     const lease = await repository.leaseNextQueuedTask('worker-finalize', 'lease-finalize', at(0), at(60));
     assert.equal(lease?.id, task.id);
     const base = { tenantId: task.tenantId, taskId: task.id, leaseOwnerId: 'worker-finalize', leaseToken: 'lease-finalize' };
@@ -133,6 +135,7 @@ async function leasedStructure(objectType: StructureAssetType, onLeasedFinalizeS
     task.providerDispatchedAt = null;
     task.resultReceiptHash = null;
     task.providerCallBudgetUsed = 0;
+    task.providerCallBudgetMax = 1;
     assert.equal((await repository.leaseNextQueuedTask('worker-structure', 'lease-structure', at(0), at(60)))?.id, task.id);
     const base = { tenantId: task.tenantId, taskId: task.id, leaseOwnerId: 'worker-structure', leaseToken: 'lease-structure' };
     assert.equal((await repository.checkpointLeasedTask({ ...base, authoritativeNow: at(1), checkpoint: {
@@ -173,6 +176,7 @@ async function leasedTrialOne(onLeasedFinalizeStage?: (stage: FinalizeStage) => 
     task.providerDispatchedAt = null;
     task.resultReceiptHash = null;
     task.providerCallBudgetUsed = 0;
+    task.providerCallBudgetMax = 1;
     assert.equal((await repository.leaseNextQueuedTask('worker-trial', 'lease-trial', at(0), at(60)))?.id, task.id);
     const base = { tenantId: task.tenantId, taskId: task.id, leaseOwnerId: 'worker-trial', leaseToken: 'lease-trial' };
     assert.equal((await repository.checkpointLeasedTask({ ...base, authoritativeNow: at(1), checkpoint: {
@@ -240,6 +244,7 @@ async function leasedTrialFollowup(onLeasedFinalizeStage?: (stage: FinalizeStage
     task.providerDispatchedAt = null;
     task.resultReceiptHash = null;
     task.providerCallBudgetUsed = 0;
+    task.providerCallBudgetMax = 1;
     assert.equal((await repository.leaseNextQueuedTask('worker-followup', 'lease-followup', at(0), at(60)))?.id, task.id);
     const base = { tenantId: task.tenantId, taskId: task.id, leaseOwnerId: 'worker-followup', leaseToken: 'lease-followup' };
     assert.equal((await repository.checkpointLeasedTask({ ...base, authoritativeNow: at(1), checkpoint: {
@@ -254,6 +259,58 @@ async function leasedTrialFollowup(onLeasedFinalizeStage?: (stage: FinalizeStage
     return { repository, task, novelId: fixture.novelId, sourceRun, followup, finalizeInput: {
       ...base, authoritativeNow: at(4), providerAttemptId: 'attempt-followup', validatedResult: followup
     } };
+  } finally {
+    await fixture.app.close();
+  }
+}
+
+async function leasedFullReview(onLeasedFinalizeStage?: (stage: FinalizeStage) => void) {
+  const repository = createInMemoryNovelRepository({ onLeasedFinalizeStage });
+  const fixture = await createRouteAuthorityFixture('novel_full_review', repository);
+  try {
+    const novel = await repository.findById('tenant_test', fixture.novelId);
+    assert.ok(novel);
+    const novelBefore = structuredClone(novel);
+    const generated = await fixture.runSuccess('leased-full-review');
+    assert.equal(generated.statusCode, 200, generated.body);
+    const task = repository.getGenerationTasks().find((item) => item.id === generated.json().data.task.id);
+    assert.ok(task);
+    const invocation = fixture.providerInvocations().find((item) => item.action === 'novel_full_review');
+    assert.ok(invocation);
+    const draft = await new MockFullReviewProvider().generateFullReview(
+      invocation.input as NovelProviderActionInputFor<'novel_full_review'>
+    );
+    const generatedReport = repository.getReviewReports().find((item) => item.sourceTaskId === task.id);
+    assert.ok(generatedReport);
+    repository.getReviewReports().splice(repository.getReviewReports().indexOf(generatedReport), 1);
+    const generatedGate = repository.getFullReviewGates().find((item) => item.reviewReportId === generatedReport.id);
+    assert.ok(generatedGate);
+    repository.getFullReviewGates().splice(repository.getFullReviewGates().indexOf(generatedGate), 1);
+    Object.assign(novel, novelBefore);
+    task.status = TaskStatus.Queued;
+    task.startedAt = null;
+    task.finishedAt = null;
+    task.providerAttemptId = null;
+    task.providerAttemptPhase = null;
+    task.providerDispatchedAt = null;
+    task.resultReceiptHash = null;
+    task.providerCallBudgetUsed = 0;
+    task.providerCallBudgetMax = 1;
+    assert.equal((await repository.leaseNextQueuedTask('worker-full-review', 'lease-full-review', at(0), at(60)))?.id, task.id);
+    const base = { tenantId: task.tenantId, taskId: task.id,
+      leaseOwnerId: 'worker-full-review', leaseToken: 'lease-full-review' };
+    assert.equal((await repository.checkpointLeasedTask({ ...base, authoritativeNow: at(1), checkpoint: {
+      expectedPhase: 'leased', nextPhase: 'prepared'
+    } })).outcome, 'applied');
+    assert.equal((await repository.checkpointLeasedTask({ ...base, authoritativeNow: at(2), checkpoint: {
+      expectedPhase: 'prepared', nextPhase: 'provider_call_started', providerAttemptId: 'attempt-full-review'
+    } })).outcome, 'applied');
+    assert.equal((await repository.checkpointLeasedTask({ ...base, authoritativeNow: at(3), checkpoint: {
+      expectedPhase: 'provider_call_started', nextPhase: 'provider_result_validated', providerAttemptId: 'attempt-full-review'
+    } })).outcome, 'applied');
+    const finalizeInput = { ...base, authoritativeNow: at(4), providerAttemptId: 'attempt-full-review',
+      validatedResult: draft } as unknown as LeasedCreativeFinalizeInput;
+    return { repository, task, novel, draft, finalizeInput };
   } finally {
     await fixture.app.close();
   }
@@ -282,6 +339,7 @@ async function leasedImpactAssessment(onLeasedFinalizeStage?: (stage: FinalizeSt
     task.providerDispatchedAt = null;
     task.resultReceiptHash = null;
     task.providerCallBudgetUsed = 0;
+    task.providerCallBudgetMax = 1;
     task.resultObjectType = null;
     task.resultObjectId = null;
     task.resultVersionIds = [];
@@ -299,6 +357,59 @@ async function leasedImpactAssessment(onLeasedFinalizeStage?: (stage: FinalizeSt
     return { repository, task, impact, finalizeInput: {
       ...base, authoritativeNow: at(4), providerAttemptId: 'attempt-impact', validatedResult: impact
     } };
+  } finally {
+    await fixture.app.close();
+  }
+}
+
+async function leasedAdoptImpactAssessment(onLeasedFinalizeStage?: (stage: FinalizeStage) => void) {
+  const repository = createInMemoryNovelRepository({ onLeasedFinalizeStage });
+  const fixture = await createRouteAuthorityFixture('chapter_adopt_impact_assess', repository);
+  try {
+    const novel = await repository.findById('tenant_test', fixture.novelId);
+    assert.ok(novel);
+    const novelBefore = structuredClone(novel);
+    const restore = [restoreMutableRecords(repository.getNovelChapters()),
+      restoreMutableRecords(repository.getChapterContentVersions()),
+      restoreMutableRecords(repository.getAssetDecisionRecords()),
+      restoreMutableRecords(repository.getImpactCases())];
+    const generated = await fixture.runSuccess('leased-adopt-impact');
+    assert.equal(generated.statusCode, 200, generated.body);
+    const task = repository.getGenerationTasks().find((item) => item.id === generated.json().data.task.id);
+    assert.ok(task);
+    const invocation = fixture.providerInvocations().find((item) => item.action === 'chapter_adopt_impact_assess');
+    assert.ok(invocation);
+    const impact = await new MockBodyProvider().assessImpact(
+      invocation.input as NovelProviderActionInputFor<'chapter_adopt_impact_assess'>
+    );
+    restore.forEach((restoreStore) => restoreStore());
+    Object.assign(novel, novelBefore);
+    task.status = TaskStatus.Queued;
+    task.startedAt = null;
+    task.finishedAt = null;
+    task.providerAttemptId = null;
+    task.providerAttemptPhase = null;
+    task.providerDispatchedAt = null;
+    task.resultReceiptHash = null;
+    task.providerCallBudgetUsed = 0;
+    task.providerCallBudgetMax = 1;
+    task.resultObjectType = null;
+    task.resultObjectId = null;
+    task.resultVersionIds = [];
+    assert.equal((await repository.leaseNextQueuedTask('worker-adopt', 'lease-adopt', at(0), at(60)))?.id, task.id);
+    const base = { tenantId: task.tenantId, taskId: task.id, leaseOwnerId: 'worker-adopt', leaseToken: 'lease-adopt' };
+    assert.equal((await repository.checkpointLeasedTask({ ...base, authoritativeNow: at(1), checkpoint: {
+      expectedPhase: 'leased', nextPhase: 'prepared'
+    } })).outcome, 'applied');
+    assert.equal((await repository.checkpointLeasedTask({ ...base, authoritativeNow: at(2), checkpoint: {
+      expectedPhase: 'prepared', nextPhase: 'provider_call_started', providerAttemptId: 'attempt-adopt'
+    } })).outcome, 'applied');
+    assert.equal((await repository.checkpointLeasedTask({ ...base, authoritativeNow: at(3), checkpoint: {
+      expectedPhase: 'provider_call_started', nextPhase: 'provider_result_validated', providerAttemptId: 'attempt-adopt'
+    } })).outcome, 'applied');
+    return { repository, task, novel, impact, finalizeInput: {
+      ...base, authoritativeNow: at(4), providerAttemptId: 'attempt-adopt', validatedResult: impact
+    } as LeasedCreativeFinalizeInput };
   } finally {
     await fixture.app.close();
   }
@@ -331,6 +442,7 @@ async function leasedChapterRewrite(onLeasedFinalizeStage?: (stage: FinalizeStag
     task.providerDispatchedAt = null;
     task.resultReceiptHash = null;
     task.providerCallBudgetUsed = 0;
+    task.providerCallBudgetMax = 1;
     task.resultObjectType = null;
     task.resultObjectId = null;
     task.resultVersionIds = [];
@@ -392,6 +504,7 @@ async function leasedOverlengthRevision(onLeasedFinalizeStage?: (stage: Finalize
     task.providerDispatchedAt = null;
     task.resultReceiptHash = null;
     task.providerCallBudgetUsed = 0;
+    task.providerCallBudgetMax = 1;
     task.resultObjectType = null;
     task.resultObjectId = null;
     task.resultVersionIds = [];
@@ -702,6 +815,15 @@ describe('RP-02B2a4 in-memory trial chapter one fenced finalize', () => {
 });
 
 describe('RP-02B2a4 in-memory trial followup fenced finalize', () => {
+  it('publishes the receipt before yielding to another caller', async () => {
+    const { repository, task, finalizeInput } = await leasedTrialFollowup();
+    const pending = repository.finalizeLeasedAction(finalizeInput);
+    assert.equal(task.status, TaskStatus.WaitingConfirmation);
+    assert.match(task.resultReceiptHash ?? '', /^[0-9a-f]{64}$/);
+    assert.equal(task.leaseToken, null);
+    assert.equal((await pending).outcome, 'applied');
+  });
+
   it('writes chapter, feature-card, review, result and receipt together', async () => {
     const { repository, task, sourceRun, finalizeInput } = await leasedTrialFollowup();
     const before = { versions: repository.getChapterContentVersions().length,
@@ -800,6 +922,84 @@ describe('RP-02B2a4 in-memory trial followup fenced finalize', () => {
   });
 });
 
+describe('RP-02B2a4 in-memory expired lease recovery', () => {
+  it('reserves exactly one paid attempt before dispatch and fences exhausted budget', async () => {
+    const { repository, task, finalizeInput } = await leasedDirection();
+    assert.equal(task.providerCallBudgetMax, 1);
+    assert.equal(task.providerCallBudgetUsed, 1);
+    task.providerAttemptPhase = 'prepared';
+    task.providerAttemptId = null;
+    task.providerDispatchedAt = null;
+    const eventCount = repository.getGenerationTaskEvents().length;
+    assert.equal((await repository.checkpointLeasedTask({
+      tenantId: finalizeInput.tenantId, taskId: finalizeInput.taskId,
+      leaseOwnerId: finalizeInput.leaseOwnerId, leaseToken: finalizeInput.leaseToken,
+      authoritativeNow: at(4), checkpoint: { expectedPhase: 'prepared',
+        nextPhase: 'provider_call_started', providerAttemptId: 'attempt-extra' }
+    })).outcome, 'fenced');
+    assert.equal(task.providerCallBudgetUsed, 1);
+    assert.equal(task.providerDispatchedAt, null);
+    assert.equal(repository.getGenerationTaskEvents().length, eventCount);
+  });
+
+  it('lists only complete expired processing leases and uses a fresh local clock', async () => {
+    const { repository, task } = await leasedDirection();
+    assert.deepEqual(await repository.listExpiredTaskLeases(at(59), 10), []);
+    assert.deepEqual(await repository.listExpiredTaskLeases(at(60), 0), []);
+    const observed = await repository.listExpiredTaskLeases(at(60), 1);
+    assert.equal(observed.length, 1);
+    assert.equal(observed[0]?.taskId, task.id);
+    assert.equal(observed[0]?.leaseToken, 'lease-finalize');
+    assert.ok(Math.abs((await repository.getAuthoritativeTaskTime()).getTime() - Date.now()) < 5_000);
+    task.leaseToken = null;
+    assert.deepEqual(await repository.listExpiredTaskLeases(at(60), 10), []);
+  });
+
+  for (const dispatched of [false, true]) {
+    it(`terminally recovers malformed ${dispatched ? 'dispatched' : 'pre-dispatch'} task`, async () => {
+      const { repository, task } = await leasedDirection();
+      task.executionEnvelopeJson = { invalid: true };
+      if (!dispatched) {
+        task.providerAttemptId = null;
+        task.providerDispatchedAt = null;
+        task.providerAttemptPhase = 'prepared';
+    task.providerCallBudgetUsed = 0;
+    task.providerCallBudgetMax = 1;
+      }
+      const observed = (await repository.listExpiredTaskLeases(at(60), 1))[0];
+      assert.ok(observed);
+      const eventCount = repository.getGenerationTaskEvents().length;
+      const logCount = repository.getOperationLogs().length;
+      assert.equal((await repository.recoverExpiredTask(observed, at(60))).outcome, 'recovered');
+      assert.equal(task.status, TaskStatus.Failed);
+      assert.equal(task.errorCode, dispatched ? 'PROVIDER_OUTCOME_UNKNOWN' : 'WORKER_PAYLOAD_UNSUPPORTED');
+      assert.equal(task.activeClaimKey, null);
+      assert.equal(task.leaseToken, null);
+      assert.equal(repository.getGenerationTaskEvents().length, eventCount + 1);
+      assert.equal(repository.getOperationLogs().length, logCount + 1);
+      assert.equal((await repository.recoverExpiredTask(observed, at(61))).outcome, 'not_recovered');
+    });
+  }
+
+  for (const failAt of ['event', 'operation_log'] as const) {
+    it(`rolls back malformed recovery when ${failAt} fails`, async () => {
+      const { repository, task } = await leasedDirection(undefined, 'direction_generate', (stage) => {
+        if (stage === failAt) throw new Error('injected recovery fault');
+      });
+      task.executionEnvelopeJson = { invalid: true };
+      const observed = (await repository.listExpiredTaskLeases(at(60), 1))[0];
+      assert.ok(observed);
+      const events = repository.getGenerationTaskEvents().length;
+      const logs = repository.getOperationLogs().length;
+      await assert.rejects(repository.recoverExpiredTask(observed, at(60)), /injected recovery fault/);
+      assert.equal(task.status, TaskStatus.Processing);
+      assert.equal(task.leaseToken, observed.leaseToken);
+      assert.equal(repository.getGenerationTaskEvents().length, events);
+      assert.equal(repository.getOperationLogs().length, logs);
+    });
+  }
+});
+
 describe('RP-02B2a4 in-memory impact assessment fenced finalize', () => {
   it('writes an impact case with a safe receipt without changing formal chapter content', async () => {
     const { repository, task, finalizeInput } = await leasedImpactAssessment();
@@ -861,6 +1061,114 @@ describe('RP-02B2a4 in-memory impact assessment fenced finalize', () => {
     assert.equal(stale.task.errorCode, 'SOURCE_STALE');
     assert.equal(stale.task.resultReceiptHash, null);
     assert.equal(stale.repository.getImpactCases().length, 0);
+  });
+});
+
+describe('RP-02B2a4 in-memory chapter adoption impact fenced finalize', () => {
+  it('publishes adopted content and receipt before yielding', async () => {
+    const { repository, task, finalizeInput } = await leasedAdoptImpactAssessment();
+    const candidateId = (task.sourceVersionRefs as { candidateVersionId: string }).candidateVersionId;
+    const pending = repository.finalizeLeasedAction(finalizeInput);
+    assert.equal(repository.getNovelChapters().find((item) => item.id === task.objectId)?.currentContentVersionId, candidateId);
+    assert.match(task.resultReceiptHash ?? '', /^[0-9a-f]{64}$/);
+    assert.equal(task.leaseToken, null);
+    assert.equal((await pending).outcome, 'applied');
+  });
+
+  it('atomically adopts the candidate with decision, impact case, receipt, task, event and logs', async () => {
+    const { repository, task, finalizeInput } = await leasedAdoptImpactAssessment();
+    const chapter = repository.getNovelChapters().find((item) => item.id === task.objectId);
+    assert.ok(chapter);
+    const previousId = chapter.currentContentVersionId;
+    const candidateId = (task.sourceVersionRefs as { candidateVersionId: string }).candidateVersionId;
+    const before = { cases: repository.getImpactCases().length,
+      decisions: repository.getAssetDecisionRecords().length,
+      events: repository.getGenerationTaskEvents().length,
+      logs: repository.getOperationLogs().length,
+      versions: repository.getChapterContentVersions().length };
+    assert.equal((await repository.finalizeLeasedAction(finalizeInput)).outcome, 'applied');
+    assert.equal(chapter.currentContentVersionId, candidateId);
+    assert.equal(repository.getChapterContentVersions().find((item) => item.id === previousId)?.status, VersionStatus.Historical);
+    assert.equal(repository.getChapterContentVersions().find((item) => item.id === candidateId)?.status, VersionStatus.Current);
+    assert.equal(repository.getChapterContentVersions().length, before.versions);
+    assert.equal(repository.getAssetDecisionRecords().length, before.decisions + 1);
+    assert.equal(repository.getImpactCases().length, before.cases + 1);
+    assert.equal(repository.getImpactCases()[0]?.decisionRecordId, repository.getAssetDecisionRecords()[0]?.id);
+    assert.equal(task.status, TaskStatus.Completed);
+    assert.equal(task.resultObjectId, repository.getImpactCases()[0]?.id);
+    assert.deepEqual(task.resultVersionIds, [candidateId]);
+    assert.match(task.resultReceiptHash ?? '', /^[0-9a-f]{64}$/);
+    assert.equal(task.leaseToken, null);
+    assert.ok(repository.getGenerationTaskEvents().length > before.events);
+    assert.equal(repository.getOperationLogs().length, before.logs + 2);
+    assert.equal((await repository.finalizeLeasedAction(finalizeInput)).outcome, 'fenced');
+  });
+
+  for (const failAt of ['asset', 'receipt', 'task', 'event', 'operation_log'] as const) {
+    it(`rolls back adoption when ${failAt} fails`, async () => {
+      const { repository, task, novel, finalizeInput } = await leasedAdoptImpactAssessment((stage) => {
+        if (stage === failAt) throw new Error('injected adoption fault');
+      });
+      const before = { novel: structuredClone(novel), chapters: structuredClone(repository.getNovelChapters()),
+        versions: structuredClone(repository.getChapterContentVersions()),
+        decisions: structuredClone(repository.getAssetDecisionRecords()),
+        cases: structuredClone(repository.getImpactCases()),
+        events: repository.getGenerationTaskEvents().length, logs: repository.getOperationLogs().length };
+      await assert.rejects(repository.finalizeLeasedAction(finalizeInput), /injected adoption fault/);
+      assert.deepEqual(novel, before.novel);
+      assert.deepEqual(repository.getNovelChapters(), before.chapters);
+      assert.deepEqual(repository.getChapterContentVersions(), before.versions);
+      assert.deepEqual(repository.getAssetDecisionRecords(), before.decisions);
+      assert.deepEqual(repository.getImpactCases(), before.cases);
+      assert.equal(repository.getGenerationTaskEvents().length, before.events);
+      assert.equal(repository.getOperationLogs().length, before.logs);
+      assert.equal(task.status, TaskStatus.Processing);
+      assert.equal(task.resultReceiptHash, null);
+      assert.equal(task.leaseToken, 'lease-adopt');
+    });
+  }
+
+  it('rejects invalid impact output without adopting the candidate', async () => {
+    const { repository, task, impact, finalizeInput } = await leasedAdoptImpactAssessment();
+    const chapters = structuredClone(repository.getNovelChapters());
+    assert.equal((await repository.finalizeLeasedAction({ ...finalizeInput,
+      validatedResult: { ...impact, impactLevel: 'severe', blocksFullReview: false }
+    })).outcome, 'applied');
+    assert.equal(task.status, TaskStatus.Failed);
+    assert.equal(task.errorCode, 'WORKER_PAYLOAD_UNSUPPORTED');
+    assert.deepEqual(repository.getNovelChapters(), chapters);
+    assert.equal(repository.getImpactCases().filter((item) => item.sourceTaskId === task.id).length, 0);
+  });
+
+  it('fences expired and cancelled attempts and fails stale source or candidate', async () => {
+    const late = await leasedAdoptImpactAssessment();
+    assert.equal((await late.repository.finalizeLeasedAction({ ...late.finalizeInput,
+      providerAttemptId: 'wrong-attempt' })).outcome, 'fenced');
+    assert.equal(late.repository.getAssetDecisionRecords().filter((item) => item.sourceTaskId === late.task.id).length, 0);
+    assert.equal((await late.repository.finalizeLeasedAction({ ...late.finalizeInput,
+      authoritativeNow: at(60) })).outcome, 'fenced');
+    late.task.status = TaskStatus.Cancelled;
+    assert.equal((await late.repository.finalizeLeasedAction(late.finalizeInput)).outcome, 'fenced');
+    assert.equal(late.repository.getAssetDecisionRecords().filter((item) => item.sourceTaskId === late.task.id).length, 0);
+
+    for (const changed of ['current', 'candidate'] as const) {
+      const stale = await leasedAdoptImpactAssessment();
+      if (changed === 'current') {
+        const chapter = stale.repository.getNovelChapters().find((item) => item.id === stale.task.objectId);
+        assert.ok(chapter);
+        chapter.currentContentVersionId = 'replaced-content';
+      } else {
+        const candidateId = (stale.task.sourceVersionRefs as { candidateVersionId: string }).candidateVersionId;
+        const candidate = stale.repository.getChapterContentVersions().find((item) => item.id === candidateId);
+        assert.ok(candidate);
+        candidate.status = VersionStatus.Discarded;
+      }
+      assert.equal((await stale.repository.finalizeLeasedAction(stale.finalizeInput)).outcome, 'applied');
+      assert.equal(stale.task.status, TaskStatus.Failed);
+      assert.equal(stale.task.errorCode, 'SOURCE_STALE');
+      assert.equal(stale.task.resultReceiptHash, null);
+      assert.equal(stale.repository.getImpactCases().filter((item) => item.sourceTaskId === stale.task.id).length, 0);
+    }
   });
 });
 
@@ -993,5 +1301,76 @@ describe('RP-02B2a4 in-memory overlength revision fenced finalize', () => {
     assert.equal(stale.task.errorCode, 'SOURCE_STALE');
     assert.equal(stale.task.resultReceiptHash, null);
     assert.equal(stale.repository.getChapterContentVersions().filter((item) => item.sourceTaskId === stale.task.id).length, 0);
+  });
+});
+
+describe('RP-02B2a4 in-memory full review fenced finalize', () => {
+  it('saves review and gate with receipt without replacing chapter content', async () => {
+    const { repository, task, finalizeInput } = await leasedFullReview();
+    const before = { reports: repository.getReviewReports().length, gates: repository.getFullReviewGates().length,
+      chapters: structuredClone(repository.getNovelChapters()) };
+    assert.equal((await repository.finalizeLeasedAction(finalizeInput)).outcome, 'applied');
+    assert.equal(repository.getReviewReports().length, before.reports + 1);
+    assert.equal(repository.getFullReviewGates().length, before.gates + 1);
+    assert.deepEqual(repository.getNovelChapters(), before.chapters);
+    assert.equal(task.status, TaskStatus.Completed);
+    assert.equal(task.resultObjectType, 'full_review');
+    assert.match(task.resultReceiptHash ?? '', /^[0-9a-f]{64}$/);
+    assert.equal((await repository.finalizeLeasedAction(finalizeInput)).outcome, 'fenced');
+  });
+
+  for (const failAt of ['asset', 'receipt', 'task', 'event', 'operation_log'] as const) {
+    it(`rolls back full review when ${failAt} fails`, async () => {
+      const { repository, task, novel, finalizeInput } = await leasedFullReview((stage) => {
+        if (stage === failAt) throw new Error('injected full review fault');
+      });
+      const before = { reports: structuredClone(repository.getReviewReports()),
+        gates: structuredClone(repository.getFullReviewGates()), novel: structuredClone(novel),
+        events: repository.getGenerationTaskEvents().length, logs: repository.getOperationLogs().length };
+      await assert.rejects(repository.finalizeLeasedAction(finalizeInput), /injected full review fault/);
+      assert.deepEqual(repository.getReviewReports(), before.reports);
+      assert.deepEqual(repository.getFullReviewGates(), before.gates);
+      assert.deepEqual(novel, before.novel);
+      assert.equal(repository.getGenerationTaskEvents().length, before.events);
+      assert.equal(repository.getOperationLogs().length, before.logs);
+      assert.equal(task.status, TaskStatus.Processing);
+      assert.equal(task.resultReceiptHash, null);
+      assert.equal(task.leaseToken, 'lease-full-review');
+    });
+  }
+
+  it('rejects malformed policy and issue scope before saving a report', async () => {
+    for (const invalid of ['policy', 'scope'] as const) {
+      const { repository, task, draft, finalizeInput } = await leasedFullReview();
+      const before = repository.getReviewReports().length;
+      const validatedResult = invalid === 'policy'
+        ? { ...draft, reviewPolicyVersionId: 'forged-policy' }
+        : { ...draft, issues: draft.issues.map((issue) => ({ ...issue, scopeRefs: ['foreign-chapter'] })) };
+      assert.equal((await repository.finalizeLeasedAction({ ...finalizeInput,
+        validatedResult: validatedResult as unknown as LeasedCreativeFinalizeInput['validatedResult']
+      })).outcome, 'applied');
+      assert.equal(task.status, TaskStatus.Failed);
+      assert.equal(task.errorCode, 'WORKER_PAYLOAD_UNSUPPORTED');
+      assert.equal(repository.getReviewReports().length, before);
+    }
+  });
+
+  it('fences cancelled or expired results and fails stale chapter sources', async () => {
+    const late = await leasedFullReview();
+    assert.equal((await late.repository.finalizeLeasedAction({ ...late.finalizeInput,
+      authoritativeNow: at(60) })).outcome, 'fenced');
+    late.task.status = TaskStatus.Cancelled;
+    assert.equal((await late.repository.finalizeLeasedAction(late.finalizeInput)).outcome, 'fenced');
+    assert.equal(late.repository.getReviewReports().filter((item) => item.sourceTaskId === late.task.id).length, 0);
+
+    const stale = await leasedFullReview();
+    const chapter = stale.repository.getNovelChapters().find((item) => item.novelId === stale.task.novelId);
+    assert.ok(chapter);
+    chapter.currentContentVersionId = 'replaced-content';
+    assert.equal((await stale.repository.finalizeLeasedAction(stale.finalizeInput)).outcome, 'applied');
+    assert.equal(stale.task.status, TaskStatus.Failed);
+    assert.equal(stale.task.errorCode, 'SOURCE_STALE');
+    assert.equal(stale.task.resultReceiptHash, null);
+    assert.equal(stale.repository.getReviewReports().filter((item) => item.sourceTaskId === stale.task.id).length, 0);
   });
 });

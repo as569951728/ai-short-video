@@ -8,6 +8,7 @@ import {
   StageStatus,
   TaskStatus,
   VersionStatus,
+  assertNoSensitiveExecutionPayload,
   type BodyBatchChapterResultDTO,
   type ChapterLengthGateDTO,
   type StructureAssetContentDTO,
@@ -30,6 +31,7 @@ import {
   type ChapterRewriteInput,
   type CreatedBodyBatchTaskRecord,
   type CreatedDirectionCandidatesRecord,
+  type DirectionCandidateDraft,
   type CreatedDirectionRevisionRecord,
   type CreatedDraftRecord,
   type CreatedImpactAssessmentRecord,
@@ -112,6 +114,7 @@ import {
 } from '../domain/novelDomain.js';
 import {
   isNovelProviderTaskType,
+  createSafeResultReceipt,
   matchGenerationAuthority,
   validateExecutionEnvelopeV1_1ForTask,
   verifyHashedSafeResultReceipt
@@ -843,6 +846,9 @@ export class PrismaNovelRepository implements NovelRepository {
             leaseExpiresAt: { gt: input.authoritativeNow },
             retryOfTaskId: null,
             providerAttemptPhase: expectedPhase,
+            ...(checkpoint.expectedPhase === 'prepared'
+              ? { providerCallBudgetUsed: 0, providerCallBudgetMax: { gt: 0 }, durationDeadlineAt: { gt: input.authoritativeNow } }
+              : {}),
             ...(checkpoint.expectedPhase === 'leased' || checkpoint.expectedPhase === 'prepared'
               ? { providerAttemptId: null, providerDispatchedAt: null }
               : { providerAttemptId: attemptId, providerDispatchedAt: { not: null } })
@@ -850,7 +856,8 @@ export class PrismaNovelRepository implements NovelRepository {
           data: {
             providerAttemptPhase: nextPhase,
             ...(checkpoint.expectedPhase === 'prepared'
-              ? { providerAttemptId: attemptId, providerDispatchedAt: input.authoritativeNow }
+              ? { providerAttemptId: attemptId, providerDispatchedAt: input.authoritativeNow,
+                  providerCallBudgetUsed: { increment: 1 } }
               : {}),
             updatedAt: input.authoritativeNow
           }
@@ -898,9 +905,149 @@ export class PrismaNovelRepository implements NovelRepository {
   }
 
   async finalizeLeasedAction(input: LeasedCreativeFinalizeInput) {
-    const task = await this.findTaskById(input.tenantId, input.taskId);
-    if (!task?.providerAttemptPhase) return { outcome: 'fenced' as const, task: null };
-    return this.failLeasedAction({ ...input, expectedPhase: task.providerAttemptPhase, reason: 'worker_payload_unsupported' });
+    const observed = await this.prisma.generationTask.findFirst({ where: { tenantId: input.tenantId, id: input.taskId } });
+    if (!observed) return { outcome: 'fenced' as const, task: null };
+    if (observed.taskType !== 'novel_direction_generate') {
+      const task = mapGenerationTask(observed);
+      if (!task.providerAttemptPhase) return { outcome: 'fenced' as const, task: null };
+      return this.failLeasedAction({ ...input, expectedPhase: task.providerAttemptPhase, reason: 'worker_payload_unsupported' });
+    }
+    if (!observed.novelId || !Number.isFinite(input.authoritativeNow.getTime())) return { outcome: 'fenced' as const, task: null };
+    let observedEnvelope: ReturnType<typeof validateExecutionEnvelopeV1_1ForTask> | null = null;
+    try {
+      observedEnvelope = validateExecutionEnvelopeV1_1ForTask(mapGenerationTask(observed));
+    } catch {
+      // A malformed envelope is terminal only if the same live lease still owns it under the row lock.
+    }
+    return this.prisma.$transaction(async (tx) => {
+      const authorityInput = observedEnvelope ? {
+        action: observedEnvelope.action, tenantId: observedEnvelope.tenantId, novelId: observedEnvelope.novelId,
+        objectId: observedEnvelope.objectId, sourceVersionRefs: observedEnvelope.sourceVersionRefs,
+        normalizedRequest: observedEnvelope.normalizedRequest
+      } : null;
+      if (authorityInput) await lockGenerationAuthority(tx, authorityInput);
+      else await lockNovelAuthorityRoot(tx, input.tenantId, observed.novelId!);
+      await tx.$queryRaw(Prisma.sql`SELECT id FROM generation_task WHERE tenant_id = ${input.tenantId} AND id = ${input.taskId} FOR UPDATE`);
+      const current = await tx.generationTask.findFirst({ where: { tenantId: input.tenantId, id: input.taskId } });
+      if (!current || current.novelId !== observed.novelId || current.taskType !== 'novel_direction_generate'
+        || current.status !== PrismaTaskStatus.PROCESSING || current.leaseOwnerId !== input.leaseOwnerId
+        || current.leaseToken !== input.leaseToken || !current.leaseExpiresAt
+        || current.leaseExpiresAt.getTime() <= input.authoritativeNow.getTime()
+        || current.providerAttemptPhase !== PrismaProviderAttemptPhase.PROVIDER_RESULT_VALIDATED
+        || typeof input.providerAttemptId !== 'string' || !input.providerAttemptId.trim()
+        || current.providerAttemptId !== input.providerAttemptId
+        || current.providerDispatchedAt === null || current.resultReceiptHash !== null
+        || current.retryOfTaskId !== null || current.cancelRequestedAt !== null
+        || current.providerCallBudgetUsed !== 1 || current.providerCallBudgetMax < 1
+        || current.durationDeadlineAt.getTime() <= input.authoritativeNow.getTime()) {
+        return { outcome: 'fenced' as const, task: null };
+      }
+      const fence = {
+        tenantId: input.tenantId, id: input.taskId, novelId: current.novelId,
+        taskType: 'novel_direction_generate', status: PrismaTaskStatus.PROCESSING,
+        leaseOwnerId: input.leaseOwnerId, leaseToken: input.leaseToken,
+        leaseExpiresAt: { gt: input.authoritativeNow }, providerAttemptId: input.providerAttemptId,
+        providerAttemptPhase: PrismaProviderAttemptPhase.PROVIDER_RESULT_VALIDATED,
+        providerDispatchedAt: { not: null }, providerCallBudgetUsed: 1,
+        providerCallBudgetMax: { gte: 1 }, durationDeadlineAt: { gt: input.authoritativeNow },
+        retryOfTaskId: null, cancelRequestedAt: null, resultReceiptHash: null
+      };
+      const requestId = `worker:${input.leaseOwnerId.slice(0, 110)}`;
+      const fail = async (reason: 'worker_payload_unsupported' | 'source_stale') => {
+        const failure = leasedActionFailure(reason);
+        const transition = await tx.generationTask.updateMany({ where: fence, data: leaseFailureData(failure, input.authoritativeNow) });
+        if (transition.count !== 1) return { outcome: 'fenced' as const, task: null };
+        const failed = await tx.generationTask.findFirstOrThrow({ where: { tenantId: input.tenantId, id: input.taskId } });
+        await createTaskEvent(tx, { task: failed, eventType: 'task_failed', message: failure.statusNote,
+          progress: failed.progress, requestId, createdAt: input.authoritativeNow });
+        await tx.operationLog.create({ data: {
+          tenantId: failed.tenantId, userId: failed.createdBy, novelId: failed.novelId,
+          action: 'generation_task_failed', objectType: 'generation_task', objectId: failed.id,
+          afterSnapshot: { failureCategory: failure.failureCategory, errorCode: failure.errorCode },
+          reason: failure.statusNote, sourceTaskId: failed.id, requestId, createdAt: input.authoritativeNow
+        } });
+        return { outcome: 'applied' as const, task: mapGenerationTask(failed) };
+      };
+      let envelope: ReturnType<typeof validateExecutionEnvelopeV1_1ForTask>;
+      try {
+        envelope = validateExecutionEnvelopeV1_1ForTask(mapGenerationTask(current));
+      } catch {
+        return fail('worker_payload_unsupported');
+      }
+      if (!observedEnvelope || !authorityInput || current.requestHash !== observed.requestHash
+        || envelope.sourceVersionRefs.authoritySnapshotHash !== observedEnvelope.sourceVersionRefs.authoritySnapshotHash) {
+        return fail('worker_payload_unsupported');
+      }
+      const authority = await this.loadGenerationAuthority(authorityInput, tx);
+      if (!matchGenerationAuthority(authorityInput, envelope.sourceVersionRefs.authoritySnapshotHash, authority).ok) {
+        return fail('source_stale');
+      }
+      const drafts = input.validatedResult;
+      if (!Array.isArray(drafts) || drafts.length < 1 || drafts.length > 10
+        || !drafts.every(validPrismaLeasedDirectionDraft)) return fail('worker_payload_unsupported');
+      try {
+        assertNoSensitiveExecutionPayload(drafts, 'directionCandidates');
+      } catch {
+        return fail('worker_payload_unsupported');
+      }
+      const candidates = drafts as DirectionCandidateDraft[];
+      const sourceDirectionId = authorityRecord(envelope.sourceVersionRefs).currentDirectionVersionId ?? null;
+      const firstVersionNo = await getNextDirectionVersionNo(tx, input.tenantId, current.novelId!);
+      const versions = [];
+      for (const [index, candidate] of candidates.entries()) {
+        versions.push(await tx.creativeVersion.create({ data: {
+          tenantId: input.tenantId, novelId: current.novelId!, objectType: 'direction', objectId: 'direction',
+          versionNo: firstVersionNo + index, status: PrismaVersionStatus.CANDIDATE, staleLevel: PrismaStaleLevel.NONE,
+          sourceType: 'mock_ai', sourceTaskId: current.id,
+          sourceVersionRefs: toJsonObject({ currentDirectionVersionId: sourceDirectionId }),
+          changeReason: '模型生成方向候选', contentJson: toJsonObject({
+            title: candidate.content.title, logline: candidate.content.logline,
+            coreHook: candidate.content.coreHook, audienceAppeal: candidate.content.audienceAppeal,
+            videoPotential: candidate.content.videoPotential, sellingPoints: candidate.content.sellingPoints,
+            riskTags: candidate.content.riskTags, recommendation: candidate.content.recommendation
+          }), summary: candidate.summary,
+          score: candidate.score, riskLevel: toPrismaRiskLevel(candidate.riskLevel),
+          promptTemplateVersionId: current.promptTemplateVersionId,
+          policyProfileVersionId: current.policyProfileVersionId, createdBy: current.createdBy,
+          createdAt: input.authoritativeNow,
+          metadata: { marketScore: candidate.marketScore, riskTags: candidate.riskTags,
+            recommendedReason: candidate.recommendedReason }
+        } }));
+      }
+      const receipt = createSafeResultReceipt(mapGenerationTask(current), {
+        status: 'waiting_confirmation', outcome: 'candidate_created', resultObjectType: 'creative_version',
+        resultObjectId: versions[0]!.id, resultVersionIds: versions.map((version) => version.id), resultCount: versions.length
+      });
+      const transition = await tx.generationTask.updateMany({ where: fence, data: {
+        status: PrismaTaskStatus.WAITING_CONFIRMATION, statusNote: '方向候选已生成，等待用户确认。',
+        progress: 100, currentStep: '方向候选已生成，等待选择', resultObjectType: receipt.receipt.resultObjectType,
+        resultObjectId: receipt.receipt.resultObjectId, resultVersionId: versions[0]!.id,
+        resultVersionIdsJson: receipt.receipt.resultVersionIds,
+        outputSummary: `${versions.length} 个方向候选已生成，等待用户采用。`,
+        resultReceiptHash: receipt.hash, providerAttemptPhase: PrismaProviderAttemptPhase.FINALIZING,
+        activeClaimKey: null, leaseOwnerId: null, leaseToken: null, leaseExpiresAt: null,
+        finishedAt: input.authoritativeNow, updatedAt: input.authoritativeNow
+      } });
+      if (transition.count !== 1) throw new Error('Direction finalize lost its fenced task transition.');
+      if (sourceDirectionId === null) {
+        const stageTransition = await tx.novel.updateMany({ where: {
+          tenantId: input.tenantId, id: current.novelId!, deletedAt: null,
+          lifecycleStatus: PrismaNovelLifecycleStatus.ACTIVE, currentDirectionVersionId: null
+        }, data: { creationStage: PrismaNovelCreationStage.DIRECTION,
+          stageStatus: PrismaStageStatus.WAITING_USER, updatedBy: current.createdBy, updatedAt: input.authoritativeNow } });
+        if (stageTransition.count !== 1) throw new Error('Direction finalize lost its novel stage transition.');
+      }
+      const finalized = await tx.generationTask.findFirstOrThrow({ where: { tenantId: input.tenantId, id: input.taskId } });
+      await createTaskEvent(tx, { task: finalized, eventType: 'task_finalized', message: finalized.statusNote!,
+        progress: 100, requestId, createdAt: input.authoritativeNow });
+      await tx.operationLog.create({ data: {
+        tenantId: input.tenantId, userId: current.createdBy, novelId: current.novelId,
+        action: 'generation_task_finalized', objectType: 'generation_task', objectId: current.id,
+        afterSnapshot: { resultVersionIds: receipt.receipt.resultVersionIds, receiptHash: receipt.hash },
+        reason: '方向候选生成完成', sourceTaskId: current.id, requestId, createdAt: input.authoritativeNow
+      } });
+      return { outcome: 'applied' as const, task: mapGenerationTask(finalized) };
+    });
   }
 
   async finalizeLeasedTask(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, authoritativeNow: Date, result: HashedSafeResultReceipt) {
@@ -950,6 +1097,36 @@ export class PrismaNovelRepository implements NovelRepository {
     });
   }
 
+  async listExpiredTaskLeases(authoritativeNow: Date, limit: number): Promise<ObservedTaskLease[]> {
+    const take = Number.isInteger(limit) ? Math.min(Math.max(limit, 0), 100) : 0;
+    if (take === 0) return [];
+    const rows = await this.prisma.generationTask.findMany({
+      where: {
+        status: PrismaTaskStatus.PROCESSING,
+        leaseOwnerId: { not: null }, leaseToken: { not: null },
+        leaseExpiresAt: { lte: authoritativeNow }
+      },
+      select: { tenantId: true, id: true, leaseOwnerId: true, leaseToken: true, leaseExpiresAt: true },
+      orderBy: [{ leaseExpiresAt: 'asc' }, { id: 'asc' }],
+      take
+    });
+    return rows.flatMap((row) => row.leaseOwnerId && row.leaseToken && row.leaseExpiresAt
+      ? [{ tenantId: row.tenantId, taskId: row.id, leaseOwnerId: row.leaseOwnerId,
+        leaseToken: row.leaseToken, leaseExpiresAt: row.leaseExpiresAt }]
+      : []);
+  }
+
+  async getAuthoritativeTaskTime(): Promise<Date> {
+    const rows = await this.prisma.$queryRaw<Array<{ now_ms: bigint | number | string }>>`
+      SELECT CAST(ROUND(UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3)) * 1000) AS UNSIGNED) AS now_ms
+    `;
+    const milliseconds = Number(rows[0]?.now_ms);
+    if (!Number.isSafeInteger(milliseconds) || milliseconds <= 0) {
+      throw new Error('Database clock is unavailable.');
+    }
+    return new Date(milliseconds);
+  }
+
   async recoverExpiredTask(observed: ObservedTaskLease, authoritativeNow: Date) {
     return this.prisma.$transaction(async (tx) => {
       const current = await tx.generationTask.findFirst({ where: {
@@ -957,17 +1134,23 @@ export class PrismaNovelRepository implements NovelRepository {
         leaseOwnerId: observed.leaseOwnerId, leaseToken: observed.leaseToken, leaseExpiresAt: observed.leaseExpiresAt
       } });
       if (!current || current.leaseExpiresAt === null || current.leaseExpiresAt.getTime() > authoritativeNow.getTime()) return { outcome: 'not_recovered' as const, task: null };
+      let envelopeValid = true;
       try {
         validateExecutionEnvelopeV1_1ForTask(mapGenerationTask(current));
       } catch {
-        return { outcome: 'not_recovered' as const, task: null };
+        envelopeValid = false;
       }
-      const dispatched = current.providerDispatchedAt !== null;
+      const dispatched = current.providerDispatchedAt !== null || current.providerAttemptId !== null
+        || current.providerCallBudgetUsed > 0
+        || (current.providerAttemptPhase !== null
+          && current.providerAttemptPhase !== PrismaProviderAttemptPhase.LEASED
+          && current.providerAttemptPhase !== PrismaProviderAttemptPhase.PREPARED);
       const failure = {
-        failureCategory: dispatched ? 'provider_outcome_unknown' : 'worker_lease_expired',
-        errorCode: dispatched ? 'PROVIDER_OUTCOME_UNKNOWN' : 'WORKER_LEASE_EXPIRED',
-        errorMessage: dispatched ? 'Provider outcome is unknown.' : 'Worker lease expired.',
-        statusNote: dispatched ? 'Provider 结果未知，禁止自动重放。' : 'Worker 租约已过期。'
+        failureCategory: dispatched ? 'provider_outcome_unknown' : envelopeValid ? 'worker_lease_expired' : 'worker_payload_unsupported',
+        errorCode: dispatched ? 'PROVIDER_OUTCOME_UNKNOWN' : envelopeValid ? 'WORKER_LEASE_EXPIRED' : 'WORKER_PAYLOAD_UNSUPPORTED',
+        errorMessage: dispatched ? 'Provider outcome is unknown.' : envelopeValid ? 'Worker lease expired.' : 'Execution envelope is invalid.',
+        statusNote: dispatched ? 'Provider 结果未知，禁止自动重放。'
+          : envelopeValid ? 'Worker 租约已过期。' : '任务执行合同无效，已安全结束。'
       };
       const transition = await tx.generationTask.updateMany({
         where: {
@@ -980,6 +1163,12 @@ export class PrismaNovelRepository implements NovelRepository {
       if (transition.count !== 1) return { outcome: 'not_recovered' as const, task: null };
       const task = await tx.generationTask.findFirstOrThrow({ where: { tenantId: observed.tenantId, id: observed.taskId } });
       await createTaskEvent(tx, { task, eventType: 'task_recovered', message: failure.statusNote, progress: task.progress, requestId: 'worker:recovery', createdAt: authoritativeNow });
+      await tx.operationLog.create({ data: {
+        tenantId: task.tenantId, userId: task.createdBy, novelId: task.novelId,
+        action: 'generation_task_recovered', objectType: 'generation_task', objectId: task.id,
+        afterSnapshot: { failureCategory: failure.failureCategory, errorCode: failure.errorCode },
+        reason: failure.statusNote, sourceTaskId: task.id, requestId: 'worker:recovery', createdAt: authoritativeNow
+      } });
       return { outcome: 'recovered' as const, task: mapGenerationTask(task) };
     });
   }
@@ -5262,6 +5451,21 @@ function toDirectionContent(value: unknown) {
     riskTags: [],
     recommendation: ''
   };
+}
+
+function validPrismaLeasedDirectionDraft(value: unknown): value is DirectionCandidateDraft {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const draft = value as Record<string, unknown>;
+  const content = authorityRecord(draft.content);
+  const text = (item: unknown, max = 10000) => typeof item === 'string' && item.trim().length > 0 && item.length <= max;
+  const strings = (item: unknown) => Array.isArray(item) && item.length <= 30 && item.every((part) => text(part, 2000));
+  const score = (item: unknown) => typeof item === 'number' && Number.isFinite(item) && item >= 0 && item <= 100;
+  return text(draft.title, 200) && text(draft.summary) && text(draft.recommendedReason)
+    && score(draft.score) && score(draft.marketScore)
+    && Object.values(RiskLevel).includes(draft.riskLevel as RiskLevel) && strings(draft.riskTags)
+    && text(content.title, 200) && text(content.logline) && text(content.coreHook)
+    && text(content.audienceAppeal) && text(content.videoPotential)
+    && strings(content.sellingPoints) && strings(content.riskTags) && text(content.recommendation);
 }
 
 function bodyBatchFromTaskMetadata(metadata: unknown, tenantId: string, novelId: string): BodyBatchRecord | null {
