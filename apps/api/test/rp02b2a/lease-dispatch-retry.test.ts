@@ -5,6 +5,7 @@ import { buildApp } from '../../src/app.js';
 import { createInMemoryNovelRepository } from '../../src/modules/novels/repositories/inMemoryNovelRepository.js';
 import { PrismaNovelRepository } from '../../src/modules/novels/repositories/prismaNovelRepository.js';
 import { preflightLeasedAction } from '../../src/modules/novels/services/taskClaim.js';
+import { validateExecutionEnvelopeV1_1ForTask } from '../../src/modules/novels/domain/executionContract.js';
 import { listActionExecutionPlans } from '../../src/modules/novels/services/actionExecutionPlan.js';
 
 const at = (seconds: number) => new Date(Date.UTC(2030, 0, 1, 0, 0, seconds));
@@ -199,21 +200,33 @@ describe('RP-02B2a3 leased dispatch checkpoint', () => {
   });
 
   it('guards Prisma dispatch with a single paid-call budget and deadline in the same CAS', async () => {
+    const { repository: source, task } = await queuedTask();
+    const envelope = validateExecutionEnvelopeV1_1ForTask(task);
+    const authority = await source.loadGenerationAuthority({ action: envelope.action, tenantId: envelope.tenantId,
+      novelId: envelope.novelId, objectId: envelope.objectId, sourceVersionRefs: envelope.sourceVersionRefs,
+      normalizedRequest: envelope.normalizedRequest });
+    assert.ok(authority);
+    const row = { ...task, status: 'PROCESSING', providerAttemptPhase: 'PREPARED',
+      leaseOwnerId: 'worker-1', leaseToken: 'lease-1', leaseExpiresAt: at(30),
+      resultVersionId: null, resultVersionIdsJson: [], costBudgetMicrosMax: BigInt(0), costBudgetMicrosUsed: BigInt(0) };
     const updates: Array<{ where: Record<string, unknown>; data: Record<string, unknown> }> = [];
     const repository = Object.create(PrismaNovelRepository.prototype) as PrismaNovelRepository & { prisma: unknown };
     Object.defineProperty(repository, 'prisma', { value: {
+      generationTask: { findFirst: async () => row },
       $transaction: async (callback: (tx: unknown) => Promise<unknown>) => callback({
+        $queryRaw: async () => [],
         generationTask: {
+          findFirst: async () => row,
           updateMany: async (query: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
             updates.push(query);
             return { count: 0 };
           },
-          findFirstOrThrow: async () => { throw new Error('Fenced dispatch must not read a task'); }
         }
       })
     } });
+    repository.loadGenerationAuthority = async () => authority;
     const input = {
-      tenantId: 'tenant-1', taskId: 'task-1', leaseOwnerId: 'worker-1', leaseToken: 'lease-1',
+      tenantId: task.tenantId, taskId: task.id, leaseOwnerId: 'worker-1', leaseToken: 'lease-1',
       authoritativeNow: at(10), checkpoint: {
         expectedPhase: 'prepared' as const, nextPhase: 'provider_call_started' as const,
         providerAttemptId: 'attempt-1'
@@ -261,6 +274,92 @@ describe('RP-02B2a3 leased dispatch checkpoint', () => {
       expectedPhase: 'provider_call_started', nextPhase: 'provider_result_validated', providerAttemptId: 'attempt-1'
     } })).outcome, 'fenced');
     assert.equal((await repository.recoverExpiredTask({ ...base, leaseExpiresAt: at(60) }, at(60))).task?.errorCode, 'PROVIDER_OUTCOME_UNKNOWN');
+  });
+
+  it('atomically rechecks authority before reserving the only paid call', async () => {
+    const { repository, task } = await queuedTask();
+    await repository.leaseNextQueuedTask('worker-authority', 'lease-authority', at(0), at(60));
+    const base = { tenantId: task.tenantId, taskId: task.id, leaseOwnerId: 'worker-authority',
+      leaseToken: 'lease-authority' };
+    assert.equal((await repository.checkpointLeasedTask({ ...base, authoritativeNow: at(1),
+      checkpoint: { expectedPhase: 'leased', nextPhase: 'prepared' } })).outcome, 'applied');
+    const beforeEvents = repository.getGenerationTaskEvents().length;
+    const beforeLogs = repository.getOperationLogs().length;
+    repository.getPreferences()[0]!.targetAudience = '另一个读者群';
+    const dispatched = await repository.dispatchLeasedTask({ ...base, authoritativeNow: at(2),
+      providerAttemptId: 'attempt-stale' });
+    assert.equal(dispatched.outcome, 'applied');
+    assert.equal(task.status, TaskStatus.Failed);
+    assert.equal(task.errorCode, 'SOURCE_STALE');
+    assert.equal(task.providerCallBudgetUsed, 0);
+    assert.equal(task.providerAttemptId, null);
+    assert.equal(task.providerDispatchedAt, null);
+    assert.equal(repository.getGenerationTaskEvents().length, beforeEvents + 1);
+    assert.equal(repository.getOperationLogs().length, beforeLogs + 1);
+    assert.equal((await repository.dispatchLeasedTask({ ...base, authoritativeNow: at(3),
+      providerAttemptId: 'attempt-stale' })).outcome, 'fenced');
+    assert.equal(repository.getGenerationTaskEvents().length, beforeEvents + 1);
+  });
+
+  it('reserves exactly one attempt after matching current authority and fences replay', async () => {
+    const { repository, task } = await queuedTask();
+    await repository.leaseNextQueuedTask('worker-valid', 'lease-valid', at(0), at(60));
+    const base = { tenantId: task.tenantId, taskId: task.id, leaseOwnerId: 'worker-valid', leaseToken: 'lease-valid' };
+    assert.equal((await repository.checkpointLeasedTask({ ...base, authoritativeNow: at(1),
+      checkpoint: { expectedPhase: 'leased', nextPhase: 'prepared' } })).outcome, 'applied');
+    assert.equal((await repository.dispatchLeasedTask({ ...base, authoritativeNow: at(2),
+      providerAttemptId: 'attempt-valid' })).outcome, 'applied');
+    assert.equal(task.providerCallBudgetUsed, 1);
+    assert.equal(task.providerAttemptId, 'attempt-valid');
+    assert.equal(task.providerAttemptPhase, 'provider_call_started');
+    assert.equal((await repository.dispatchLeasedTask({ ...base, authoritativeNow: at(3),
+      providerAttemptId: 'attempt-replay' })).outcome, 'fenced');
+    assert.equal(task.providerCallBudgetUsed, 1);
+    assert.equal(task.providerAttemptId, 'attempt-valid');
+  });
+
+  it('locks Prisma authority and task before failing stale dispatch with zero paid calls', async () => {
+    const { task } = await queuedTask();
+    const row = { ...task, status: 'PROCESSING', providerAttemptPhase: 'PREPARED',
+      leaseOwnerId: 'worker-prisma', leaseToken: 'lease-prisma', leaseExpiresAt: at(60),
+      resultVersionId: null, resultVersionIdsJson: [], costBudgetMicrosMax: BigInt(0), costBudgetMicrosUsed: BigInt(0) };
+    const locks: unknown[] = [];
+    const events: unknown[] = [];
+    const logs: unknown[] = [];
+    const updates: Array<{ where: Record<string, unknown>; data: Record<string, unknown> }> = [];
+    const repository = Object.create(PrismaNovelRepository.prototype) as PrismaNovelRepository & { prisma: unknown };
+    Object.defineProperty(repository, 'prisma', { value: {
+      generationTask: { findFirst: async () => row },
+      $transaction: async (callback: (tx: unknown) => Promise<unknown>) => callback({
+        $queryRaw: async (query: unknown) => { locks.push(query); return []; },
+        generationTask: {
+          findFirst: async () => row,
+          findFirstOrThrow: async () => row,
+          updateMany: async (query: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
+            updates.push(query);
+            Object.assign(row, query.data);
+            return { count: 1 };
+          }
+        },
+        generationTaskEvent: { create: async (input: unknown) => { events.push(input); } },
+        operationLog: { create: async (input: unknown) => { logs.push(input); } }
+      })
+    } });
+    repository.loadGenerationAuthority = async () => null;
+    const result = await repository.dispatchLeasedTask({ tenantId: task.tenantId, taskId: task.id,
+      leaseOwnerId: 'worker-prisma', leaseToken: 'lease-prisma', authoritativeNow: at(2),
+      providerAttemptId: 'attempt-prisma' });
+    assert.equal(result.outcome, 'applied');
+    assert.ok(locks.length >= 2);
+    assert.equal(updates.length, 1);
+    assert.equal(updates[0]?.where.providerCallBudgetUsed, 0);
+    assert.equal(row.providerCallBudgetUsed, 0);
+    assert.equal(row.providerAttemptId, null);
+    assert.equal(row.providerDispatchedAt, null);
+    assert.equal(row.status, 'FAILED');
+    assert.equal(row.errorCode, 'SOURCE_STALE');
+    assert.equal(events.length, 1);
+    assert.equal(logs.length, 1);
   });
 
   it('recovers an expired pre-dispatch lease without claiming that the provider ran', async () => {

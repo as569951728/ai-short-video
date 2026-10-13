@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { GenerationTaskRecord } from '../../src/modules/novels/domain/novelDomain.js';
 import {
+  NovelTaskLeaseAbandonedError,
   NovelTaskWorkerRuntime,
   type NovelTaskWorkerScheduler
 } from '../../src/modules/novels/services/novelTaskWorkerRuntime.js';
@@ -191,6 +192,78 @@ describe('novel task worker runtime (injected execute/settle only)', () => {
     await h.scheduler.advance(100);
     assert.deepEqual(h.heartbeats, [10]);
     assert.deepEqual(h.settled, []);
+  });
+
+  it('waits for an in-flight repository checkpoint before abandoning the lease', async () => {
+    const scheduler = new ManualScheduler();
+    const entered = new Deferred<void>();
+    const release = new Deferred<void>();
+    let writes = 0;
+    let settlements = 0;
+    let signal: AbortSignal | null = null;
+    const runtime = new NovelTaskWorkerRuntime<string>({
+      repository: {
+        leaseNextQueuedTask: async (owner, token, _now, until) => {
+          const leased = task(); leased.leaseOwnerId = owner; leased.leaseToken = token; leased.leaseExpiresAt = until;
+          return leased;
+        },
+        heartbeatTask: async () => true
+      },
+      clock: { now: () => new Date(scheduler.nowMs) }, scheduler, workerId: 'worker-1',
+      policy: { workerConcurrency: 1, leaseDurationMs: 90, heartbeatIntervalMs: 10,
+        pollIntervalMs: 100, shutdownGracePeriodMs: 20 },
+      execute: async (context) => {
+        signal = context.signal;
+        await context.mutate(async () => { entered.resolve(); await release.promise; writes += 1; });
+        return 'late result';
+      },
+      settle: async () => { settlements += 1; }
+    });
+    runtime.start();
+    await scheduler.advance(0);
+    await entered.promise;
+    const stopping = runtime.stop();
+    await scheduler.advance(20);
+    assert.equal(runtime.snapshot().state, 'stopping');
+    assert.equal(signal?.aborted, true);
+    release.resolve();
+    await stopping;
+    assert.equal(writes, 1);
+    assert.equal(settlements, 0);
+    assert.equal(runtime.snapshot().state, 'stopped');
+  });
+
+  it('refuses a repository mutation attempted after abandonment', async () => {
+    const scheduler = new ManualScheduler();
+    const execution = new Deferred<string>();
+    let writes = 0;
+    let lateMutation: () => Promise<void> = async () => {};
+    const runtime = new NovelTaskWorkerRuntime<string>({
+      repository: {
+        leaseNextQueuedTask: async (owner, token, _now, until) => {
+          const leased = task(); leased.leaseOwnerId = owner; leased.leaseToken = token; leased.leaseExpiresAt = until;
+          return leased;
+        },
+        heartbeatTask: async () => true
+      },
+      clock: { now: () => new Date(scheduler.nowMs) }, scheduler, workerId: 'worker-1',
+      policy: { workerConcurrency: 1, leaseDurationMs: 90, heartbeatIntervalMs: 10,
+        pollIntervalMs: 100, shutdownGracePeriodMs: 20 },
+      execute: async ({ mutate }) => {
+        lateMutation = () => mutate(async () => { writes += 1; });
+        return execution.promise;
+      },
+      settle: async () => { throw new Error('late result must not settle'); }
+    });
+    runtime.start();
+    await scheduler.advance(0);
+    const stopping = runtime.stop();
+    await scheduler.advance(20);
+    await stopping;
+    await assert.rejects(lateMutation(), NovelTaskLeaseAbandonedError);
+    execution.resolve('late result');
+    await scheduler.flush();
+    assert.equal(writes, 0);
   });
 
   it('waits for the single fenced settlement when settlement wins the grace race', async () => {

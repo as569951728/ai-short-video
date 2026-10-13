@@ -59,6 +59,7 @@ async function leasedDirection(onLeasedFinalizeStage?: (stage: FinalizeStage) =>
     task.resultReceiptHash = null;
     task.providerCallBudgetUsed = 0;
     task.providerCallBudgetMax = 1;
+    task.durationDeadlineAt = at(120);
     const lease = await repository.leaseNextQueuedTask('worker-finalize', 'lease-finalize', at(0), at(60));
     assert.equal(lease?.id, task.id);
     const base = { tenantId: task.tenantId, taskId: task.id, leaseOwnerId: 'worker-finalize', leaseToken: 'lease-finalize' };
@@ -136,6 +137,7 @@ async function leasedStructure(objectType: StructureAssetType, onLeasedFinalizeS
     task.resultReceiptHash = null;
     task.providerCallBudgetUsed = 0;
     task.providerCallBudgetMax = 1;
+    task.durationDeadlineAt = at(120);
     assert.equal((await repository.leaseNextQueuedTask('worker-structure', 'lease-structure', at(0), at(60)))?.id, task.id);
     const base = { tenantId: task.tenantId, taskId: task.id, leaseOwnerId: 'worker-structure', leaseToken: 'lease-structure' };
     assert.equal((await repository.checkpointLeasedTask({ ...base, authoritativeNow: at(1), checkpoint: {
@@ -177,6 +179,7 @@ async function leasedTrialOne(onLeasedFinalizeStage?: (stage: FinalizeStage) => 
     task.resultReceiptHash = null;
     task.providerCallBudgetUsed = 0;
     task.providerCallBudgetMax = 1;
+    task.durationDeadlineAt = at(120);
     assert.equal((await repository.leaseNextQueuedTask('worker-trial', 'lease-trial', at(0), at(60)))?.id, task.id);
     const base = { tenantId: task.tenantId, taskId: task.id, leaseOwnerId: 'worker-trial', leaseToken: 'lease-trial' };
     assert.equal((await repository.checkpointLeasedTask({ ...base, authoritativeNow: at(1), checkpoint: {
@@ -245,6 +248,7 @@ async function leasedTrialFollowup(onLeasedFinalizeStage?: (stage: FinalizeStage
     task.resultReceiptHash = null;
     task.providerCallBudgetUsed = 0;
     task.providerCallBudgetMax = 1;
+    task.durationDeadlineAt = at(120);
     assert.equal((await repository.leaseNextQueuedTask('worker-followup', 'lease-followup', at(0), at(60)))?.id, task.id);
     const base = { tenantId: task.tenantId, taskId: task.id, leaseOwnerId: 'worker-followup', leaseToken: 'lease-followup' };
     assert.equal((await repository.checkpointLeasedTask({ ...base, authoritativeNow: at(1), checkpoint: {
@@ -296,6 +300,7 @@ async function leasedFullReview(onLeasedFinalizeStage?: (stage: FinalizeStage) =
     task.resultReceiptHash = null;
     task.providerCallBudgetUsed = 0;
     task.providerCallBudgetMax = 1;
+    task.durationDeadlineAt = at(120);
     assert.equal((await repository.leaseNextQueuedTask('worker-full-review', 'lease-full-review', at(0), at(60)))?.id, task.id);
     const base = { tenantId: task.tenantId, taskId: task.id,
       leaseOwnerId: 'worker-full-review', leaseToken: 'lease-full-review' };
@@ -340,6 +345,7 @@ async function leasedImpactAssessment(onLeasedFinalizeStage?: (stage: FinalizeSt
     task.resultReceiptHash = null;
     task.providerCallBudgetUsed = 0;
     task.providerCallBudgetMax = 1;
+    task.durationDeadlineAt = at(120);
     task.resultObjectType = null;
     task.resultObjectId = null;
     task.resultVersionIds = [];
@@ -393,6 +399,7 @@ async function leasedAdoptImpactAssessment(onLeasedFinalizeStage?: (stage: Final
     task.resultReceiptHash = null;
     task.providerCallBudgetUsed = 0;
     task.providerCallBudgetMax = 1;
+    task.durationDeadlineAt = at(120);
     task.resultObjectType = null;
     task.resultObjectId = null;
     task.resultVersionIds = [];
@@ -443,6 +450,7 @@ async function leasedChapterRewrite(onLeasedFinalizeStage?: (stage: FinalizeStag
     task.resultReceiptHash = null;
     task.providerCallBudgetUsed = 0;
     task.providerCallBudgetMax = 1;
+    task.durationDeadlineAt = at(120);
     task.resultObjectType = null;
     task.resultObjectId = null;
     task.resultVersionIds = [];
@@ -505,6 +513,7 @@ async function leasedOverlengthRevision(onLeasedFinalizeStage?: (stage: Finalize
     task.resultReceiptHash = null;
     task.providerCallBudgetUsed = 0;
     task.providerCallBudgetMax = 1;
+    task.durationDeadlineAt = at(120);
     task.resultObjectType = null;
     task.resultObjectId = null;
     task.resultVersionIds = [];
@@ -568,6 +577,7 @@ async function leasedBody(action: 'chapter_body_generate' | 'body_batch_generate
     task.resultReceiptHash = null;
     task.providerCallBudgetUsed = 0;
     task.providerCallBudgetMax = 1;
+    task.durationDeadlineAt = at(120);
     task.resultObjectType = null;
     task.resultObjectId = null;
     task.resultVersionIds = [];

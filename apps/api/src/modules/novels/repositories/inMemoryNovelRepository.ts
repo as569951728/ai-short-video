@@ -79,6 +79,7 @@ import {
   type HashedSafeResultReceipt,
   type LeasedTaskFailure,
   type LeasedTaskCheckpointInput,
+  type LeasedProviderDispatchInput,
   type LeasedActionFailureInput,
   type LeasedCreativeFinalizeInput,
   type ObservedTaskLease,
@@ -1276,6 +1277,9 @@ export function createInMemoryNovelRepository(options: {
     },
 
     async checkpointLeasedTask(input: LeasedTaskCheckpointInput) {
+      if (input.checkpoint.expectedPhase === 'prepared') {
+        return this.dispatchLeasedTask({ ...input, providerAttemptId: input.checkpoint.providerAttemptId });
+      }
       const task = validLease(input.tenantId, input.taskId, input.leaseOwnerId, input.leaseToken, input.authoritativeNow);
       if (!task || task.providerAttemptPhase !== input.checkpoint.expectedPhase || task.retryOfTaskId !== null) {
         return { outcome: 'fenced' as const, task: null };
@@ -1284,22 +1288,6 @@ export function createInMemoryNovelRepository(options: {
       if (checkpoint.expectedPhase === 'leased') {
         if (task.providerAttemptId !== null || task.providerDispatchedAt !== null) return { outcome: 'fenced' as const, task: null };
         task.providerAttemptPhase = 'prepared';
-      } else if (checkpoint.expectedPhase === 'prepared') {
-        const budgetMax = task.providerCallBudgetMax;
-        const budgetUsed = task.providerCallBudgetUsed;
-        if (!checkpoint.providerAttemptId.trim() || task.providerAttemptId !== null || task.providerDispatchedAt !== null ||
-          typeof budgetMax !== 'number' || typeof budgetUsed !== 'number' ||
-          !Number.isSafeInteger(budgetMax) || !Number.isSafeInteger(budgetUsed)
-          || budgetMax < 1 || budgetUsed < 0
-          || budgetUsed >= budgetMax ||
-          generationTasks.some((other) => other.id !== task.id && other.tenantId === task.tenantId && other.providerAttemptId === checkpoint.providerAttemptId)) {
-          return { outcome: 'fenced' as const, task: null };
-        }
-        task.providerCallBudgetUsed = budgetUsed + 1;
-        task.providerAttemptId = checkpoint.providerAttemptId;
-        task.providerDispatchedAt = input.authoritativeNow;
-        task.providerAttemptPhase = 'provider_call_started';
-        appendLeaseEvent(task, 'calling_model', '正在调用模型。', input.authoritativeNow);
       } else {
         if (!checkpoint.providerAttemptId.trim() || task.providerAttemptId !== checkpoint.providerAttemptId || task.providerDispatchedAt === null) {
           return { outcome: 'fenced' as const, task: null };
@@ -1307,6 +1295,41 @@ export function createInMemoryNovelRepository(options: {
         task.providerAttemptPhase = 'provider_result_validated';
       }
       task.updatedAt = input.authoritativeNow;
+      return { outcome: 'applied' as const, task };
+    },
+
+    async dispatchLeasedTask(input: LeasedProviderDispatchInput) {
+      const task = validLease(input.tenantId, input.taskId, input.leaseOwnerId, input.leaseToken, input.authoritativeNow);
+      if (!task || task.providerAttemptPhase !== 'prepared' || task.providerAttemptId !== null
+        || task.providerDispatchedAt !== null || task.retryOfTaskId !== null || task.cancelRequestedAt !== null
+        || !task.durationDeadlineAt || task.durationDeadlineAt.getTime() <= input.authoritativeNow.getTime()
+        || !input.providerAttemptId.trim() || task.providerCallBudgetUsed !== 0
+        || typeof task.providerCallBudgetMax !== 'number' || !Number.isSafeInteger(task.providerCallBudgetMax)
+        || task.providerCallBudgetMax < 1 || generationTasks.some((other) => other.id !== task.id
+          && other.tenantId === task.tenantId && other.providerAttemptId === input.providerAttemptId)) {
+        return { outcome: 'fenced' as const, task: null };
+      }
+      let envelope;
+      try {
+        envelope = validateExecutionEnvelopeV1_1ForTask(task);
+      } catch {
+        return this.failLeasedAction({ ...input, expectedPhase: 'prepared', reason: 'worker_payload_unsupported' });
+      }
+      const authorityInput = {
+        action: envelope.action, tenantId: envelope.tenantId, novelId: envelope.novelId,
+        objectId: envelope.objectId, sourceVersionRefs: envelope.sourceVersionRefs,
+        normalizedRequest: envelope.normalizedRequest
+      };
+      const authority = loadAuthority(authorityInput);
+      if (!matchGenerationAuthority(authorityInput, envelope.sourceVersionRefs.authoritySnapshotHash, authority).ok) {
+        return this.failLeasedAction({ ...input, expectedPhase: 'prepared', reason: 'source_stale' });
+      }
+      task.providerCallBudgetUsed = 1;
+      task.providerAttemptId = input.providerAttemptId;
+      task.providerDispatchedAt = input.authoritativeNow;
+      task.providerAttemptPhase = 'provider_call_started';
+      task.updatedAt = input.authoritativeNow;
+      appendLeaseEvent(task, 'calling_model', '正在调用模型。', input.authoritativeNow);
       return { outcome: 'applied' as const, task };
     },
 

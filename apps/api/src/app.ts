@@ -8,6 +8,7 @@ import { registerVideoRoutes } from './modules/videos/routes/videoRoutes.js';
 import { toErrorResponse } from './shared/errors.js';
 import type { LlmClient } from './modules/ai/llmClient.js';
 import type { AiProviderEnv } from './modules/ai/modelRouting.js';
+import { resolveAiProviderMode } from './modules/ai/modelRouting.js';
 import type { NovelRepository, RequestContextResolver } from './modules/novels/domain/novelDomain.js';
 import type { VideoRepository } from './modules/videos/domain/videoDomain.js';
 import { createNovelProvidersFromEnv } from './modules/novels/providers/providerFactory.js';
@@ -19,6 +20,10 @@ import { createInMemoryVideoRepository } from './modules/videos/repositories/inM
 import { PrismaNovelRepository } from './modules/novels/repositories/prismaNovelRepository.js';
 import { PrismaVideoRepository } from './modules/videos/repositories/prismaVideoRepository.js';
 import { env } from './config/env.js';
+import {
+  createCapabilityPolicySnapshotResolver,
+  type AsyncTransportPolicySource
+} from './modules/novels/services/asyncTransportCapability.js';
 
 interface BuildAppOptions {
   logger?: boolean;
@@ -31,6 +36,7 @@ interface BuildAppOptions {
   hotspotReferenceGateway?: HotspotReferenceGateway;
   now?: () => Date;
   requestContextResolver?: RequestContextResolver | null;
+  asyncTransportPolicy?: AsyncTransportPolicySource;
   enableAcceptanceSeeds?: boolean;
 }
 
@@ -83,6 +89,13 @@ export async function buildApp(options: BuildAppOptions = {}) {
     env: options.aiProviderEnv,
     llmClient: options.llmClient
   });
+  const capabilityPolicySnapshotResolver = createCapabilityPolicySnapshotResolver({
+    policy: options.asyncTransportPolicy ?? { novelAsyncDispatchEnabled: false },
+    runtimeEnvironment: env.NODE_ENV,
+    providerMode: resolveAiProviderMode(options.aiProviderEnv),
+    requestContextResolver: options.requestContextResolver ?? undefined,
+    now: options.now
+  });
   await registerNovelRoutes(app, {
     repository: novelRepository,
     ...novelProviders,
@@ -91,6 +104,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     hotspotReferenceGateway: options.hotspotReferenceGateway,
     now: options.now,
     requestContextResolver: options.requestContextResolver ?? undefined,
+    capabilityPolicySnapshotResolver,
     acceptanceSeeds: {
       enabled: acceptanceSeedsEnabled
     }

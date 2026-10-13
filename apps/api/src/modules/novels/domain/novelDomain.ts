@@ -641,6 +641,15 @@ export interface LeasedTaskCheckpointInput {
   checkpoint: LeasedTaskCheckpoint;
 }
 
+export interface LeasedProviderDispatchInput {
+  tenantId: string;
+  taskId: string;
+  leaseOwnerId: string;
+  leaseToken: string;
+  authoritativeNow: Date;
+  providerAttemptId: string;
+}
+
 export interface LeasedActionFailureInput {
   tenantId: string;
   taskId: string;
@@ -1364,6 +1373,7 @@ export interface NovelRepository {
   leaseNextQueuedTask(workerId: string, leaseToken: string, now: Date, leaseUntil: Date): Promise<GenerationTaskRecord | null>;
   heartbeatTask(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, now: Date, leaseUntil: Date): Promise<boolean>;
   checkpointLeasedTask(input: LeasedTaskCheckpointInput): Promise<LeasedTaskMutationResult>;
+  dispatchLeasedTask(input: LeasedProviderDispatchInput): Promise<LeasedTaskMutationResult>;
   failLeasedAction(input: LeasedActionFailureInput): Promise<LeasedTaskMutationResult>;
   finalizeLeasedAction(input: LeasedCreativeFinalizeInput): Promise<LeasedTaskMutationResult>;
   finalizeLeasedTask(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, authoritativeNow: Date, result: HashedSafeResultReceipt): Promise<LeasedTaskMutationResult>;

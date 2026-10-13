@@ -49,6 +49,7 @@ import {
   type HashedSafeResultReceipt,
   type LeasedTaskFailure,
   type LeasedTaskCheckpointInput,
+  type LeasedProviderDispatchInput,
   type LeasedActionFailureInput,
   type LeasedCreativeFinalizeInput,
   type ObservedTaskLease,
@@ -839,6 +840,9 @@ export class PrismaNovelRepository implements NovelRepository {
 
   async checkpointLeasedTask(input: LeasedTaskCheckpointInput) {
     const checkpoint = input.checkpoint;
+    if (checkpoint.expectedPhase === 'prepared') {
+      return this.dispatchLeasedTask({ ...input, providerAttemptId: checkpoint.providerAttemptId });
+    }
     const expectedPhase = checkpoint.expectedPhase.toUpperCase() as PrismaProviderAttemptPhase;
     const nextPhase = checkpoint.nextPhase.toUpperCase() as PrismaProviderAttemptPhase;
     const attemptId = checkpoint.expectedPhase === 'leased' ? null : checkpoint.providerAttemptId.trim();
@@ -855,29 +859,105 @@ export class PrismaNovelRepository implements NovelRepository {
             leaseExpiresAt: { gt: input.authoritativeNow },
             retryOfTaskId: null,
             providerAttemptPhase: expectedPhase,
-            ...(checkpoint.expectedPhase === 'prepared'
-              ? { providerCallBudgetUsed: 0, providerCallBudgetMax: { gt: 0 }, durationDeadlineAt: { gt: input.authoritativeNow } }
-              : {}),
-            ...(checkpoint.expectedPhase === 'leased' || checkpoint.expectedPhase === 'prepared'
+            ...(checkpoint.expectedPhase === 'leased'
               ? { providerAttemptId: null, providerDispatchedAt: null }
               : { providerAttemptId: attemptId, providerDispatchedAt: { not: null } })
           },
           data: {
             providerAttemptPhase: nextPhase,
-            ...(checkpoint.expectedPhase === 'prepared'
-              ? { providerAttemptId: attemptId, providerDispatchedAt: input.authoritativeNow,
-                  providerCallBudgetUsed: { increment: 1 } }
-              : {}),
             updatedAt: input.authoritativeNow
           }
         });
         if (transition.count !== 1) return { outcome: 'fenced' as const, task: null };
         const task = await tx.generationTask.findFirstOrThrow({ where: { id: input.taskId, tenantId: input.tenantId } });
-        if (checkpoint.nextPhase === 'provider_call_started') {
-          await createTaskEvent(tx, { task, eventType: 'calling_model', message: '正在调用模型。', progress: task.progress,
-            requestId: `worker:${input.leaseOwnerId}`, createdAt: input.authoritativeNow });
-        }
         return { outcome: 'applied' as const, task: mapGenerationTask(task) };
+      });
+    } catch (error) {
+      if (isPrismaUniqueConstraintError(error)) return { outcome: 'fenced' as const, task: null };
+      throw error;
+    }
+  }
+
+  async dispatchLeasedTask(input: LeasedProviderDispatchInput) {
+    if (!input.providerAttemptId.trim()) return { outcome: 'fenced' as const, task: null };
+    const observed = await this.prisma.generationTask.findFirst({ where: { tenantId: input.tenantId, id: input.taskId } });
+    if (!observed?.novelId) return { outcome: 'fenced' as const, task: null };
+    let observedEnvelope: ReturnType<typeof validateExecutionEnvelopeV1_1ForTask> | null = null;
+    try {
+      observedEnvelope = validateExecutionEnvelopeV1_1ForTask(mapGenerationTask(observed));
+    } catch {
+      // The same live lease must be checked under the row lock before a malformed task can be failed.
+    }
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const authorityInput = observedEnvelope ? {
+          action: observedEnvelope.action, tenantId: observedEnvelope.tenantId, novelId: observedEnvelope.novelId,
+          objectId: observedEnvelope.objectId, sourceVersionRefs: observedEnvelope.sourceVersionRefs,
+          normalizedRequest: observedEnvelope.normalizedRequest
+        } : null;
+        if (authorityInput) await lockGenerationAuthority(tx, authorityInput);
+        else await lockNovelAuthorityRoot(tx, input.tenantId, observed.novelId!);
+        await tx.$queryRaw(Prisma.sql`SELECT id FROM generation_task WHERE tenant_id = ${input.tenantId} AND id = ${input.taskId} FOR UPDATE`);
+        const current = await tx.generationTask.findFirst({ where: { tenantId: input.tenantId, id: input.taskId } });
+        if (!current || current.novelId !== observed.novelId || current.status !== PrismaTaskStatus.PROCESSING
+          || current.leaseOwnerId !== input.leaseOwnerId || current.leaseToken !== input.leaseToken
+          || !current.leaseExpiresAt || current.leaseExpiresAt.getTime() <= input.authoritativeNow.getTime()
+          || current.providerAttemptPhase !== PrismaProviderAttemptPhase.PREPARED
+          || current.providerAttemptId !== null || current.providerDispatchedAt !== null
+          || current.providerCallBudgetUsed !== 0 || current.providerCallBudgetMax < 1
+          || current.durationDeadlineAt.getTime() <= input.authoritativeNow.getTime()
+          || current.retryOfTaskId !== null || current.cancelRequestedAt !== null) {
+          return { outcome: 'fenced' as const, task: null };
+        }
+        const fence = {
+          tenantId: input.tenantId, id: input.taskId, novelId: current.novelId,
+          status: PrismaTaskStatus.PROCESSING, leaseOwnerId: input.leaseOwnerId, leaseToken: input.leaseToken,
+          leaseExpiresAt: { gt: input.authoritativeNow }, providerAttemptPhase: PrismaProviderAttemptPhase.PREPARED,
+          providerAttemptId: null, providerDispatchedAt: null, providerCallBudgetUsed: 0,
+          providerCallBudgetMax: { gt: 0 }, durationDeadlineAt: { gt: input.authoritativeNow },
+          retryOfTaskId: null, cancelRequestedAt: null
+        };
+        const requestId = `worker:${input.leaseOwnerId.slice(0, 110)}`;
+        const fail = async (reason: 'worker_payload_unsupported' | 'source_stale') => {
+          const failure = leasedActionFailure(reason);
+          const transition = await tx.generationTask.updateMany({ where: fence, data: leaseFailureData(failure, input.authoritativeNow) });
+          if (transition.count !== 1) return { outcome: 'fenced' as const, task: null };
+          const failed = await tx.generationTask.findFirstOrThrow({ where: { tenantId: input.tenantId, id: input.taskId } });
+          await createTaskEvent(tx, { task: failed, eventType: 'task_failed', message: failure.statusNote,
+            progress: failed.progress, requestId, createdAt: input.authoritativeNow });
+          await tx.operationLog.create({ data: {
+            tenantId: failed.tenantId, userId: failed.createdBy, novelId: failed.novelId,
+            action: 'generation_task_failed', objectType: 'generation_task', objectId: failed.id,
+            afterSnapshot: { failureCategory: failure.failureCategory, errorCode: failure.errorCode },
+            reason: failure.statusNote, sourceTaskId: failed.id, requestId, createdAt: input.authoritativeNow
+          } });
+          return { outcome: 'applied' as const, task: mapGenerationTask(failed) };
+        };
+        let envelope: ReturnType<typeof validateExecutionEnvelopeV1_1ForTask>;
+        try {
+          envelope = validateExecutionEnvelopeV1_1ForTask(mapGenerationTask(current));
+        } catch {
+          return fail('worker_payload_unsupported');
+        }
+        const currentAuthorityInput = {
+          action: envelope.action, tenantId: envelope.tenantId, novelId: envelope.novelId,
+          objectId: envelope.objectId, sourceVersionRefs: envelope.sourceVersionRefs,
+          normalizedRequest: envelope.normalizedRequest
+        };
+        const authority = await this.loadGenerationAuthority(currentAuthorityInput, tx);
+        if (!matchGenerationAuthority(currentAuthorityInput, envelope.sourceVersionRefs.authoritySnapshotHash, authority).ok) {
+          return fail('source_stale');
+        }
+        const transition = await tx.generationTask.updateMany({ where: fence, data: {
+          providerAttemptId: input.providerAttemptId, providerDispatchedAt: input.authoritativeNow,
+          providerAttemptPhase: PrismaProviderAttemptPhase.PROVIDER_CALL_STARTED,
+          providerCallBudgetUsed: { increment: 1 }, updatedAt: input.authoritativeNow
+        } });
+        if (transition.count !== 1) return { outcome: 'fenced' as const, task: null };
+        const dispatched = await tx.generationTask.findFirstOrThrow({ where: { tenantId: input.tenantId, id: input.taskId } });
+        await createTaskEvent(tx, { task: dispatched, eventType: 'calling_model', message: '正在调用模型。',
+          progress: dispatched.progress, requestId, createdAt: input.authoritativeNow });
+        return { outcome: 'applied' as const, task: mapGenerationTask(dispatched) };
       });
     } catch (error) {
       if (isPrismaUniqueConstraintError(error)) return { outcome: 'fenced' as const, task: null };

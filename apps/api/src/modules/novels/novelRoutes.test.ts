@@ -25,7 +25,7 @@ import {
   type StructureCurrentAssetsProviderInputV1,
   type StructureProviderAction
 } from './services/actionExecutionPlan.js';
-import { createActorScopedIdempotencyToken, hashCanonicalJson } from './services/taskClaim.js';
+import { createActorScopedIdempotencyToken, hashCanonicalJson, reconstructLeasedProviderInput } from './services/taskClaim.js';
 import { validateExecutionEnvelopeV1_1ForTask } from './domain/executionContract.js';
 import { CHAPTER_LENGTH_COUNT_METRIC, countChapterLength, evaluateChapterLength } from './domain/chapterLengthPolicy.js';
 import { MockBodyProvider } from './providers/mockBodyProvider.js';
@@ -2932,7 +2932,9 @@ describe('novel package 6 body generation routes', () => {
     const app = await buildApp({ logger: false, novelRepository: repository });
     const generateBody = MockBodyProvider.prototype.generateBodyChapter;
     const reviseOverlength = MockBodyProvider.prototype.reviseOverlengthChapter;
+    const originalFence = repository.fenceGenerationAuthority.bind(repository);
     let revisionCalls = 0;
+    let reconstructed = false;
     try {
       const { novelId, strategySnapshot } = await createNovelReadyForBody(app, '显式精简超长原稿', 8);
       MockBodyProvider.prototype.generateBodyChapter = async function(input) {
@@ -2953,8 +2955,21 @@ describe('novel package 6 body generation routes', () => {
       const chapter = repository.getNovelChapters().find((item) => item.novelId === novelId && item.chapterNo === 5)!;
       const originalId = body.json().data.batch.chapterResults[1].contentVersionId as string;
       const path = `/novels/${novelId}/chapters/${chapter.id}/overlength-revisions`;
+      repository.fenceGenerationAuthority = async (input) => {
+        const task = await repository.findTaskById(input.tenantId, input.taskId);
+        if (input.phase === 'provider_dispatch' && task?.taskType === 'chapter_overlength_revise') {
+          const rebuilt = await reconstructLeasedProviderInput(repository, task);
+          assert.equal(rebuilt.action, 'chapter_overlength_revise');
+          assert.equal(hashCanonicalJson(rebuilt.providerInput),
+            (task.executionEnvelopeJson as { sourceVersionRefs: { providerInputSnapshotHash: string } }).sourceVersionRefs.providerInputSnapshotHash);
+          assert.equal(revisionCalls, 0);
+          reconstructed = true;
+        }
+        return originalFence(input);
+      };
       const first = await app.inject({ method: 'POST', url: path, payload: { sourceCandidateVersionId: originalId } });
       assert.equal(first.statusCode, 200, first.body);
+      assert.equal(reconstructed, true);
       assert.equal(first.json().data.task.status, 'waiting_confirmation');
       assert.equal(first.json().data.candidate.sourceType, 'ai_overlength_revision');
       assert.equal(first.json().data.candidate.lengthGate.status, 'pass');
@@ -2978,6 +2993,7 @@ describe('novel package 6 body generation routes', () => {
         payload: { currentContentVersionId: null, reason: '验证精简候选门禁' } });
       assert.equal(blockedAdopt.statusCode, 409, blockedAdopt.body);
     } finally {
+      repository.fenceGenerationAuthority = originalFence;
       MockBodyProvider.prototype.generateBodyChapter = generateBody;
       MockBodyProvider.prototype.reviseOverlengthChapter = reviseOverlength;
       await app.close();

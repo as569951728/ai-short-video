@@ -24,6 +24,13 @@ export interface NovelTaskLeaseContext {
   leaseToken: string;
 }
 
+export class NovelTaskLeaseAbandonedError extends Error {
+  constructor() {
+    super('Novel task lease is no longer active');
+    this.name = 'NovelTaskLeaseAbandonedError';
+  }
+}
+
 export type NovelTaskExecutionOutcome<TResult> =
   | { kind: 'fulfilled'; value: TResult }
   | { kind: 'rejected'; reason: unknown };
@@ -35,8 +42,11 @@ export interface NovelTaskWorkerRuntimeOptions<TResult> {
   workerId: string;
   policy: NovelTaskWorkerPolicy;
   newLeaseToken?: () => string;
-  // Pure execution boundary: no repository calls here. It may observe abort.
-  execute(context: NovelTaskLeaseContext & { signal: AbortSignal }): Promise<TResult>;
+  // Repository operations during execution must use mutate; provider calls stay outside it.
+  execute(context: NovelTaskLeaseContext & {
+    signal: AbortSignal;
+    mutate<T>(operation: () => Promise<T>): Promise<T>;
+  }): Promise<TResult>;
   // The caller must implement one fenced, atomic terminal write using this lease.
   settle(context: NovelTaskLeaseContext & {
     authoritativeNow: Date;
@@ -53,6 +63,8 @@ interface ActiveExecution {
   heartbeatInFlight: boolean;
   heartbeatTimer: { cancel(): void } | null;
   leaseLost: boolean;
+  mutationInFlight: boolean;
+  abandonRequested: boolean;
 }
 
 export function createSystemNovelTaskWorkerScheduler(): NovelTaskWorkerScheduler {
@@ -106,7 +118,7 @@ export class NovelTaskWorkerRuntime<TResult> {
     this.stopPromise = new Promise<void>((resolve) => { this.resolveStop = resolve; });
     this.graceTimer = this.options.scheduler.schedule(this.options.policy.shutdownGracePeriodMs, () => {
       this.graceElapsed = true;
-      for (const execution of [...this.active]) this.abandon(execution);
+      for (const execution of [...this.active]) this.requestAbandon(execution);
       this.maybeFinishStop();
     });
     this.maybeFinishStop();
@@ -158,7 +170,8 @@ export class NovelTaskWorkerRuntime<TResult> {
   private run(task: GenerationTaskRecord, leaseToken: string): void {
     const execution: ActiveExecution = {
       phase: 'running', task, leaseToken, abortController: new AbortController(),
-      heartbeatInFlight: false, heartbeatTimer: null, leaseLost: false
+      heartbeatInFlight: false, heartbeatTimer: null, leaseLost: false,
+      mutationInFlight: false, abandonRequested: false
     };
     this.active.add(execution);
     this.scheduleHeartbeat(execution);
@@ -198,7 +211,7 @@ export class NovelTaskWorkerRuntime<TResult> {
   private loseLease(execution: ActiveExecution): void {
     execution.leaseLost = true;
     execution.abortController.abort();
-    if (execution.phase === 'running') this.abandon(execution);
+    if (execution.phase === 'running') this.requestAbandon(execution);
     // A settlement already in flight is fenced by its repository implementation.
   }
 
@@ -209,13 +222,14 @@ export class NovelTaskWorkerRuntime<TResult> {
     let outcome: NovelTaskExecutionOutcome<TResult>;
     try {
       outcome = { kind: 'fulfilled', value: await this.options.execute({
-        ...lease, signal: execution.abortController.signal
+        ...lease, signal: execution.abortController.signal,
+        mutate: (operation) => this.withLeaseMutation(execution, operation)
       }) };
     } catch (reason) {
       outcome = { kind: 'rejected', reason };
     }
     // This synchronous transition wins or loses against the shutdown deadline.
-    if (execution.phase !== 'running' || execution.leaseLost) return;
+    if (execution.phase !== 'running' || execution.leaseLost || execution.abandonRequested) return;
     execution.phase = 'settling';
     try {
       const authoritativeNow = await this.options.clock.now();
@@ -233,7 +247,7 @@ export class NovelTaskWorkerRuntime<TResult> {
   }
 
   private abandon(execution: ActiveExecution): void {
-    if (execution.phase !== 'running') return;
+    if (execution.phase !== 'running' || execution.mutationInFlight) return;
     execution.phase = 'abandoned';
     execution.heartbeatTimer?.cancel();
     execution.heartbeatTimer = null;
@@ -241,6 +255,25 @@ export class NovelTaskWorkerRuntime<TResult> {
     this.active.delete(execution);
     this.schedulePoll(0);
     this.maybeFinishStop();
+  }
+
+  private requestAbandon(execution: ActiveExecution): void {
+    if (execution.phase !== 'running') return;
+    execution.abandonRequested = true;
+    execution.abortController.abort();
+    this.abandon(execution);
+  }
+
+  private async withLeaseMutation<T>(execution: ActiveExecution, operation: () => Promise<T>): Promise<T> {
+    if (execution.phase !== 'running' || execution.leaseLost || execution.abandonRequested
+      || execution.mutationInFlight) throw new NovelTaskLeaseAbandonedError();
+    execution.mutationInFlight = true;
+    try {
+      return await operation();
+    } finally {
+      execution.mutationInFlight = false;
+      if (execution.abandonRequested || execution.leaseLost) this.abandon(execution);
+    }
   }
 
   private maybeFinishStop(): void {

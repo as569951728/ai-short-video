@@ -112,3 +112,11 @@ Prisma 首次补上 `direction_generate` 的 leased fenced finalize：事务内�
 新增显式后台入队 claim 路径，与原同步 `executeClaimedGeneration` 共用来源权威、幂等和冲突校验，但新建任务只写 `QUEUED`、真实执行截止时间与单次模型调用预算，HTTP 旧同步路径保持原样。后台入队要求显式持久提交键和已放行的 leased action capability；当前仓储 capability 仍关闭，因此正式生成路由不会调用此路径。相同提交键可在来源变化或原执行期限过后找回原任务；不同提交键不能绕过排队中的冲突任务。Prisma 与 InMemory 的 claim 形态均已覆盖，尚无真实 MySQL 并发证据。
 
 另新增可注入的 worker runtime 骨架：轮询领取、串行租约心跳、租约丢失后中断执行、停机宽限期内 `running -> settling/abandoned` 竞态及晚返回不落账均由手动时钟/调度器测试。runtime 尚未接入 `main.ts`、正式 provider/action 重建或业务落账回调，不能把组件测试当作长模型调用已由后台接手。InMemory 新增单章正文的 fenced finalize，普通结果与超长候选分别落账并覆盖五处故障回滚；`body_batch_generate` 的多章部分结果和单章 hard-failed 回执仍保持围栏，待 E2 定义分段合同。当前无页面 202/轮询交互、进程重启实测或隔离 MySQL；**E1 继续标记修复中**。
+
+## E1 第十三个执行检查点
+
+后台执行前新增按持久化 V1.1 合同重建模型输入的只读校验，逐项覆盖现有 16 类生成动作；来源事实或输入快照不符时，不能进入模型调用。worker runtime 为提交前的仓储写入增加受控窗口，停机已宣布放弃后拒绝迟到写入，并等待正在进行的检查点完成。
+
+`prepared -> provider_call_started` 现在统一经仓储原子派发：InMemory 和 Prisma 在同一写入边界内重新验证执行合同、当前来源、有效租约、截止时间和一次调用预算，再登记 attempt、派发时间及事件。旧检查点入口也委托这条安全路径。来源变化在预算消耗前写受控失败终态；重复派发和过期 owner 被围栏。新增只读 `GET /novels/async-transport-capability`，默认关闭；只在开发环境、mock provider、可信身份、足长 scope 密钥与 audience 全部满足时提供短期 HMAC 能力快照，不接入生成 POST/202。
+
+本检查点的 RP-02B2a 定向测试、后端常规 216 项与质量资产 4 项、整仓类型检查均通过；Prisma 原子性目前是注入式事务/CAS 测试，不等于真实 MySQL 验证。**E1 仍未完成**：仓储 action capability 保持关闭，生产 worker 执行回调与路由入队尚未接通，页面 2-5 分钟状态、进程重启故障注入、Prisma 全部业务结果落账和隔离 MySQL 证据仍缺失，不能宣称用户侧生成异常已经修复。

@@ -105,6 +105,42 @@ export type LeasedActionPreflightResult =
   | { outcome: 'ready' | 'failed'; task: GenerationTaskRecord }
   | { outcome: 'fenced'; task: null };
 
+export interface ReconstructedLeasedProviderInput {
+  action: NovelProviderAction;
+  authorityInput: Parameters<NovelRepository['loadGenerationAuthority']>[0];
+  authoritySnapshotHash: string;
+  providerInput: unknown;
+}
+
+export async function reconstructLeasedProviderInput(
+  repository: Pick<NovelRepository, 'loadGenerationAuthority'>,
+  task: GenerationTaskRecord
+): Promise<ReconstructedLeasedProviderInput> {
+  const envelope = validateExecutionEnvelopeV1_1ForTask(task);
+  const authorityInput = {
+    action: envelope.action,
+    tenantId: envelope.tenantId,
+    novelId: envelope.novelId,
+    objectId: envelope.objectId,
+    sourceVersionRefs: envelope.sourceVersionRefs,
+    normalizedRequest: envelope.normalizedRequest
+  };
+  const authoritySnapshotHash = envelope.sourceVersionRefs.authoritySnapshotHash;
+  const authority = await repository.loadGenerationAuthority(authorityInput);
+  if (!matchGenerationAuthority(authorityInput, authoritySnapshotHash, authority).ok) throw sourceStale();
+  const providerInput = buildAuthoritativeProviderInput(
+    envelope.action, authority!, envelope.normalizedRequest, envelope.sourceVersionRefs
+  );
+  const actionAuthorityRefs = buildActionAuthoritySourceRefs(
+    envelope.action, authority!, envelope.normalizedRequest, envelope.sourceVersionRefs
+  );
+  if (hashCanonicalJson(providerInput) !== envelope.sourceVersionRefs.providerInputSnapshotHash
+    || hashCanonicalJson(actionAuthorityRefs) !== hashCanonicalJson(pickActionAuthoritySourceRefs(envelope.sourceVersionRefs))) {
+    throw sourceStale();
+  }
+  return { action: envelope.action, authorityInput, authoritySnapshotHash, providerInput };
+}
+
 export async function preflightLeasedAction(input: LeasedActionPreflightInput): Promise<LeasedActionPreflightResult> {
   const task = await input.repository.findTaskById(input.tenantId, input.taskId);
   if (!task || task.status !== TaskStatus.Processing || task.leaseOwnerId !== input.leaseOwnerId

@@ -4,6 +4,7 @@ import { BusinessError } from '../../../shared/errors.js';
 import { sendOk } from '../../../shared/reply.js';
 import { NovelService, type NovelServiceOptions } from '../services/novelService.js';
 import { resolveRequestIdempotencyKey } from '../services/taskClaim.js';
+import type { CapabilityPolicySnapshotResolver } from '../services/asyncTransportCapability.js';
 import { isInMemoryNovelRepository } from '../repositories/inMemoryNovelRepository.js';
 import type {
   AdoptDirectionRequest,
@@ -130,6 +131,7 @@ interface AcceptanceSeedRouteAccess {
 
 type NovelRouteOptions = NovelServiceOptions & {
   requestContextResolver?: RequestContextResolver;
+  capabilityPolicySnapshotResolver?: CapabilityPolicySnapshotResolver;
   acceptanceSeeds?: AcceptanceSeedRouteAccess;
 };
 export async function registerNovelRoutes(app: FastifyInstance, options: NovelRouteOptions) {
@@ -143,6 +145,23 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
   ) {
     throw new Error('acceptance seeds require an explicit in-memory repository with no DATABASE_URL');
   }
+
+  app.get(
+    '/novels/async-transport-capability',
+    {
+      schema: {
+        querystring: { type: 'object', additionalProperties: false },
+        response: { 200: responseEnvelopeSchema }
+      }
+    },
+    async (request, reply) => sendOk(
+      request,
+      reply,
+      options.capabilityPolicySnapshotResolver
+        ? await options.capabilityPolicySnapshotResolver(request)
+        : { contractVersion: 'v1', enabled: false, reasonCode: 'POLICY_DISABLED' }
+    )
+  );
 
   if (acceptanceSeeds.enabled) {
     const devSeedNovelService = new NovelService({
