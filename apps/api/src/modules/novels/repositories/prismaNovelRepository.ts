@@ -1097,6 +1097,7 @@ export class PrismaNovelRepository implements NovelRepository {
       const sourceSettingId = authorityRecord(envelope.sourceVersionRefs).currentSettingVersionId ?? null;
       const sourceOutlineId = authorityRecord(envelope.sourceVersionRefs).currentOutlineVersionId ?? null;
       const sourceStageOutlineId = authorityRecord(envelope.sourceVersionRefs).currentStageOutlineVersionId ?? null;
+      const sourceType = current.modelRoutingVersion?.startsWith('deepseek:') ? 'deepseek' : 'mock_ai';
       const firstVersionNo = await getNextVersionNo(tx, input.tenantId, current.novelId!, structureType ?? 'direction');
       const versions = [];
       if (structureType) {
@@ -1104,7 +1105,7 @@ export class PrismaNovelRepository implements NovelRepository {
         versions.push(await tx.creativeVersion.create({ data: {
           tenantId: input.tenantId, novelId: current.novelId!, objectType: structureType, objectId: structureType,
           versionNo: firstVersionNo, status: PrismaVersionStatus.CANDIDATE, staleLevel: PrismaStaleLevel.NONE,
-          sourceType: 'mock_ai', sourceTaskId: current.id,
+          sourceType, sourceTaskId: current.id,
           sourceVersionRefs: toJsonObject(envelope.sourceVersionRefs),
           changeReason: `模型生成${getStructureObjectText(structureType)}候选`,
           contentJson: toJsonObject(candidate.content), summary: candidate.summary,
@@ -1119,7 +1120,7 @@ export class PrismaNovelRepository implements NovelRepository {
           versions.push(await tx.creativeVersion.create({ data: {
             tenantId: input.tenantId, novelId: current.novelId!, objectType: 'direction', objectId: 'direction',
             versionNo: firstVersionNo + index, status: PrismaVersionStatus.CANDIDATE, staleLevel: PrismaStaleLevel.NONE,
-            sourceType: 'mock_ai', sourceTaskId: current.id,
+            sourceType, sourceTaskId: current.id,
             sourceVersionRefs: toJsonObject({ currentDirectionVersionId: sourceDirectionId }),
             changeReason: '模型生成方向候选', contentJson: toJsonObject({
               title: candidate.content.title, logline: candidate.content.logline,

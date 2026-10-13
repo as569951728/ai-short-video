@@ -3,7 +3,13 @@ import type { LlmClient } from '../../ai/llmClient.js';
 import { createDeepSeekLlmClient, resolveDeepSeekConfig, type AiProviderEnv } from '../../ai/modelRouting.js';
 import { BusinessError } from '../../../shared/errors.js';
 import type { NovelServiceOptions } from '../services/novelService.js';
+import type { NovelProviderSet } from '../services/actionExecutionPlan.js';
 import { DeepSeekNovelProvider } from './deepseekNovelProvider.js';
+import { MockDirectionProvider } from './mockDirectionProvider.js';
+import { MockStructureProvider } from './mockStructureProvider.js';
+import { MockTrialProvider } from './mockTrialProvider.js';
+import { MockBodyProvider } from './mockBodyProvider.js';
+import { MockFullReviewProvider } from './mockFullReviewProvider.js';
 
 export interface NovelProviderFactoryOptions {
   env?: AiProviderEnv;
@@ -11,6 +17,21 @@ export interface NovelProviderFactoryOptions {
 }
 
 export function createNovelProvidersFromEnv(options: NovelProviderFactoryOptions = {}): Partial<NovelServiceOptions> {
+  return createConfiguredProviders(options, false);
+}
+
+export function createLeasedNovelProvidersFromEnv(options: NovelProviderFactoryOptions = {}): NovelProviderSet {
+  const configured = createConfiguredProviders(options, true);
+  return {
+    directionProvider: configured.directionProvider ?? new MockDirectionProvider(),
+    structureProvider: configured.structureProvider ?? new MockStructureProvider(),
+    trialProvider: configured.trialProvider ?? new MockTrialProvider(),
+    bodyProvider: configured.bodyProvider ?? new MockBodyProvider(),
+    fullReviewProvider: configured.fullReviewProvider ?? new MockFullReviewProvider()
+  };
+}
+
+function createConfiguredProviders(options: NovelProviderFactoryOptions, singlePaidCallMode: boolean): Partial<NovelServiceOptions> {
   const config = resolveDeepSeekConfig(options.env);
   if (config.mode !== 'deepseek') {
     return {};
@@ -32,7 +53,8 @@ export function createNovelProvidersFromEnv(options: NovelProviderFactoryOptions
     client,
     model: config.model,
     structureModel: config.structureModel,
-    reasonerModel: config.reasonerModel
+    reasonerModel: config.reasonerModel,
+    singlePaidCallMode
   });
 
   return {

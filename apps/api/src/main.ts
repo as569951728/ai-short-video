@@ -7,11 +7,7 @@ import { PrismaNovelRepository } from './modules/novels/repositories/prismaNovel
 import { createNovelRecoveryLoop } from './modules/novels/services/recoveryScanner.js';
 import { createLeasedActionExecutor } from './modules/novels/services/leasedActionExecutor.js';
 import { createSystemNovelTaskWorkerScheduler, NovelTaskWorkerRuntime } from './modules/novels/services/novelTaskWorkerRuntime.js';
-import { MockDirectionProvider } from './modules/novels/providers/mockDirectionProvider.js';
-import { MockStructureProvider } from './modules/novels/providers/mockStructureProvider.js';
-import { MockTrialProvider } from './modules/novels/providers/mockTrialProvider.js';
-import { MockBodyProvider } from './modules/novels/providers/mockBodyProvider.js';
-import { MockFullReviewProvider } from './modules/novels/providers/mockFullReviewProvider.js';
+import { createLeasedNovelProvidersFromEnv } from './modules/novels/providers/providerFactory.js';
 import { resolveAiProviderMode } from './modules/ai/modelRouting.js';
 
 if (
@@ -64,13 +60,7 @@ const worker = new NovelTaskWorkerRuntime({
   },
   ...createLeasedActionExecutor({
     repository: novelRepository,
-    providers: {
-      directionProvider: new MockDirectionProvider(),
-      structureProvider: new MockStructureProvider(),
-      trialProvider: new MockTrialProvider(),
-      bodyProvider: new MockBodyProvider(),
-      fullReviewProvider: new MockFullReviewProvider()
-    }
+    providers: createLeasedNovelProvidersFromEnv()
   }),
   onRuntimeError: (stage) => app.log.warn({ stage }, 'Novel task worker operation failed.')
 });
