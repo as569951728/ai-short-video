@@ -305,29 +305,33 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
     revisionMessages[1].content = JSON.stringify(revisionPrompt);
     if (revisionMessages.reduce((total, message) => total + message.content.length, 0) > 40_000) return original;
 
-    return requestJsonOutput(this.options.client, {
-      taskName: 'novel_body_chapter_shorten',
-      model: this.model,
-      ...SINGLE_PAID_CALL_JSON_POLICY,
-      thinkingMode: 'disabled',
-      messages: revisionMessages,
-      maxTokens: 700,
-      validate: (value) => {
-        const patch = asRecord(value);
-        if (Object.keys(patch).length !== 1 || !Object.hasOwn(patch, 'sentenceIds')) throw new Error('body deletion output has unexpected fields');
-        const content = applyBodySentenceIds(original.content, eligibleSentences, readArray(patch, 'sentenceIds'), minimumRemoval, maximumRemoval);
-        const length = evaluateChapterLength(content, input.chapter.wordTarget);
-        if (length.status !== 'pass') throw new Error('body deletion result is outside the chapter length gate');
-        return {
-          ...original,
-          content,
-          firstSentence: firstSentence(content),
-          first300Summary: content.slice(0, 300),
-          experimentalRevisionRequiresConfirmation: true,
-          experimentalOriginalDraft: original
-        };
-      }
-    });
+    try {
+      return await requestJsonOutput(this.options.client, {
+        taskName: 'novel_body_chapter_shorten',
+        model: this.model,
+        ...SINGLE_PAID_CALL_JSON_POLICY,
+        thinkingMode: 'disabled',
+        messages: revisionMessages,
+        maxTokens: 700,
+        validate: (value) => {
+          const patch = asRecord(value);
+          if (Object.keys(patch).length !== 1 || !Object.hasOwn(patch, 'sentenceIds')) throw new Error('body deletion output has unexpected fields');
+          const content = applyBodySentenceIds(original.content, eligibleSentences, readArray(patch, 'sentenceIds'), minimumRemoval, maximumRemoval);
+          const length = evaluateChapterLength(content, input.chapter.wordTarget);
+          if (length.status !== 'pass') throw new Error('body deletion result is outside the chapter length gate');
+          return {
+            ...original,
+            content,
+            firstSentence: firstSentence(content),
+            first300Summary: content.slice(0, 300),
+            experimentalRevisionRequiresConfirmation: true,
+            experimentalOriginalDraft: original
+          };
+        }
+      });
+    } catch {
+      return original;
+    }
   }
 
   async rewriteChapter(input: BodyRewriteInput): Promise<{ candidate: BodyChapterProviderDraft; summaryCompare: ChapterSummaryCompareDTO }> {

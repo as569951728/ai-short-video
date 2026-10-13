@@ -997,7 +997,7 @@ describe('DeepSeek novel provider', () => {
     }
   });
 
-  it('rejects a deletion that is too small without making a third call', async () => {
+  it('retains the original when a deletion is too small without making a third call', async () => {
     const requests: ChatCompletionRequest[] = [];
     const { original } = createOverlongDeletionFixture(1000);
     const responses = [JSON.stringify({ content: original }), JSON.stringify({ sentenceIds: [] })];
@@ -1005,14 +1005,13 @@ describe('DeepSeek novel provider', () => {
       experimentalOverlongRevision: true,
       client: { async chat(request) { requests.push(request); return { content: responses.shift()!, model: request.model }; } }
     });
-    await assert.rejects(
-      () => provider.generateBodyChapter(bodyInputForLengthTest(1000)),
-      (error) => error instanceof LlmProviderError && error.category === 'output_parse_failed'
-    );
+    const draft = await provider.generateBodyChapter(bodyInputForLengthTest(1000));
+    assert.equal(draft.content, original);
+    assert.equal(draft.experimentalRevisionRequiresConfirmation, undefined);
     assert.equal(requests.length, 2);
   });
 
-  it('rejects invented, repeated, or non-string sentence ids', async () => {
+  it('retains the original for invented, repeated, or non-string sentence ids', async () => {
     const { original } = createOverlongDeletionFixture(1000);
     for (const sentenceIds of [
       ['s999'],
@@ -1024,24 +1023,22 @@ describe('DeepSeek novel provider', () => {
         experimentalOverlongRevision: true,
         client: { async chat(request) { return { content: responses.shift()!, model: request.model }; } }
       });
-      await assert.rejects(
-        () => provider.generateBodyChapter(bodyInputForLengthTest(1000)),
-        (error) => error instanceof LlmProviderError && error.details?.reason === 'body deletion id is invalid'
-      );
+      const draft = await provider.generateBodyChapter(bodyInputForLengthTest(1000));
+      assert.equal(draft.content, original);
+      assert.equal(draft.experimentalRevisionRequiresConfirmation, undefined);
     }
   });
 
-  it('rejects an extra rewrite field in the deletion response', async () => {
+  it('retains the original when the deletion response contains an extra rewrite field', async () => {
     const { original } = createOverlongDeletionFixture(1000);
     const responses = [JSON.stringify({ content: original }), JSON.stringify({ sentenceIds: ['s1'], content: '额外正文' })];
     const provider = new DeepSeekNovelProvider({
       experimentalOverlongRevision: true,
       client: { async chat(request) { return { content: responses.shift()!, model: request.model }; } }
     });
-    await assert.rejects(
-      () => provider.generateBodyChapter(bodyInputForLengthTest(1000)),
-      (error) => error instanceof LlmProviderError && error.details?.reason === 'body deletion output has unexpected fields'
-    );
+    const draft = await provider.generateBodyChapter(bodyInputForLengthTest(1000));
+    assert.equal(draft.content, original);
+    assert.equal(draft.experimentalRevisionRequiresConfirmation, undefined);
   });
 
   it('does not spend a second call when the revision context exceeds its prompt budget', async () => {

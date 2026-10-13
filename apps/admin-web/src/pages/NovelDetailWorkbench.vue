@@ -868,6 +868,18 @@
                 <p>失败结果不会成为新的正式正文；已完成章节仍会保留。下一次将从 {{ bodyGeneration?.nextBatchRange.text || '未完成章节' }} 继续。</p>
                 <el-button size="small" @click="openTaskDrawer(failedBodyGenerationTask.id)">查看失败任务</el-button>
               </el-alert>
+              <el-alert
+                v-if="overlengthBodyChapter"
+                data-body-recovery="overlength"
+                class="mb-16"
+                title="正文超长，原稿已保存为候选"
+                type="warning"
+                show-icon
+                :closable="false"
+              >
+                <p>第 {{ overlengthBodyChapter.chapterNo }} 章尚未写入正式正文，后续章节已暂停。请查看原稿及字数；未完成逐版本复核前不能采用。</p>
+                <el-button size="small" @click="router.push(`/novels/${novelId}/chapters/${overlengthBodyChapter.chapterId}`)">查看候选</el-button>
+              </el-alert>
 
               <el-alert
                 v-if="!bodyGeneration?.strategySnapshot"
@@ -946,6 +958,11 @@
                     </template>
                   </el-table-column>
                   <el-table-column prop="recommendedAction" label="建议动作" min-width="180" />
+                  <el-table-column label="操作" width="110">
+                    <template #default="{ row }">
+                      <el-button size="small" text @click="router.push(`/novels/${novelId}/chapters/${row.chapterId}`)">章节详情</el-button>
+                    </template>
+                  </el-table-column>
                 </el-table>
               </div>
             </template>
@@ -1693,6 +1710,8 @@ const visibleOutlineRows = computed(() => (activeSubStep.value.key === 'stages' 
 const chapterPlanRows = computed(() => structureRows.value.filter((asset) => asset.objectType === 'chapter_plan'))
 const bodyGeneration = computed(() => detail.value?.bodyGeneration ?? null)
 const latestBodyBatch = computed(() => bodyGeneration.value?.latestBatch ?? null)
+const overlengthBodyChapter = computed(() => latestBodyBatch.value?.chapterResults?.find((result) =>
+  result.status === 'pending' && result.lengthGate?.status === 'too_long') ?? null)
 const bodyGenerationTask = computed(() => resolveTaskSummaryForAction(pendingTask.value, detail.value, 'body_batch_generate'))
 const authoritativeBodyGenerationTask = computed(() => resolveTaskSummaryForAction(null, detail.value, 'body_batch_generate'))
 const isAuthoritativeBodyGenerationInFlight = computed(() =>

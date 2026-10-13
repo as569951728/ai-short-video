@@ -2780,7 +2780,9 @@ export class PrismaNovelRepository implements NovelRepository {
         orderBy: { createdAt: 'desc' }
       }),
       this.prisma.generationTask.findFirst({
-        where: { tenantId, novelId, objectType: 'trial_run' },
+        where: chapter.lastGenerationTaskId
+          ? { tenantId, novelId, id: chapter.lastGenerationTaskId }
+          : { tenantId, novelId, objectType: 'trial_run' },
         orderBy: { updatedAt: 'desc' }
       }),
       this.prisma.longTermMemory.findFirst({
@@ -3120,23 +3122,30 @@ export class PrismaNovelRepository implements NovelRepository {
     return this.prisma.$transaction(async (tx) => {
       const { task } = await verifyBodyBatchWriteContext(tx, input);
       const progress = requireBodyBatchProgress(task, input);
-      const failed = progress.chapterResults.find((result) => result.status === 'failed') ?? null;
+      const overlengthPersistence = input.overlengthDraft
+        ? await persistOverlengthBodyCandidates(tx, input, progress)
+        : null;
+      const overlengthResult = overlengthPersistence?.chapterResult ?? null;
+      const chapterResults = overlengthResult ? [...progress.chapterResults, overlengthResult] : progress.chapterResults;
+      const failed = chapterResults.find((result) => result.status === 'failed') ?? null;
       const totalCount = input.endChapterNo - input.startChapterNo + 1;
-      if (!failed && progress.chapterResults.length !== totalCount) {
+      if (!failed && !overlengthResult && chapterResults.length !== totalCount) {
         throw new BusinessError(ErrorCode.GateBlocked, '正文批次结果不完整，不能标记完成。');
       }
-      const completedCount = progress.chapterResults.filter((result) => result.status === 'completed').length;
+      const completedCount = chapterResults.filter((result) => result.status === 'completed').length;
       const summary: BodyBatchRecord['summary'] = {
         id: createId('batchsummary'),
         batchId: progress.batchId,
-        conclusion: failed
+        conclusion: overlengthResult
+          ? `已完成 ${completedCount} 章，第 ${overlengthResult.chapterNo} 章原稿超长，已保存候选并暂停后续章节。`
+          : failed
           ? `已完成 ${completedCount} 章，第 ${failed.chapterNo} 章硬失败，后续章节已暂停。`
           : `第 ${input.startChapterNo}-${input.endChapterNo} 章批量正文已完成。`,
-        chapterResults: progress.chapterResults,
-        riskTrend: failed || progress.chapterResults.some((result) => result.score !== null && result.score < 70)
+        chapterResults,
+        riskTrend: failed || overlengthResult || chapterResults.some((result) => result.score !== null && result.score < 70)
           ? '本批存在需要关注的质量风险。' : '本批未发现阻塞风险。',
         nextBatchNotes: input.previousBatchSummary?.nextBatchNotes ?? [],
-        riskChapterIds: progress.chapterResults.filter((result) => result.hardFailed || (result.score !== null && result.score < 70)).map((result) => result.chapterId),
+        riskChapterIds: chapterResults.filter((result) => result.hardFailed || result.status === 'pending' || (result.score !== null && result.score < 70)).map((result) => result.chapterId),
         createdAt: input.now
       };
       const batch: BodyBatchRecord = {
@@ -3151,41 +3160,46 @@ export class PrismaNovelRepository implements NovelRepository {
         sourceVersionRefs: input.sourceVersionRefs,
         startChapterNo: input.startChapterNo,
         endChapterNo: input.endChapterNo,
-        status: failed ? 'paused' : 'completed',
-        statusNote: failed ? `第 ${failed.chapterNo} 章硬失败，后续章节未继续。` : '本批正文生成完成。',
+        status: failed || overlengthResult ? 'paused' : 'completed',
+        statusNote: overlengthResult ? `第 ${overlengthResult.chapterNo} 章超长待处理，后续章节未继续。` : failed ? `第 ${failed.chapterNo} 章硬失败，后续章节未继续。` : '本批正文生成完成。',
         completedCount,
         failedCount: failed ? 1 : 0,
-        pendingCount: failed ? totalCount - completedCount - 1 : 0,
-        failedChapterNo: failed?.chapterNo ?? null,
-        chapterResults: progress.chapterResults,
+        pendingCount: overlengthResult ? totalCount - completedCount : failed ? totalCount - completedCount - 1 : 0,
+        failedChapterNo: failed?.chapterNo ?? overlengthResult?.chapterNo ?? null,
+        chapterResults,
         summary,
         createdAt: input.now,
-        metadata: { previousBatchSummaryId: input.previousBatchSummary?.id ?? null }
+        metadata: { previousBatchSummaryId: input.previousBatchSummary?.id ?? null,
+          overlengthCandidateId: overlengthResult?.contentVersionId ?? null,
+          overlengthRevisionCandidateId: overlengthPersistence?.candidateIds[1] ?? null }
       };
       const updatedTask = await transitionClaimedTask(tx, {
         taskId: task.id,
         tenantId: input.context.tenantId,
         data: {
-          status: failed ? PrismaTaskStatus.FAILED : PrismaTaskStatus.COMPLETED,
-          statusNote: failed ? '硬失败待处理，已完成章节保留。' : '本批正文生成完成。',
+          status: overlengthResult ? PrismaTaskStatus.WAITING_CONFIRMATION : failed ? PrismaTaskStatus.FAILED : PrismaTaskStatus.COMPLETED,
+          statusNote: overlengthResult ? '原稿超长已存为候选，等待处理；正式正文未写入。' : failed ? '硬失败待处理，已完成章节保留。' : '本批正文生成完成。',
           progress: 100,
-          currentStep: failed ? `第 ${failed.chapterNo} 章硬失败待处理` : '批次总结已生成',
+          currentStep: overlengthResult ? `第 ${overlengthResult.chapterNo} 章超长待处理` : failed ? `第 ${failed.chapterNo} 章硬失败待处理` : '批次总结已生成',
           outputSummary: summary.conclusion,
           resultObjectType: 'body_batch',
           resultObjectId: batch.id,
-          resultVersionIdsJson: progress.chapterResults.map((result) => result.contentVersionId).filter((id): id is string => Boolean(id)),
+          resultVersionIdsJson: [...new Set([
+            ...chapterResults.map((result) => result.contentVersionId).filter((id): id is string => Boolean(id)),
+            ...(overlengthPersistence?.candidateIds ?? [])
+          ])],
           failureCategory: failed ? 'quality_failed' : null,
           errorCode: failed ? 'QUALITY_GATE_FAILED' : null,
           errorMessage: failed ? `第 ${failed.chapterNo} 章硬失败，后续章节已暂停。` : null,
           activeClaimKey: null,
           finishedAt: input.now,
-          metadata: toJsonObject({ ...toRecord(task.metadata), bodyBatchProgress: progress, batch }),
+          metadata: toJsonObject({ ...toRecord(task.metadata), bodyBatchProgress: { ...progress, chapterResults }, batch }),
           updatedAt: input.now
         }
       });
       await createTaskEvent(tx, {
         task: updatedTask,
-        eventType: failed ? 'batch_paused' : 'batch_completed',
+        eventType: failed || overlengthResult ? 'batch_paused' : 'batch_completed',
         message: summary.conclusion,
         progress: 100,
         requestId: input.context.requestId,
@@ -3198,7 +3212,7 @@ export class PrismaNovelRepository implements NovelRepository {
         where: { id: input.novel.id, tenantId: input.context.tenantId },
         data: {
           creationStage: PrismaNovelCreationStage.BODY,
-          stageStatus: failed ? PrismaStageStatus.BLOCKED : remaining === 0 ? PrismaStageStatus.COMPLETED : PrismaStageStatus.NOT_STARTED,
+          stageStatus: failed || overlengthResult ? PrismaStageStatus.BLOCKED : remaining === 0 ? PrismaStageStatus.COMPLETED : PrismaStageStatus.NOT_STARTED,
           updatedBy: input.context.userId,
           updatedAt: input.now
         }
@@ -3320,10 +3334,15 @@ function validateBodyBatchRange(input: BodyBatchTaskCreationInput | BodyBatchGen
 
 function validateBodyBatchDrafts(input: BodyBatchGenerationInput) {
   const total = input.endChapterNo - input.startChapterNo + 1;
-  if (input.chapters.length === 0 || input.chapters.length > total ||
+  const overlength = input.overlengthDraft;
+  if ((!overlength && input.chapters.length === 0) || input.chapters.length > total ||
       input.chapters.some((draft, index) => draft.chapter.chapterNo !== input.startChapterNo + index ||
         (draft.hardFailed && index !== input.chapters.length - 1)) ||
-      (!input.chapters.at(-1)?.hardFailed && input.chapters.length !== total)) {
+      (overlength && (input.chapters.at(-1)?.hardFailed || overlength.chapter.chapterNo !== input.startChapterNo + input.chapters.length ||
+        overlength.chapter.chapterNo > input.endChapterNo ||
+        evaluateChapterLength(overlength.originalContent, overlength.chapter.wordTarget).status !== 'too_long' ||
+        (overlength.revisedContent !== undefined && evaluateChapterLength(overlength.revisedContent, overlength.chapter.wordTarget).status !== 'pass'))) ||
+      (!overlength && !input.chapters.at(-1)?.hardFailed && input.chapters.length !== total)) {
     throw new BusinessError(ErrorCode.GateBlocked, '模型返回的正文章节不连续或不完整，未写入正文。');
   }
 }
@@ -3469,6 +3488,71 @@ async function persistFailedBodyChapter(tx: Prisma.TransactionClient, input: Bod
     data: { mainStatus: 'pending', statusNote: '硬失败待处理', impactLevel: PrismaImpactLevel.MEDIUM, lastGenerationTaskId: taskId, updatedAt: input.now }
   });
   return bodyChapterResult(draft, 'failed', null, null, null, null);
+}
+
+async function persistOverlengthBodyCandidates(
+  tx: Prisma.TransactionClient,
+  input: BodyBatchGenerationInput,
+  progress: BodyBatchProgress
+): Promise<{ chapterResult: BodyBatchChapterResultDTO; candidateIds: string[] }> {
+  const draft = input.overlengthDraft!;
+  const tenantId = input.context.tenantId;
+  if (progress.chapterResults.length !== draft.chapter.chapterNo - input.startChapterNo) {
+    throw new BusinessError(ErrorCode.GateBlocked, '超长章节与已保存批次检查点不连续。');
+  }
+  const chapter = await tx.novelChapter.findFirst({
+    where: { id: draft.chapter.id, tenantId, novelId: input.novel.id, chapterNo: draft.chapter.chapterNo, deletedAt: null }
+  });
+  if (!chapter || chapter.currentContentVersionId || chapter.wordTarget !== draft.chapter.wordTarget) {
+    throw new BusinessError(ErrorCode.CandidateStale, '超长章节目标或正式正文已变化，不能保存旧候选。');
+  }
+  const existing = await tx.chapterContentVersion.findFirst({ where: { tenantId, novelId: input.novel.id, chapterId: chapter.id } });
+  if (existing) throw new BusinessError(ErrorCode.GateBlocked, '本章已有候选或正式版本，不能重复保存超长原稿。');
+  const originalLength = evaluateChapterLength(draft.originalContent, chapter.wordTarget);
+  if (originalLength.status !== 'too_long') throw new BusinessError(ErrorCode.ValidationError, '超长原稿不符合恢复条件。');
+  const original = await tx.chapterContentVersion.create({
+    data: {
+      tenantId, novelId: input.novel.id, chapterId: chapter.id, versionNo: 1,
+      status: PrismaVersionStatus.CANDIDATE, staleLevel: PrismaStaleLevel.NONE,
+      sourceType: 'ai_overlength_original', sourceTaskId: input.task.id,
+      sourceVersionRefs: toJsonObject(input.sourceVersionRefs), rewriteReason: null,
+      content: draft.originalContent, wordCount: originalLength.actual,
+      summary: draft.originalSummary, reviewScore: null, createdBy: input.context.userId, createdAt: input.now,
+      metadata: toJsonObject({ batchId: progress.batchId, chapterNo: chapter.chapterNo, title: chapter.title,
+        lengthRecovery: 'original', lengthGate: originalLength, reviewRequired: true, riskLevel: RiskLevel.Medium })
+    }
+  });
+  let revisionId: string | null = null;
+  if (draft.revisedContent) {
+    const revisedLength = evaluateChapterLength(draft.revisedContent, chapter.wordTarget);
+    if (revisedLength.status !== 'pass') throw new BusinessError(ErrorCode.ValidationError, '精简候选未通过字数门禁。');
+    const revision = await tx.chapterContentVersion.create({
+      data: {
+        tenantId, novelId: input.novel.id, chapterId: chapter.id, versionNo: 2,
+        status: PrismaVersionStatus.CANDIDATE, staleLevel: PrismaStaleLevel.NONE,
+        sourceType: 'ai_overlength_revision', sourceTaskId: input.task.id,
+        sourceVersionRefs: toJsonObject(input.sourceVersionRefs), rewriteReason: '超长原稿实验精简',
+        content: draft.revisedContent, wordCount: revisedLength.actual,
+        summary: null, reviewScore: null, createdBy: input.context.userId, createdAt: input.now,
+        metadata: toJsonObject({ batchId: progress.batchId, chapterNo: chapter.chapterNo, title: chapter.title,
+          lengthRecovery: 'revision', revisionOfCandidateId: original.id, lengthGate: revisedLength,
+          reviewRequired: true, riskLevel: RiskLevel.Medium })
+      }
+    });
+    revisionId = revision.id;
+  }
+  await tx.novelChapter.update({
+    where: { id: chapter.id, tenantId },
+    data: { mainStatus: 'pending', statusNote: '原稿超长待处理', lastGenerationTaskId: input.task.id, updatedAt: input.now }
+  });
+  return { chapterResult: {
+    chapterId: chapter.id, chapterNo: chapter.chapterNo, title: chapter.title,
+    status: 'pending', statusText: '超长待处理', contentVersionId: original.id,
+    featureCardId: null, reviewReportId: null, longTermMemoryId: null,
+    score: null, riskLevel: RiskLevel.Medium, hardFailed: false, lengthGate: originalLength,
+    statusNote: `原稿 ${originalLength.actual} 字，高于上限 ${originalLength.upperBound} 字。`,
+    recommendedAction: '查看超长候选，复核后再继续'
+  }, candidateIds: revisionId ? [original.id, revisionId] : [original.id] };
 }
 
 async function persistCompletedBodyChapter(tx: Prisma.TransactionClient, input: BodyBatchGenerationInput, taskId: string, batchId: string, draft: BodyBatchGenerationInput['chapters'][number]): Promise<BodyBatchChapterResultDTO> {

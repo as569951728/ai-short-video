@@ -987,6 +987,12 @@ export interface BodyBatchGenerationInput {
   strategySnapshot: CreativeVersionRecord;
   task: GenerationTaskRecord;
   chapters: BodyChapterDraft[];
+  overlengthDraft?: {
+    chapter: NovelChapterRecord;
+    originalContent: string;
+    originalSummary: string;
+    revisedContent?: string;
+  };
   idempotencyKey: string;
   requestFingerprint: unknown;
   startChapterNo: number;

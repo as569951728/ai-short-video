@@ -2613,7 +2613,7 @@ describe('novel package 6 body generation routes', () => {
     }
   });
 
-  it('rejects short and long provider output for batch, single-chapter, and rewrite actions without formal writes', async () => {
+  it('retains overlong generation drafts as candidates, while rejecting short drafts and invalid rewrites', async () => {
     const originalGenerate = MockBodyProvider.prototype.generateBodyChapter;
     const originalRewrite = MockBodyProvider.prototype.rewriteChapter;
     const cases = [
@@ -2670,24 +2670,36 @@ describe('novel package 6 body generation routes', () => {
 
           const formalAssetsBefore = snapshotFormalChapterAssets(repository, novelId);
           const response = await app.inject({ method: 'POST', url, payload });
-          assert.deepEqual(
-            [response.statusCode, response.json().error.code, response.json().error.details.reasonCode],
-            [409, ErrorCode.GateBlocked, 'NOVEL_CONTENT_LENGTH_OUT_OF_RANGE'],
-            `${action}:${testCase.status}`
-          );
-          assertPublicLengthFailure(response, testCase.status);
           const task = repository.getGenerationTasks().find((item) =>
             item.idempotencyToken === testActorScopedIdempotencyToken(action, objectId, rawKey)
           );
           assert.ok(task, `${action}:${testCase.status}`);
-          assert.equal(response.json().error.details.taskId, task.id);
           assert.equal(providerCalls, 1, `${action}:${testCase.status}`);
-          await assertPersistedLengthFailure(app, task, testCase.status);
-          assert.equal(snapshotFormalChapterAssets(repository, novelId), formalAssetsBefore, `${action}:${testCase.status}`);
-          assert.deepEqual(
-            repository.getGenerationTaskEvents().filter((event) => event.taskId === task.id).map((event) => event.eventType),
-            ['task_claimed', 'failed']
-          );
+          if (testCase.status === 'too_long' && action !== 'chapter_rewrite') {
+            assert.equal(response.statusCode, 200, `${action}:${testCase.status}: ${response.body}`);
+            assert.equal(response.json().data.batch.status, 'paused');
+            assert.equal(task.status, TaskStatus.WaitingConfirmation);
+            assert.equal(chapter.currentContentVersionId, null);
+            assert.equal(chapter.currentFeatureCardVersionId, null);
+            assert.equal(chapter.currentReviewReportId, null);
+            const candidate = repository.getChapterContentVersions().find((item) => item.chapterId === chapter.id && item.sourceTaskId === task.id);
+            assert.equal(candidate?.status, VersionStatus.Candidate);
+            assert.equal(candidate?.content, testCase.content);
+          } else {
+            assert.deepEqual(
+              [response.statusCode, response.json().error.code, response.json().error.details.reasonCode],
+              [409, ErrorCode.GateBlocked, 'NOVEL_CONTENT_LENGTH_OUT_OF_RANGE'],
+              `${action}:${testCase.status}`
+            );
+            assertPublicLengthFailure(response, testCase.status);
+            assert.equal(response.json().error.details.taskId, task.id);
+            await assertPersistedLengthFailure(app, task, testCase.status);
+            assert.equal(snapshotFormalChapterAssets(repository, novelId), formalAssetsBefore, `${action}:${testCase.status}`);
+            assert.deepEqual(
+              repository.getGenerationTaskEvents().filter((event) => event.taskId === task.id).map((event) => event.eventType),
+              ['task_claimed', 'failed']
+            );
+          }
         } finally {
           MockBodyProvider.prototype.generateBodyChapter = originalGenerate;
           MockBodyProvider.prototype.rewriteChapter = originalRewrite;
@@ -2732,14 +2744,16 @@ describe('novel package 6 body generation routes', () => {
           idempotencyKey: `body-revise-${revisionPasses}`
         }, { tenantId: 'tenant_test', userId: 'user_test', requestId: `body-revise-${revisionPasses}` });
 
-        await assert.rejects(
-          generate,
-          revisionPasses
-            ? (error) => error instanceof BusinessError && error.code === ErrorCode.GateBlocked
-            : undefined
-        );
+        const result = await generate();
+        assert.equal(result.batch?.status, 'paused');
+        assert.equal(result.task.status, TaskStatus.WaitingConfirmation);
         assert.equal(chapter.currentContentVersionId, null);
-        assert.equal(repository.getChapterContentVersions().filter((item) => item.chapterId === chapter.id).length, 0);
+        const candidates = repository.getChapterContentVersions().filter((item) => item.chapterId === chapter.id && item.sourceTaskId === result.task.id);
+        assert.equal(candidates.length, revisionPasses ? 2 : 1);
+        assert.equal(candidates.find((item) => item.sourceType === 'ai_overlength_original')?.content, original);
+        assert.equal(candidates.every((item) => item.status === VersionStatus.Candidate), true);
+        if (revisionPasses) assert.equal(candidates.find((item) => item.sourceType === 'ai_overlength_revision')?.metadata &&
+          (candidates.find((item) => item.sourceType === 'ai_overlength_revision')!.metadata as Record<string, unknown>).reviewRequired, true);
         assert.deepEqual(requests, ['novel_body_chapter_generate', 'novel_body_chapter_shorten']);
       } finally {
         await app.close();
@@ -2861,6 +2875,91 @@ describe('novel package 6 body generation routes', () => {
       MockBodyProvider.prototype.generateBodyChapter = generateBody;
       MockBodyProvider.prototype.rewriteChapter = rewriteBody;
       MockBodyProvider.prototype.assessImpact = assessImpact;
+      await app.close();
+    }
+  });
+
+  it('retains an overlength body candidate, pauses the batch, and does not call later chapters', async () => {
+    const repository = createInMemoryNovelRepository();
+    const app = await buildApp({ logger: false, novelRepository: repository });
+    const generateBody = MockBodyProvider.prototype.generateBodyChapter;
+    const calledChapters: number[] = [];
+    try {
+      const { novelId, strategySnapshot } = await createNovelReadyForBody(app, '超长候选恢复接口验收', 8);
+      MockBodyProvider.prototype.generateBodyChapter = async function(input) {
+        calledChapters.push(input.chapter.chapterNo);
+        const draft = await generateBody.call(this, input);
+        return input.chapter.chapterNo === 5
+          ? { ...draft, content: '长'.repeat((input.chapter.wordTarget ?? 2000) * 2), summary: '超长原稿摘要' }
+          : draft;
+      };
+      const request = { strategySnapshotId: strategySnapshot.id,
+        expectedStrategySnapshotVersion: strategySnapshot.versionNo, idempotencyKey: 'overlength-body-batch-1' };
+      const first = await app.inject({ method: 'POST', url: `/novels/${novelId}/chapters/batch-generate`, payload: request });
+      assert.equal(first.statusCode, 200, first.body);
+      assert.deepEqual(calledChapters, [4, 5]);
+      assert.equal(first.json().data.batch.status, 'paused');
+      assert.equal(first.json().data.task.status, 'waiting_confirmation');
+      const chapter = repository.getNovelChapters().find((item) => item.novelId === novelId && item.chapterNo === 5)!;
+      assert.equal(chapter.currentContentVersionId, null);
+      assert.equal(chapter.currentFeatureCardVersionId, null);
+      assert.equal(chapter.currentReviewReportId, null);
+      const candidate = repository.getChapterContentVersions().find((item) => item.id === first.json().data.batch.chapterResults[1].contentVersionId)!;
+      assert.equal(candidate.status, VersionStatus.Candidate);
+      assert.equal(candidate.sourceType, 'ai_overlength_original');
+      const workbench = await app.inject({ method: 'GET', url: `/novels/${novelId}/chapters/${chapter.id}` });
+      assert.equal(workbench.statusCode, 200, workbench.body);
+      assert.equal(workbench.json().data.candidateVersions.find((version: any) => version.id === candidate.id).requiresContentReview, true);
+      assert.equal(workbench.json().data.candidateCompares[candidate.id], undefined);
+      const replay = await app.inject({ method: 'POST', url: `/novels/${novelId}/chapters/batch-generate`, payload: request });
+      assert.equal(replay.statusCode, 200, replay.body);
+      assert.deepEqual(calledChapters, [4, 5]);
+      assert.equal(repository.getChapterContentVersions().filter((item) => item.id === candidate.id).length, 1);
+      const blockedAdopt = await app.inject({ method: 'POST',
+        url: `/novels/${novelId}/chapters/${chapter.id}/content-versions/${candidate.id}/adopt`,
+        payload: { currentContentVersionId: null, reason: '验证超长候选门禁', idempotencyKey: 'overlength-adopt-1' } });
+      assert.equal(blockedAdopt.statusCode, 409, blockedAdopt.body);
+      assert.equal(chapter.currentContentVersionId, null);
+    } finally {
+      MockBodyProvider.prototype.generateBodyChapter = generateBody;
+      await app.close();
+    }
+  });
+  it('keeps a cancelled in-flight body response from saving a late overlength candidate', async () => {
+    const repository = createInMemoryNovelRepository();
+    const app = await buildApp({ logger: false, novelRepository: repository });
+    const generateBody = MockBodyProvider.prototype.generateBodyChapter;
+    let releaseModel: (() => void) | null = null;
+    let modelStarted: (() => void) | null = null;
+    const modelStartedPromise = new Promise<void>((resolve) => { modelStarted = resolve; });
+    try {
+      const { novelId, strategySnapshot } = await createNovelReadyForBody(app, '正文取消迟到结果验收', 8);
+      MockBodyProvider.prototype.generateBodyChapter = async function(input) {
+        modelStarted?.();
+        await new Promise<void>((resolve) => { releaseModel = resolve; });
+        const draft = await generateBody.call(this, input);
+        return { ...draft, content: '长'.repeat((input.chapter.wordTarget ?? 2000) * 2) };
+      };
+      const request = app.inject({ method: 'POST', url: `/novels/${novelId}/chapters/batch-generate`,
+        payload: { strategySnapshotId: strategySnapshot.id,
+          expectedStrategySnapshotVersion: strategySnapshot.versionNo, idempotencyKey: 'cancelled-overlength-1' } });
+      await modelStartedPromise;
+      const activeTask = repository.getGenerationTasks().find((task) => task.taskType === 'body_batch_generate' && task.status === TaskStatus.Processing);
+      assert.ok(activeTask);
+      const during = await app.inject({ method: 'GET', url: `/tasks/${activeTask.id}` });
+      assert.equal(during.json().data.status, 'processing');
+      const cancelled = await app.inject({ method: 'POST', url: `/tasks/${activeTask.id}/cancel`,
+        payload: { reason: '用户取消长时间等待' } });
+      assert.equal(cancelled.statusCode, 200, cancelled.body);
+      releaseModel?.();
+      const lateResponse = await request;
+      assert.equal(lateResponse.statusCode, 409, lateResponse.body);
+      const chapters = repository.getNovelChapters().filter((chapter) => chapter.novelId === novelId && chapter.chapterNo >= 4);
+      assert.equal(chapters.every((chapter) => chapter.currentContentVersionId === null), true);
+      assert.equal(repository.getChapterContentVersions().some((version) => chapters.some((chapter) => chapter.id === version.chapterId)), false);
+    } finally {
+      releaseModel?.();
+      MockBodyProvider.prototype.generateBodyChapter = generateBody;
       await app.close();
     }
   });

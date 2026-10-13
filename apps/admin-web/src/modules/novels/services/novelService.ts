@@ -914,7 +914,7 @@ export function toTrialCandidateRow(candidate: TrialChapterCandidateDTO): TrialC
   const score = candidate.scoring.totalScore
   const lengthGate = toChapterLengthGateRow((candidate as TrialCandidateWithLengthGate).lengthGate)
   const canSelectByStatus = candidate.status === VersionStatus.Candidate
-  const canSelect = canSelectByStatus && lengthGate?.canAdopt === true
+  const canSelect = canSelectByStatus && lengthGate?.canAdopt === true && candidate.requiresContentReview !== true
 
   return {
     id: candidate.id,
@@ -922,8 +922,8 @@ export function toTrialCandidateRow(candidate: TrialChapterCandidateDTO): TrialC
     title: candidate.title,
     versionLabel: `v${candidate.versionNo}`,
     statusText: getVersionStatusText(candidate.status),
-    scoreText: String(score),
-    gateText: candidate.scoring.gateResultText,
+    scoreText: candidate.requiresContentReview ? '-' : String(score),
+    gateText: candidate.requiresContentReview ? '待逐版本复核' : candidate.scoring.gateResultText,
     riskLevelText: getRiskLevelText(candidate.riskLevel),
     riskTags: candidate.riskTags,
     openingStrategy: candidate.openingStrategy,
@@ -938,7 +938,9 @@ export function toTrialCandidateRow(candidate: TrialChapterCandidateDTO): TrialC
     canSelect,
     selectDisabledReason: canSelect
       ? null
-      : lengthGate?.adoptDisabledReason ?? (canSelectByStatus ? '缺少权威字符数门禁结果，已阻止采用，请重新生成。' : '该候选当前状态不允许采用。'),
+      : candidate.requiresContentReview && lengthGate?.canAdopt
+        ? '字数合格，但本稿的特性卡、审稿和记忆尚未逐版本复核，暂不可采用。'
+        : lengthGate?.adoptDisabledReason ?? (canSelectByStatus ? '缺少权威字符数门禁结果，已阻止采用，请重新生成。' : '该候选当前状态不允许采用。'),
     requiresRiskConfirm: score < 75 || candidate.scoring.gateResult !== 'pass',
     evidence: candidate.scoring.evidence,
     penalties: candidate.scoring.penalties,

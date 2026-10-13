@@ -886,6 +886,7 @@ export interface TrialChapterCandidateDTO {
   staleLevel: StaleLevel;
   isAiRecommended: boolean;
   isSelected: boolean;
+  requiresContentReview?: boolean;
   openingStrategy: string;
   openingHighlight: string;
   firstSentence: string;

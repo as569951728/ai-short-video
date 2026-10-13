@@ -199,6 +199,63 @@ describe('Prisma body batch repository', () => {
     assert.equal(client.tables.generationTask[0].status, 'FAILED');
   });
 
+  it('stores overlength original and experimental revision as separate candidates without formal pointers', async () => {
+    const { repository, client, base, chapters } = fixture();
+    await repository.createBodyBatchTask(base);
+    const originalContent = '长'.repeat(2301);
+    const revisedContent = '短'.repeat(2100);
+    const result = await repository.generateBodyBatch({ ...base, chapters: [draft(chapters[0])],
+      overlengthDraft: { chapter: chapters[1] as BodyBatchGenerationInput['chapters'][number]['chapter'],
+        originalContent, originalSummary: '原稿摘要', revisedContent }, previousBatchSummary: null });
+    assert.equal(result.batch.status, 'paused');
+    assert.equal(result.batch.completedCount, 1);
+    assert.equal(result.batch.pendingCount, 1);
+    assert.equal(result.batch.chapterResults[1].status, 'pending');
+    assert.equal(result.batch.chapterResults[1].lengthGate?.status, 'too_long');
+    assert.equal(client.tables.generationTask[0].status, 'WAITING_CONFIRMATION');
+    assert.equal(client.tables.novelChapter[1].currentContentVersionId, null);
+    assert.equal(client.tables.novelChapter[1].currentFeatureCardVersionId, null);
+    assert.equal(client.tables.novelChapter[1].currentReviewReportId, null);
+    assert.equal(client.tables.chapterFeatureCard.length, 1);
+    assert.equal(client.tables.reviewReport.length, 1);
+    assert.equal(client.tables.longTermMemory.length, 1);
+    const candidates = client.tables.chapterContentVersion.filter((row) => row.chapterId === chapters[1].id);
+    assert.deepEqual(candidates.map((row) => [row.versionNo, row.status, row.sourceType, row.wordCount]), [
+      [1, 'CANDIDATE', 'ai_overlength_original', 2301],
+      [2, 'CANDIDATE', 'ai_overlength_revision', 2100]
+    ]);
+    assert.equal(candidates[1].metadata.revisionOfCandidateId, candidates[0].id);
+    assert.deepEqual(client.tables.generationTask[0].resultVersionIdsJson, [
+      result.batch.chapterResults[0].contentVersionId, candidates[0].id, candidates[1].id
+    ]);
+    assert.equal((await repository.findBodyBatchByIdempotencyKey('tenant-a', 'novel-1', 'body-key-0001'))?.status, 'paused');
+    assert.equal((await repository.findLatestBodyBatch('tenant-a', 'novel-1'))?.chapterResults[1].contentVersionId, candidates[0].id);
+  });
+
+  it('discards an overlength model result after cancellation or an upstream version change', async () => {
+    for (const invalidation of ['cancelled', 'stale_source'] as const) {
+      const { repository, client, base, chapters } = fixture();
+      await repository.createBodyBatchTask(base);
+      if (invalidation === 'cancelled') {
+        client.tables.generationTask[0].status = 'CANCELLED';
+        client.tables.generationTask[0].cancelRequestedAt = base.now;
+      } else {
+        client.tables.novel[0].currentChapterPlanVersionId = 'new-plan';
+      }
+      await assert.rejects(
+        () => repository.generateBodyBatch({ ...base, chapters: [],
+          overlengthDraft: { chapter: chapters[0] as BodyBatchGenerationInput['chapters'][number]['chapter'],
+            originalContent: '长'.repeat(2301), originalSummary: '迟到原稿' }, previousBatchSummary: null }),
+        (error: unknown) => (error as { code?: string }).code ===
+          (invalidation === 'cancelled' ? ErrorCode.GateBlocked : ErrorCode.CandidateStale)
+      );
+      assert.equal(client.tables.chapterContentVersion.length, 0, invalidation);
+      assert.equal(client.tables.novelChapter[0].currentContentVersionId, null, invalidation);
+      assert.equal(client.tables.novelChapter[0].lastGenerationTaskId, null, invalidation);
+      assert.deepEqual(client.tables.generationTask[0].metadata.bodyBatchProgress.chapterResults, [], invalidation);
+    }
+  });
+
   it('rejects overlength content and changed targets before formal writes', async () => {
     const { repository, client, base, chapters } = fixture();
     await repository.createBodyBatchTask(base);

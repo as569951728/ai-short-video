@@ -7,11 +7,13 @@ import {
   StageStatus,
   TaskStatus,
   VersionStatus,
+  type BodyBatchChapterResultDTO,
   type FirstVideoSuggestionDTO,
   type FullReviewIssueDTO,
   type StructureAssetContentDTO,
   type VideoReadinessCheckItemDTO
 } from '@ai-shortvideo/shared';
+import { evaluateChapterLength } from '../domain/chapterLengthPolicy.js';
 import {
   DEFAULT_POLICY_PROFILE_VERSION_ID,
   type AdoptedDirectionRecord,
@@ -2485,7 +2487,7 @@ export function createInMemoryNovelRepository(): InMemoryNovelRepository {
       task.currentStep = `正在保存第 ${input.startChapterNo}-${input.endChapterNo} 章正文`;
       task.updatedAt = input.now;
       const batchId = nextId('bodybatch');
-      const chapterResults = [];
+      const chapterResults: BodyBatchChapterResultDTO[] = [];
       let failedChapterNo: number | null = null;
       let completedCount = 0;
 
@@ -2573,7 +2575,50 @@ export function createInMemoryNovelRepository(): InMemoryNovelRepository {
         }));
       }
 
-      const status = failedChapterNo ? 'paused' : 'completed';
+      const overlength = input.overlengthDraft;
+      if (overlength) {
+        const chapter = chapters.find((item) => item.id === overlength.chapter.id && item.tenantId === input.context.tenantId && item.novelId === input.novel.id);
+        const lengthGate = evaluateChapterLength(overlength.originalContent, chapter?.wordTarget ?? null);
+        if (!chapter || chapter.chapterNo !== input.startChapterNo + completedCount || chapter.currentContentVersionId ||
+            chapterContentVersions.some((version) => version.tenantId === input.context.tenantId && version.chapterId === chapter.id) ||
+            lengthGate.status !== 'too_long') {
+          throw new BusinessError(ErrorCode.GateBlocked, '超长原稿与当前章节或批次检查点不匹配。');
+        }
+        const revisedGate = overlength.revisedContent
+          ? evaluateChapterLength(overlength.revisedContent, chapter.wordTarget)
+          : null;
+        if (revisedGate && revisedGate.status !== 'pass') throw new BusinessError(ErrorCode.GateBlocked, '精简候选未通过字数门禁。');
+        const original: ChapterContentVersionRecord = {
+          id: nextId('content'), tenantId: input.context.tenantId, novelId: input.novel.id,
+          chapterId: chapter.id, versionNo: 1, status: VersionStatus.Candidate, staleLevel: StaleLevel.None,
+          sourceType: 'ai_overlength_original', sourceTaskId: task.id, sourceVersionRefs: input.sourceVersionRefs,
+          rewriteReason: null, content: overlength.originalContent, wordCount: lengthGate.actual,
+          summary: overlength.originalSummary, reviewScore: null, decisionRecordId: null,
+          createdBy: input.context.userId, createdAt: input.now,
+          metadata: { batchId, chapterNo: chapter.chapterNo, title: chapter.title, lengthRecovery: 'original',
+            lengthGate, reviewRequired: true, riskLevel: RiskLevel.Medium }
+        };
+        chapterContentVersions.unshift(original);
+        if (overlength.revisedContent && revisedGate) {
+          chapterContentVersions.unshift({ ...original, id: nextId('content'), versionNo: 2,
+            sourceType: 'ai_overlength_revision', rewriteReason: '超长原稿实验精简',
+            content: overlength.revisedContent, wordCount: revisedGate.actual, summary: null,
+            metadata: { batchId, chapterNo: chapter.chapterNo, title: chapter.title, lengthRecovery: 'revision',
+              revisionOfCandidateId: original.id, lengthGate: revisedGate, reviewRequired: true, riskLevel: RiskLevel.Medium } });
+        }
+        chapter.mainStatus = 'pending';
+        chapter.statusNote = '原稿超长待处理';
+        chapter.lastGenerationTaskId = task.id;
+        chapter.updatedAt = input.now;
+        chapterResults.push({ chapterId: chapter.id, chapterNo: chapter.chapterNo, title: chapter.title,
+          status: 'pending' as const, statusText: '超长待处理', contentVersionId: original.id,
+          featureCardId: null, reviewReportId: null, longTermMemoryId: null, score: null,
+          riskLevel: RiskLevel.Medium, hardFailed: false, lengthGate,
+          statusNote: `原稿 ${lengthGate.actual} 字，高于上限 ${lengthGate.upperBound} 字。`,
+          recommendedAction: '查看超长候选，复核后再继续' });
+      }
+
+      const status = failedChapterNo || overlength ? 'paused' : 'completed';
       const summary = createBodyBatchSummary({
         batchId,
         chapterResults,
@@ -2583,6 +2628,10 @@ export function createInMemoryNovelRepository(): InMemoryNovelRepository {
         completedCount,
         createdAt: input.now
       });
+      if (overlength) {
+        summary.conclusion = `已完成 ${completedCount} 章，第 ${overlength.chapter.chapterNo} 章原稿超长，已保存候选并暂停后续章节。`;
+        summary.riskChapterIds.push(overlength.chapter.id);
+      }
       const totalCount = input.endChapterNo - input.startChapterNo + 1;
       const batch: BodyBatchRecord = {
         id: batchId,
@@ -2597,11 +2646,11 @@ export function createInMemoryNovelRepository(): InMemoryNovelRepository {
         startChapterNo: input.startChapterNo,
         endChapterNo: input.endChapterNo,
         status,
-        statusNote: failedChapterNo ? `第 ${failedChapterNo} 章硬失败，后续章节未继续生成。` : '本批正文生成完成。',
+        statusNote: overlength ? `第 ${overlength.chapter.chapterNo} 章超长待处理，后续章节未继续。` : failedChapterNo ? `第 ${failedChapterNo} 章硬失败，后续章节未继续生成。` : '本批正文生成完成。',
         completedCount,
         failedCount: failedChapterNo ? 1 : 0,
-        pendingCount: failedChapterNo ? totalCount - completedCount - 1 : 0,
-        failedChapterNo,
+        pendingCount: overlength ? totalCount - completedCount : failedChapterNo ? totalCount - completedCount - 1 : 0,
+        failedChapterNo: failedChapterNo ?? overlength?.chapter.chapterNo ?? null,
         chapterResults,
         summary,
         createdAt: input.now,
@@ -2614,14 +2663,18 @@ export function createInMemoryNovelRepository(): InMemoryNovelRepository {
       };
       bodyBatches.unshift(batch);
 
-      task.status = failedChapterNo ? TaskStatus.Failed : TaskStatus.Completed;
-      task.statusNote = failedChapterNo ? '硬失败待处理，已完成章节保留。' : '本批正文生成完成，已生成批次总结。';
+      task.status = overlength ? TaskStatus.WaitingConfirmation : failedChapterNo ? TaskStatus.Failed : TaskStatus.Completed;
+      task.statusNote = overlength ? '原稿超长已存为候选，等待处理；正式正文未写入。' : failedChapterNo ? '硬失败待处理，已完成章节保留。' : '本批正文生成完成，已生成批次总结。';
       task.progress = 100;
-      task.currentStep = failedChapterNo ? `第 ${failedChapterNo} 章硬失败待处理` : '批次总结已生成';
+      task.currentStep = overlength ? `第 ${overlength.chapter.chapterNo} 章超长待处理` : failedChapterNo ? `第 ${failedChapterNo} 章硬失败待处理` : '批次总结已生成';
       task.outputSummary = summary.conclusion;
       task.resultObjectType = 'body_batch';
       task.resultObjectId = batch.id;
-      task.resultVersionIds = chapterResults.map((result) => result.contentVersionId).filter((id): id is string => Boolean(id));
+      task.resultVersionIds = [...new Set([
+        ...chapterResults.map((result) => result.contentVersionId).filter((id): id is string => Boolean(id)),
+        ...chapterContentVersions.filter((version) => version.tenantId === input.context.tenantId &&
+          version.sourceTaskId === task.id && version.sourceType === 'ai_overlength_revision').map((version) => version.id)
+      ])];
       task.failureCategory = failedChapterNo ? 'quality_failed' : null;
       task.errorCode = failedChapterNo ? 'QUALITY_GATE_FAILED' : null;
       task.errorMessage = failedChapterNo ? `第 ${failedChapterNo} 章硬失败，后续章节已暂停。` : null;
@@ -2633,7 +2686,7 @@ export function createInMemoryNovelRepository(): InMemoryNovelRepository {
         batch
       };
       appendTaskEvent(task, {
-        eventType: failedChapterNo ? 'batch_paused' : 'batch_completed',
+        eventType: failedChapterNo || overlength ? 'batch_paused' : 'batch_completed',
         message: summary.conclusion,
         progress: 100,
         requestId: input.context.requestId,
@@ -2644,7 +2697,7 @@ export function createInMemoryNovelRepository(): InMemoryNovelRepository {
       const allCompleted = activeChapters.length > 0 && activeChapters.every((chapter) => chapter.currentContentVersionId && chapter.mainStatus === 'completed');
       mutateNovel(input.novel.id, {
         creationStage: NovelCreationStage.Body,
-        stageStatus: failedChapterNo ? StageStatus.Blocked : allCompleted ? StageStatus.Completed : StageStatus.NotStarted,
+        stageStatus: failedChapterNo || overlength ? StageStatus.Blocked : allCompleted ? StageStatus.Completed : StageStatus.NotStarted,
         updatedBy: input.context.userId,
         updatedAt: input.now
       });
@@ -3566,7 +3619,7 @@ export function createInMemoryNovelRepository(): InMemoryNovelRepository {
 
   function createBodyBatchSummary(options: {
     batchId: string;
-    chapterResults: ReturnType<typeof createBodyChapterResult>[];
+    chapterResults: BodyBatchChapterResultDTO[];
     startChapterNo: number;
     endChapterNo: number;
     failedChapterNo: number | null;

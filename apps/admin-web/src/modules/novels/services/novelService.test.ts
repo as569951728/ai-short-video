@@ -461,6 +461,10 @@ describe('novel service data source switching', () => {
     const bodyRow = toBodyBatchChapterResultRow(bodyResult)
     const invalidRow = toChapterLengthGateRow({ metric: 'unicode_code_point_non_whitespace_nfc_v1', canAdopt: true })
     const missingGateRow = toTrialCandidateRow({ ...createTrialCandidateDTO(), lengthGate: undefined } as unknown as TrialChapterCandidateDTO)
+    const unrevisedEvidenceRow = toTrialCandidateRow({ ...createTrialCandidateDTO(),
+      requiresContentReview: true,
+      lengthGate: { ...shortCandidate.lengthGate, actual: 2100, status: 'pass', canAdopt: true, statusText: '字符数合格' },
+    })
 
     assert.equal(candidateRow.canSelectByStatus, true)
     assert.equal(candidateRow.canSelect, false)
@@ -474,6 +478,9 @@ describe('novel service data source switching', () => {
     assert.equal(missingGateRow.canSelectByStatus, true)
     assert.equal(missingGateRow.canSelect, false)
     assert.match(missingGateRow.selectDisabledReason ?? '', /缺少权威字符数门禁结果/)
+    assert.equal(unrevisedEvidenceRow.canSelect, false)
+    assert.equal(unrevisedEvidenceRow.scoreText, '-')
+    assert.match(unrevisedEvidenceRow.selectDisabledReason ?? '', /逐版本复核/)
   })
 
   it('posts structure generation and adoption requests to the backend', async () => {

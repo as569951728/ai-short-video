@@ -12,6 +12,7 @@ import type { NovelRepository, RequestContextResolver } from './modules/novels/d
 import type { VideoRepository } from './modules/videos/domain/videoDomain.js';
 import { createNovelProvidersFromEnv } from './modules/novels/providers/providerFactory.js';
 import type { FullReviewProvider } from './modules/novels/providers/mockFullReviewProvider.js';
+import type { BodyProvider } from './modules/novels/providers/mockBodyProvider.js';
 import type { HotspotReferenceGateway } from './modules/novels/integrations/hotspotReferenceGateway.js';
 import { createInMemoryNovelRepository, isInMemoryNovelRepository } from './modules/novels/repositories/inMemoryNovelRepository.js';
 import { createInMemoryVideoRepository } from './modules/videos/repositories/inMemoryVideoRepository.js';
@@ -26,6 +27,7 @@ interface BuildAppOptions {
   aiProviderEnv?: AiProviderEnv;
   llmClient?: LlmClient;
   fullReviewProvider?: FullReviewProvider;
+  bodyProvider?: BodyProvider;
   hotspotReferenceGateway?: HotspotReferenceGateway;
   now?: () => Date;
   requestContextResolver?: RequestContextResolver | null;
@@ -84,6 +86,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   await registerNovelRoutes(app, {
     repository: novelRepository,
     ...novelProviders,
+    bodyProvider: options.bodyProvider ?? novelProviders.bodyProvider,
     fullReviewProvider: options.fullReviewProvider ?? novelProviders.fullReviewProvider,
     hotspotReferenceGateway: options.hotspotReferenceGateway,
     now: options.now,

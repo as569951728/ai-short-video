@@ -902,6 +902,36 @@ describe('NovelDetailWorkbench DOM behavior', () => {
     }
   })
 
+  it('shows a persisted overlength candidate after refresh and opens its chapter', async () => {
+    mocks.route.query = { step: 'body' }
+    const fixture = createBodyGenerationFixture({ status: 'pending' })
+    const overlengthResult = {
+      ...fixture.latestBatch.summary.chapterResults[0],
+      chapterNo: 5,
+      chapterId: 'chapter-dom-005',
+      status: 'pending',
+      statusText: '超长待处理',
+      lengthGate: { status: 'too_long', actualText: '2800', targetText: '2200', rangeText: '1870-2530', statusText: '字符数偏多', tagType: 'danger' },
+    }
+    mocks.getNovelDetail.mockResolvedValue(createNovelDetail({
+      creationStage: NovelCreationStage.Body,
+      bodyGeneration: {
+        ...fixture,
+        latestBatch: { ...fixture.latestBatch, status: 'paused', statusText: '已暂停',
+          chapterResults: [overlengthResult], summary: { ...fixture.latestBatch.summary, chapterResults: [overlengthResult] } },
+        recommendedAction: { label: '超长待处理', reasonText: '第 5 章原稿待复核', disabled: true },
+      },
+    }))
+
+    wrapper = mount(NovelDetailWorkbench, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    const notice = wrapper.find('[data-body-recovery="overlength"]')
+    expect(notice.text()).toContain('第 5 章尚未写入正式正文')
+    expect(notice.text()).toContain('未完成逐版本复核前不能采用')
+    await notice.find('button').trigger('click')
+    expect(mocks.routerPush).toHaveBeenCalledWith('/novels/novel-dom-001/chapters/chapter-dom-005')
+  })
+
   it('blocks duplicate body generation after refresh while the authoritative task is processing', async () => {
     mocks.route.query = { step: 'body' }
     mocks.getNovelDetail.mockResolvedValue(createNovelDetail({

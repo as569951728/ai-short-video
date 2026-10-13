@@ -95,6 +95,7 @@ import {
   DEFAULT_USER_ID,
   DEFAULT_POLICY_PROFILE_VERSION_ID,
   type BodyChapterDraft,
+  type BodyBatchGenerationInput,
   type ChapterContentVersionRecord,
   type ChapterFeatureCardRecord,
   type CreativeVersionRecord,
@@ -981,12 +982,15 @@ export class NovelService {
     const novel = await this.findNovelOrThrow(context.tenantId, novelId);
     this.ensureLifecycleActive(novel);
     const idempotencyKey = request.idempotencyKey?.trim() || createInternalBodyIdempotencyKey(action, novelId, context.requestId);
-    const strategySnapshot = await this.ensureBodyBatchGate(novel, request, context);
-    const sourceVersionRefs = createBodySourceRefs(novel, strategySnapshot);
     const existingBatch = await this.options.repository.findBodyBatchByIdempotencyKey(context.tenantId, novelId, idempotencyKey);
     if (existingBatch) {
+      const strategySnapshot = await this.options.repository.findBodyStrategySnapshot(context.tenantId, novelId);
+      if (!strategySnapshot) throw new BusinessError(ErrorCode.CandidateStale, '正文策略快照已变化，请刷新后查看原任务。');
+      const sourceVersionRefs = createBodySourceRefs(novel, strategySnapshot);
       return this.returnExistingBodyBatch({ novel, request, context, strategySnapshot, sourceVersionRefs, existingBatch, idempotencyKey, action });
     }
+    const strategySnapshot = await this.ensureBodyBatchGate(novel, request, context);
+    const sourceVersionRefs = createBodySourceRefs(novel, strategySnapshot);
     const chapters = await this.options.repository.listNovelChapters(context.tenantId, novelId);
     const range = calculateBodyBatchRange(chapters, request);
     if (!range.startChapterNo || !range.endChapterNo) {
@@ -1050,6 +1054,7 @@ export class NovelService {
       provider: async (authoritativeInput) => {
         const authoritative = authoritativeInput as typeof providerInput;
         const drafts: BodyChapterDraft[] = [];
+        let overlengthDraft: BodyBatchGenerationInput['overlengthDraft'];
         let previousContent = authoritative.previousContent;
         let previousMemory = authoritative.previousMemory;
         for (const providerChapter of authoritative.targetChapters) {
@@ -1066,8 +1071,16 @@ export class NovelService {
             previousBatchNotes: authoritative.previousBatchNotes,
             enhancedReview: authoritative.enhancedReview && chapter.chapterNo <= 10
           });
-          if (providerDraft.experimentalRevisionRequiresConfirmation) {
-            throw new BusinessError(ErrorCode.GateBlocked, '修订稿需要先保存为候选并由用户采用；当前流程不会自动写入正式正文。');
+          const originalDraft = providerDraft.experimentalOriginalDraft ?? providerDraft;
+          const originalLength = evaluateChapterLength(originalDraft.content, chapter.wordTarget);
+          if (originalLength.status === 'too_long') {
+            overlengthDraft = {
+              chapter,
+              originalContent: originalDraft.content,
+              originalSummary: originalDraft.summary,
+              ...(providerDraft.experimentalRevisionRequiresConfirmation ? { revisedContent: providerDraft.content } : {})
+            };
+            break;
           }
           const draft = bindGeneratedBodyChapter(chapter, providerDraft);
           // A provider may return chapter-local memory; immutable facts must survive later chapters and the saved snapshot.
@@ -1080,13 +1093,14 @@ export class NovelService {
           previousContent = projectChapterContentProviderInput(createDraftLikeContentVersion(chapter, draft));
           previousMemory = projectLongTermMemoryProviderInput(draft.memory);
         }
-        return drafts;
+        return { chapters: drafts, overlengthDraft };
       },
-      finalize: (task, drafts) => this.options.repository.generateBodyBatch({
+      finalize: (task, result) => this.options.repository.generateBodyBatch({
         novel,
         strategySnapshot,
         task,
-        chapters: drafts,
+        chapters: result.chapters,
+        overlengthDraft: result.overlengthDraft,
         idempotencyKey,
         requestFingerprint,
         startChapterNo: range.startChapterNo!,
@@ -1377,6 +1391,9 @@ export class NovelService {
     const candidate = await this.options.repository.findChapterContentVersionById(context.tenantId, novelId, versionId);
     if (!candidate || candidate.chapterId !== chapterId) {
       throw new BusinessError(ErrorCode.NotFound, '章节候选正文不存在');
+    }
+    if (toRecord(candidate.metadata).reviewRequired === true || candidate.sourceType?.startsWith('ai_overlength_')) {
+      throw new BusinessError(ErrorCode.GateBlocked, '超长恢复候选尚未完成逐版本复核，不能采用为正式正文。');
     }
     if (!existingTask && candidate.status !== VersionStatus.Candidate) {
       throw new BusinessError(ErrorCode.VersionConflict, '该章节正文版本当前不可采用');
@@ -2202,7 +2219,7 @@ export class NovelService {
     );
     const candidateChapter = candidateChapters.find(Boolean);
     if (candidateChapter) {
-      throw new BusinessError(ErrorCode.GateBlocked, '存在未确认章节正文候选，请先采用、放弃或处理后再继续批量正文', {
+      throw new BusinessError(ErrorCode.GateBlocked, '存在未处理的章节正文候选，请在章节详情查看；处理完成前不能继续批量正文。', {
         chapterId: candidateChapter.id,
         chapterNo: candidateChapter.chapterNo
       });
@@ -2730,6 +2747,7 @@ async function buildBodyGenerationState(
   const chapters = inputChapters ?? await repository.listNovelChapters(novel.tenantId, novel.id);
   const strategySnapshot = inputStrategySnapshot ?? await repository.findBodyStrategySnapshot(novel.tenantId, novel.id);
   const latestBatch = await repository.findLatestBodyBatch(novel.tenantId, novel.id);
+  const overlengthPending = latestBatch?.chapterResults.find((result) => result.status === 'pending' && result.lengthGate?.status === 'too_long');
   const openImpactCases = await repository.listOpenBlockingImpactCases(novel.tenantId, novel.id);
   const nextRange = calculateBodyBatchPreviewRange(chapters);
   const completedCount = chapters.filter((chapter) => chapter.currentContentVersionId && chapter.mainStatus === 'completed').length;
@@ -2758,9 +2776,13 @@ async function buildBodyGenerationState(
       : latestBatch?.status === 'paused'
         ? createLocalRecommendedAction({
             type: 'handle_failed_chapter',
-            label: '处理失败章节',
-            reasonText: latestBatch.summary.conclusion,
-            taskType: 'chapter_body_rewrite'
+            label: overlengthPending ? '超长待处理' : '处理失败章节',
+            reasonText: overlengthPending
+              ? `第 ${overlengthPending.chapterNo} 章原稿已保留为候选。请查看字数和正文；复核完成前不会自动采用或继续生成。`
+              : latestBatch.summary.conclusion,
+            disabled: Boolean(overlengthPending),
+            disabledReason: overlengthPending ? '超长候选尚未完成复核。' : undefined,
+            taskType: overlengthPending ? 'body_batch_generate' : 'chapter_body_rewrite'
           })
         : !strategySnapshot
           ? createLocalRecommendedAction({
@@ -3317,6 +3339,7 @@ function toTrialChapterCandidateDTO(version: ChapterContentVersionRecord, chapte
     staleLevel: version.staleLevel,
     isAiRecommended: metadata.isAiRecommended === true,
     isSelected: metadata.isSelected === true || trialStatus === 'selected_for_trial',
+    requiresContentReview: metadata.reviewRequired === true,
     openingStrategy: String(metadata.openingStrategy ?? ''),
     openingHighlight: String(metadata.openingHighlight ?? ''),
     firstSentence: String(metadata.firstSentence ?? firstSentence(version.content)),
@@ -3862,13 +3885,14 @@ function toChapterWorkbenchDTO(record: {
 }, novel: NovelRecord): ChapterWorkbenchDTO {
   const currentContent = record.currentContent ? toTrialChapterCandidateDTO(record.currentContent, record.chapter) : null;
   const candidateCompares = Object.fromEntries(
-    record.candidateVersions.map((version) => [
+    record.candidateVersions.filter((version) => toRecord(version.metadata).reviewRequired !== true).map((version) => [
       version.id,
       toSummaryCompare(toRecord(version.metadata).summaryCompare, record.currentContent, version)
     ])
   );
   const openBlockingImpactCase = record.impactCases.find((impactCase) => toImpactCaseDTO(impactCase).blocksFullReview);
   const actionableCandidate = record.candidateVersions.find((version) => version.status === VersionStatus.Candidate && typeof toRecord(version.metadata).trialRunId !== 'string');
+  const needsContentReview = actionableCandidate && toRecord(actionableCandidate.metadata).reviewRequired === true;
   const recommendedAction = novel.creationStage === NovelCreationStage.Trial
     ? createLocalRecommendedAction({
         type: currentContent ? 'view_trial_review' : 'generate_trial',
@@ -3886,9 +3910,13 @@ function toChapterWorkbenchDTO(record: {
     : actionableCandidate
       ? createLocalRecommendedAction({
           type: 'adopt_chapter_candidate',
-          label: '采用候选版本',
-          reasonText: '本章存在重写候选，采用前请查看摘要对比和影响提示。',
+          label: needsContentReview ? '查看超长候选' : '采用候选版本',
+          reasonText: needsContentReview
+            ? '超长原稿已保留在候选池。字数合格的修订稿也需先完成逐版本复核，当前不能采用。'
+            : '本章存在重写候选，采用前请查看摘要对比和影响提示。',
           confirmRequired: true,
+          disabled: needsContentReview,
+          disabledReason: needsContentReview ? '候选尚未完成逐版本复核。' : undefined,
           taskType: 'chapter_impact_assess'
         })
       : currentContent
