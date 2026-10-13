@@ -154,3 +154,9 @@ Prisma leased fenced finalize 扩展到全书大纲、阶段大纲和章节目�
 新增显式运行的 `prisma-live-worker-smoke.ts`，要求 URL 同时由 `DATABASE_URL` 和 `E1_MYSQL_SMOKE_URL` 提供，且必须为本机非默认端口、独立 `ai_shortvideo_e1_*` schema；只使用 mock provider，并在脚本内**临时**放行 Prisma 的 `novel_direction_generate` 能力，生产仓储门禁仍关闭。真实 MySQL 中方向任务从 `queued` 被 worker 领取，最终为 `waiting_confirmation`，四个候选、一次调用预算、一条终态事件，正式方向指针仍为空。第二个任务在模型已派发后停止 worker，关闭并重建 Prisma 客户端，租约过期后由新仓储实例扫描恢复为 `PROVIDER_OUTCOME_UNKNOWN`；预算仍为 1，候选为 0，迟到结果被围栏。测试输出不包含模型输入、响应或数据库口令。
 
 **E1 仍未完成**：上述恢复是同进程停 worker、重建数据库客户端后的持久库测试，不是杀进程再启动服务的端到端故障注入；也未验证两个独立 worker 竞争、真实付费模型费用对账、其余生成动作的 Prisma 写链和生产页面 2-5 分钟等待。所有生产异步能力继续默认关闭，不应把测试专用 capability override 当作上线依据。
+
+## E1 第十八个执行检查点
+
+在同一隔离 MySQL schema 上增加真正的进程终止烟测：子进程以 mock provider 领取方向任务，确认进入 `provider_call_started` 且调用预算为 1 后，主进程对该子进程发送 `SIGKILL`。租约到期后，新的进程和 Prisma 客户端扫描该库，任务被归类为 `PROVIDER_OUTCOME_UNKNOWN`，没有候选；新 worker 启动后该任务没有再次派发，模型调用计数为 0。脚本同样只接受本机非默认端口和独立 E1 schema，不调用真实模型。此项补足了前一检查点明确缺失的**单任务杀进程再启动**证据，但仅覆盖方向生成和一次 worker 重启。
+
+**E1 仍为修复中**：测试专用能力覆盖不等于生产门禁放行。尚需证明双 worker 同时竞争/失租、更多生成动作的 Prisma 原子结果出口、页面在真实 2-5 分钟调用中的状态承接、真实模型费用对账和人工内容验收；未满足前不得宣布整条小说生成异常恢复完成。
