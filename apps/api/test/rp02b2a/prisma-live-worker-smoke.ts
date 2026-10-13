@@ -28,13 +28,14 @@ if (target.protocol !== 'mysql:' || !['127.0.0.1', 'localhost'].includes(target.
 class IsolatedPrismaRepository extends PrismaNovelRepository {
   override async getLeasedExecutionCapability(taskType: string) {
     return ['novel_direction_generate', 'novel_direction_fuse', 'novel_direction_optimize',
-      'trial_writing_generate'].includes(taskType)
+      'trial_writing_generate', 'trial_followup_generate'].includes(taskType)
       ? 'enabled' as const : super.getLeasedExecutionCapability(taskType);
   }
 }
 
 const repository = new IsolatedPrismaRepository();
 const directionProvider = new MockDirectionProvider();
+const trialProvider = new MockTrialProvider();
 const suffix = randomUUID();
 const context = { tenantId: `tenant-e1-${suffix.slice(0, 8)}`, userId: `user-e1-${suffix.slice(0, 8)}`,
   requestId: `req-e1-${suffix}` };
@@ -54,7 +55,7 @@ const worker = new NovelTaskWorkerRuntime({
   policy: { workerConcurrency: 1, leaseDurationMs: 10_000, heartbeatIntervalMs: 1000,
     pollIntervalMs: 200, shutdownGracePeriodMs: 1000 },
   ...createLeasedActionExecutor({ repository, providers: {
-    directionProvider, structureProvider: new MockStructureProvider(), trialProvider: new MockTrialProvider(),
+    directionProvider, structureProvider: new MockStructureProvider(), trialProvider,
     bodyProvider: new MockBodyProvider(), fullReviewProvider: new MockFullReviewProvider()
   } }),
   onRuntimeError: (stage) => { process.stderr.write(`E1 worker ${stage} failed\n`); }
@@ -221,6 +222,97 @@ try {
     tenantId: context.tenantId, novelId: novel.id, sourceTaskId: trialTask.id
   } }), 3);
 
+  const validGenerateFollowup = trialProvider.generateFollowup.bind(trialProvider);
+  trialProvider.generateFollowup = async (input) => {
+    const result = await validGenerateFollowup(input);
+    return { ...result, review: { ...result.review, summary: undefined as unknown as string } };
+  };
+  const invalidFollowupNow = await repository.getAuthoritativeTaskTime();
+  const invalidFollowupQueued = await claimQueuedGeneration({
+    action: 'trial_followup_generate', repository,
+    novel: (await repository.findById(context.tenantId, novel.id))!,
+    objectId: trialRun.id, context,
+    idempotencyKey: `e1-invalid-followup-${suffix}`,
+    effectiveRequest: { trialRunId: trialRun.id,
+      selectedCandidateId: trialVersions[0]!.id },
+    sourceVersionRefs: { currentDirectionVersionId: versions[0]!.id,
+      currentSettingVersionId: null, currentOutlineVersionId: null,
+      currentStageOutlineVersionId: null, currentChapterPlanVersionId: plan.id,
+      selectedChapterOneCandidateId: trialVersions[0]!.id, objectType: 'trial_run' },
+    now: () => invalidFollowupNow,
+    durationDeadlineAt: new Date(invalidFollowupNow.getTime() + 15 * 60_000),
+    providerCapability: trialProvider
+  });
+  const invalidFollowupTask = await waitForTerminalTask(repository, context.tenantId,
+    invalidFollowupQueued.task.id);
+  assert.equal(invalidFollowupTask.status, TaskStatus.Failed);
+  assert.equal(invalidFollowupTask.errorCode, 'WORKER_PAYLOAD_UNSUPPORTED');
+  assert.equal(invalidFollowupTask.providerCallBudgetUsed, 1);
+  assert.equal(await prisma.trialChapterResult.count({ where: {
+    tenantId: context.tenantId, trialRunId: trialRun.id
+  } }), 0);
+  assert.equal(await prisma.reviewReport.count({ where: {
+    tenantId: context.tenantId, novelId: novel.id, sourceTaskId: invalidFollowupTask.id
+  } }), 0);
+  assert.equal((await repository.findTrialRunById(context.tenantId, novel.id, trialRun.id))?.status,
+    'waiting_chapter1_selection');
+  assert.equal((await repository.findTaskById(context.tenantId, trialTask.id))?.status,
+    TaskStatus.WaitingConfirmation);
+  trialProvider.generateFollowup = validGenerateFollowup;
+
+  const followupNow = await repository.getAuthoritativeTaskTime();
+  const followupQueued = await claimQueuedGeneration({
+    action: 'trial_followup_generate', repository,
+    novel: (await repository.findById(context.tenantId, novel.id))!,
+    objectId: trialRun.id, context,
+    idempotencyKey: `e1-followup-${suffix}`,
+    effectiveRequest: { trialRunId: trialRun.id,
+      selectedCandidateId: trialVersions[0]!.id },
+    sourceVersionRefs: { currentDirectionVersionId: versions[0]!.id,
+      currentSettingVersionId: null, currentOutlineVersionId: null,
+      currentStageOutlineVersionId: null, currentChapterPlanVersionId: plan.id,
+      selectedChapterOneCandidateId: trialVersions[0]!.id, objectType: 'trial_run' },
+    now: () => followupNow,
+    durationDeadlineAt: new Date(followupNow.getTime() + 15 * 60_000),
+    providerCapability: new MockTrialProvider()
+  });
+  assert.equal(followupQueued.task.modelRoutingVersion, 'provider:MockTrialProvider:v1');
+  const followupTask = await waitForTerminalTask(repository, context.tenantId, followupQueued.task.id);
+  assert.equal(followupTask.status, TaskStatus.WaitingConfirmation,
+    `Followup failed: ${followupTask.errorCode ?? 'none'} ${followupTask.statusNote ?? ''}; budget=${followupTask.providerCallBudgetUsed}; phase=${followupTask.providerAttemptPhase}`);
+  assert.equal(followupTask.providerCallBudgetUsed, 1);
+  assert.ok(followupTask.resultReceiptHash);
+  assert.deepEqual(followupTask.resultVersionIds[0], trialVersions[0]!.id);
+  const completedRun = await prisma.trialRun.findFirstOrThrow({ where: {
+    tenantId: context.tenantId, id: trialRun.id
+  } });
+  assert.equal(completedRun.status, 'review_ready');
+  assert.equal(completedRun.sourceTaskId, followupTask.id);
+  assert.ok(completedRun.reviewReportId);
+  const chapterResults = await prisma.trialChapterResult.findMany({ where: {
+    tenantId: context.tenantId, trialRunId: trialRun.id
+  } });
+  assert.equal(chapterResults.length, 3);
+  assert.equal(await prisma.chapterFeatureCard.count({ where: {
+    tenantId: context.tenantId, novelId: novel.id, sourceTaskId: followupTask.id
+  } }), 3);
+  assert.equal(await prisma.reviewReport.count({ where: {
+    tenantId: context.tenantId, novelId: novel.id, sourceTaskId: followupTask.id
+  } }), 4);
+  assert.equal((await repository.findTaskById(context.tenantId, trialTask.id))?.status, TaskStatus.Completed);
+  const writtenChapters = await prisma.novelChapter.findMany({ where: {
+    tenantId: context.tenantId, novelId: novel.id
+  }, orderBy: { chapterNo: 'asc' } });
+  assert.equal(writtenChapters.length, 3);
+  assert.deepEqual(writtenChapters.map((chapter) => chapter.currentContentVersionId),
+    followupTask.resultVersionIds);
+  assert.ok(writtenChapters.every((chapter) => chapter.currentFeatureCardVersionId
+    && chapter.currentReviewReportId));
+  assert.equal((await repository.listTaskEvents(context.tenantId, followupTask.id))
+    .filter((event) => event.eventType === 'task_finalized').length, 1);
+  assert.equal((await new IsolatedPrismaRepository().findTrialRunById(
+    context.tenantId, novel.id, trialRun.id))?.reviewReportId, completedRun.reviewReportId);
+
   await worker.stop();
   const invalidNow = await repository.getAuthoritativeTaskTime();
   const invalidQueued = await claimQueuedGeneration({
@@ -321,6 +413,8 @@ try {
     fuseTaskId: fuseTask.id, optimizeTaskId: optimizeTask.id,
     revisionCandidateCount: fusedVersions.length + optimizedVersions.length,
     trialTaskId: trialTask.id, trialCandidateCount: trialVersions.length,
+    followupTaskId: followupTask.id, followupChapterCount: chapterResults.length,
+    malformedFollowupStatus: invalidFollowupTask.status,
     malformedResultStatus: invalidTask?.status,
     malformedTrialResultStatus: malformedTrialTask?.status }) + '\n');
 } finally {

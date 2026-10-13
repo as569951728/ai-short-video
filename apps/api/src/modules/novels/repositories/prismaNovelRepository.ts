@@ -17,6 +17,8 @@ import {
 import { getPrismaClient } from '../../../infrastructure/database/prisma.js';
 import { Prisma } from '../../../generated/prisma/client.js';
 import { evaluateChapterLength } from '../domain/chapterLengthPolicy.js';
+import { bindTrialFollowupChapters } from '../domain/trialFollowupBinding.js';
+import type { TrialFollowupChapterProviderDraft } from '../services/actionExecutionPlan.js';
 import {
   DEFAULT_POLICY_PROFILE_VERSION_ID,
   leasedActionFailure,
@@ -107,6 +109,7 @@ import {
   type TrialChapterResultRecord,
   type TrialConfirmationInput,
   type TrialFollowupGenerationInput,
+  type TrialReviewDraft,
   type TrialFollowupTaskCreationInput,
   type TrialRunRecord,
   type VideoReadinessCheckInput,
@@ -1000,7 +1003,8 @@ export class PrismaNovelRepository implements NovelRepository {
     if (!observed) return { outcome: 'fenced' as const, task: null };
     if (!['novel_direction_generate', 'novel_direction_fuse', 'novel_direction_optimize',
       'novel_setting_generate', 'novel_outline_generate',
-      'stage_outline_generate', 'chapter_plan_generate', 'trial_writing_generate'].includes(observed.taskType)) {
+      'stage_outline_generate', 'chapter_plan_generate', 'trial_writing_generate',
+      'trial_followup_generate'].includes(observed.taskType)) {
       const task = mapGenerationTask(observed);
       if (!task.providerAttemptPhase) return { outcome: 'fenced' as const, task: null };
       return this.failLeasedAction({ ...input, expectedPhase: task.providerAttemptPhase, reason: 'worker_payload_unsupported' });
@@ -1074,6 +1078,91 @@ export class PrismaNovelRepository implements NovelRepository {
       const authority = await this.loadGenerationAuthority(authorityInput, tx);
       if (!matchGenerationAuthority(authorityInput, envelope.sourceVersionRefs.authoritySnapshotHash, authority).ok) {
         return fail('source_stale');
+      }
+      if (current.taskType === 'trial_followup_generate') {
+        const refs = authorityRecord(envelope.sourceVersionRefs);
+        const request = authorityRecord(envelope.normalizedRequest);
+        const novel = await this.findById(input.tenantId, current.novelId!, tx);
+        const trialRun = await this.findTrialRunById(input.tenantId, current.novelId!, envelope.objectId, tx);
+        const selected = typeof refs.selectedChapterOneCandidateId === 'string'
+          ? await this.findChapterContentVersionById(input.tenantId, current.novelId!,
+            refs.selectedChapterOneCandidateId, tx) : null;
+        const chapters = (await this.listNovelChapters(input.tenantId, current.novelId!, tx))
+          .slice(0, trialRun?.trialChapterCount ?? 0);
+        const sourceTask = trialRun?.sourceTaskId
+          ? await tx.generationTask.findFirst({ where: { tenantId: input.tenantId, id: trialRun.sourceTaskId } }) : null;
+        if (envelope.action !== 'trial_followup_generate' || !novel || !trialRun || !selected
+          || trialRun.status !== 'waiting_chapter1_selection'
+          || trialRun.chapterPlanVersionId !== novel.currentChapterPlanVersionId
+          || trialRun.trialChapterCount < 2 || trialRun.trialChapterCount > 5
+          || chapters.length !== trialRun.trialChapterCount
+          || chapters.some((chapter, index) => chapter.chapterNo !== index + 1)
+          || selected.status !== VersionStatus.Candidate || selected.chapterId !== chapters[0]?.id
+          || authorityRecord(selected.metadata).trialRunId !== trialRun.id
+          || request.trialRunId !== trialRun.id || request.selectedCandidateVersionId !== selected.id
+          || !sourceTask || sourceTask.id === current.id
+          || sourceTask.status !== PrismaTaskStatus.WAITING_CONFIRMATION) return fail('source_stale');
+        const raw = input.validatedResult;
+        let bound;
+        let review: TrialReviewDraft;
+        try {
+          if (!validPrismaLeasedTrialFollowupResult(raw)) {
+            throw new Error('invalid trial followup result');
+          }
+          review = raw.review;
+          bound = bindTrialFollowupChapters(chapters, raw.chapters, review);
+          if (bound[0]?.chapter.id !== selected.chapterId || bound[0]?.content !== selected.content) {
+            throw new Error('selected opening changed in followup');
+          }
+          assertNoSensitiveExecutionPayload(trialFollowupSensitiveProbe(raw), 'trialFollowupResult');
+        } catch {
+          return fail('worker_payload_unsupported');
+        }
+        const context = { tenantId: input.tenantId, userId: current.createdBy!, requestId };
+        const generationInput: TrialFollowupGenerationInput = {
+          novel, trialRun, task: mapGenerationTask(current), selectedCandidate: selected,
+          chapters: bound, review, context, now: input.authoritativeNow
+        };
+        const contentVersionIds = await persistLeasedTrialFollowupAssets(tx, generationInput,
+          sourceTask.id, envelope.sourceVersionRefs, current.modelRoutingVersion);
+        const blocked = review.trialResult === 'blocked';
+        const receipt = createSafeResultReceipt(mapGenerationTask(current), {
+          status: 'waiting_confirmation', outcome: 'review_created',
+          resultObjectType: 'trial_run', resultObjectId: trialRun.id,
+          resultVersionIds: contentVersionIds, resultCount: contentVersionIds.length
+        });
+        const transition = await tx.generationTask.updateMany({ where: fence, data: {
+          status: PrismaTaskStatus.WAITING_CONFIRMATION,
+          statusNote: '模型服务已生成试写结果，等待用户确认。', progress: 100,
+          currentStep: blocked ? '第2章硬门槛未通过，试写暂停' : '前三章试写总评已生成，等待确认',
+          resultObjectType: 'trial_run', resultObjectId: trialRun.id,
+          resultVersionId: contentVersionIds[0]!, resultVersionIdsJson: contentVersionIds,
+          outputSummary: review.summary, resultReceiptHash: receipt.hash,
+          providerAttemptPhase: PrismaProviderAttemptPhase.FINALIZING,
+          activeClaimKey: null, leaseOwnerId: null, leaseToken: null, leaseExpiresAt: null,
+          finishedAt: input.authoritativeNow, updatedAt: input.authoritativeNow
+        } });
+        if (transition.count !== 1) throw new Error('Trial followup lost its fenced task transition.');
+        const novelTransition = await tx.novel.updateMany({ where: {
+          tenantId: input.tenantId, id: current.novelId!, deletedAt: null,
+          lifecycleStatus: PrismaNovelLifecycleStatus.ACTIVE,
+          currentChapterPlanVersionId: trialRun.chapterPlanVersionId
+        }, data: { creationStage: PrismaNovelCreationStage.TRIAL,
+          stageStatus: blocked ? PrismaStageStatus.BLOCKED : PrismaStageStatus.WAITING_USER,
+          updatedBy: current.createdBy, updatedAt: input.authoritativeNow } });
+        if (novelTransition.count !== 1) throw new Error('Trial followup lost its novel stage transition.');
+        const finalized = await tx.generationTask.findFirstOrThrow({ where: { tenantId: input.tenantId, id: current.id } });
+        await createTaskEvent(tx, { task: finalized, eventType: 'task_finalized',
+          message: finalized.statusNote!, progress: 100,
+          requestId, createdAt: input.authoritativeNow });
+        await tx.operationLog.create({ data: {
+          tenantId: input.tenantId, userId: current.createdBy, novelId: current.novelId,
+          action: 'generation_task_finalized', objectType: 'generation_task', objectId: current.id,
+          afterSnapshot: { resultVersionIds: receipt.receipt.resultVersionIds, receiptHash: receipt.hash },
+          reason: '后续试写与总评生成完成', sourceTaskId: current.id,
+          requestId, createdAt: input.authoritativeNow
+        } });
+        return { outcome: 'applied' as const, task: mapGenerationTask(finalized) };
       }
       if (current.taskType === 'trial_writing_generate') {
         const request = authorityRecord(envelope.normalizedRequest);
@@ -5190,6 +5279,144 @@ function createTrialFollowupSourceVersionRefs(novel: NovelRecord, selectedChapte
   };
 }
 
+async function persistLeasedTrialFollowupAssets(
+  tx: Prisma.TransactionClient,
+  input: TrialFollowupGenerationInput,
+  sourceTaskId: string,
+  sourceVersionRefs: unknown,
+  modelRoutingVersion: string | null
+): Promise<string[]> {
+  const { context, novel, trialRun, selectedCandidate, chapters, review, task, now } = input;
+  const sourceTransition = await tx.generationTask.updateMany({ where: {
+    tenantId: context.tenantId, id: sourceTaskId, status: PrismaTaskStatus.WAITING_CONFIRMATION
+  }, data: { status: PrismaTaskStatus.COMPLETED, statusNote: '用户已选择第1章候选',
+    currentStep: '第1章候选已选择，继续试写', userAcceptedResult: true,
+    finishedAt: now, updatedAt: now } });
+  if (sourceTransition.count !== 1) throw new Error('Trial followup lost its source task transition.');
+  const completedSourceTask = await tx.generationTask.findFirstOrThrow({ where: {
+    tenantId: context.tenantId, id: sourceTaskId
+  } });
+  await createTaskEvent(tx, { task: completedSourceTask, eventType: 'task_completed',
+    message: '用户已选择第1章候选，任务完成。', progress: 100,
+    requestId: context.requestId, createdAt: now });
+  const selectedTransition = await tx.chapterContentVersion.updateMany({ where: {
+    tenantId: context.tenantId, novelId: novel.id, id: selectedCandidate.id,
+    status: PrismaVersionStatus.CANDIDATE
+  }, data: { status: PrismaVersionStatus.CURRENT,
+    metadata: toJsonObject({ ...authorityRecord(selectedCandidate.metadata),
+      trialStatus: 'selected_for_trial', isSelected: true, followupStatus: 'completed' }) } });
+  if (selectedTransition.count !== 1) throw new Error('Trial followup lost its selected candidate.');
+  await tx.chapterContentVersion.updateMany({ where: {
+    tenantId: context.tenantId, novelId: novel.id, chapterId: selectedCandidate.chapterId,
+    id: { not: selectedCandidate.id }, status: PrismaVersionStatus.CANDIDATE
+  }, data: { status: PrismaVersionStatus.HISTORICAL } });
+  await tx.chapterContentVersion.updateMany({ where: {
+    tenantId: context.tenantId, novelId: novel.id, chapterId: selectedCandidate.chapterId,
+    id: { not: selectedCandidate.id }, status: PrismaVersionStatus.CURRENT
+  }, data: { status: PrismaVersionStatus.HISTORICAL } });
+  const sourceType = modelRoutingVersion?.startsWith('deepseek:') ? 'deepseek' : 'mock_ai';
+  const contentVersionIds: string[] = [];
+  for (const chapterDraft of chapters) {
+    const chapter = chapterDraft.chapter;
+    if (chapter.chapterNo !== 1) {
+      await tx.chapterContentVersion.updateMany({ where: {
+        tenantId: context.tenantId, novelId: novel.id, chapterId: chapter.id,
+        status: PrismaVersionStatus.CURRENT
+      }, data: { status: PrismaVersionStatus.HISTORICAL } });
+    }
+    await tx.chapterFeatureCard.updateMany({ where: {
+      tenantId: context.tenantId, novelId: novel.id, chapterId: chapter.id,
+      status: PrismaVersionStatus.CURRENT
+    }, data: { status: PrismaVersionStatus.HISTORICAL } });
+    const contentVersion = chapter.chapterNo === 1 ? { id: selectedCandidate.id }
+      : await tx.chapterContentVersion.create({ data: {
+        tenantId: context.tenantId, novelId: novel.id, chapterId: chapter.id,
+        versionNo: await getNextChapterContentVersionNo(tx, context.tenantId, novel.id, chapter.id),
+        status: PrismaVersionStatus.CURRENT, staleLevel: PrismaStaleLevel.NONE,
+        sourceType, sourceTaskId: task.id,
+        sourceVersionRefs: toJsonObject(sourceVersionRefs),
+        rewriteReason: '连续试写生成章节正文', content: chapterDraft.content,
+        wordCount: countWords(chapterDraft.content), summary: chapterDraft.summary,
+        reviewScore: chapterDraft.scoring.totalScore, createdBy: context.userId,
+        createdAt: now,
+        metadata: toJsonObject({ trialRunId: trialRun.id, trialStatus: 'selected_for_trial',
+          chapterNo: chapter.chapterNo, title: chapter.title,
+          openingStrategy: chapterDraft.openingStrategy,
+          openingHighlight: chapterDraft.openingHighlight,
+          firstSentence: chapterDraft.firstSentence,
+          first300Summary: chapterDraft.first300Summary,
+          endingHook: chapterDraft.endingHook, riskLevel: chapterDraft.riskLevel,
+          riskTags: chapterDraft.riskTags, aiRecommendedReason: chapterDraft.aiRecommendedReason,
+          isAiRecommended: false, isSelected: true, scoring: chapterDraft.scoring })
+      } });
+    contentVersionIds.push(contentVersion.id);
+    const feature = chapterDraft.featureCard;
+    const featureCard = await tx.chapterFeatureCard.create({ data: {
+      tenantId: context.tenantId, novelId: novel.id, chapterId: chapter.id,
+      versionNo: await getNextFeatureCardVersionNo(tx, context.tenantId, chapter.id),
+      status: PrismaVersionStatus.CURRENT, staleLevel: PrismaStaleLevel.NONE,
+      oneLineSummary: feature.oneLineSummary, coreTask: feature.coreTask,
+      mainConflict: feature.mainConflict, appealPoint: feature.appealPoint,
+      emotionKeywordsJson: feature.emotionKeywords,
+      characterChangesJson: feature.characterChanges,
+      relationshipChangesJson: feature.relationshipChanges,
+      keyInformationJson: feature.keyInformation,
+      foreshadowingOperation: feature.foreshadowingOperation,
+      endingHook: feature.endingHook,
+      factsCannotChangeJson: feature.factsCannotChange,
+      featuresToStrengthenJson: feature.featuresToStrengthen,
+      sourceTaskId: task.id, createdAt: now,
+      metadata: toJsonObject(feature.metadata)
+    } });
+    const reviewReport = await tx.reviewReport.create({ data: createReviewReportData({
+      input, taskId: task.id, chapterDraft, contentVersionId: contentVersion.id
+    }) });
+    await tx.trialChapterResult.create({ data: {
+      tenantId: context.tenantId, trialRunId: trialRun.id, chapterId: chapter.id,
+      contentVersionId: contentVersion.id, featureCardVersionId: featureCard.id,
+      reviewReportId: reviewReport.id, score: chapterDraft.scoring.totalScore,
+      status: chapterDraft.hardFailed ? 'hard_failed' : 'completed',
+      createdAt: now, metadata: { hardFailed: chapterDraft.hardFailed,
+        hardFailureReasons: chapterDraft.hardFailureReasons }
+    } });
+    await tx.novelChapter.update({ where: { id: chapter.id }, data: {
+      currentContentVersionId: contentVersion.id,
+      currentFeatureCardVersionId: featureCard.id,
+      currentReviewReportId: reviewReport.id, lastGenerationTaskId: task.id,
+      wordCount: countWords(chapterDraft.content),
+      mainStatus: chapterDraft.hardFailed ? 'blocked' : 'trial_written',
+      statusNote: chapterDraft.hardFailed ? '试写硬门槛未通过，暂停继续生成。'
+        : '试写正文已生成，等待总评确认。', updatedAt: now
+    } });
+  }
+  const trialReview = await tx.reviewReport.create({ data: createTrialReviewReportData(input, task.id) });
+  const blocked = review.trialResult === 'blocked';
+  const trialTransition = await tx.trialRun.updateMany({ where: {
+    tenantId: context.tenantId, novelId: novel.id, id: trialRun.id,
+    status: 'waiting_chapter1_selection', sourceTaskId
+  }, data: {
+    status: blocked ? 'blocked' : 'review_ready', totalScore: review.totalScore,
+    trialResult: review.trialResult, reviewReportId: trialReview.id,
+    sourceTaskId: task.id, updatedAt: now,
+    metadata: toJsonObject({ ...authorityRecord(trialRun.metadata),
+      selectedChapterOneCandidateId: selectedCandidate.id,
+      currentStep: blocked ? '处理第2章硬失败' : '确认试写总评并生成正文策略快照',
+      blockingReason: blocked ? '第2章硬门槛未通过，不能继续第3章。' : null,
+      requiresRiskConfirmation: review.requiresRiskConfirmation })
+  } });
+  if (trialTransition.count !== 1) throw new Error('Trial followup lost its run transition.');
+  await tx.operationLog.create({ data: {
+    tenantId: context.tenantId, userId: context.userId, novelId: novel.id,
+    action: 'select_trial_chapter1_candidate', objectType: 'trial_run', objectId: trialRun.id,
+    beforeSnapshot: { selectedChapterOneCandidateId: null },
+    afterSnapshot: { selectedChapterOneCandidateId: selectedCandidate.id,
+      trialResult: review.trialResult, totalScore: review.totalScore },
+    reason: '用户选择第1章候选并继续试写', impactSummary: review.summary,
+    sourceTaskId: task.id, requestId: context.requestId, createdAt: now
+  } });
+  return contentVersionIds;
+}
+
 function createReviewReportData(options: {
   input: TrialFollowupGenerationInput;
   taskId: string;
@@ -5768,6 +5995,66 @@ function validPrismaLeasedTrialCandidate(
     && strings(scoring.evidence) && strings(scoring.penalties)
     && typeof scoring.hardFailure === 'boolean' && strings(scoring.hardFailureReasons)
     && evaluateChapterLength(draft.content as string, wordTarget).status === 'pass';
+}
+
+function trialFollowupSensitiveProbe(result: {
+  chapters: TrialFollowupChapterProviderDraft[];
+  review: TrialReviewDraft;
+}) {
+  return {
+    ...result,
+    chapters: result.chapters.map((chapter) => ({
+      ...chapter,
+      review: {
+        ...chapter.review,
+        issueCards: chapter.review.issueCards.map((issue) => {
+          const { message, ...otherFields } = issue;
+          return { ...otherFields, issueText: message };
+        })
+      }
+    }))
+  };
+}
+
+function validPrismaLeasedTrialFollowupResult(value: unknown): value is {
+  chapters: TrialFollowupChapterProviderDraft[];
+  review: TrialReviewDraft;
+} {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const result = value as Record<string, unknown>;
+  const review = authorityRecord(result.review);
+  const text = (item: unknown, max = 20000) => typeof item === 'string'
+    && item.trim().length > 0 && item.length <= max;
+  const strings = (item: unknown) => Array.isArray(item) && item.length <= 30
+    && item.every((part) => text(part, 2000));
+  return Array.isArray(result.chapters) && result.chapters.length >= 2 && result.chapters.length <= 5
+    && text(review.summary) && strings(review.strengths) && strings(review.problems)
+    && strings(review.suggestions) && text(review.recommendedAction, 200)
+    && typeof review.requiresRiskConfirmation === 'boolean'
+    && result.chapters.every((item) => {
+      const draft = authorityRecord(item);
+      const feature = authorityRecord(draft.featureCard);
+      const chapterReview = authorityRecord(draft.review);
+      return text(draft.content, 100000) && text(draft.summary)
+        && text(draft.openingStrategy) && text(draft.openingHighlight)
+        && text(draft.firstSentence) && text(draft.first300Summary)
+        && text(draft.endingHook) && text(draft.aiRecommendedReason)
+        && strings(draft.riskTags) && strings(draft.hardFailureReasons)
+        && text(feature.oneLineSummary) && text(feature.coreTask)
+        && text(feature.mainConflict) && text(feature.appealPoint)
+        && strings(feature.emotionKeywords) && strings(feature.characterChanges)
+        && strings(feature.relationshipChanges) && strings(feature.keyInformation)
+        && text(feature.foreshadowingOperation) && text(feature.endingHook)
+        && strings(feature.factsCannotChange) && strings(feature.featuresToStrengthen)
+        && text(chapterReview.reviewLevel, 100) && text(chapterReview.summary)
+        && strings(chapterReview.strengths) && strings(chapterReview.problems)
+        && strings(chapterReview.suggestions) && strings(chapterReview.actionOptions)
+        && text(chapterReview.recommendedAction, 200)
+        && typeof chapterReview.allowNextStep === 'boolean'
+        && Number.isInteger(chapterReview.blockingIssueCount)
+        && Array.isArray(chapterReview.issueCards)
+        && chapterReview.issueCards.length <= 30;
+    });
 }
 
 function validPrismaLeasedStructureDraft(value: unknown, objectType: StructureAssetDraft['objectType']): value is StructureAssetDraft {
