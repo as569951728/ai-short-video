@@ -333,6 +333,7 @@ export type NovelProviderActionInput =
   | { action: 'trial_followup_generate'; novel: NovelProviderInputV1; selectedCandidate: TrialChapterCandidateDraftLike; chapters: ChapterProviderInputV1[] }
   | { action: 'body_batch_generate'; novel: NovelProviderInputV1; chapter: ChapterProviderInputV1; strategySnapshot: BodyStrategyProviderInputV1; previousContent: ChapterContentProviderInputV1 | null; previousMemory: LongTermMemoryProviderInputV1 | null; previousBatchNotes: string[]; enhancedReview: boolean }
   | { action: 'chapter_body_generate'; novel: NovelProviderInputV1; chapter: ChapterProviderInputV1; strategySnapshot: BodyStrategyProviderInputV1; previousContent: ChapterContentProviderInputV1 | null; previousMemory: LongTermMemoryProviderInputV1 | null; previousBatchNotes: string[]; enhancedReview: boolean }
+  | { action: 'chapter_overlength_revise'; novel: NovelProviderInputV1; chapter: ChapterProviderInputV1; original: ChapterContentProviderInputV1 }
   | { action: 'chapter_rewrite'; novel: NovelProviderInputV1; chapter: ChapterProviderInputV1; currentContent: ChapterContentProviderInputV1; instruction: string }
   | { action: 'chapter_impact_assess'; novel: NovelProviderInputV1; chapter: ChapterProviderInputV1; oldContent: ChapterContentProviderInputV1 | null; newContent: ChapterContentProviderInputV1; instruction?: string | null }
   | { action: 'chapter_adopt_impact_assess'; novel: NovelProviderInputV1; chapter: ChapterProviderInputV1; oldContent: ChapterContentProviderInputV1 | null; newContent: ChapterContentProviderInputV1; instruction?: string | null }
@@ -351,6 +352,7 @@ export const ACTION_INPUT_KEYS = {
   trial_followup_generate: ['action', 'chapters', 'novel', 'selectedCandidate'],
   body_batch_generate: ['action', 'chapter', 'enhancedReview', 'novel', 'previousBatchNotes', 'previousContent', 'previousMemory', 'strategySnapshot'],
   chapter_body_generate: ['action', 'chapter', 'enhancedReview', 'novel', 'previousBatchNotes', 'previousContent', 'previousMemory', 'strategySnapshot'],
+  chapter_overlength_revise: ['action', 'chapter', 'novel', 'original'],
   chapter_rewrite: ['action', 'chapter', 'currentContent', 'instruction', 'novel'],
   chapter_impact_assess: ['action', 'chapter', 'instruction', 'newContent', 'novel', 'oldContent'],
   chapter_adopt_impact_assess: ['action', 'chapter', 'instruction', 'newContent', 'novel', 'oldContent'],
@@ -391,6 +393,7 @@ export interface NovelProviderActionResultMap {
   trial_followup_generate: { chapters: TrialFollowupChapterProviderDraft[]; review: TrialReviewDraft };
   body_batch_generate: BodyChapterProviderDraft;
   chapter_body_generate: BodyChapterProviderDraft;
+  chapter_overlength_revise: string;
   chapter_rewrite: { candidate: BodyChapterProviderDraft; summaryCompare: ChapterSummaryCompareDTO };
   chapter_impact_assess: ImpactAssessmentDraft;
   chapter_adopt_impact_assess: ImpactAssessmentDraft;
@@ -419,6 +422,7 @@ interface NovelProviderObjectTypeByAction {
   trial_followup_generate: 'trial_run';
   body_batch_generate: 'novel';
   chapter_body_generate: 'chapter';
+  chapter_overlength_revise: 'chapter';
   chapter_rewrite: 'chapter';
   chapter_impact_assess: 'chapter';
   chapter_adopt_impact_assess: 'chapter';
@@ -451,6 +455,7 @@ export const ACTION_EXECUTION_PLANS: { [A in NovelProviderAction]: ActionExecuti
   trial_followup_generate: plan('trial_followup_generate', 'trial_followup_generate', 'trial_run', 'novel_trial_followup', '生成后续试写章节和总评', 'trial', (providers, input) => providers.trialProvider.generateFollowup(input)),
   body_batch_generate: plan('body_batch_generate', 'body_batch_generate', 'novel', 'novel_body', '生成批量章节正文', 'body', (providers, input) => providers.bodyProvider.generateBodyChapter(input)),
   chapter_body_generate: plan('chapter_body_generate', 'chapter_body_generate', 'chapter', 'chapter', '生成单章正文', 'body', (providers, input) => providers.bodyProvider.generateBodyChapter(input)),
+  chapter_overlength_revise: plan('chapter_overlength_revise', 'chapter_overlength_revise', 'chapter', 'chapter', '精简超长正文候选', 'body', (providers, input) => providers.bodyProvider.reviseOverlengthChapter(input)),
   chapter_rewrite: plan('chapter_rewrite', 'chapter_body_rewrite', 'chapter', 'chapter', '生成章节重写候选', 'body', (providers, input) => providers.bodyProvider.rewriteChapter(input)),
   chapter_impact_assess: plan('chapter_impact_assess', 'chapter_impact_assess', 'chapter', 'chapter', '评估章节正文影响', 'body', (providers, input) => providers.bodyProvider.assessImpact(input)),
   chapter_adopt_impact_assess: plan('chapter_adopt_impact_assess', 'chapter_impact_assess', 'chapter', 'chapter', '采用候选前评估章节影响', 'body', (providers, input) => providers.bodyProvider.assessImpact(input)),
@@ -1492,7 +1497,7 @@ type ProviderInputShape = string | number | boolean | readonly [ProviderInputSha
 const PROVIDER_METADATA_SHAPE = { scoringStrategyVersion: ['', null], hardFailed: [false, null], candidateRank: [0, null], isMockOutput: [false, null] } as const, CHAPTER_SHAPE = { id: '', chapterNo: 0, title: '', wordTarget: [0, null], statusNote: ['', null] } as const;
 const CHAPTER_CONTENT_SHAPE = { id: '', content: '', summary: ['', null], reviewScore: [0, null], providerSafeMetadata: PROVIDER_METADATA_SHAPE } as const, DIRECTION_CONTENT_SHAPE = { title: '', logline: '', coreHook: '', audienceAppeal: '', videoPotential: '', sellingPoints: [''], riskTags: [''], recommendation: '' } as const;
 const DIRECTION_DRAFT_SHAPE = { title: '', summary: '', content: DIRECTION_CONTENT_SHAPE, score: 0, marketScore: 0, riskLevel: '', riskTags: [''], recommendedReason: '' } as const, OPTIONAL_ACTION_KEYS = { direction_fuse: ['reason'], direction_optimize: [], chapter_impact_assess: ['instruction'], chapter_adopt_impact_assess: ['instruction'] } as const;
-const PROVIDER_INPUT_SHAPES = { action: '', objectType: '', reason: ['', null], instruction: ['', null], novel: { id: '', title: '', genres: [''], chapterLimit: 0, chapterWordMin: 0, chapterWordMax: 0, policyProfileVersionId: ['', null] }, preferences: { appealPoints: [''], targetAudience: ['', null], stageCount: [0, null] }, source: DIRECTION_DRAFT_SHAPE, sources: [DIRECTION_DRAFT_SHAPE], chapter: CHAPTER_SHAPE, chapters: [CHAPTER_SHAPE], chapterCount: 0, selectedCandidate: CHAPTER_CONTENT_SHAPE, strategySnapshot: { id: '', versionNo: 0, title: ['', null], summary: ['', null], riskLevel: '', riskTags: [''], providerSafeMetadata: PROVIDER_METADATA_SHAPE }, previousContent: [CHAPTER_CONTENT_SHAPE, null], currentContent: CHAPTER_CONTENT_SHAPE, oldContent: [CHAPTER_CONTENT_SHAPE, null], newContent: CHAPTER_CONTENT_SHAPE, previousMemory: [{ previousSummary: ['', null], characterStates: [''], relationshipStates: [''], unresolvedConflicts: [''], factsCannotContradict: [''] }, null], previousBatchNotes: [''], enhancedReview: false, sourceVersionRefs: { directionVersionId: ['', null], settingVersionId: ['', null], outlineVersionId: ['', null], stageOutlineVersionId: ['', null], chapterPlanVersionId: ['', null], bodyStrategySnapshotId: ['', null], chapterContentVersionIds: [''] }, currentAssets: '', optimization: '', chapterEvidence: '', coverageManifest: '', evidenceHash: '', memory: '' } as const satisfies Record<(typeof ACTION_INPUT_KEYS)[NovelProviderAction][number], ProviderInputShape>;
+const PROVIDER_INPUT_SHAPES = { action: '', objectType: '', reason: ['', null], instruction: ['', null], novel: { id: '', title: '', genres: [''], chapterLimit: 0, chapterWordMin: 0, chapterWordMax: 0, policyProfileVersionId: ['', null] }, preferences: { appealPoints: [''], targetAudience: ['', null], stageCount: [0, null] }, source: DIRECTION_DRAFT_SHAPE, sources: [DIRECTION_DRAFT_SHAPE], chapter: CHAPTER_SHAPE, chapters: [CHAPTER_SHAPE], chapterCount: 0, selectedCandidate: CHAPTER_CONTENT_SHAPE, original: CHAPTER_CONTENT_SHAPE, strategySnapshot: { id: '', versionNo: 0, title: ['', null], summary: ['', null], riskLevel: '', riskTags: [''], providerSafeMetadata: PROVIDER_METADATA_SHAPE }, previousContent: [CHAPTER_CONTENT_SHAPE, null], currentContent: CHAPTER_CONTENT_SHAPE, oldContent: [CHAPTER_CONTENT_SHAPE, null], newContent: CHAPTER_CONTENT_SHAPE, previousMemory: [{ previousSummary: ['', null], characterStates: [''], relationshipStates: [''], unresolvedConflicts: [''], factsCannotContradict: [''] }, null], previousBatchNotes: [''], enhancedReview: false, sourceVersionRefs: { directionVersionId: ['', null], settingVersionId: ['', null], outlineVersionId: ['', null], stageOutlineVersionId: ['', null], chapterPlanVersionId: ['', null], bodyStrategySnapshotId: ['', null], chapterContentVersionIds: [''] }, currentAssets: '', optimization: '', chapterEvidence: '', coverageManifest: '', evidenceHash: '', memory: '' } as const satisfies Record<(typeof ACTION_INPUT_KEYS)[NovelProviderAction][number], ProviderInputShape>;
 function strictProviderInput(input: { action: NovelProviderAction; objectType?: StructureAssetType; currentAssets?: unknown; optimization?: unknown }, action: NovelProviderAction): NovelProviderActionInput {
   const optional = (OPTIONAL_ACTION_KEYS as Partial<Record<NovelProviderAction, readonly string[]>>)[action] ?? [];
   const source = exactRecord(input, `${action} input`, ACTION_INPUT_KEYS[action], optional);

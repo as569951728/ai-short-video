@@ -80,6 +80,8 @@ import {
   type ResolvedImpactCaseRecord,
   type RewrittenChapterRecord,
   type ChapterRewriteInput,
+  type OverlengthRevisionInput,
+  type SavedOverlengthRevisionRecord,
   type CreatedTrialCandidatesRecord,
   type CreatedTrialFollowupTaskRecord,
   type StructureAdoptionInput,
@@ -231,13 +233,17 @@ export function createInMemoryNovelRepository(): InMemoryNovelRepository {
     if (input.action !== 'direction_fuse' && input.action !== 'direction_optimize'
       && currentVersionIds.map(versionById).some((item) => item && item.status !== VersionStatus.Current)) return null;
     const chapter = chapters.find((item) => item.tenantId === input.tenantId && item.novelId === novel.id && item.id === input.objectId);
-    if (['chapter_body_generate', 'chapter_rewrite', 'chapter_impact_assess', 'chapter_adopt_impact_assess'].includes(input.action) && !chapter) return null;
+    if (['chapter_body_generate', 'chapter_overlength_revise', 'chapter_rewrite', 'chapter_impact_assess', 'chapter_adopt_impact_assess'].includes(input.action) && !chapter) return null;
     if (chapter && 'currentContentVersionId' in refs && chapter.currentContentVersionId !== refs.currentContentVersionId) return null;
     const currentContent = contentById(refs.currentContentVersionId);
     if (refs.currentContentVersionId && (!currentContent || currentContent.chapterId !== chapter?.id)) return null;
     const candidateRefId = refs.candidateVersionId ?? refs.selectedChapterOneCandidateId;
     const candidate = contentById(candidateRefId);
     if (refs.candidateVersionId && (!candidate || candidate.chapterId !== chapter?.id || candidate.status === VersionStatus.Discarded)) return null;
+    if (input.action === 'chapter_overlength_revise' && (!chapter || chapter.currentContentVersionId || !candidate ||
+      candidate.status !== VersionStatus.Candidate || candidate.sourceType !== 'ai_overlength_original' ||
+      asRecord(asRecord(candidate.metadata).lengthGate).target !== chapter.wordTarget ||
+      evaluateChapterLength(candidate.content, chapter.wordTarget).status !== 'too_long')) return null;
     const trialRunId = typeof refs.trialRunId === 'string'
       ? refs.trialRunId
       : input.action === 'trial_followup_generate' ? input.objectId : null;
@@ -2018,7 +2024,10 @@ export function createInMemoryNovelRepository(): InMemoryNovelRepository {
         .filter((report) => report.tenantId === tenantId && report.novelId === novelId && report.objectType === 'chapter' && report.objectId === chapterId)
         .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())[0] ?? null;
       const recentTask = generationTasks
-        .filter((task) => task.tenantId === tenantId && task.novelId === novelId && task.resultVersionIds.some((id) => candidateVersions.some((version) => version.id === id)))
+        .filter((task) => task.tenantId === tenantId && task.novelId === novelId && (
+          (task.objectType === 'chapter' && task.objectId === chapterId) ||
+          task.resultVersionIds.some((id) => candidateVersions.some((version) => version.id === id))
+        ))
         .sort((left, right) => right.updatedAt.getTime() - left.updatedAt.getTime())[0] ?? null;
       const longTermMemory = longTermMemories
         .filter((memory) => memory.tenantId === tenantId && memory.novelId === novelId && memory.chapterId === chapterId)
@@ -2760,6 +2769,52 @@ export function createInMemoryNovelRepository(): InMemoryNovelRepository {
         candidate,
         summaryCompare: input.summaryCompare
       };
+    },
+
+    async createOverlengthRevision(input: OverlengthRevisionInput): Promise<SavedOverlengthRevisionRecord> {
+      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task);
+      const task = requireClaimedTask(input.task, input.context.tenantId);
+      const novel = novels.find((item) => item.tenantId === input.context.tenantId && item.id === input.novel.id && !item.deletedAt);
+      const chapter = chapters.find((item) => item.tenantId === input.context.tenantId && item.id === input.chapter.id);
+      const original = chapterContentVersions.find((item) => item.tenantId === input.context.tenantId && item.id === input.original.id);
+      const refs = asRecord(task.sourceVersionRefs);
+      if (!novel || novel.creationStage !== NovelCreationStage.Body ||
+        novel.currentChapterPlanVersionId !== input.novel.currentChapterPlanVersionId ||
+        !chapter || !original || chapter.novelId !== input.novel.id || original.chapterId !== chapter.id ||
+        chapter.currentContentVersionId || chapter.wordTarget !== input.chapter.wordTarget ||
+        original.status !== VersionStatus.Candidate || original.sourceType !== 'ai_overlength_original' ||
+        asRecord(asRecord(original.metadata).lengthGate).target !== chapter.wordTarget ||
+        refs.candidateVersionId !== original.id || refs.currentChapterPlanVersionId !== input.novel.currentChapterPlanVersionId ||
+        chapterContentVersions.some((item) => item.tenantId === input.context.tenantId && item.chapterId === chapter.id &&
+          item.sourceType === 'ai_overlength_revision')) {
+        throw new BusinessError(ErrorCode.CandidateStale, '超长原稿或章节状态已变化，不能保存精简候选。');
+      }
+      const lengthGate = evaluateChapterLength(input.content, chapter.wordTarget);
+      if (lengthGate.status !== 'pass') throw new BusinessError(ErrorCode.GateBlocked, '精简稿未通过字数门禁。');
+      const candidate: ChapterContentVersionRecord = {
+        id: nextId('ccv'), tenantId: input.context.tenantId, novelId: input.novel.id, chapterId: chapter.id,
+        versionNo: nextChapterContentVersionNo(input.context.tenantId, input.novel.id, chapter.id),
+        status: VersionStatus.Candidate, staleLevel: StaleLevel.None,
+        sourceType: 'ai_overlength_revision', sourceTaskId: task.id, sourceVersionRefs: task.sourceVersionRefs,
+        rewriteReason: '用户发起超长正文精简', content: input.content, wordCount: lengthGate.actual,
+        summary: null, reviewScore: null, decisionRecordId: null, createdBy: input.context.userId,
+        createdAt: input.now, metadata: { reviewRequired: true, lengthRecovery: 'revision',
+          revisionOfCandidateId: original.id, lengthGate, chapterNo: chapter.chapterNo, title: chapter.title,
+          riskLevel: RiskLevel.Medium }
+      };
+      chapterContentVersions.unshift(candidate);
+      task.resultVersionIds = [candidate.id];
+      task.resultObjectType = 'chapter_content_version';
+      task.resultObjectId = candidate.id;
+      task.outputSummary = '超长精简候选已保存，待逐版本复核。';
+      task.status = TaskStatus.WaitingConfirmation;
+      task.statusNote = task.outputSummary;
+      task.progress = 100;
+      task.currentStep = '精简候选待复核';
+      task.updatedAt = input.now;
+      task.activeClaimKey = null;
+      appendTaskProgressEvents(task, input.context.requestId, input.now);
+      return { task, candidate };
     },
 
     async adoptChapterContent(input: ChapterContentAdoptionInput): Promise<AdoptedChapterContentRecord> {

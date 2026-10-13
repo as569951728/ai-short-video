@@ -77,6 +77,10 @@ class MissingDeepSeekConfigProvider {
     throwMissingDeepSeekConfig();
   }
 
+  async reviseOverlengthChapter(): Promise<never> {
+    throwMissingDeepSeekConfig();
+  }
+
   async rewriteChapter(): Promise<never> {
     throwMissingDeepSeekConfig();
   }

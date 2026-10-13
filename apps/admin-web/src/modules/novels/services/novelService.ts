@@ -42,10 +42,12 @@ import {
   type NovelListItemDTO,
   type NovelListResultDTO,
   type OptimizeDirectionRequest,
+  type OverlengthRevisionResultDTO,
   type RecheckVideoReadinessRequest,
   type ResolveFullReviewIssueRequest,
   type ResolveImpactCaseRequest,
   type RewriteChapterRequest,
+  type ReviseOverlengthChapterRequest,
   type StartFullReviewRequest,
   type UpdateChapterWordTargetsRequest,
   type ChapterContentAdoptionResultDTO,
@@ -485,6 +487,20 @@ export async function rewriteChapter(
   })
 }
 
+export async function reviseOverlengthChapter(
+  novelId: string,
+  chapterId: string,
+  request: ReviseOverlengthChapterRequest,
+  mode: ApiMode = getApiMode(),
+): Promise<OverlengthRevisionResultDTO> {
+  if (mode === 'mock') throw new Error('超字数精简需要连接后端服务')
+
+  return apiRequest<OverlengthRevisionResultDTO>(`/novels/${novelId}/chapters/${chapterId}/overlength-revisions`, {
+    method: 'POST',
+    body: request,
+  })
+}
+
 export async function adoptChapterContentVersion(
   novelId: string,
   chapterId: string,
@@ -919,6 +935,7 @@ export function toTrialCandidateRow(candidate: TrialChapterCandidateDTO): TrialC
   return {
     id: candidate.id,
     chapterId: candidate.chapterId,
+    sourceType: candidate.sourceType ?? null,
     title: candidate.title,
     versionLabel: `v${candidate.versionNo}`,
     statusText: getVersionStatusText(candidate.status),

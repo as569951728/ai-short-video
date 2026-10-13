@@ -21,7 +21,7 @@ const TASK_ACTIONS: Record<string, readonly NovelProviderAction[]> = {
   novel_direction_generate: ['direction_generate'], novel_direction_fuse: ['direction_fuse'], novel_direction_optimize: ['direction_optimize'],
   novel_setting_generate: ['setting_generate'], novel_outline_generate: ['outline_generate'], stage_outline_generate: ['stage_outline_generate'],
   chapter_plan_generate: ['chapter_plan_generate'], trial_writing_generate: ['trial_chapter_one_generate'], trial_followup_generate: ['trial_followup_generate'],
-  body_batch_generate: ['body_batch_generate'], chapter_body_generate: ['chapter_body_generate'], chapter_body_rewrite: ['chapter_rewrite'],
+  body_batch_generate: ['body_batch_generate'], chapter_body_generate: ['chapter_body_generate'], chapter_overlength_revise: ['chapter_overlength_revise'], chapter_body_rewrite: ['chapter_rewrite'],
   chapter_impact_assess: ['chapter_impact_assess', 'chapter_adopt_impact_assess'], novel_full_review: ['novel_full_review']
 };
 

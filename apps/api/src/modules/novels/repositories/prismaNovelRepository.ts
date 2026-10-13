@@ -85,6 +85,8 @@ import {
   type ResolvedFullReviewIssueRecord,
   type ResolvedImpactCaseRecord,
   type RewrittenChapterRecord,
+  type OverlengthRevisionInput,
+  type SavedOverlengthRevisionRecord,
   type ReviewReportRecord,
   type StructureAdoptionInput,
   type StructureCreationInput,
@@ -358,7 +360,8 @@ export class PrismaNovelRepository implements NovelRepository {
       'trial_writing_generate',
       'trial_followup_generate',
       'body_batch_generate',
-      'chapter_body_generate'
+      'chapter_body_generate',
+      'chapter_overlength_revise'
     ]);
     if (!supported.has(taskType)) {
       throw new BusinessError(ErrorCode.ConfigMissing, 'Prisma 小说后半写链尚未实现，provider 调用已在 task claim 前阻断。', {
@@ -409,7 +412,7 @@ export class PrismaNovelRepository implements NovelRepository {
     if (input.action !== 'direction_fuse' && input.action !== 'direction_optimize'
       && currentVersionIds.map(versionById).some((item) => item && item.status !== VersionStatus.Current)) return null;
     const chapter = chapters.find((item) => item.id === input.objectId) ?? null;
-    if (['chapter_body_generate', 'chapter_rewrite', 'chapter_impact_assess', 'chapter_adopt_impact_assess'].includes(input.action) && !chapter) return null;
+    if (['chapter_body_generate', 'chapter_overlength_revise', 'chapter_rewrite', 'chapter_impact_assess', 'chapter_adopt_impact_assess'].includes(input.action) && !chapter) return null;
     if (chapter && 'currentContentVersionId' in refs && chapter.currentContentVersionId !== refs.currentContentVersionId) return null;
     const candidateRefId = refs.candidateVersionId ?? refs.selectedChapterOneCandidateId;
     const trialRunId = refs.trialRunId ?? (input.action === 'trial_followup_generate' ? input.objectId : null);
@@ -420,6 +423,10 @@ export class PrismaNovelRepository implements NovelRepository {
     ]);
     if (refs.currentContentVersionId && (!currentContent || currentContent.chapterId !== chapter?.id)) return null;
     if (refs.candidateVersionId && (!candidate || candidate.chapterId !== chapter?.id || candidate.status === VersionStatus.Discarded)) return null;
+    if (input.action === 'chapter_overlength_revise' && (!chapter || chapter.currentContentVersionId || !candidate ||
+      candidate.status !== VersionStatus.Candidate || candidate.sourceType !== 'ai_overlength_original' ||
+      toRecord(toRecord(candidate.metadata).lengthGate).target !== chapter.wordTarget ||
+      evaluateChapterLength(candidate.content, chapter.wordTarget).status !== 'too_long')) return null;
     if (trialRunId && !trialRun) return null;
     if (input.action === 'trial_followup_generate') {
       if (
@@ -2781,9 +2788,11 @@ export class PrismaNovelRepository implements NovelRepository {
         orderBy: { createdAt: 'desc' }
       }),
       this.prisma.generationTask.findFirst({
-        where: chapter.lastGenerationTaskId
-          ? { tenantId, novelId, id: chapter.lastGenerationTaskId }
-          : { tenantId, novelId, objectType: 'trial_run' },
+        where: { tenantId, novelId, OR: [
+          { objectType: 'chapter', objectId: chapterId },
+          ...(chapter.lastGenerationTaskId ? [{ id: chapter.lastGenerationTaskId }] : []),
+          { objectType: 'trial_run' }
+        ] },
         orderBy: { updatedAt: 'desc' }
       }),
       this.prisma.longTermMemory.findFirst({
@@ -3228,6 +3237,80 @@ export class PrismaNovelRepository implements NovelRepository {
 
   async rewriteChapter(_input: ChapterRewriteInput): Promise<RewrittenChapterRecord> {
     throw new Error('Package 6 Prisma rewrite path is not implemented; use in-memory mock provider for current package verification.');
+  }
+
+  async createOverlengthRevision(input: OverlengthRevisionInput): Promise<SavedOverlengthRevisionRecord> {
+    return this.prisma.$transaction(async (tx) => {
+      const tenantId = input.context.tenantId;
+      const claimed = await tx.generationTask.updateMany({
+        where: { id: input.task.id, tenantId, novelId: input.novel.id,
+          taskType: 'chapter_overlength_revise', status: PrismaTaskStatus.PROCESSING,
+          activeClaimKey: input.task.activeClaimKey, requestHash: input.task.requestHash,
+          cancelRequestedAt: null },
+        data: { updatedAt: input.now }
+      });
+      if (claimed.count !== 1) throw new BusinessError(ErrorCode.GateBlocked, '精简任务已取消或失去 claim，模型结果已丢弃。');
+      const task = await tx.generationTask.findFirstOrThrow({ where: { id: input.task.id, tenantId } });
+      const refs = toRecord(task.sourceVersionRefs);
+      if (refs.candidateVersionId !== input.original.id || refs.currentContentVersionId !== null ||
+        refs.currentChapterPlanVersionId !== input.novel.currentChapterPlanVersionId) {
+        throw new BusinessError(ErrorCode.CandidateStale, '精简任务的原稿或上游目录已变化。');
+      }
+      const novelLock = await tx.novel.updateMany({
+        where: { id: input.novel.id, tenantId, deletedAt: null,
+          lifecycleStatus: PrismaNovelLifecycleStatus.ACTIVE, creationStage: PrismaNovelCreationStage.BODY,
+          currentChapterPlanVersionId: String(refs.currentChapterPlanVersionId) },
+        data: { updatedAt: input.now }
+      });
+      const chapterLock = await tx.novelChapter.updateMany({
+        where: { id: input.chapter.id, tenantId, novelId: input.novel.id, deletedAt: null,
+          currentContentVersionId: null, wordTarget: input.chapter.wordTarget },
+        data: { updatedAt: input.now }
+      });
+      if (novelLock.count !== 1 || chapterLock.count !== 1) {
+        throw new BusinessError(ErrorCode.CandidateStale, '小说目录或章节目标已变化，未保存精简候选。');
+      }
+      const original = await tx.chapterContentVersion.findFirst({
+        where: { id: input.original.id, tenantId, novelId: input.novel.id, chapterId: input.chapter.id,
+          status: PrismaVersionStatus.CANDIDATE, sourceType: 'ai_overlength_original' }
+      });
+      if (!original || original.content !== input.original.content ||
+        toRecord(toRecord(original.metadata).lengthGate).target !== input.chapter.wordTarget ||
+        evaluateChapterLength(original.content, input.chapter.wordTarget).status !== 'too_long') {
+        throw new BusinessError(ErrorCode.CandidateStale, '超长原稿已变化，未保存精简候选。');
+      }
+      const priorRevision = await tx.chapterContentVersion.findFirst({
+        where: { tenantId, novelId: input.novel.id, chapterId: input.chapter.id, sourceType: 'ai_overlength_revision' }
+      });
+      if (priorRevision) throw new BusinessError(ErrorCode.GateBlocked, '本章已有一次精简候选，请先查看已有结果。');
+      const lengthGate = evaluateChapterLength(input.content, input.chapter.wordTarget);
+      if (lengthGate.status !== 'pass') throw new BusinessError(ErrorCode.GateBlocked, '精简稿未通过字数门禁。');
+      const latest = await tx.chapterContentVersion.findFirst({
+        where: { tenantId, novelId: input.novel.id, chapterId: input.chapter.id }, orderBy: { versionNo: 'desc' },
+        select: { versionNo: true }
+      });
+      const candidate = await tx.chapterContentVersion.create({ data: {
+        tenantId, novelId: input.novel.id, chapterId: input.chapter.id,
+        versionNo: (latest?.versionNo ?? 0) + 1, status: PrismaVersionStatus.CANDIDATE,
+        staleLevel: PrismaStaleLevel.NONE, sourceType: 'ai_overlength_revision', sourceTaskId: task.id,
+        sourceVersionRefs: toJsonObject(task.sourceVersionRefs), rewriteReason: '用户发起超长正文精简',
+        content: input.content, wordCount: lengthGate.actual, summary: null, reviewScore: null,
+        createdBy: input.context.userId, createdAt: input.now,
+        metadata: toJsonObject({ reviewRequired: true, lengthRecovery: 'revision',
+          revisionOfCandidateId: original.id, lengthGate, chapterNo: input.chapter.chapterNo,
+          title: input.chapter.title, riskLevel: RiskLevel.Medium })
+      } });
+      const updatedTask = await transitionClaimedTask(tx, { taskId: task.id, tenantId, data: {
+        status: PrismaTaskStatus.WAITING_CONFIRMATION, statusNote: '超长精简候选已保存，待逐版本复核。',
+        progress: 100, currentStep: '精简候选待复核', outputSummary: '精简候选已保存，正式正文未改变。',
+        resultObjectType: 'chapter_content_version', resultObjectId: candidate.id,
+        resultVersionIdsJson: [candidate.id], activeClaimKey: null, finishedAt: input.now, updatedAt: input.now
+      } });
+      await createTaskEvent(tx, { task: updatedTask, eventType: 'candidate_created',
+        message: '精简候选已保存，等待复核。', progress: 100,
+        requestId: input.context.requestId, createdAt: input.now });
+      return { task: mapGenerationTask(updatedTask), candidate: mapChapterContentVersion(candidate) };
+    });
   }
 
   async adoptChapterContent(_input: ChapterContentAdoptionInput): Promise<AdoptedChapterContentRecord> {

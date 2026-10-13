@@ -11,10 +11,12 @@ import { countChapterLength } from '../domain/chapterLengthPolicy.js';
 
 type BodyGenerateInput = NovelProviderActionInputFor<'body_batch_generate' | 'chapter_body_generate'>;
 type BodyRewriteInput = NovelProviderActionInputFor<'chapter_rewrite'>;
+type OverlengthRevisionInput = NovelProviderActionInputFor<'chapter_overlength_revise'>;
 type BodyImpactInput = NovelProviderActionInputFor<'chapter_impact_assess' | 'chapter_adopt_impact_assess'>;
 
 export interface BodyProvider {
   generateBodyChapter(input: BodyGenerateInput): Promise<BodyChapterProviderDraft>;
+  reviseOverlengthChapter(input: OverlengthRevisionInput): Promise<string>;
   rewriteChapter(input: BodyRewriteInput): Promise<{
     candidate: BodyChapterProviderDraft;
     summaryCompare: ChapterSummaryCompareDTO;
@@ -25,6 +27,21 @@ export interface BodyProvider {
 const BODY_SCORE_VERSION = 'body-chapter-score-v1';
 
 export class MockBodyProvider implements BodyProvider {
+  async reviseOverlengthChapter(input: OverlengthRevisionInput): Promise<string> {
+    const upperBound = Math.floor((input.chapter.wordTarget ?? 0) * 1.15);
+    const original = input.original.content;
+    const removable = '这是一句可以删除的冗余描写。';
+    let revised = original;
+    while (countChapterLength(revised) > upperBound && revised.includes(removable)) {
+      revised = revised.replace(removable, '');
+    }
+    if (revised === original || countChapterLength(revised) > upperBound ||
+      countChapterLength(original) - countChapterLength(revised) > countChapterLength(original) * 0.12) {
+      throw new Error('原稿没有足够的安全冗余句可供精简。');
+    }
+    return revised;
+  }
+
   async generateBodyChapter(input: BodyGenerateInput): Promise<BodyChapterProviderDraft> {
     const hardFailed = input.novel.title.includes('批量正文暂停') && input.chapter.chapterNo === 6;
     const ordinaryRisk = !hardFailed && (input.chapter.chapterNo === 5 || input.chapter.chapterNo === 9);

@@ -45,6 +45,7 @@ type TrialChapterOneInput = NovelProviderActionInputFor<'trial_chapter_one_gener
 type TrialFollowupInput = NovelProviderActionInputFor<'trial_followup_generate'>;
 type BodyGenerateInput = NovelProviderActionInputFor<'body_batch_generate' | 'chapter_body_generate'>;
 type BodyRewriteInput = NovelProviderActionInputFor<'chapter_rewrite'>;
+type OverlengthRevisionInput = NovelProviderActionInputFor<'chapter_overlength_revise'>;
 type BodyImpactInput = NovelProviderActionInputFor<'chapter_impact_assess' | 'chapter_adopt_impact_assess'>;
 type FullReviewProviderInput = NovelProviderActionInputFor<'novel_full_review'>;
 
@@ -276,37 +277,68 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
     });
     const originalLength = evaluateChapterLength(original.content, input.chapter.wordTarget);
     if (originalLength.status !== 'too_long' || !this.options.experimentalOverlongRevision) return original;
+    try {
+      const content = await this.shortenOverlongContent({
+        novel: input.novel, chapter: input.chapter, content: original.content,
+        strategySnapshot: { title: input.strategySnapshot.title, summary: input.strategySnapshot.summary },
+        factsCannotChange: original.featureCard.factsCannotChange,
+        factsCannotContradict: original.memory.factsCannotContradict
+      });
+      return content ? { ...original, content, firstSentence: firstSentence(content),
+        first300Summary: content.slice(0, 300), experimentalRevisionRequiresConfirmation: true,
+        experimentalOriginalDraft: original } : original;
+    } catch {
+      return original;
+    }
+  }
+
+  async reviseOverlengthChapter(input: OverlengthRevisionInput): Promise<string> {
+    const revised = await this.shortenOverlongContent({
+      novel: input.novel, chapter: input.chapter, content: input.original.content,
+      factsCannotChange: [], factsCannotContradict: []
+    });
+    if (!revised) throw new LlmProviderError('output_parse_failed', '原稿超出可安全精简范围，请手工编辑或调整章节目标字数。');
+    return revised;
+  }
+
+  private async shortenOverlongContent(input: {
+    novel: NovelProviderInputV1;
+    chapter: ChapterProviderInputV1;
+    content: string;
+    strategySnapshot?: { title: string | null; summary: string | null };
+    factsCannotChange: string[];
+    factsCannotContradict: string[];
+  }): Promise<string | null> {
+    const wordTargetPolicy = createWordTargetPolicy(input.novel, input.chapter.wordTarget ?? undefined);
+    const originalLength = evaluateChapterLength(input.content, input.chapter.wordTarget);
+    if (originalLength.status !== 'too_long') return null;
     const minimumRemoval = originalLength.actual - wordTargetPolicy.upperBound;
-    if (minimumRemoval > Math.floor(originalLength.actual * 0.12)) return original;
+    if (minimumRemoval > Math.floor(originalLength.actual * 0.12)) return null;
     const maximumRemoval = minimumRemoval + Math.max(40, Math.ceil(wordTargetPolicy.target * 0.04));
-    const eligibleSentences = listEligibleBodySentences(original.content);
-    if (eligibleSentences.length === 0) return original;
+    const eligibleSentences = listEligibleBodySentences(input.content);
+    if (eligibleSentences.length === 0) return null;
 
     const revisionMessages = createMessages(
       `原稿共 ${originalLength.actual} 个非空白字符，上限 ${wordTargetPolicy.upperBound}。只能从 eligibleSentences 中挑选可安全删除的冗余句候选，最多 12 个编号；服务端会从中选择删减 ${minimumRemoval}-${maximumRemoval} 字的最小组合。只返回 {"sentenceIds":["s1"]}；不得输出改写、摘要、新正文或句子文本。不得选择人物首次出场、关键事实、因果转折和伏笔。没有足够安全的冗余句就返回空数组，不要勉强。`,
       input.novel,
       {
         chapter: pickChapter(input.chapter),
-        strategySnapshot: {
-          title: input.strategySnapshot.title,
-          summary: input.strategySnapshot.summary
-        },
+        strategySnapshot: input.strategySnapshot ?? null,
         original: {
-          content: original.content,
-          factsCannotChange: original.featureCard.factsCannotChange,
-          factsCannotContradict: original.memory.factsCannotContradict
+          content: input.content,
+          factsCannotChange: input.factsCannotChange,
+          factsCannotContradict: input.factsCannotContradict
         },
         eligibleSentences: eligibleSentences.map(({ id, text }) => ({ id, text }))
       },
       '{"sentenceIds":["s1"]}'
     );
     const revisionPrompt = JSON.parse(revisionMessages[1].content) as { payload: { original: { content: string } } };
-    revisionPrompt.payload.original.content = original.content;
+    revisionPrompt.payload.original.content = input.content;
     revisionMessages[1].content = JSON.stringify(revisionPrompt);
-    if (revisionMessages.reduce((total, message) => total + message.content.length, 0) > 40_000) return original;
+    if (revisionMessages.reduce((total, message) => total + message.content.length, 0) > 40_000) return null;
 
-    try {
-      return await requestJsonOutput(this.options.client, {
+    return requestJsonOutput(this.options.client, {
         taskName: 'novel_body_chapter_shorten',
         model: this.model,
         ...SINGLE_PAID_CALL_JSON_POLICY,
@@ -316,22 +348,12 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
         validate: (value) => {
           const patch = asRecord(value);
           if (Object.keys(patch).length !== 1 || !Object.hasOwn(patch, 'sentenceIds')) throw new Error('body deletion output has unexpected fields');
-          const content = applyBodySentenceIds(original.content, eligibleSentences, readArray(patch, 'sentenceIds'), minimumRemoval, maximumRemoval);
+          const content = applyBodySentenceIds(input.content, eligibleSentences, readArray(patch, 'sentenceIds'), minimumRemoval, maximumRemoval);
           const length = evaluateChapterLength(content, input.chapter.wordTarget);
           if (length.status !== 'pass') throw new Error('body deletion result is outside the chapter length gate');
-          return {
-            ...original,
-            content,
-            firstSentence: firstSentence(content),
-            first300Summary: content.slice(0, 300),
-            experimentalRevisionRequiresConfirmation: true,
-            experimentalOriginalDraft: original
-          };
+          return content;
         }
       });
-    } catch {
-      return original;
-    }
   }
 
   async rewriteChapter(input: BodyRewriteInput): Promise<{ candidate: BodyChapterProviderDraft; summaryCompare: ChapterSummaryCompareDTO }> {

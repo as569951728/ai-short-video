@@ -18,9 +18,10 @@ if (
 }
 
 const overlengthScenario = process.env.NOVEL_SMOKE_OVERLENGTH === 'true';
+const explicitRevisionScenario = process.env.NOVEL_SMOKE_EXPLICIT_REVISION === 'true';
 const cancelLateScenario = process.env.NOVEL_SMOKE_CANCEL_LATE === 'true';
 const hardFailureScenario = process.env.NOVEL_SMOKE_HARD_FAILURE === 'true';
-if ([overlengthScenario, cancelLateScenario, hardFailureScenario].filter(Boolean).length > 1) {
+if ([overlengthScenario, explicitRevisionScenario, cancelLateScenario, hardFailureScenario].filter(Boolean).length > 1) {
   throw new Error('Choose one body smoke scenario.');
 }
 class OverlengthBodyProvider extends MockBodyProvider {
@@ -29,6 +30,15 @@ class OverlengthBodyProvider extends MockBodyProvider {
     return input.chapter.chapterNo === 5
       ? { ...draft, content: '长'.repeat((input.chapter.wordTarget ?? 2000) * 2), summary: '超长原稿摘要' }
       : draft;
+  }
+}
+class RevisableOverlengthBodyProvider extends MockBodyProvider {
+  async generateBodyChapter(input: Parameters<MockBodyProvider['generateBodyChapter']>[0]) {
+    const draft = await super.generateBodyChapter(input);
+    if (input.chapter.chapterNo !== 5) return draft;
+    const upper = Math.floor((input.chapter.wordTarget ?? 2000) * 1.15);
+    return { ...draft, content: '主线事实。' + '稳'.repeat(upper - 5) + '这是一句可以删除的冗余描写。'.repeat(4),
+      summary: '超长原稿摘要' };
   }
 }
 class DelayedOverlengthBodyProvider extends OverlengthBodyProvider {
@@ -57,7 +67,8 @@ const delayedBodyProvider = cancelLateScenario ? new DelayedOverlengthBodyProvid
 
 const appOptions = {
   logger: false,
-  bodyProvider: delayedBodyProvider ?? (overlengthScenario ? new OverlengthBodyProvider() : undefined),
+  bodyProvider: delayedBodyProvider ?? (explicitRevisionScenario ? new RevisableOverlengthBodyProvider()
+    : overlengthScenario ? new OverlengthBodyProvider() : undefined),
   requestContextResolver: async (request) => ({
     tenantId: 'tenant_novel_prisma_smoke',
     userId: 'user_novel_prisma_smoke',
@@ -192,7 +203,7 @@ try {
     assert.equal(afterRestart.every((chapter) => chapter.currentContentVersionId !== null), true);
     console.log(JSON.stringify({ result: 'PASS', scenario: 'prisma_hard_failure_reopened_client_resume', novelId,
       retainedBeforeRestart: [4, 5], resumedChapters: [6, 7, 8] }));
-  } else if (overlengthScenario) {
+  } else if (overlengthScenario || explicitRevisionScenario) {
     assert.equal(body.batch.status, 'paused');
     assert.equal(body.task.status, 'waiting_confirmation');
     assert.deepEqual(body.batch.chapterResults.map((result: { chapterNo: number }) => result.chapterNo), [4, 5]);
@@ -213,19 +224,51 @@ try {
     const replay = await post(`/novels/${novelId}/chapters/batch-generate`, bodyRequest);
     assert.equal(replay.batch.id, body.batch.id);
     assert.equal(await prisma.chapterContentVersion.count({ where: { tenantId: 'tenant_novel_prisma_smoke', novelId, chapterId: overlongChapter.id } }), 1);
+    let revisionId: string | null = null;
+    if (explicitRevisionScenario) {
+      const revisionPath = `/novels/${novelId}/chapters/${overlongChapter.id}/overlength-revisions`;
+      const revised = await post(revisionPath, { sourceCandidateVersionId: candidate.id });
+      assert.equal(revised.task.status, 'waiting_confirmation');
+      assert.equal(revised.candidate.sourceType, 'ai_overlength_revision');
+      assert.equal(revised.candidate.lengthGate.status, 'pass');
+      revisionId = revised.candidate.id;
+      const revisionWorkbench = await app.inject({ method: 'GET', url: `/novels/${novelId}/chapters/${overlongChapter.id}` });
+      assert.equal(revisionWorkbench.json().data.recentTask.taskType, 'chapter_overlength_revise');
+      assert.equal(revisionWorkbench.json().data.recentTask.status, 'waiting_confirmation');
+      const repeated = await post(revisionPath, { sourceCandidateVersionId: candidate.id });
+      assert.equal(repeated.candidate.id, revisionId);
+      assert.equal(await prisma.chapterContentVersion.count({ where: {
+        tenantId: 'tenant_novel_prisma_smoke', novelId, chapterId: overlongChapter.id
+      } }), 2);
+      const blockedAdopt = await app.inject({ method: 'POST',
+        url: `/novels/${novelId}/chapters/${overlongChapter.id}/content-versions/${revisionId}/adopt`,
+        payload: { reason: '隔离库修订门禁验证', currentContentVersionId: null } });
+      assert.equal(blockedAdopt.statusCode, 409, blockedAdopt.body);
+      const afterRevision = await prisma.novelChapter.findUniqueOrThrow({ where: { id: overlongChapter.id } });
+      assert.equal(afterRevision.currentContentVersionId, null);
+      assert.equal(afterRevision.currentFeatureCardVersionId, null);
+      assert.equal(afterRevision.currentReviewReportId, null);
+    }
     await app.close();
     await disconnectPrismaClient();
     app = await buildApp(appOptions);
     const reread = await app.inject({ method: 'GET', url: `/novels/${novelId}/chapters/${overlongChapter.id}` });
     assert.equal(reread.statusCode, 200, reread.body);
     assert.equal(reread.json().data.candidateVersions.find((version: { id: string }) => version.id === candidate.id).requiresContentReview, true);
+    if (revisionId) {
+      const savedRevision = reread.json().data.candidateVersions.find((version: { id: string }) => version.id === revisionId);
+      assert.equal(savedRevision?.sourceType, 'ai_overlength_revision');
+      assert.equal(savedRevision?.lengthGate.status, 'pass');
+      assert.equal(savedRevision?.requiresContentReview, true);
+    }
     assert.equal(reread.json().data.chapter.currentContentVersionId, null);
     const novelDetail = await app.inject({ method: 'GET', url: `/novels/${novelId}` });
     assert.equal(novelDetail.statusCode, 200, novelDetail.body);
     assert.equal(novelDetail.json().data.bodyGeneration.latestBatch.chapterResults[1].lengthGate.status, 'too_long');
     assert.equal(novelDetail.json().data.bodyGeneration.recommendedAction.disabled, true);
-    console.log(JSON.stringify({ result: 'PASS', scenario: 'prisma_overlength_candidate_recovery', novelId,
-      retainedOriginal: candidate.id, pausedAtChapter: 5, replayedBatch: true, reopenedClient: true }));
+    console.log(JSON.stringify({ result: 'PASS', scenario: explicitRevisionScenario
+      ? 'prisma_explicit_overlength_revision_recovery' : 'prisma_overlength_candidate_recovery', novelId,
+      retainedOriginal: candidate.id, revisionId, pausedAtChapter: 5, replayedBatch: true, reopenedClient: true }));
   } else {
   assert.equal(body.batch.status, 'completed');
   assert.equal(body.batch.completedCount, 5);

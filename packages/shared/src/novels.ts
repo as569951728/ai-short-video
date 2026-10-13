@@ -4,7 +4,7 @@ import type { ImpactLevel, NovelCreationStage, NovelLifecycleStatus, RiskLevel, 
 export const NOVEL_PROVIDER_ACTIONS = [
   'direction_generate', 'direction_fuse', 'direction_optimize', 'setting_generate', 'outline_generate',
   'stage_outline_generate', 'chapter_plan_generate', 'trial_chapter_one_generate', 'trial_followup_generate',
-  'body_batch_generate', 'chapter_body_generate', 'chapter_rewrite', 'chapter_impact_assess',
+  'body_batch_generate', 'chapter_body_generate', 'chapter_overlength_revise', 'chapter_rewrite', 'chapter_impact_assess',
   'chapter_adopt_impact_assess', 'novel_full_review'
 ] as const;
 
@@ -81,6 +81,7 @@ export type ExecutionEnvelopeV1 =
   | ExecutionEnvelopeBaseV1<'trial_followup_generate', 'trial_run', { trialRunId: string; selectedCandidateVersionId: string; chapterPlanVersionId: string; selectionReason?: string; confirmRisk?: boolean }, TrialFollowupExecutionSourceRefsV1>
   | ExecutionEnvelopeBaseV1<'body_batch_generate', 'novel', { startChapter: number; endChapter: number; batchSize: number; strategySnapshotId: string }, BodyExecutionSourceRefsV1>
   | ExecutionEnvelopeBaseV1<'chapter_body_generate', 'chapter', { chapterId: string; strategySnapshotId: string; enhancedReview?: boolean }, BodyExecutionSourceRefsV1>
+  | ExecutionEnvelopeBaseV1<'chapter_overlength_revise', 'chapter', { chapterId: string; candidateVersionId: string }, { candidateVersionId: string; currentContentVersionId: null; currentChapterPlanVersionId: string }>
   | ExecutionEnvelopeBaseV1<'chapter_rewrite', 'chapter', { chapterId: string; currentContentVersionId: string; instruction: string; reason?: string }, { currentContentVersionId: string }>
   | ExecutionEnvelopeBaseV1<'chapter_impact_assess', 'chapter', { chapterId: string; currentContentVersionId: string; instruction?: string; reason?: string }, { currentContentVersionId: string }>
   | ExecutionEnvelopeBaseV1<'chapter_adopt_impact_assess', 'chapter', { chapterId: string; candidateVersionId: string; currentContentVersionId: string; reason: string; pageVersionSnapshot?: Record<string, unknown> }, { currentContentVersionId: string; candidateVersionId: string }>
@@ -267,6 +268,7 @@ export function normalizeExecutionEnvelope(input: unknown): ExecutionEnvelopeV1 
     case 'trial_followup_generate': envelope = executionExact(common, 'trial_run', executionTrialFollowupRequest(request, common.objectId), executionTrialRefs(refs, true, common.objectId)); break;
     case 'body_batch_generate': envelope = executionExact(common, 'novel', executionBodyBatchRequest(request), executionBodyRefs(refs)); break;
     case 'chapter_body_generate': envelope = executionExact(common, 'chapter', executionChapterBodyRequest(request), executionBodyRefs(refs)); break;
+    case 'chapter_overlength_revise': envelope = executionExact(common, 'chapter', executionOverlengthRevisionRequest(request), executionOverlengthRevisionRefs(refs)); break;
     case 'chapter_rewrite': envelope = executionExact(common, 'chapter', executionChapterRewriteRequest(request), executionContentRefs(refs, false)); break;
     case 'chapter_impact_assess': envelope = executionExact(common, 'chapter', executionChapterImpactRequest(request), executionContentRefs(refs, false)); break;
     case 'chapter_adopt_impact_assess': envelope = executionExact(common, 'chapter', executionChapterAdoptImpactRequest(request), executionContentRefs(refs, true)); break;
@@ -307,6 +309,7 @@ function assertExecutionSourceConsistency(envelope: ExecutionEnvelopeV1) {
     case 'trial_followup_generate': return mismatch(envelope.effectiveRequest.trialRunId !== envelope.objectId || envelope.effectiveRequest.trialRunId !== envelope.sourceVersionRefs.trialRunId || envelope.effectiveRequest.chapterPlanVersionId !== envelope.sourceVersionRefs.currentChapterPlanVersionId || envelope.effectiveRequest.selectedCandidateVersionId !== envelope.sourceVersionRefs.selectedChapterOneCandidateId);
     case 'body_batch_generate': return mismatch(envelope.effectiveRequest.strategySnapshotId !== envelope.sourceVersionRefs.strategySnapshotId);
     case 'chapter_body_generate': return mismatch(envelope.objectId !== envelope.effectiveRequest.chapterId || envelope.effectiveRequest.strategySnapshotId !== envelope.sourceVersionRefs.strategySnapshotId);
+    case 'chapter_overlength_revise': return mismatch(envelope.objectId !== envelope.effectiveRequest.chapterId || envelope.effectiveRequest.candidateVersionId !== envelope.sourceVersionRefs.candidateVersionId);
     case 'chapter_rewrite': case 'chapter_impact_assess': return mismatch(envelope.objectId !== envelope.effectiveRequest.chapterId || envelope.effectiveRequest.currentContentVersionId !== envelope.sourceVersionRefs.currentContentVersionId);
     case 'chapter_adopt_impact_assess': return mismatch(envelope.objectId !== envelope.effectiveRequest.chapterId || envelope.effectiveRequest.currentContentVersionId !== envelope.sourceVersionRefs.currentContentVersionId || envelope.effectiveRequest.candidateVersionId !== envelope.sourceVersionRefs.candidateVersionId);
     case 'novel_full_review': return mismatch(envelope.policyProfileVersionId !== envelope.effectiveRequest.policyProfileVersionId);
@@ -354,6 +357,7 @@ function executionBodyBatchRequest(value: unknown) {
   return { startChapter, endChapter, batchSize, strategySnapshotId: executionId(source.strategySnapshotId, 'effectiveRequest.strategySnapshotId') };
 }
 function executionChapterBodyRequest(value: unknown) { const source = executionRecord(value, ['chapterId', 'strategySnapshotId', 'enhancedReview'], 'effectiveRequest'); if (source.enhancedReview !== undefined && typeof source.enhancedReview !== 'boolean') executionUnsupported('effectiveRequest.enhancedReview must be boolean'); return { chapterId: executionId(source.chapterId, 'effectiveRequest.chapterId'), strategySnapshotId: executionId(source.strategySnapshotId, 'effectiveRequest.strategySnapshotId'), ...(source.enhancedReview === undefined ? {} : { enhancedReview: source.enhancedReview }) }; }
+function executionOverlengthRevisionRequest(value: unknown) { const source = executionRequiredRecord(value, ['chapterId', 'candidateVersionId'], 'effectiveRequest'); return { chapterId: executionAuthorityId(source.chapterId, 'effectiveRequest.chapterId'), candidateVersionId: executionAuthorityId(source.candidateVersionId, 'effectiveRequest.candidateVersionId') }; }
 function executionChapterRewriteRequest(value: unknown) { const source = executionRecord(value, ['chapterId', 'currentContentVersionId', 'instruction', 'reason'], 'effectiveRequest'); const reason = executionOptionalText(source.reason, 'effectiveRequest.reason', 1_000); return { chapterId: executionId(source.chapterId, 'effectiveRequest.chapterId'), currentContentVersionId: executionId(source.currentContentVersionId, 'effectiveRequest.currentContentVersionId'), instruction: executionText(source.instruction, 'effectiveRequest.instruction', 2_000), ...(reason ? { reason } : {}) }; }
 function executionChapterImpactRequest(value: unknown) { const source = executionRecord(value, ['chapterId', 'currentContentVersionId', 'instruction', 'reason'], 'effectiveRequest'); const instruction = executionOptionalText(source.instruction, 'effectiveRequest.instruction', 2_000); const reason = executionOptionalText(source.reason, 'effectiveRequest.reason', 1_000); return { chapterId: executionId(source.chapterId, 'effectiveRequest.chapterId'), currentContentVersionId: executionId(source.currentContentVersionId, 'effectiveRequest.currentContentVersionId'), ...(instruction ? { instruction } : {}), ...(reason ? { reason } : {}) }; }
 function executionChapterAdoptImpactRequest(value: unknown) { const source = executionRecord(value, ['chapterId', 'candidateVersionId', 'currentContentVersionId', 'reason', 'pageVersionSnapshot'], 'effectiveRequest'); const pageVersionSnapshot = executionOptionalPageVersionSnapshot(source.pageVersionSnapshot); return { chapterId: executionId(source.chapterId, 'effectiveRequest.chapterId'), candidateVersionId: executionId(source.candidateVersionId, 'effectiveRequest.candidateVersionId'), currentContentVersionId: executionId(source.currentContentVersionId, 'effectiveRequest.currentContentVersionId'), reason: executionText(source.reason, 'effectiveRequest.reason', 1_000), ...(pageVersionSnapshot ? { pageVersionSnapshot } : {}) }; }
@@ -392,6 +396,7 @@ function executionBodyRefs(value: unknown) {
   return Object.fromEntries(keys.map((key) => [key, key === 'strategySnapshotVersion' ? executionInteger(source[key], `sourceVersionRefs.${key}`, 1, 1_000_000) : key === 'creationStage' ? 'body' : executionNullableAuthorityId(source[key], `sourceVersionRefs.${key}`)])) as never;
 }
 function executionContentRefs(value: unknown, candidate: boolean) { const source = executionRequiredRecord(value, ['currentContentVersionId', ...(candidate ? ['candidateVersionId'] : [])], 'sourceVersionRefs'); return { currentContentVersionId: executionAuthorityId(source.currentContentVersionId, 'sourceVersionRefs.currentContentVersionId'), ...(candidate ? { candidateVersionId: executionAuthorityId(source.candidateVersionId, 'sourceVersionRefs.candidateVersionId') } : {}) }; }
+function executionOverlengthRevisionRefs(value: unknown) { const source = executionRequiredRecord(value, ['candidateVersionId', 'currentContentVersionId', 'currentChapterPlanVersionId'], 'sourceVersionRefs'); if (source.currentContentVersionId !== null) executionUnsupported('sourceVersionRefs.currentContentVersionId must be null'); return { candidateVersionId: executionAuthorityId(source.candidateVersionId, 'sourceVersionRefs.candidateVersionId'), currentContentVersionId: null, currentChapterPlanVersionId: executionAuthorityId(source.currentChapterPlanVersionId, 'sourceVersionRefs.currentChapterPlanVersionId') }; }
 function executionFullReviewRefs(value: unknown) {
   const keys = ['currentDirectionVersionId', 'currentSettingVersionId', 'currentOutlineVersionId', 'currentStageOutlineVersionId', 'currentChapterPlanVersionId', 'chapterContentVersionIds'];
   const source = executionRecord(value, keys, 'sourceVersionRefs');
@@ -407,7 +412,7 @@ function executionActionAuthorityRefs(action: NovelProviderAction, refs: Record<
   if (refs.sourceIdentitySchemaVersion !== 1) executionUnsupported('sourceVersionRefs.sourceIdentitySchemaVersion must be 1');
   const required = new Set<string>(['sourceIdentitySchemaVersion', 'sourceIdentities', 'novelProviderInputSnapshotHash']);
   if (['direction_generate', 'direction_fuse', 'direction_optimize', 'setting_generate', 'outline_generate', 'stage_outline_generate', 'chapter_plan_generate', 'trial_chapter_one_generate', 'trial_followup_generate'].includes(action)) required.add('preferencesSnapshotHash');
-  if (['trial_chapter_one_generate', 'trial_followup_generate', 'body_batch_generate', 'chapter_body_generate', 'chapter_rewrite', 'chapter_impact_assess', 'chapter_adopt_impact_assess', 'novel_full_review'].includes(action)) required.add('chapterProviderInputSnapshotHash');
+  if (['trial_chapter_one_generate', 'trial_followup_generate', 'body_batch_generate', 'chapter_body_generate', 'chapter_overlength_revise', 'chapter_rewrite', 'chapter_impact_assess', 'chapter_adopt_impact_assess', 'novel_full_review'].includes(action)) required.add('chapterProviderInputSnapshotHash');
   if (action === 'trial_chapter_one_generate' || action === 'trial_followup_generate') {
     required.add('chapterRefs'); required.add('chapterInputSnapshotHash');
   }
@@ -549,7 +554,7 @@ function assertAuthoritySourceIdentityCoverage(envelope: ExecutionEnvelopeV1_1):
   requireIdentity('body_strategy_snapshot', refs.strategySnapshotId as string | null | undefined, 'sourceVersionRefs.strategySnapshotId', refs.strategySnapshotVersion as number | undefined);
   requireIdentity('chapter_content', refs.currentContentVersionId as string | null | undefined, 'sourceVersionRefs.currentContentVersionId');
   requireIdentity('chapter_content', refs.candidateVersionId as string | null | undefined, 'sourceVersionRefs.candidateVersionId');
-  if (['chapter_body_generate', 'chapter_rewrite', 'chapter_impact_assess', 'chapter_adopt_impact_assess'].includes(envelope.action)) {
+  if (['chapter_body_generate', 'chapter_overlength_revise', 'chapter_rewrite', 'chapter_impact_assess', 'chapter_adopt_impact_assess'].includes(envelope.action)) {
     requireIdentity('chapter', envelope.objectId, 'objectId');
   }
   for (const key of ['chapterRefs', 'targetChapterRefs'] as const) {
@@ -887,6 +892,7 @@ export interface TrialChapterCandidateDTO {
   isAiRecommended: boolean;
   isSelected: boolean;
   requiresContentReview?: boolean;
+  sourceType?: string | null;
   openingStrategy: string;
   openingHighlight: string;
   firstSentence: string;
@@ -1307,6 +1313,13 @@ export interface ChapterRewriteResultDTO {
   nextAction: RecommendedActionDTO;
 }
 
+export interface OverlengthRevisionResultDTO {
+  novelId: string;
+  task: DirectionTaskDTO;
+  original: TrialChapterCandidateDTO;
+  candidate: TrialChapterCandidateDTO | null;
+}
+
 export interface ChapterContentAdoptionResultDTO {
   novelId: string;
   statusSummary: NovelStatusSummaryDTO;
@@ -1675,6 +1688,10 @@ export interface RewriteChapterRequest {
   reason?: string | null;
   currentContentVersionId?: string | null;
   idempotencyKey?: string | null;
+}
+
+export interface ReviseOverlengthChapterRequest {
+  sourceCandidateVersionId: string;
 }
 
 export interface AdoptChapterContentVersionRequest {

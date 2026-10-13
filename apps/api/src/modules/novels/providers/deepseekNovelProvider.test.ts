@@ -966,6 +966,39 @@ describe('DeepSeek novel provider', () => {
     assert.equal(evaluateChapterLength(draft.content, 100).status, 'too_long');
   });
 
+  it('makes one explicit deletion-only revision call without enabling automatic revision', async () => {
+    const requests: ChatCompletionRequest[] = [];
+    const { original, deletion } = createOverlongDeletionFixture(1000);
+    const provider = new DeepSeekNovelProvider({
+      client: { async chat(request) {
+        requests.push(request);
+        return { content: JSON.stringify({ sentenceIds: ['s1'] }), model: request.model };
+      } }
+    });
+    const bodyInput = bodyInputForLengthTest(1000);
+    const revised = await provider.reviseOverlengthChapter({
+      action: 'chapter_overlength_revise', novel: bodyInput.novel, chapter: bodyInput.chapter,
+      original: { id: 'candidate-overlong', content: original, summary: null }
+    } as any);
+    assert.equal(revised, original.replace(deletion, ''));
+    assert.deepEqual(requests.map((request) => request.taskName), ['novel_body_chapter_shorten']);
+    assert.equal(requests[0].maxRetries, 0);
+    assert.equal(requests[0].maxTokens, 700);
+  });
+
+  it('refuses explicit revision before provider dispatch when removal exceeds the safe bound', async () => {
+    let calls = 0;
+    const provider = new DeepSeekNovelProvider({
+      client: { async chat(request) { calls += 1; return { content: '{}', model: request.model }; } }
+    });
+    const bodyInput = bodyInputForLengthTest(1000);
+    await assert.rejects(() => provider.reviseOverlengthChapter({
+      action: 'chapter_overlength_revise', novel: bodyInput.novel, chapter: bodyInput.chapter,
+      original: { id: 'candidate-far-overlong', content: '字'.repeat(1400), summary: null }
+    } as any), (error) => error instanceof LlmProviderError && error.category === 'output_parse_failed');
+    assert.equal(calls, 0);
+  });
+
   it('uses the smallest valid subset of model-selected sentence ids', async () => {
     const { original, deletion } = createOverlongDeletionFixture(1000, true);
     const responses = [JSON.stringify({ content: original }), JSON.stringify({ sentenceIds: ['s1', 's2'] })];

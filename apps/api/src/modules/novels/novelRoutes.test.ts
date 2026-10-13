@@ -2925,6 +2925,150 @@ describe('novel package 6 body generation routes', () => {
       await app.close();
     }
   });
+  it('creates one explicit overlength revision candidate without changing formal chapter assets', async () => {
+    const repository = createInMemoryNovelRepository();
+    const app = await buildApp({ logger: false, novelRepository: repository });
+    const generateBody = MockBodyProvider.prototype.generateBodyChapter;
+    const reviseOverlength = MockBodyProvider.prototype.reviseOverlengthChapter;
+    let revisionCalls = 0;
+    try {
+      const { novelId, strategySnapshot } = await createNovelReadyForBody(app, '显式精简超长原稿', 8);
+      MockBodyProvider.prototype.generateBodyChapter = async function(input) {
+        const draft = await generateBody.call(this, input);
+        if (input.chapter.chapterNo !== 5) return draft;
+        const upper = Math.floor((input.chapter.wordTarget ?? 2000) * 1.15);
+        return { ...draft, content: '主线事实。' + '稳'.repeat(upper - 5) +
+          '这是一句可以删除的冗余描写。'.repeat(4) };
+      };
+      MockBodyProvider.prototype.reviseOverlengthChapter = async function(input) {
+        revisionCalls += 1;
+        return reviseOverlength.call(this, input);
+      };
+      const body = await app.inject({ method: 'POST', url: `/novels/${novelId}/chapters/batch-generate`,
+        payload: { strategySnapshotId: strategySnapshot.id,
+          expectedStrategySnapshotVersion: strategySnapshot.versionNo, idempotencyKey: 'explicit-revision-body-1' } });
+      assert.equal(body.statusCode, 200, body.body);
+      const chapter = repository.getNovelChapters().find((item) => item.novelId === novelId && item.chapterNo === 5)!;
+      const originalId = body.json().data.batch.chapterResults[1].contentVersionId as string;
+      const path = `/novels/${novelId}/chapters/${chapter.id}/overlength-revisions`;
+      const first = await app.inject({ method: 'POST', url: path, payload: { sourceCandidateVersionId: originalId } });
+      assert.equal(first.statusCode, 200, first.body);
+      assert.equal(first.json().data.task.status, 'waiting_confirmation');
+      assert.equal(first.json().data.candidate.sourceType, 'ai_overlength_revision');
+      assert.equal(first.json().data.candidate.lengthGate.status, 'pass');
+      const revisionId = first.json().data.candidate.id as string;
+      const repeated = await app.inject({ method: 'POST', url: path, payload: { sourceCandidateVersionId: originalId } });
+      assert.equal(repeated.statusCode, 200, repeated.body);
+      assert.equal(repeated.json().data.candidate.id, revisionId);
+      assert.equal(revisionCalls, 1);
+      const refreshed = await app.inject({ method: 'GET', url: `/novels/${novelId}/chapters/${chapter.id}` });
+      assert.equal(refreshed.statusCode, 200, refreshed.body);
+      assert.equal(refreshed.json().data.recentTask.taskType, 'chapter_overlength_revise');
+      assert.equal(refreshed.json().data.recentTask.status, 'waiting_confirmation');
+      assert.deepEqual(refreshed.json().data.candidateVersions
+        .filter((version: { id: string }) => [originalId, revisionId].includes(version.id))
+        .map((version: { requiresContentReview: boolean }) => version.requiresContentReview), [true, true]);
+      assert.equal(chapter.currentContentVersionId, null);
+      assert.equal(chapter.currentFeatureCardVersionId, null);
+      assert.equal(chapter.currentReviewReportId, null);
+      const blockedAdopt = await app.inject({ method: 'POST',
+        url: `/novels/${novelId}/chapters/${chapter.id}/content-versions/${revisionId}/adopt`,
+        payload: { currentContentVersionId: null, reason: '验证精简候选门禁' } });
+      assert.equal(blockedAdopt.statusCode, 409, blockedAdopt.body);
+    } finally {
+      MockBodyProvider.prototype.generateBodyChapter = generateBody;
+      MockBodyProvider.prototype.reviseOverlengthChapter = reviseOverlength;
+      await app.close();
+    }
+  });
+  it('rejects a changed chapter target before spending an explicit revision call', async () => {
+    const repository = createInMemoryNovelRepository();
+    const app = await buildApp({ logger: false, novelRepository: repository });
+    const generateBody = MockBodyProvider.prototype.generateBodyChapter;
+    const reviseOverlength = MockBodyProvider.prototype.reviseOverlengthChapter;
+    let revisionCalls = 0;
+    try {
+      const { novelId, strategySnapshot } = await createNovelReadyForBody(app, '精简旧目标阻断', 8);
+      MockBodyProvider.prototype.generateBodyChapter = async function(input) {
+        const draft = await generateBody.call(this, input);
+        return input.chapter.chapterNo === 5
+          ? { ...draft, content: '长'.repeat((input.chapter.wordTarget ?? 2000) * 2) } : draft;
+      };
+      const body = await app.inject({ method: 'POST', url: `/novels/${novelId}/chapters/batch-generate`,
+        payload: { strategySnapshotId: strategySnapshot.id,
+          expectedStrategySnapshotVersion: strategySnapshot.versionNo, idempotencyKey: 'stale-target-body' } });
+      assert.equal(body.statusCode, 200, body.body);
+      const chapter = repository.getNovelChapters().find((item) => item.novelId === novelId && item.chapterNo === 5)!;
+      const originalId = body.json().data.batch.chapterResults[1].contentVersionId as string;
+      chapter.wordTarget = (chapter.wordTarget ?? 2000) + 100;
+      MockBodyProvider.prototype.reviseOverlengthChapter = async function(input) {
+        revisionCalls += 1;
+        return reviseOverlength.call(this, input);
+      };
+      const revision = await app.inject({ method: 'POST',
+        url: `/novels/${novelId}/chapters/${chapter.id}/overlength-revisions`,
+        payload: { sourceCandidateVersionId: originalId } });
+      assert.equal(revision.statusCode, 409, revision.body);
+      assert.equal(revisionCalls, 0);
+      assert.equal(repository.getChapterContentVersions().filter((item) => item.chapterId === chapter.id).length, 1);
+      assert.equal(chapter.currentContentVersionId, null);
+    } finally {
+      MockBodyProvider.prototype.generateBodyChapter = generateBody;
+      MockBodyProvider.prototype.reviseOverlengthChapter = reviseOverlength;
+      await app.close();
+    }
+  });
+  it('discards a cancelled explicit revision even when the model returns later', async () => {
+    const repository = createInMemoryNovelRepository();
+    const app = await buildApp({ logger: false, novelRepository: repository });
+    const generateBody = MockBodyProvider.prototype.generateBodyChapter;
+    const reviseOverlength = MockBodyProvider.prototype.reviseOverlengthChapter;
+    let releaseModel: (() => void) | undefined;
+    let modelStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => { modelStarted = resolve; });
+    try {
+      const { novelId, strategySnapshot } = await createNovelReadyForBody(app, '精简取消迟到结果', 8);
+      MockBodyProvider.prototype.generateBodyChapter = async function(input) {
+        const draft = await generateBody.call(this, input);
+        if (input.chapter.chapterNo !== 5) return draft;
+        const upper = Math.floor((input.chapter.wordTarget ?? 2000) * 1.15);
+        return { ...draft, content: '主线事实。' + '稳'.repeat(upper - 5) +
+          '这是一句可以删除的冗余描写。'.repeat(4) };
+      };
+      const body = await app.inject({ method: 'POST', url: `/novels/${novelId}/chapters/batch-generate`,
+        payload: { strategySnapshotId: strategySnapshot.id,
+          expectedStrategySnapshotVersion: strategySnapshot.versionNo, idempotencyKey: 'cancel-revision-body' } });
+      assert.equal(body.statusCode, 200, body.body);
+      const chapter = repository.getNovelChapters().find((item) => item.novelId === novelId && item.chapterNo === 5)!;
+      const originalId = body.json().data.batch.chapterResults[1].contentVersionId as string;
+      MockBodyProvider.prototype.reviseOverlengthChapter = async function(input) {
+        modelStarted?.();
+        await new Promise<void>((resolve) => { releaseModel = resolve; });
+        return reviseOverlength.call(this, input);
+      };
+      const pending = app.inject({ method: 'POST',
+        url: `/novels/${novelId}/chapters/${chapter.id}/overlength-revisions`,
+        payload: { sourceCandidateVersionId: originalId } });
+      await started;
+      const task = repository.getGenerationTasks().find((item) => item.taskType === 'chapter_overlength_revise' && item.status === TaskStatus.Processing);
+      assert.ok(task);
+      const during = await app.inject({ method: 'GET', url: `/novels/${novelId}/chapters/${chapter.id}` });
+      assert.equal(during.json().data.recentTask.id, task.id);
+      assert.equal(during.json().data.recentTask.status, 'processing');
+      const cancelled = await app.inject({ method: 'POST', url: `/tasks/${task.id}/cancel`, payload: { reason: '用户停止等待' } });
+      assert.equal(cancelled.statusCode, 200, cancelled.body);
+      releaseModel?.();
+      const late = await pending;
+      assert.equal(late.statusCode, 409, late.body);
+      assert.equal(repository.getChapterContentVersions().filter((item) => item.chapterId === chapter.id).length, 1);
+      assert.equal(chapter.currentContentVersionId, null);
+    } finally {
+      releaseModel?.();
+      MockBodyProvider.prototype.generateBodyChapter = generateBody;
+      MockBodyProvider.prototype.reviseOverlengthChapter = reviseOverlength;
+      await app.close();
+    }
+  });
   it('keeps hard failure classification when the failed chapter is also overlength', async () => {
     const repository = createInMemoryNovelRepository();
     const app = await buildApp({ logger: false, novelRepository: repository });
@@ -5300,6 +5444,7 @@ function createProviderSet(calls: Array<{ action: NovelProviderAction; keys: str
     },
     bodyProvider: {
       generateBodyChapter: (input) => record(input.action === 'chapter_body_generate' ? 'chapter_body_generate' : 'body_batch_generate', input, bodyProvider.generateBodyChapter(input)),
+      reviseOverlengthChapter: (input) => record('chapter_overlength_revise', input, bodyProvider.reviseOverlengthChapter(input)),
       rewriteChapter: (input) => record('chapter_rewrite', input, bodyProvider.rewriteChapter(input)),
       assessImpact: (input) => record(input.action === 'chapter_adopt_impact_assess' ? 'chapter_adopt_impact_assess' : 'chapter_impact_assess', input, bodyProvider.assessImpact(input))
     },
@@ -5363,9 +5508,9 @@ describe('RP-02B2a1 registry and strict provider ABI', () => {
       }
     }
   });
-  it('covers all 15 actions with stable execution plans', () => {
+  it('covers all 16 actions with stable execution plans', () => {
     assert.deepEqual(Object.keys(ACTION_EXECUTION_PLANS).sort(), [...NOVEL_PROVIDER_ACTIONS].sort());
-    assert.equal(listActionExecutionPlans().length, 15);
+    assert.equal(listActionExecutionPlans().length, 16);
     assert.deepEqual(
       Object.fromEntries(['setting_generate', 'outline_generate', 'stage_outline_generate', 'chapter_plan_generate'].map((action) => [action, ACTION_EXECUTION_PLANS[action as keyof typeof ACTION_EXECUTION_PLANS].objectType])),
       {
@@ -5377,7 +5522,7 @@ describe('RP-02B2a1 registry and strict provider ABI', () => {
     );
     assert.throws(() => assertNoQueuedTaskStatus({ nested: [{ taskType: 'canary', status: TaskStatus.Queued }] }), /queued task/);
   });
-  it('scenario 1 dispatcher_all_15_actions_and_unknown_handler uses strict inputs and exact side effects', async () => {
+  it('scenario 1 dispatcher_all_16_actions_and_unknown_handler uses strict inputs and exact side effects', async () => {
     const calls: Array<{ action: NovelProviderAction; keys: string[]; payload: unknown }> = [];
     const repository = createInMemoryNovelRepository();
     const before = await snapshotScenarioCounts(repository, calls.length);
@@ -5397,6 +5542,8 @@ describe('RP-02B2a1 registry and strict provider ABI', () => {
     await executeNovelProviderAction(providers, { action: 'trial_followup_generate', novel, selectedCandidate: { id: 'c1', content: '正文', summary: '摘要', reviewScore: 80, providerSafeMetadata }, chapters: [chapter] });
     await executeNovelProviderAction(providers, { action: 'body_batch_generate', novel, chapter, strategySnapshot, previousContent: null, previousMemory: { previousSummary: '前情', characterStates: [], relationshipStates: [], unresolvedConflicts: [], factsCannotContradict: ['不可矛盾'] }, previousBatchNotes: [], enhancedReview: false });
     await executeNovelProviderAction(providers, { action: 'chapter_body_generate', novel, chapter, strategySnapshot, previousContent: null, previousMemory: null, previousBatchNotes: [], enhancedReview: false });
+    await executeNovelProviderAction(providers, { action: 'chapter_overlength_revise', novel, chapter: { ...chapter, wordTarget: 2000 },
+      original: { ...content, content: '主线事实。' + '稳'.repeat(2295) + '这是一句可以删除的冗余描写。'.repeat(4) } });
     await executeNovelProviderAction(providers, { action: 'chapter_rewrite', novel, chapter, currentContent: content, instruction: '重写' });
     await executeNovelProviderAction(providers, { action: 'chapter_impact_assess', novel, chapter, oldContent: content, newContent: content });
     await executeNovelProviderAction(providers, { action: 'chapter_adopt_impact_assess', novel, chapter, oldContent: null, newContent: content });
@@ -5412,10 +5559,10 @@ describe('RP-02B2a1 registry and strict provider ABI', () => {
       input[unknownKey] = unknownKey;
       assert.throws(() => Reflect.apply(executeNovelProviderAction, undefined, [providers, input]), /invalid keys/);
       for (const [key, canary] of [[unknownKey, unknownKey], ['SECRET_API_KEY_CANARY', 'secret'], ['rawEntityCanary', RAW_ENTITY_CANARY]] as const) { const nested = structuredClone(item.payload) as Record<string, unknown>, value = Object.values(nested).find((candidate) => candidate && typeof candidate === 'object'), target = (Array.isArray(value) ? value[0] : value) as Record<string, unknown>; target[key] = canary; assert.throws(() => Reflect.apply(executeNovelProviderAction, undefined, [providers, nested]), item.action === 'novel_full_review' ? /hash|invalid keys|字段不符合 full-review evidence ABI/ : /invalid keys/); }
-      assert.equal(calls.length, 15, `${item.action} nested canary provider=0`);
+      assert.equal(calls.length, 16, `${item.action} nested canary provider=0`);
     }
     const missingRequired = structuredClone(calls.find((item) => item.action === 'direction_fuse')!.payload) as Record<string, unknown>; delete missingRequired.sources; assert.throws(() => Reflect.apply(executeNovelProviderAction, undefined, [providers, missingRequired]), /invalid keys/);
-    assert.equal(calls.length, 15);
+    assert.equal(calls.length, 16);
     assert.doesNotMatch(JSON.stringify(calls), /PROMPT_CANARY|SECRET_API_KEY_CANARY|RAW_ENTITY_CANARY/);
     for (const item of calls) assertNestedProviderAbi(item.action, item.payload as Record<string, unknown>);
     assert.deepEqual(calls.find((item) => item.action === 'direction_generate')?.keys, ['action', 'novel', 'preferences']);
@@ -5423,7 +5570,7 @@ describe('RP-02B2a1 registry and strict provider ABI', () => {
     assert.deepEqual(calls.find((item) => item.action === 'direction_optimize')?.keys, ACTION_INPUT_KEYS.direction_optimize.slice().sort());
     assert.deepEqual(calls.find((item) => item.action === 'trial_followup_generate')?.keys, ['action', 'chapters', 'novel', 'selectedCandidate']);
     const after = await snapshotScenarioCounts(repository, calls.length);
-    assert.deepEqual(diffScenarioCounts(before, after), scenarioExpectedCounts({ provider: 15 }));
+    assert.deepEqual(diffScenarioCounts(before, after), scenarioExpectedCounts({ provider: 16 }));
     const bodyPayload = calls.find((item) => item.action === 'body_batch_generate')?.payload as { chapter: { wordTarget: number | null }; strategySnapshot: { title: string | null; summary: string | null }; previousContent: unknown; previousMemory: unknown };
     assert.equal(bodyPayload.chapter.wordTarget, null);
     assert.equal(bodyPayload.strategySnapshot.title, null);
@@ -5560,7 +5707,7 @@ describe('RP-02B2a1 registry and strict provider ABI', () => {
       idempotencyKey: 'b2a1-adopt-impact'
     });
     const actions = new Set(captured.map((item) => item.action));
-    assert.deepEqual([...actions].sort(), [...NOVEL_PROVIDER_ACTIONS].sort());
+    assert.deepEqual([...actions].sort(), NOVEL_PROVIDER_ACTIONS.filter((action) => action !== 'chapter_overlength_revise').sort());
     for (const { action, payload } of captured) {
       assert.deepEqual(exactKeys(payload), ACTION_INPUT_KEYS[action].filter((key) => key in payload || !((action === 'direction_fuse' && key === 'reason') || (action !== 'chapter_rewrite' && key === 'instruction'))));
       assertNestedProviderAbi(action, payload);
@@ -6095,6 +6242,10 @@ function createRouteProviderSpies(captured: Array<{ action: NovelProviderAction;
         record(input.action === 'chapter_body_generate' ? 'chapter_body_generate' : 'body_batch_generate', input);
         const result = await bodyProvider.generateBodyChapter(input);
         return poison.body ? { ...result, chapter: { ...result.chapter, id: PROVIDER_RETURNED_ID_CANARY } } : result;
+      },
+      reviseOverlengthChapter: async (input: Parameters<typeof bodyProvider.reviseOverlengthChapter>[0]) => {
+        record('chapter_overlength_revise', input);
+        return bodyProvider.reviseOverlengthChapter(input);
       },
       rewriteChapter: async (input: Parameters<typeof bodyProvider.rewriteChapter>[0]) => {
         record('chapter_rewrite', input);

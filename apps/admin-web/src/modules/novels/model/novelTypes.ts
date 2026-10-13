@@ -143,6 +143,7 @@ export interface ChapterLengthGateRow {
 export interface TrialCandidateRow {
   id: string
   chapterId: string
+  sourceType: string | null
   title: string
   versionLabel: string
   statusText: string

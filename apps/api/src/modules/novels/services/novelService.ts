@@ -24,6 +24,8 @@ import {
   type ChapterReviewIssueDTO,
   type ChapterReviewReportDTO,
   type ChapterRewriteResultDTO,
+  type OverlengthRevisionResultDTO,
+  type ReviseOverlengthChapterRequest,
   type ChapterSummaryCompareDTO,
   type ChapterWorkbenchDTO,
   type CompletionActionResultDTO,
@@ -1363,6 +1365,77 @@ export class NovelService {
         taskType: 'chapter_impact_assess'
       })
     };
+  }
+
+  async reviseOverlengthChapter(
+    novelId: string, chapterId: string, request: ReviseOverlengthChapterRequest, context: RequestContext
+  ): Promise<OverlengthRevisionResultDTO> {
+    const novel = await this.findNovelOrThrow(context.tenantId, novelId);
+    this.ensureLifecycleActive(novel);
+    if (novel.creationStage !== NovelCreationStage.Body) {
+      throw new BusinessError(ErrorCode.InvalidStage, '当前小说未处于正文阶段，不能精简超长候选。');
+    }
+    const chapter = await this.options.repository.findChapterById(context.tenantId, novelId, chapterId);
+    const original = await this.options.repository.findChapterContentVersionById(
+      context.tenantId, novelId, request.sourceCandidateVersionId
+    );
+    if (!chapter || !original || original.chapterId !== chapter.id) {
+      throw new BusinessError(ErrorCode.NotFound, '超长原稿候选不存在。');
+    }
+    assertChapterLengthTargetConfigured(chapter.wordTarget);
+    const originalRefs = toRecord(original.sourceVersionRefs);
+    if (chapter.currentContentVersionId || original.status !== VersionStatus.Candidate ||
+      original.staleLevel !== StaleLevel.None || original.sourceType !== 'ai_overlength_original' ||
+      evaluateChapterLength(original.content, chapter.wordTarget).status !== 'too_long' ||
+      toRecord(toRecord(original.metadata).lengthGate).target !== chapter.wordTarget ||
+      originalRefs.currentChapterPlanVersionId !== novel.currentChapterPlanVersionId ||
+      !novel.currentChapterPlanVersionId) {
+      throw new BusinessError(ErrorCode.CandidateStale, '超长原稿或章节目录已变化，请刷新后重试。');
+    }
+    const idempotencyKey = `overlength-revise:${original.id}`;
+    const scopedToken = createActorScopedIdempotencyToken({ tenantId: context.tenantId,
+      userId: context.userId, action: 'chapter_overlength_revise', objectId: chapter.id,
+      rawIdempotencyKey: idempotencyKey });
+    const existingTask = await this.options.repository.findTaskByIdempotencyToken(
+      context.tenantId, 'chapter_overlength_revise', scopedToken
+    );
+    if (!existingTask) {
+      const versions = await this.options.repository.listChapterContentVersions(context.tenantId, novelId, chapter.id);
+      if (versions.some((version) => version.sourceType === 'ai_overlength_revision')) {
+        throw new BusinessError(ErrorCode.GateBlocked, '本章已有一次精简候选，请先查看已有结果。');
+      }
+    }
+    const sourceVersionRefs = {
+      candidateVersionId: original.id, currentContentVersionId: null,
+      currentChapterPlanVersionId: novel.currentChapterPlanVersionId
+    };
+    const execution = await executeClaimedGeneration({
+      action: 'chapter_overlength_revise', repository: this.options.repository, novel,
+      objectId: chapter.id, idempotencyKey,
+      effectiveRequest: { chapterId: chapter.id, candidateVersionId: original.id },
+      sourceVersionRefs, context, now: this.now, providerCapability: this.bodyProvider,
+      provider: (authoritativeInput) => executeNovelProviderAction(
+        this.getProviderSet(), authoritativeInput as NovelProviderActionInputFor<'chapter_overlength_revise'>
+      ),
+      finalize: (task, content) => {
+        const originalLength = evaluateChapterLength(original.content, chapter.wordTarget);
+        const revisedLength = evaluateChapterLength(content, chapter.wordTarget);
+        if (revisedLength.status !== 'pass' || !isDeletionOnlyRevision(original.content, content) ||
+          originalLength.actual - revisedLength.actual > Math.floor(originalLength.actual * 0.12)) {
+          throw new BusinessError(ErrorCode.GateBlocked, '精简稿超出字数或删句边界，原稿已保留。');
+        }
+        return this.options.repository.createOverlengthRevision({
+          novel, task, chapter, original, content, context, now: this.now()
+        });
+      }
+    });
+    const candidateId = execution.reused ? execution.task.resultVersionIds[0] : execution.value.candidate.id;
+    const candidate = candidateId ? await this.options.repository.findChapterContentVersionById(
+      context.tenantId, novelId, candidateId
+    ) : null;
+    return { novelId, task: toDirectionTaskDTO(execution.reused ? execution.task : execution.value.task),
+      original: toTrialChapterCandidateDTO(original, chapter),
+      candidate: candidate ? toTrialChapterCandidateDTO(candidate, chapter) : null };
   }
 
   async adoptChapterContentVersion(
@@ -3344,6 +3417,7 @@ function toTrialChapterCandidateDTO(version: ChapterContentVersionRecord, chapte
     isAiRecommended: metadata.isAiRecommended === true,
     isSelected: metadata.isSelected === true || trialStatus === 'selected_for_trial',
     requiresContentReview: metadata.reviewRequired === true,
+    sourceType: version.sourceType,
     openingStrategy: String(metadata.openingStrategy ?? ''),
     openingHighlight: String(metadata.openingHighlight ?? ''),
     firstSentence: String(metadata.firstSentence ?? firstSentence(version.content)),
@@ -4547,6 +4621,17 @@ function assertChapterLengthGate(content: string, target: number | null): Chapte
     );
   }
   return lengthGate;
+}
+
+function isDeletionOnlyRevision(original: string, revised: string): boolean {
+  const source = [...original.normalize('NFC')];
+  const target = [...revised.normalize('NFC')];
+  if (target.length >= source.length) return false;
+  let cursor = 0;
+  for (const character of source) {
+    if (character === target[cursor]) cursor += 1;
+  }
+  return cursor === target.length;
 }
 
 function assertChapterLengthTargetConfigured(target: number | null | undefined): asserts target is number {

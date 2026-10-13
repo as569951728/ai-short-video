@@ -23,7 +23,7 @@
           <p class="muted">章节生成、审稿和试写相关任务会在这里显示最近状态。</p>
         </div>
       </div>
-      <TaskProgressPanel :summary="workbench?.recentTask || null" :loading="loading" @refresh="loadWorkbench" />
+      <TaskProgressPanel :summary="workbench?.recentTask || null" :loading="loading" @refresh="loadWorkbench" @view="openTaskDetail" @view-result="scrollToCandidates" />
     </el-card>
 
     <div class="chapter-right-columns">
@@ -42,7 +42,7 @@
           </template>
         </el-card>
 
-        <el-card shadow="never">
+        <el-card id="chapter-candidates" shadow="never">
           <div class="section-title">
             <div>
               <h2>候选版本</h2>
@@ -72,8 +72,19 @@
               />
               <div class="split-actions">
                 <el-button size="small" @click="openContent(candidate)">看全文</el-button>
+                <el-button
+                  v-if="candidate.sourceType === 'ai_overlength_original' && candidate.lengthGate?.status === 'too_long'"
+                  size="small"
+                  type="warning"
+                  :disabled="hasRevisionAttempt || actionLoading"
+                  :loading="actionLoading"
+                  @click="handleReviseOverlength(candidate)"
+                >精简一次</el-button>
                 <el-button v-if="candidate.canSelectByStatus" size="small" type="primary" :disabled="!candidate.canSelect" :loading="actionLoading" @click="handleAdoptCandidate(candidate)">采用候选</el-button>
               </div>
+              <p v-if="candidate.sourceType === 'ai_overlength_revision'" class="muted">精简候选已保留，待内容复核后才能采用。</p>
+              <p v-if="candidate.sourceType === 'ai_overlength_original' && hasOverlengthRevision" class="muted">已有一次精简候选，请查看新版本。</p>
+              <p v-else-if="candidate.sourceType === 'ai_overlength_original' && hasRevisionAttempt" class="muted">本次精简已发起，可在任务详情查看状态；原稿会继续保留。</p>
               <p v-if="candidate.canSelectByStatus && !candidate.canSelect" class="muted">{{ candidate.selectDisabledReason }}</p>
             </article>
           </div>
@@ -160,21 +171,36 @@
         <p v-for="paragraph in drawerParagraphs" :key="paragraph" class="novel-text">{{ paragraph }}</p>
       </div>
     </el-drawer>
+    <el-drawer v-model="taskDrawer.open" title="任务详情" size="min(560px, 100%)">
+      <el-alert v-if="taskDrawer.error" :title="taskDrawer.error" type="error" show-icon class="mb-16" />
+      <TaskProgressPanel
+        :summary="workbench?.recentTask || null"
+        :detail="taskDetailForDisplay"
+        :loading="taskDrawer.loading"
+        :action-loading="taskDrawer.actionLoading"
+        @refresh="loadTaskDetail"
+        @cancel="handleCancelTask"
+        @retry="handleRetryTask"
+        @view-result="scrollToCandidates"
+      />
+    </el-drawer>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import type { ChapterWorkbenchDTO } from '@ai-shortvideo/shared'
+import { TaskStatus, type ChapterWorkbenchDTO, type TaskDetailDTO } from '@ai-shortvideo/shared'
 import { ApiClientError } from '../shared/services/http'
 import TaskProgressPanel from '../modules/novels/components/TaskProgressPanel.vue'
+import { cancelTask, getTaskDetail, retryTask } from '../modules/novels/services/taskService'
 import {
   adoptChapterContentVersion,
   createImpactAssessment,
   getChapterWorkbench,
   resolveImpactCase,
+  reviseOverlengthChapter,
   rewriteChapter,
   toTrialCandidateRow,
 } from '../modules/novels/services/novelService'
@@ -193,6 +219,8 @@ const contentDrawer = reactive({
   title: '',
   content: '',
 })
+const taskDrawer = reactive({ open: false, taskId: '', task: null as TaskDetailDTO | null,
+  loading: false, actionLoading: false, error: '' })
 
 const titleText = computed(() => {
   if (!workbench.value) return '章节详情'
@@ -200,6 +228,10 @@ const titleText = computed(() => {
 })
 const currentContent = computed(() => workbench.value?.currentContent ? toTrialCandidateRow(workbench.value.currentContent) : null)
 const candidateRows = computed(() => (workbench.value?.candidateVersions ?? []).map(toTrialCandidateRow))
+const hasOverlengthRevision = computed(() => candidateRows.value.some((candidate) => candidate.sourceType === 'ai_overlength_revision'))
+const hasRevisionAttempt = computed(() => hasOverlengthRevision.value || workbench.value?.recentTask?.taskType === 'chapter_overlength_revise')
+const taskDetailForDisplay = computed(() => taskDrawer.task?.taskType === 'chapter_overlength_revise'
+  ? { ...taskDrawer.task, retryable: false } : taskDrawer.task)
 const candidateCompareById = computed(() => workbench.value?.candidateCompares ?? {})
 const openImpactCases = computed(() => (workbench.value?.impactCases ?? []).filter((impact) => impact.blocksFullReview))
 const currentContentParagraphs = computed(() => (currentContent.value?.content ?? '').split(/\n\s*\n/).map((paragraph) => paragraph.trim()).filter(Boolean).slice(0, 4))
@@ -210,6 +242,8 @@ const statusTagType = computed(() => {
   if (status === 'trial_written' || status === 'completed') return 'success'
   return 'info'
 })
+let taskPollTimer: ReturnType<typeof setInterval> | null = null
+onUnmounted(() => { if (taskPollTimer) clearInterval(taskPollTimer) })
 
 async function loadWorkbench() {
   loading.value = true
@@ -258,6 +292,88 @@ async function handleRewriteChapter() {
     apiError.value = formatApiError(error)
   } finally {
     actionLoading.value = false
+  }
+}
+
+async function handleReviseOverlength(candidate: TrialCandidateRow) {
+  try {
+    await ElMessageBox.confirm(
+      '将调用模型对本稿最多精简一次。原稿保留，新稿只进入候选池；字数或事实边界不合格时不会保存新稿，也不会修改正式正文。',
+      '精简超字数正文',
+      { confirmButtonText: '开始精简', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch { return }
+  actionLoading.value = true
+  apiError.value = ''
+  try {
+    const result = await reviseOverlengthChapter(novelId.value, chapterId.value, { sourceCandidateVersionId: candidate.id })
+    if (result.candidate) ElMessage.success('精简候选已生成，待内容复核')
+    else if (result.task.status === TaskStatus.Queued || result.task.status === TaskStatus.Processing) ElMessage.info('精简任务进行中，可刷新查看')
+    else ElMessage.warning('本次精简未生成合格候选，原稿已保留')
+  } catch (error) {
+    apiError.value = formatApiError(error)
+  } finally {
+    actionLoading.value = false
+    await loadWorkbench()
+  }
+}
+
+function scrollToCandidates() {
+  taskDrawer.open = false
+  document.getElementById('chapter-candidates')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
+async function openTaskDetail() {
+  const taskId = workbench.value?.recentTask?.id
+  if (!taskId) return
+  taskDrawer.open = true
+  taskDrawer.taskId = taskId
+  await loadTaskDetail()
+}
+
+async function loadTaskDetail() {
+  if (!taskDrawer.taskId) return
+  taskDrawer.loading = true
+  taskDrawer.error = ''
+  try {
+    taskDrawer.task = await getTaskDetail(taskDrawer.taskId)
+    await loadWorkbench()
+  } catch (error) {
+    taskDrawer.error = formatApiError(error)
+  } finally {
+    taskDrawer.loading = false
+  }
+}
+
+async function handleCancelTask() {
+  if (!taskDrawer.task) return
+  try {
+    await ElMessageBox.confirm('取消后，模型即使稍后返回也不会保存新候选；原稿仍保留。', '取消等待',
+      { confirmButtonText: '确认取消', cancelButtonText: '继续等待', type: 'warning' })
+  } catch { return }
+  taskDrawer.actionLoading = true
+  try {
+    await cancelTask(taskDrawer.task.id, { reason: '用户取消章节任务等待' })
+    ElMessage.info('任务已取消，原稿仍保留')
+    await loadTaskDetail()
+  } catch (error) {
+    taskDrawer.error = formatApiError(error)
+  } finally {
+    taskDrawer.actionLoading = false
+  }
+}
+
+async function handleRetryTask() {
+  if (!taskDrawer.task || taskDrawer.task.taskType === 'chapter_overlength_revise') return
+  taskDrawer.actionLoading = true
+  try {
+    const result = await retryTask(taskDrawer.task.id, { reason: '从章节详情重试任务' })
+    taskDrawer.taskId = result.newTask.id
+    await loadTaskDetail()
+  } catch (error) {
+    taskDrawer.error = formatApiError(error)
+  } finally {
+    taskDrawer.actionLoading = false
   }
 }
 
@@ -419,7 +535,13 @@ function formatApiError(error: unknown) {
 }
 
 onMounted(() => {
-  loadWorkbench()
+  void loadWorkbench()
+  taskPollTimer = setInterval(() => {
+    const status = workbench.value?.recentTask?.status
+    if (actionLoading.value || status === TaskStatus.Queued || status === TaskStatus.Processing) {
+      void loadWorkbench()
+    }
+  }, 10000)
 })
 </script>
 

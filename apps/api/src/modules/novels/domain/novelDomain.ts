@@ -1164,6 +1164,21 @@ export interface RewrittenChapterRecord {
   summaryCompare: ChapterSummaryCompareDTO;
 }
 
+export interface OverlengthRevisionInput {
+  novel: NovelRecord;
+  task: GenerationTaskRecord;
+  chapter: NovelChapterRecord;
+  original: ChapterContentVersionRecord;
+  content: string;
+  context: RequestContext;
+  now: Date;
+}
+
+export interface SavedOverlengthRevisionRecord {
+  task: GenerationTaskRecord;
+  candidate: ChapterContentVersionRecord;
+}
+
 export interface ChapterContentAdoptionInput {
   novel: NovelRecord;
   task: GenerationTaskRecord;
@@ -1345,6 +1360,7 @@ export interface NovelRepository {
   confirmVideoReadiness(input: VideoReadinessConfirmationInput): Promise<ConfirmedVideoReadinessRecord>;
   generateBodyBatch(input: BodyBatchGenerationInput): Promise<GeneratedBodyBatchRecord>;
   rewriteChapter(input: ChapterRewriteInput): Promise<RewrittenChapterRecord>;
+  createOverlengthRevision(input: OverlengthRevisionInput): Promise<SavedOverlengthRevisionRecord>;
   adoptChapterContent(input: ChapterContentAdoptionInput): Promise<AdoptedChapterContentRecord>;
   createImpactAssessment(input: ImpactAssessmentInput): Promise<CreatedImpactAssessmentRecord>;
   resolveImpactCase(input: ImpactCaseResolveInput): Promise<ResolvedImpactCaseRecord>;

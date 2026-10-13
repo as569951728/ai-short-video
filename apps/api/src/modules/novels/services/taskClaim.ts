@@ -437,6 +437,7 @@ function normalizeClaimEffectiveRequest(action: NovelProviderAction, objectId: s
       return { startChapter, endChapter, batchSize: endChapter - startChapter + 1, strategySnapshotId: refs.strategySnapshotId };
     }
     case 'chapter_body_generate': return compact({ chapterId: objectId, strategySnapshotId: refs.strategySnapshotId, enhancedReview: request.enhancedReview });
+    case 'chapter_overlength_revise': return { chapterId: objectId, candidateVersionId: refs.candidateVersionId };
     case 'chapter_rewrite': return compact({ chapterId: objectId, currentContentVersionId: request.currentContentVersionId ?? refs.currentContentVersionId, instruction: request.instruction || request.reason || '基于审稿建议优化本章', reason: request.reason });
     case 'chapter_impact_assess': return compact({ chapterId: objectId, currentContentVersionId: request.currentContentVersionId ?? refs.currentContentVersionId, instruction: request.instruction ?? request.reason, reason: request.reason });
     case 'chapter_adopt_impact_assess': return compact({ chapterId: objectId, candidateVersionId: refs.candidateVersionId, currentContentVersionId: request.currentContentVersionId ?? refs.currentContentVersionId, reason: request.reason || '采用候选前影响评估', pageVersionSnapshot: request.pageVersionSnapshot });
@@ -465,6 +466,10 @@ function normalizeClaimSourceRefs(action: NovelProviderAction, value: unknown, o
     return { ...structure, currentChapterPlanVersionId: refs.currentChapterPlanVersionId, trialRunId: refs.trialRunId,
       selectedChapterOneCandidateId: refs.selectedChapterOneCandidateId, strategySnapshotId: refs.strategySnapshotId,
       strategySnapshotVersion: refs.strategySnapshotVersion, creationStage: 'body' };
+  }
+  if (action === 'chapter_overlength_revise') {
+    return { candidateVersionId: refs.candidateVersionId, currentContentVersionId: refs.currentContentVersionId,
+      currentChapterPlanVersionId: refs.currentChapterPlanVersionId };
   }
   if (action === 'chapter_rewrite' || action === 'chapter_impact_assess' || action === 'chapter_adopt_impact_assess') {
     return { currentContentVersionId: refs.currentContentVersionId, ...(action === 'chapter_adopt_impact_assess' ? { candidateVersionId: refs.candidateVersionId } : {}) };
@@ -507,6 +512,7 @@ function assertRequiredClaimSourceRefs(action: NovelProviderAction, value: unkno
       'strategySnapshotVersion',
       'creationStage'
     ]; break;
+    case 'chapter_overlength_revise': required = ['candidateVersionId', 'currentContentVersionId', 'currentChapterPlanVersionId']; break;
     case 'chapter_rewrite':
     case 'chapter_impact_assess': required = ['currentContentVersionId']; break;
     case 'chapter_adopt_impact_assess': required = ['currentContentVersionId', 'candidateVersionId']; break;
@@ -521,6 +527,7 @@ function assertRequiredClaimSourceRefs(action: NovelProviderAction, value: unkno
             : null;
   if (expectedObjectType && refs.objectType !== expectedObjectType) throw sourceStale();
   if ((action === 'body_batch_generate' || action === 'chapter_body_generate') && refs.creationStage !== 'body') throw sourceStale();
+  if (action === 'chapter_overlength_revise' && refs.currentContentVersionId !== null) throw sourceStale();
 }
 function toRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -605,6 +612,9 @@ function buildAuthoritativeProviderInput(
         && (arrayHasItems(content.acceptedRisks) || arrayHasItems(content.enhancedReviewRules))
     };
   }
+  if (action === 'chapter_overlength_revise') {
+    return { action, novel, chapter: projectChapterProviderInput(chapter!), original: projectChapterContentProviderInput(candidate!) };
+  }
   if (action === 'chapter_rewrite') {
     return { action, novel, chapter: projectChapterProviderInput(chapter!), currentContent: projectChapterContentProviderInput(currentContent!), instruction: request.instruction };
   }
@@ -655,7 +665,7 @@ function buildActionAuthoritySourceRefs(
   if (actionNeedsPreferences(action)) result.preferencesSnapshotHash = hashCanonicalJson(preferences);
   const authorityChapters = action === 'body_batch_generate'
     ? chapters.filter((item) => item.chapterNo >= Number(request.startChapter) && item.chapterNo <= Number(request.endChapter))
-    : ['chapter_body_generate', 'chapter_rewrite', 'chapter_impact_assess', 'chapter_adopt_impact_assess'].includes(action)
+    : ['chapter_body_generate', 'chapter_overlength_revise', 'chapter_rewrite', 'chapter_impact_assess', 'chapter_adopt_impact_assess'].includes(action)
       ? chapter ? [chapter] : []
       : actionNeedsChapterProjection(action) ? chapters : [];
   if (actionNeedsChapterProjection(action)) {
@@ -888,7 +898,7 @@ function actionNeedsPreferences(action: NovelProviderAction) {
   return ['direction_generate', 'direction_fuse', 'direction_optimize', 'setting_generate', 'outline_generate', 'stage_outline_generate', 'chapter_plan_generate', 'trial_chapter_one_generate', 'trial_followup_generate'].includes(action);
 }
 function actionNeedsChapterProjection(action: NovelProviderAction) {
-  return ['trial_chapter_one_generate', 'trial_followup_generate', 'body_batch_generate', 'chapter_body_generate', 'chapter_rewrite', 'chapter_impact_assess', 'chapter_adopt_impact_assess', 'novel_full_review'].includes(action);
+  return ['trial_chapter_one_generate', 'trial_followup_generate', 'body_batch_generate', 'chapter_body_generate', 'chapter_overlength_revise', 'chapter_rewrite', 'chapter_impact_assess', 'chapter_adopt_impact_assess', 'novel_full_review'].includes(action);
 }
 function authorityChapterRef(chapter: NovelChapterRecord, planVersionId: string) {
   if (!isRealId(chapter.id)) throw sourceStale();

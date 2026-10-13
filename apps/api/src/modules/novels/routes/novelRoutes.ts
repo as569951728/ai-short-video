@@ -29,6 +29,7 @@ import type {
   ResolveFullReviewIssueRequest,
   ResolveImpactCaseRequest,
   RewriteChapterRequest,
+  ReviseOverlengthChapterRequest,
   StartFullReviewRequest,
   UpdateChapterWordTargetsRequest
 } from '@ai-shortvideo/shared';
@@ -840,6 +841,29 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
         await resolveProviderContext(options.requestContextResolver, request)
       );
 
+      return sendOk(request, reply, data);
+    }
+  );
+
+  app.post(
+    '/novels/:novelId/chapters/:chapterId/overlength-revisions',
+    {
+      schema: {
+        params: chapterParamsSchema,
+        body: {
+          type: 'object', required: ['sourceCandidateVersionId'],
+          properties: { sourceCandidateVersionId: { type: 'string', minLength: 1, maxLength: 80 } },
+          additionalProperties: false
+        },
+        response: { 200: responseEnvelopeSchema }
+      }
+    },
+    async (request, reply) => {
+      const { novelId, chapterId } = request.params as { novelId: string; chapterId: string };
+      const data = await novelService.reviseOverlengthChapter(
+        novelId, chapterId, request.body as ReviseOverlengthChapterRequest,
+        await resolveProviderContext(options.requestContextResolver, request)
+      );
       return sendOk(request, reply, data);
     }
   );
