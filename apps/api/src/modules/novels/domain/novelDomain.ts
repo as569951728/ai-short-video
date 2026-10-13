@@ -26,6 +26,7 @@ import {
   type NovelProviderAction
 } from '@ai-shortvideo/shared';
 import type { FastifyRequest } from 'fastify';
+import type { TrialFollowupChapterProviderDraft } from '../services/actionExecutionPlan.js';
 
 export const DEFAULT_TENANT_ID = 'tenant_default';
 export const DEFAULT_USER_ID = 'user_default';
@@ -655,7 +656,8 @@ export interface LeasedCreativeFinalizeInput {
   leaseToken: string;
   authoritativeNow: Date;
   providerAttemptId: string;
-  validatedResult: DirectionCandidateDraft[] | DirectionCandidateDraft | StructureAssetDraft | TrialChapterCandidateDraft[];
+  validatedResult: DirectionCandidateDraft[] | DirectionCandidateDraft | StructureAssetDraft | TrialChapterCandidateDraft[]
+    | { chapters: TrialFollowupChapterProviderDraft[]; review: TrialReviewDraft };
 }
 
 export interface SafeResultReceiptV1 {

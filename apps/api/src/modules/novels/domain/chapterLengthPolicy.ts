@@ -1,4 +1,5 @@
-import type { ChapterLengthGateDTO } from '@ai-shortvideo/shared';
+import { ErrorCode, type ChapterLengthGateDTO } from '@ai-shortvideo/shared';
+import { BusinessError } from '../../../shared/errors.js';
 
 export const CHAPTER_LENGTH_COUNT_METRIC = 'unicode_code_point_non_whitespace_nfc_v1' as const;
 
@@ -51,6 +52,24 @@ export function evaluateChapterLength(
           : `正文字符数符合要求：实际 ${actual}，允许范围 ${lowerBound}-${upperBound}。`,
     canAdopt: status === 'pass'
   };
+}
+
+export function assertChapterLengthGate(content: string, target: number | null): ChapterLengthGateDTO {
+  const lengthGate = evaluateChapterLength(content, target);
+  if (!lengthGate.canAdopt) {
+    const reasonCode = lengthGate.status === 'unconfigured'
+      ? 'NOVEL_CONTENT_LENGTH_TARGET_MISSING'
+      : 'NOVEL_CONTENT_LENGTH_OUT_OF_RANGE';
+    throw new BusinessError(
+      ErrorCode.GateBlocked,
+      lengthGate.status === 'unconfigured'
+        ? lengthGate.statusText
+        : `${lengthGate.statusText} 本次结果未保存，请调整生成要求后重新生成。`,
+      { reasonCode, lengthStatus: lengthGate.status, countMode: lengthGate.metric, targetCount: lengthGate.target,
+        actualCount: lengthGate.actual, lowerBound: lengthGate.lowerBound, upperBound: lengthGate.upperBound, lengthGate }
+    );
+  }
+  return lengthGate;
 }
 
 export function sanitizeChapterLengthGate(value: unknown): ChapterLengthGateDTO | null {

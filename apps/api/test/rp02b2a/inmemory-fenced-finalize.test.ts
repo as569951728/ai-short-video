@@ -190,6 +190,73 @@ async function leasedTrialOne(onLeasedFinalizeStage?: (stage: FinalizeStage) => 
   }
 }
 
+function restoreMutableRecords<T extends object>(items: T[]): () => void {
+  const originals = [...items];
+  const snapshots = originals.map((item) => structuredClone(item));
+  return () => {
+    originals.forEach((item, index) => Object.assign(item, snapshots[index]));
+    items.splice(0, items.length, ...originals);
+  };
+}
+
+async function leasedTrialFollowup(onLeasedFinalizeStage?: (stage: FinalizeStage) => void) {
+  const repository = createInMemoryNovelRepository({ onLeasedFinalizeStage });
+  const fixture = await createRouteAuthorityFixture('trial_followup_generate', repository);
+  try {
+    const novel = await repository.findById('tenant_test', fixture.novelId);
+    assert.ok(novel);
+    const novelBefore = structuredClone(novel);
+    const sourceRun = repository.getTrialRuns().find((item) => item.id === fixture.authorityObjectId);
+    assert.ok(sourceRun);
+    const sourceTask = repository.getGenerationTasks().find((item) => item.id === sourceRun.sourceTaskId);
+    const sourceTaskBefore = sourceTask ? structuredClone(sourceTask) : null;
+    const restore = [
+      restoreMutableRecords(repository.getNovelChapters()),
+      restoreMutableRecords(repository.getChapterContentVersions()),
+      restoreMutableRecords(repository.getChapterFeatureCards()),
+      restoreMutableRecords(repository.getReviewReports()),
+      restoreMutableRecords(repository.getTrialRuns()),
+      restoreMutableRecords(repository.getTrialChapterResults())
+    ];
+    const generated = await fixture.runSuccess('leased-trial-followup');
+    assert.equal(generated.statusCode, 200, generated.body);
+    const task = repository.getGenerationTasks().find((item) => item.id === generated.json().data.task.id);
+    assert.ok(task);
+    const invocation = fixture.providerInvocations().find((item) => item.action === 'trial_followup_generate');
+    assert.ok(invocation);
+    const followup = await new MockTrialProvider().generateFollowup(
+      invocation.input as NovelProviderActionInputFor<'trial_followup_generate'>
+    );
+    restore.forEach((restoreStore) => restoreStore());
+    Object.assign(novel, novelBefore);
+    if (sourceTask && sourceTaskBefore) Object.assign(sourceTask, sourceTaskBefore);
+    task.status = TaskStatus.Queued;
+    task.startedAt = null;
+    task.finishedAt = null;
+    task.providerAttemptId = null;
+    task.providerAttemptPhase = null;
+    task.providerDispatchedAt = null;
+    task.resultReceiptHash = null;
+    task.providerCallBudgetUsed = 0;
+    assert.equal((await repository.leaseNextQueuedTask('worker-followup', 'lease-followup', at(0), at(60)))?.id, task.id);
+    const base = { tenantId: task.tenantId, taskId: task.id, leaseOwnerId: 'worker-followup', leaseToken: 'lease-followup' };
+    assert.equal((await repository.checkpointLeasedTask({ ...base, authoritativeNow: at(1), checkpoint: {
+      expectedPhase: 'leased', nextPhase: 'prepared'
+    } })).outcome, 'applied');
+    assert.equal((await repository.checkpointLeasedTask({ ...base, authoritativeNow: at(2), checkpoint: {
+      expectedPhase: 'prepared', nextPhase: 'provider_call_started', providerAttemptId: 'attempt-followup'
+    } })).outcome, 'applied');
+    assert.equal((await repository.checkpointLeasedTask({ ...base, authoritativeNow: at(3), checkpoint: {
+      expectedPhase: 'provider_call_started', nextPhase: 'provider_result_validated', providerAttemptId: 'attempt-followup'
+    } })).outcome, 'applied');
+    return { repository, task, novelId: fixture.novelId, sourceRun, followup, finalizeInput: {
+      ...base, authoritativeNow: at(4), providerAttemptId: 'attempt-followup', validatedResult: followup
+    } };
+  } finally {
+    await fixture.app.close();
+  }
+}
+
 describe('RP-02B2a4 in-memory direction fenced finalize', () => {
   it('writes one candidate, canonical receipt, terminal event and audit without adopting it', async () => {
     const { repository, task, novelId, finalizeInput } = await leasedDirection();
@@ -467,6 +534,105 @@ describe('RP-02B2a4 in-memory trial chapter one fenced finalize', () => {
     const chapter = repository.getNovelChapters().find((item) => item.novelId === novelId && item.chapterNo === 1);
     assert.ok(chapter);
     chapter.wordTarget = (chapter.wordTarget ?? 2000) + 100;
+    const before = repository.getChapterContentVersions().length;
+    assert.equal((await repository.finalizeLeasedAction(finalizeInput)).outcome, 'applied');
+    assert.equal(task.status, TaskStatus.Failed);
+    assert.equal(task.errorCode, 'SOURCE_STALE');
+    assert.equal(task.resultReceiptHash, null);
+    assert.equal(repository.getChapterContentVersions().length, before);
+  });
+});
+
+describe('RP-02B2a4 in-memory trial followup fenced finalize', () => {
+  it('writes chapter, feature-card, review, result and receipt together', async () => {
+    const { repository, task, sourceRun, finalizeInput } = await leasedTrialFollowup();
+    const before = { versions: repository.getChapterContentVersions().length,
+      cards: repository.getChapterFeatureCards().length, reports: repository.getReviewReports().length,
+      results: repository.getTrialChapterResults().length, events: repository.getGenerationTaskEvents().length };
+    assert.equal((await repository.finalizeLeasedAction(finalizeInput)).outcome, 'applied');
+    assert.equal(repository.getChapterContentVersions().length, before.versions + 2);
+    assert.equal(repository.getChapterFeatureCards().length, before.cards + 3);
+    assert.equal(repository.getReviewReports().length, before.reports + 4);
+    assert.equal(repository.getTrialChapterResults().length, before.results + 3);
+    assert.ok(repository.getGenerationTaskEvents().length > before.events);
+    assert.equal(task.status, TaskStatus.WaitingConfirmation);
+    assert.match(task.resultReceiptHash ?? '', /^[0-9a-f]{64}$/);
+    assert.equal(sourceRun.status, 'review_ready');
+    assert.equal(sourceRun.sourceTaskId, task.id);
+    assert.equal((await repository.finalizeLeasedAction(finalizeInput)).outcome, 'fenced');
+  });
+
+  for (const failAt of ['asset', 'receipt', 'task', 'event', 'operation_log'] as const) {
+    it(`rolls back all followup writes when ${failAt} fails`, async () => {
+      const { repository, task, sourceRun, finalizeInput } = await leasedTrialFollowup((stage) => {
+        if (stage === failAt) throw new Error('injected followup fault');
+      });
+      const before = { versions: repository.getChapterContentVersions().length,
+        cards: repository.getChapterFeatureCards().length, reports: repository.getReviewReports().length,
+        results: repository.getTrialChapterResults().length,
+        events: repository.getGenerationTaskEvents().length, logs: repository.getOperationLogs().length };
+      const chapterPointers = repository.getNovelChapters().map((chapter) => ({
+        id: chapter.id,
+        currentContentVersionId: chapter.currentContentVersionId,
+        currentFeatureCardVersionId: chapter.currentFeatureCardVersionId,
+        currentReviewReportId: chapter.currentReviewReportId
+      }));
+      const candidateStates = repository.getChapterContentVersions().map((version) => ({
+        id: version.id, status: version.status, metadata: structuredClone(version.metadata)
+      }));
+      await assert.rejects(repository.finalizeLeasedAction(finalizeInput), /injected followup fault/);
+      assert.equal(repository.getChapterContentVersions().length, before.versions);
+      assert.equal(repository.getChapterFeatureCards().length, before.cards);
+      assert.equal(repository.getReviewReports().length, before.reports);
+      assert.equal(repository.getTrialChapterResults().length, before.results);
+      assert.equal(repository.getGenerationTaskEvents().length, before.events);
+      assert.equal(repository.getOperationLogs().length, before.logs);
+      assert.deepEqual(repository.getNovelChapters().map((chapter) => ({
+        id: chapter.id,
+        currentContentVersionId: chapter.currentContentVersionId,
+        currentFeatureCardVersionId: chapter.currentFeatureCardVersionId,
+        currentReviewReportId: chapter.currentReviewReportId
+      })), chapterPointers);
+      assert.deepEqual(repository.getChapterContentVersions().map((version) => ({
+        id: version.id, status: version.status, metadata: version.metadata
+      })), candidateStates);
+      assert.equal(sourceRun.status, 'waiting_chapter1_selection');
+      assert.equal(task.status, TaskStatus.Processing);
+      assert.equal(task.resultReceiptHash, null);
+      assert.equal(task.leaseToken, 'lease-followup');
+    });
+  }
+
+  it('rejects mismatched model chapter scores before writing assets', async () => {
+    const { repository, task, followup, finalizeInput } = await leasedTrialFollowup();
+    const before = repository.getChapterContentVersions().length;
+    const result = await repository.finalizeLeasedAction({ ...finalizeInput, validatedResult: {
+      chapters: followup.chapters,
+      review: { ...followup.review, chapterScores: followup.review.chapterScores.map((score, index) =>
+        index === 0 ? { ...score, score: score.score - 1 } : score) }
+    } });
+    assert.equal(result.outcome, 'applied');
+    assert.equal(task.status, TaskStatus.Failed);
+    assert.equal(task.errorCode, 'WORKER_PAYLOAD_UNSUPPORTED');
+    assert.equal(repository.getChapterContentVersions().length, before);
+  });
+
+  it('fences a cancelled or expired followup result', async () => {
+    const { repository, task, finalizeInput } = await leasedTrialFollowup();
+    const before = { versions: repository.getChapterContentVersions().length,
+      results: repository.getTrialChapterResults().length };
+    assert.equal((await repository.finalizeLeasedAction({ ...finalizeInput, authoritativeNow: at(60) })).outcome, 'fenced');
+    task.status = TaskStatus.Cancelled;
+    assert.equal((await repository.finalizeLeasedAction(finalizeInput)).outcome, 'fenced');
+    assert.equal(repository.getChapterContentVersions().length, before.versions);
+    assert.equal(repository.getTrialChapterResults().length, before.results);
+  });
+
+  it('fails stale trial authority before writing any followup assets', async () => {
+    const { repository, task, novelId, finalizeInput } = await leasedTrialFollowup();
+    const novel = await repository.findById(task.tenantId, novelId);
+    assert.ok(novel);
+    novel.currentChapterPlanVersionId = 'replaced-plan';
     const before = repository.getChapterContentVersions().length;
     assert.equal((await repository.finalizeLeasedAction(finalizeInput)).outcome, 'applied');
     assert.equal(task.status, TaskStatus.Failed);

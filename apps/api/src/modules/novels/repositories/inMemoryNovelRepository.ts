@@ -15,6 +15,7 @@ import {
   type VideoReadinessCheckItemDTO
 } from '@ai-shortvideo/shared';
 import { evaluateChapterLength } from '../domain/chapterLengthPolicy.js';
+import { bindTrialFollowupChapters } from '../domain/trialFollowupBinding.js';
 import {
   DEFAULT_POLICY_PROFILE_VERSION_ID,
   leasedActionFailure,
@@ -106,7 +107,9 @@ import {
   type TrialChapterResultRecord,
   type TrialConfirmationInput,
   type TrialFollowupGenerationInput,
+  type TrialFollowupChapterDraft,
   type TrialFollowupTaskCreationInput,
+  type TrialReviewDraft,
   type TrialRunRecord,
   type VideoReadinessCheckInput,
   type VideoReadinessCheckRecord,
@@ -134,6 +137,7 @@ export interface InMemoryNovelRepository extends NovelRepository {
   getNovelChapters(): NovelChapterRecord[];
   getChapterContentVersions(): ChapterContentVersionRecord[];
   getTrialRuns(): TrialRunRecord[];
+  getTrialChapterResults(): TrialChapterResultRecord[];
   getImpactCases(): ImpactCaseRecord[];
   getLongTermMemories(): LongTermMemoryRecord[];
   getBodyBatches(): BodyBatchRecord[];
@@ -144,6 +148,16 @@ export interface InMemoryNovelRepository extends NovelRepository {
 }
 
 const inMemoryNovelRepositories = new WeakSet<NovelRepository>();
+const leasedTrialFollowupAccess = Symbol('leased-trial-followup');
+
+function snapshotMutableArray<T extends object>(items: T[]): () => void {
+  const originals = [...items];
+  const snapshots = originals.map((item) => structuredClone(item));
+  return () => {
+    originals.forEach((item, index) => Object.assign(item, snapshots[index]));
+    items.splice(0, items.length, ...originals);
+  };
+}
 
 export function isInMemoryNovelRepository(repository: NovelRepository): repository is InMemoryNovelRepository {
   return inMemoryNovelRepositories.has(repository);
@@ -899,7 +913,8 @@ export function createInMemoryNovelRepository(options: {
             : envelope.action === 'chapter_plan_generate' ? 'chapter_plan' : null;
       const isDirection = ['direction_generate', 'direction_fuse', 'direction_optimize'].includes(envelope.action);
       const isTrialChapterOne = envelope.action === 'trial_chapter_one_generate';
-      if (!isDirection && !structureType && !isTrialChapterOne) {
+      const isTrialFollowup = envelope.action === 'trial_followup_generate';
+      if (!isDirection && !structureType && !isTrialChapterOne && !isTrialFollowup) {
         return { outcome: 'fenced' as const, task: null };
       }
       const authorityInput = {
@@ -912,6 +927,79 @@ export function createInMemoryNovelRepository(options: {
       }
       const novel = novels.find((item) => item.tenantId === task.tenantId && item.id === task.novelId && !item.deletedAt);
       if (!novel) return this.failLeasedAction({ ...input, expectedPhase: 'provider_result_validated', reason: 'source_stale' });
+      if (isTrialFollowup) {
+        const trialRun = trialRuns.find((item) => item.tenantId === task.tenantId && item.novelId === novel.id
+          && item.id === envelope.objectId && item.status === 'waiting_chapter1_selection');
+        const refs = asRecord(envelope.sourceVersionRefs);
+        const selectedCandidate = chapterContentVersions.find((item) => item.tenantId === task.tenantId
+          && item.novelId === novel.id && item.id === refs.selectedChapterOneCandidateId
+          && getMetadataString(item.metadata, 'trialRunId') === trialRun?.id
+          && item.status === VersionStatus.Candidate);
+        const scopeChapters = chapters.filter((item) => item.tenantId === task.tenantId && item.novelId === novel.id)
+          .sort((left, right) => left.chapterNo - right.chapterNo)
+          .slice(0, trialRun?.trialChapterCount ?? 0);
+        const raw = input.validatedResult;
+        let bound: TrialFollowupChapterDraft[];
+        try {
+          if (!trialRun || !selectedCandidate || scopeChapters.length !== trialRun.trialChapterCount
+            || !raw || typeof raw !== 'object' || Array.isArray(raw)
+            || !('chapters' in raw) || !Array.isArray(raw.chapters)
+            || !('review' in raw) || !raw.review || typeof raw.review !== 'object') {
+            throw new Error('unsupported trial followup result');
+          }
+          bound = bindTrialFollowupChapters(scopeChapters, raw.chapters, raw.review as TrialReviewDraft);
+        } catch {
+          return this.failLeasedAction({ ...input, expectedPhase: 'provider_result_validated', reason: 'worker_payload_unsupported' });
+        }
+        const context = { tenantId: task.tenantId, userId: task.createdBy!, requestId: `worker:${input.leaseOwnerId}` };
+        const beforeSequence = sequence;
+        const restore = [
+          snapshotMutableArray(novels), snapshotMutableArray(chapters),
+          snapshotMutableArray(chapterContentVersions), snapshotMutableArray(chapterFeatureCards),
+          snapshotMutableArray(reviewReports), snapshotMutableArray(trialRuns),
+          snapshotMutableArray(trialChapterResults), snapshotMutableArray(generationTasks),
+          snapshotMutableArray(generationTaskEvents), snapshotMutableArray(operationLogs)
+        ];
+        try {
+          const persistFollowup = this.selectTrialChapterOneAndGenerateFollowup as (
+            input: TrialFollowupGenerationInput,
+            access: typeof leasedTrialFollowupAccess
+          ) => Promise<GeneratedTrialFollowupRecord>;
+          const generated = await persistFollowup({
+            novel, trialRun, task, selectedCandidate, chapters: bound,
+            review: raw.review as TrialReviewDraft, context, now: input.authoritativeNow
+          }, leasedTrialFollowupAccess);
+          options.onLeasedFinalizeStage?.('asset');
+          const receipt = createSafeResultReceipt(task, {
+            status: 'waiting_confirmation', outcome: 'review_created',
+            resultObjectType: 'trial_run', resultObjectId: trialRun.id,
+            resultVersionIds: generated.contentVersions.map((version) => version.id),
+            resultCount: generated.contentVersions.length
+          });
+          options.onLeasedFinalizeStage?.('receipt');
+          task.resultReceiptHash = receipt.hash;
+          task.providerAttemptPhase = 'finalizing';
+          task.finishedAt = input.authoritativeNow;
+          task.updatedAt = input.authoritativeNow;
+          clearLease(task);
+          options.onLeasedFinalizeStage?.('task');
+          appendLeaseEvent(task, 'task_finalized', task.statusNote ?? '试写总评已生成。', input.authoritativeNow);
+          options.onLeasedFinalizeStage?.('event');
+          operationLogs.unshift({
+            id: nextId('oplog'), tenantId: task.tenantId, userId: context.userId, novelId: novel.id,
+            action: 'generation_task_finalized', objectType: 'generation_task', objectId: task.id,
+            beforeSnapshot: null, afterSnapshot: { resultVersionIds: receipt.receipt.resultVersionIds, receiptHash: receipt.hash },
+            reason: '后续试写与总评生成完成', impactSummary: null, sourceTaskId: task.id,
+            requestId: context.requestId, ip: null, userAgent: null, createdAt: input.authoritativeNow
+          });
+          options.onLeasedFinalizeStage?.('operation_log');
+          return { outcome: 'applied' as const, task };
+        } catch (error) {
+          sequence = beforeSequence;
+          restore.forEach((restoreStore) => restoreStore());
+          throw error;
+        }
+      }
       if (isTrialChapterOne) {
         const chapter = chapters.find((item) => item.tenantId === task.tenantId && item.novelId === novel.id && item.chapterNo === 1);
         const request = asRecord(envelope.normalizedRequest);
@@ -2031,8 +2119,13 @@ export function createInMemoryNovelRepository(options: {
       };
     },
 
-    async selectTrialChapterOneAndGenerateFollowup(input: TrialFollowupGenerationInput): Promise<GeneratedTrialFollowupRecord> {
-      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task);
+    async selectTrialChapterOneAndGenerateFollowup(
+      input: TrialFollowupGenerationInput,
+      leasedAccess?: typeof leasedTrialFollowupAccess
+    ): Promise<GeneratedTrialFollowupRecord> {
+      if (leasedAccess !== leasedTrialFollowupAccess) {
+        assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task);
+      }
       const selectedMetadata = toMutableMetadata(input.selectedCandidate.metadata);
       selectedMetadata.trialStatus = 'selected_for_trial';
       selectedMetadata.isSelected = true;
@@ -3621,6 +3714,10 @@ export function createInMemoryNovelRepository(options: {
 
     getTrialRuns() {
       return trialRuns;
+    },
+
+    getTrialChapterResults() {
+      return trialChapterResults;
     },
 
     getImpactCases() {

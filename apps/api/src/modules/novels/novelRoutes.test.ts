@@ -5851,7 +5851,10 @@ describe('RP-02B2a1 registry and strict provider ABI', () => {
     assert.doesNotMatch(serviceSource, /this\.(directionProvider|structureProvider|trialProvider|bodyProvider|fullReviewProvider)\.(generate|fuse|optimize|rewrite|assess)/);
     assert.doesNotMatch(serviceSource, /\bas\s+(?:BodyChapterDraft|TrialFollowupChapterDraft)\b/);
     assert.doesNotMatch(serviceSource, /pickProviderChapterDraft|BODY_PROVIDER_DRAFT_KEYS|TRIAL_FOLLOWUP_PROVIDER_DRAFT_KEYS/);
-    assert.match(serviceSource, /function constructTrialFollowupChapterDraft[\s\S]*?: TrialFollowupChapterDraft \{/);
+    const trialBindingSource = readFileSync(new URL('./domain/trialFollowupBinding.ts', import.meta.url), 'utf8');
+    assert.match(serviceSource, /bindTrialFollowupChapters\(authoritativeChapters, followup\.chapters, followup\.review\)/);
+    assert.match(trialBindingSource, /function constructTrialFollowupChapterDraft[\s\S]*?: TrialFollowupChapterDraft \{/);
+    assert.doesNotMatch(trialBindingSource, /\bas\s+TrialFollowupChapterDraft\b/);
     const registrySource = readFileSync(new URL('./services/actionExecutionPlan.ts', import.meta.url), 'utf8');
     assert.doesNotMatch(registrySource, /as unknown as|BodyChapterDraft|TrialFollowupChapterDraft|^\s*content:\s*unknown|^\s*metadata:\s*unknown|^\s*sourceVersionRefs:\s*unknown/m);
     assert.match(registrySource, /executeProvider\(providers: NovelProviderSet, input: NovelProviderActionInputFor<A>\)/);
