@@ -997,7 +997,8 @@ export class PrismaNovelRepository implements NovelRepository {
   async finalizeLeasedAction(input: LeasedCreativeFinalizeInput) {
     const observed = await this.prisma.generationTask.findFirst({ where: { tenantId: input.tenantId, id: input.taskId } });
     if (!observed) return { outcome: 'fenced' as const, task: null };
-    if (!['novel_direction_generate', 'novel_setting_generate', 'novel_outline_generate',
+    if (!['novel_direction_generate', 'novel_direction_fuse', 'novel_direction_optimize',
+      'novel_setting_generate', 'novel_outline_generate',
       'stage_outline_generate', 'chapter_plan_generate'].includes(observed.taskType)) {
       const task = mapGenerationTask(observed);
       if (!task.providerAttemptPhase) return { outcome: 'fenced' as const, task: null };
@@ -1077,6 +1078,8 @@ export class PrismaNovelRepository implements NovelRepository {
         : current.taskType === 'novel_outline_generate' ? 'outline'
           : current.taskType === 'stage_outline_generate' ? 'stage_outline'
             : current.taskType === 'chapter_plan_generate' ? 'chapter_plan' : null;
+      const isDirectionRevision = current.taskType === 'novel_direction_fuse'
+        || current.taskType === 'novel_direction_optimize';
       const drafts = input.validatedResult;
       const structureDraft = structureType && validPrismaLeasedStructureDraft(drafts, structureType) ? drafts : null;
       const chapterLimit = authorityRecord(authorityRecord(authority?.facts).novel).chapterLimit;
@@ -1085,19 +1088,38 @@ export class PrismaNovelRepository implements NovelRepository {
           || (structureType === 'chapter_plan' && (!Number.isSafeInteger(chapterLimit) || Number(chapterLimit) < 1
             || structureDraft.content.chapters.length !== chapterLimit
             || structureDraft.content.chapters.some((chapter, index) => chapter.chapterNo !== index + 1)))
-        : !Array.isArray(drafts) || drafts.length < 1 || drafts.length > 10
-          || !drafts.every(validPrismaLeasedDirectionDraft)) return fail('worker_payload_unsupported');
+        : isDirectionRevision ? !validPrismaLeasedDirectionDraft(drafts)
+          : !Array.isArray(drafts) || drafts.length < 1 || drafts.length > 10
+            || !drafts.every(validPrismaLeasedDirectionDraft)) return fail('worker_payload_unsupported');
+      const sourceVersionIds = authorityRecord(envelope.sourceVersionRefs).sourceVersionIds;
+      const normalizedRequest = authorityRecord(envelope.normalizedRequest);
+      if (isDirectionRevision && (!Array.isArray(sourceVersionIds)
+        || (current.taskType === 'novel_direction_optimize'
+          ? sourceVersionIds.length !== 1 || sourceVersionIds[0] !== envelope.objectId
+            || normalizedRequest.versionId !== envelope.objectId
+            || typeof normalizedRequest.instruction !== 'string' || !normalizedRequest.instruction.trim()
+          : sourceVersionIds.length < 2)
+        || sourceVersionIds.some((id) => typeof id !== 'string' || !id.trim())
+        || new Set(sourceVersionIds).size !== sourceVersionIds.length)) return fail('worker_payload_unsupported');
+      const candidates = structureType ? [] : isDirectionRevision
+        ? [drafts as DirectionCandidateDraft] : drafts as DirectionCandidateDraft[];
       try {
-        assertNoSensitiveExecutionPayload(drafts, structureType ? 'structureCandidate' : 'directionCandidates');
+        assertNoSensitiveExecutionPayload(structureType ? drafts : candidates,
+          structureType ? 'structureCandidate' : 'directionCandidates');
       } catch {
         return fail('worker_payload_unsupported');
       }
-      const candidates = structureType ? [] : drafts as DirectionCandidateDraft[];
-      const sourceDirectionId = authorityRecord(envelope.sourceVersionRefs).currentDirectionVersionId ?? null;
+      const sourceDirectionId = isDirectionRevision
+        ? authorityRecord(authorityRecord(authority?.facts).currentRefs).currentDirectionVersionId ?? null
+        : authorityRecord(envelope.sourceVersionRefs).currentDirectionVersionId ?? null;
       const sourceSettingId = authorityRecord(envelope.sourceVersionRefs).currentSettingVersionId ?? null;
       const sourceOutlineId = authorityRecord(envelope.sourceVersionRefs).currentOutlineVersionId ?? null;
       const sourceStageOutlineId = authorityRecord(envelope.sourceVersionRefs).currentStageOutlineVersionId ?? null;
       const sourceType = current.modelRoutingVersion?.startsWith('deepseek:') ? 'deepseek' : 'mock_ai';
+      const revisionReason = current.taskType === 'novel_direction_fuse'
+        ? normalizedRequest.reason : normalizedRequest.instruction;
+      const changeReason = isDirectionRevision && typeof revisionReason === 'string' && revisionReason.trim()
+        ? revisionReason.trim() : isDirectionRevision ? '融合方向候选' : '模型生成方向候选';
       const firstVersionNo = await getNextVersionNo(tx, input.tenantId, current.novelId!, structureType ?? 'direction');
       const versions = [];
       if (structureType) {
@@ -1121,8 +1143,9 @@ export class PrismaNovelRepository implements NovelRepository {
             tenantId: input.tenantId, novelId: current.novelId!, objectType: 'direction', objectId: 'direction',
             versionNo: firstVersionNo + index, status: PrismaVersionStatus.CANDIDATE, staleLevel: PrismaStaleLevel.NONE,
             sourceType, sourceTaskId: current.id,
-            sourceVersionRefs: toJsonObject({ currentDirectionVersionId: sourceDirectionId }),
-            changeReason: '模型生成方向候选', contentJson: toJsonObject({
+            sourceVersionRefs: toJsonObject(isDirectionRevision
+              ? { sourceVersionIds } : { currentDirectionVersionId: sourceDirectionId }),
+            changeReason, contentJson: toJsonObject({
               title: candidate.content.title, logline: candidate.content.logline,
               coreHook: candidate.content.coreHook, audienceAppeal: candidate.content.audienceAppeal,
               videoPotential: candidate.content.videoPotential, sellingPoints: candidate.content.sellingPoints,
@@ -1145,12 +1168,14 @@ export class PrismaNovelRepository implements NovelRepository {
       const transition = await tx.generationTask.updateMany({ where: fence, data: {
         status: PrismaTaskStatus.WAITING_CONFIRMATION,
         statusNote: `${resultLabel}候选已生成，等待用户确认。`,
-        progress: 100, currentStep: structureType ? getStructureGenerateStep(structureType) : '方向候选已生成，等待选择',
+        progress: 100, currentStep: structureType ? getStructureGenerateStep(structureType)
+          : isDirectionRevision ? getDirectionRevisionTaskStep(current.taskType) : '方向候选已生成，等待选择',
         resultObjectType: receipt.receipt.resultObjectType,
         resultObjectId: receipt.receipt.resultObjectId, resultVersionId: versions[0]!.id,
         resultVersionIdsJson: receipt.receipt.resultVersionIds,
         outputSummary: structureType ? `${resultLabel}候选已生成，等待用户采用。`
-          : `${versions.length} 个方向候选已生成，等待用户采用。`,
+          : isDirectionRevision ? getDirectionRevisionOutputSummary(current.taskType)
+            : `${versions.length} 个方向候选已生成，等待用户采用。`,
         resultReceiptHash: receipt.hash, providerAttemptPhase: PrismaProviderAttemptPhase.FINALIZING,
         activeClaimKey: null, leaseOwnerId: null, leaseToken: null, leaseExpiresAt: null,
         finishedAt: input.authoritativeNow, updatedAt: input.authoritativeNow
