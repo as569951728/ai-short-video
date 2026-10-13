@@ -1,4 +1,4 @@
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, shallowRef } from 'vue'
 import { TaskStatus, type NovelAsyncTransportCapabilityV1, type TaskDetailDTO } from '@ai-shortvideo/shared'
 import { getApiBaseUrl } from '../../../shared/services/http.js'
 import {
@@ -31,7 +31,7 @@ export function useNovelAsyncTransport(novelId: () => string, onTaskId: (taskId:
   const store = new SubmissionIntentStore()
   const phase = ref<TransportPhase>('idle')
   const message = ref('')
-  const activeIntent = ref<SubmissionIntentV1 | null>(null)
+  const activeIntent = shallowRef<SubmissionIntentV1 | null>(null)
   const capability = ref<NovelAsyncTransportCapabilityV1 | null>(null)
   let replayTimer: ReturnType<typeof setTimeout> | undefined
   let disposed = false

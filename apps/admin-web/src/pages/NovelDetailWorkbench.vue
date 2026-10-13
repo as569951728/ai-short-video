@@ -246,7 +246,7 @@
               </div>
 
               <el-empty v-if="!loading && directionRows.length === 0" description="暂无方向候选">
-                <el-button type="primary" :loading="generatingDirection" @click="handleGenerateDirection">生成 3-5 个方向候选</el-button>
+                <el-button type="primary" :loading="generatingDirection" :disabled="hasLocalPendingWait" @click="handleGenerateDirection">生成 3-5 个方向候选</el-button>
               </el-empty>
 
               <div v-else class="direction-grid" data-result-section="direction">

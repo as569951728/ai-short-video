@@ -164,6 +164,29 @@ beforeEach(() => {
 })
 
 describe('NovelDetailWorkbench DOM behavior', () => {
+  it('disables the empty direction action while a direction task is processing', async () => {
+    mocks.route.query = { step: 'direction' }
+    mocks.getNovelDetail.mockResolvedValue(createNovelDetail({
+      recentTask: {
+        id: 'direction-task-processing',
+        taskType: 'novel_direction_generate',
+        status: TaskStatus.Processing,
+        statusText: '生成中',
+        progress: 0,
+        currentStep: '正在调用模型',
+        resultVersionIds: [],
+      },
+    }))
+
+    wrapper = mount(NovelDetailWorkbench, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    const generateButton = wrapper.findAll('button').find((button) => button.text() === '生成 3-5 个方向候选')
+    expect(generateButton?.attributes('disabled')).toBeDefined()
+    await generateButton?.trigger('click')
+    expect(mocks.generateDirections).not.toHaveBeenCalled()
+  })
+
   it('shows task progress without a false cancel or regenerate action while setting generation is processing', async () => {
     mocks.route.query = { step: 'setting' }
     mocks.getNovelDetail.mockResolvedValue(createNovelDetail({
