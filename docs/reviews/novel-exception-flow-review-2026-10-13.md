@@ -106,3 +106,9 @@ InMemory 的 `novel_full_review` 与 `chapter_adopt_impact_assess` 已补 fenced
 Prisma 首次补上 `direction_generate` 的 leased fenced finalize：事务内先锁定小说及相关来源行、任务行，再核对租约、attempt、调用预算、取消和来源权威；有效输出只落方向候选，任务回执、等待确认状态、事件和操作日志在同一事务提交。来源变化或非法输出安全失败，重复/过期/取消结果不写候选；候选、回执、任务、小说阶段、事件、日志故障注入均验证事务回滚。隔离 Prisma 事务/CAS 测试 4/4、整仓类型检查通过，执行能力继续关闭。
 
 这只是 **Prisma 第一类 action 的可注入事务证明**，没有隔离 MySQL 的真实并发测试，也没有生产 worker 或页面长等待验收；不能把 E1、Prisma 全量写链或真实库链路标为完成。
+
+## E1 第十二个执行检查点
+
+新增显式后台入队 claim 路径，与原同步 `executeClaimedGeneration` 共用来源权威、幂等和冲突校验，但新建任务只写 `QUEUED`、真实执行截止时间与单次模型调用预算，HTTP 旧同步路径保持原样。后台入队要求显式持久提交键和已放行的 leased action capability；当前仓储 capability 仍关闭，因此正式生成路由不会调用此路径。相同提交键可在来源变化或原执行期限过后找回原任务；不同提交键不能绕过排队中的冲突任务。Prisma 与 InMemory 的 claim 形态均已覆盖，尚无真实 MySQL 并发证据。
+
+另新增可注入的 worker runtime 骨架：轮询领取、串行租约心跳、租约丢失后中断执行、停机宽限期内 `running -> settling/abandoned` 竞态及晚返回不落账均由手动时钟/调度器测试。runtime 尚未接入 `main.ts`、正式 provider/action 重建或业务落账回调，不能把组件测试当作长模型调用已由后台接手。InMemory 新增单章正文的 fenced finalize，普通结果与超长候选分别落账并覆盖五处故障回滚；`body_batch_generate` 的多章部分结果和单章 hard-failed 回执仍保持围栏，待 E2 定义分段合同。当前无页面 202/轮询交互、进程重启实测或隔离 MySQL；**E1 继续标记修复中**。

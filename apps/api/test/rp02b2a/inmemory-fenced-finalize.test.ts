@@ -528,6 +528,71 @@ async function leasedOverlengthRevision(onLeasedFinalizeStage?: (stage: Finalize
   }
 }
 
+async function leasedBody(action: 'chapter_body_generate' | 'body_batch_generate',
+  onLeasedFinalizeStage?: (stage: FinalizeStage) => void) {
+  const repository = createInMemoryNovelRepository({ onLeasedFinalizeStage });
+  const fixture = await createRouteAuthorityFixture(action, repository);
+  try {
+    const novel = await repository.findById('tenant_test', fixture.novelId);
+    assert.ok(novel);
+    const novelBefore = structuredClone(novel);
+    const restore = [
+      restoreMutableRecords(repository.getNovelChapters()),
+      restoreMutableRecords(repository.getChapterContentVersions()),
+      restoreMutableRecords(repository.getChapterFeatureCards()),
+      restoreMutableRecords(repository.getReviewReports()),
+      restoreMutableRecords(repository.getLongTermMemories()),
+      restoreMutableRecords(repository.getBodyBatches()),
+      restoreMutableRecords(repository.getGenerationTasks()),
+      restoreMutableRecords(repository.getGenerationTaskEvents()),
+      restoreMutableRecords(repository.getOperationLogs())
+    ];
+    const generated = await fixture.runSuccess(`leased-${action}`);
+    assert.equal(generated.statusCode, 200, generated.body);
+    const task = repository.getGenerationTasks().find((item) => item.id === generated.json().data.task.id);
+    assert.ok(task);
+    const invocation = fixture.providerInvocations().find((item) => item.action === action);
+    assert.ok(invocation);
+    const result = await new MockBodyProvider().generateBodyChapter(
+      invocation.input as NovelProviderActionInputFor<typeof action>
+    );
+    restore.forEach((restoreStore) => restoreStore());
+    Object.assign(novel, novelBefore);
+    repository.getGenerationTasks().unshift(task);
+    task.status = TaskStatus.Queued;
+    task.startedAt = null;
+    task.finishedAt = null;
+    task.providerAttemptId = null;
+    task.providerAttemptPhase = null;
+    task.providerDispatchedAt = null;
+    task.resultReceiptHash = null;
+    task.providerCallBudgetUsed = 0;
+    task.providerCallBudgetMax = 1;
+    task.resultObjectType = null;
+    task.resultObjectId = null;
+    task.resultVersionIds = [];
+    task.metadata = { requestId: 'leased-body' };
+    const worker = `worker-${action}`;
+    const token = `lease-${action}`;
+    assert.equal((await repository.leaseNextQueuedTask(worker, token, at(0), at(60)))?.id, task.id);
+    const base = { tenantId: task.tenantId, taskId: task.id, leaseOwnerId: worker, leaseToken: token };
+    assert.equal((await repository.checkpointLeasedTask({ ...base, authoritativeNow: at(1), checkpoint: {
+      expectedPhase: 'leased', nextPhase: 'prepared'
+    } })).outcome, 'applied');
+    assert.equal((await repository.checkpointLeasedTask({ ...base, authoritativeNow: at(2), checkpoint: {
+      expectedPhase: 'prepared', nextPhase: 'provider_call_started', providerAttemptId: `attempt-${action}`
+    } })).outcome, 'applied');
+    assert.equal((await repository.checkpointLeasedTask({ ...base, authoritativeNow: at(3), checkpoint: {
+      expectedPhase: 'provider_call_started', nextPhase: 'provider_result_validated', providerAttemptId: `attempt-${action}`
+    } })).outcome, 'applied');
+    return { repository, novel, task, result, finalizeInput: {
+      ...base, authoritativeNow: at(4), providerAttemptId: `attempt-${action}`, validatedResult: result
+    } as unknown as LeasedCreativeFinalizeInput };
+  } finally {
+    await fixture.app.close();
+  }
+}
+
 describe('RP-02B2a4 in-memory direction fenced finalize', () => {
   it('writes one candidate, canonical receipt, terminal event and audit without adopting it', async () => {
     const { repository, task, novelId, finalizeInput } = await leasedDirection();
@@ -1301,6 +1366,157 @@ describe('RP-02B2a4 in-memory overlength revision fenced finalize', () => {
     assert.equal(stale.task.errorCode, 'SOURCE_STALE');
     assert.equal(stale.task.resultReceiptHash, null);
     assert.equal(stale.repository.getChapterContentVersions().filter((item) => item.sourceTaskId === stale.task.id).length, 0);
+  });
+});
+
+describe('RP-02B2a4 in-memory single chapter body fenced finalize', () => {
+  it('publishes the receipt before another caller can observe the saved chapter', async () => {
+    const { repository, task, finalizeInput } = await leasedBody('chapter_body_generate');
+    const pending = repository.finalizeLeasedAction(finalizeInput);
+    assert.ok(repository.getChapterContentVersions().some((item) => item.sourceTaskId === task.id));
+    assert.match(task.resultReceiptHash ?? '', /^[0-9a-f]{64}$/);
+    assert.equal(task.leaseToken, null);
+    assert.equal((await pending).outcome, 'applied');
+  });
+
+  it('saves the same formal chapter assets and batch as the synchronous path exactly once', async () => {
+    const { repository, task, result, finalizeInput } = await leasedBody('chapter_body_generate');
+    const chapter = repository.getNovelChapters().find((item) => item.id === task.objectId);
+    assert.ok(chapter);
+    const before = { versions: repository.getChapterContentVersions().length,
+      cards: repository.getChapterFeatureCards().length, reports: repository.getReviewReports().length,
+      memories: repository.getLongTermMemories().length, batches: repository.getBodyBatches().length,
+      events: repository.getGenerationTaskEvents().length, logs: repository.getOperationLogs().length };
+    assert.equal((await repository.finalizeLeasedAction(finalizeInput)).outcome, 'applied');
+    const batch = repository.getBodyBatches().find((item) => item.taskId === task.id);
+    const version = repository.getChapterContentVersions().find((item) => item.sourceTaskId === task.id);
+    const card = repository.getChapterFeatureCards().find((item) => item.sourceTaskId === task.id);
+    const review = repository.getReviewReports().find((item) => item.sourceTaskId === task.id);
+    const memory = repository.getLongTermMemories().find((item) => item.sourceTaskId === task.id);
+    assert.ok(batch && version && card && review && memory);
+    assert.equal(repository.getChapterContentVersions().length, before.versions + 1);
+    assert.equal(repository.getChapterFeatureCards().length, before.cards + 1);
+    assert.equal(repository.getReviewReports().length, before.reports + 1);
+    assert.equal(repository.getLongTermMemories().length, before.memories + 1);
+    assert.equal(repository.getBodyBatches().length, before.batches + 1);
+    assert.equal(version.status, VersionStatus.Current);
+    assert.equal(version.content, result.content);
+    assert.equal(chapter.currentContentVersionId, version.id);
+    assert.equal(chapter.currentFeatureCardVersionId, card.id);
+    assert.equal(chapter.currentReviewReportId, review.id);
+    assert.equal(memory.sourceContentVersionId, version.id);
+    assert.equal(batch.status, 'completed');
+    assert.equal(task.status, TaskStatus.Completed);
+    assert.equal(task.resultObjectId, batch.id);
+    assert.deepEqual(task.resultVersionIds, [version.id]);
+    assert.match(task.resultReceiptHash ?? '', /^[0-9a-f]{64}$/);
+    assert.equal(task.providerCallBudgetUsed, 1);
+    assert.equal(task.leaseToken, null);
+    assert.ok(repository.getGenerationTaskEvents().length > before.events);
+    assert.equal(repository.getOperationLogs().length, before.logs + 1);
+    assert.equal((await repository.findBodyBatchByIdempotencyKey(task.tenantId, task.novelId,
+      'leased-chapter_body_generate'))?.id, batch.id);
+    assert.equal((await repository.finalizeLeasedAction(finalizeInput)).outcome, 'fenced');
+    assert.equal(repository.getBodyBatches().length, before.batches + 1);
+  });
+
+  for (const failAt of ['asset', 'receipt', 'task', 'event', 'operation_log'] as const) {
+    it(`rolls back chapter body when ${failAt} fails`, async () => {
+      const { repository, novel, task, finalizeInput } = await leasedBody('chapter_body_generate', (stage) => {
+        if (stage === failAt) throw new Error('injected body fault');
+      });
+      const before = {
+        novel: structuredClone(novel), chapters: structuredClone(repository.getNovelChapters()),
+        versions: structuredClone(repository.getChapterContentVersions()),
+        cards: structuredClone(repository.getChapterFeatureCards()),
+        reviews: structuredClone(repository.getReviewReports()),
+        memories: structuredClone(repository.getLongTermMemories()),
+        batches: structuredClone(repository.getBodyBatches()),
+        task: structuredClone(task), events: structuredClone(repository.getGenerationTaskEvents()),
+        logs: structuredClone(repository.getOperationLogs())
+      };
+      await assert.rejects(repository.finalizeLeasedAction(finalizeInput), /injected body fault/);
+      assert.deepEqual(novel, before.novel);
+      assert.deepEqual(repository.getNovelChapters(), before.chapters);
+      assert.deepEqual(repository.getChapterContentVersions(), before.versions);
+      assert.deepEqual(repository.getChapterFeatureCards(), before.cards);
+      assert.deepEqual(repository.getReviewReports(), before.reviews);
+      assert.deepEqual(repository.getLongTermMemories(), before.memories);
+      assert.deepEqual(repository.getBodyBatches(), before.batches);
+      assert.deepEqual(task, before.task);
+      assert.deepEqual(repository.getGenerationTaskEvents(), before.events);
+      assert.deepEqual(repository.getOperationLogs(), before.logs);
+    });
+  }
+
+  it('fences stale, cancelled, expired, wrong-attempt and unspent results', async () => {
+    for (const violation of ['stale', 'formal', 'cancelled', 'expired', 'attempt', 'budget'] as const) {
+      const { repository, task, novel, finalizeInput } = await leasedBody('chapter_body_generate');
+      if (violation === 'stale') novel.currentChapterPlanVersionId = 'replaced-plan';
+      if (violation === 'formal') {
+        const chapter = repository.getNovelChapters().find((item) => item.id === task.objectId);
+        assert.ok(chapter);
+        chapter.currentContentVersionId = 'replaced-content';
+      }
+      if (violation === 'cancelled') task.status = TaskStatus.Cancelled;
+      if (violation === 'budget') task.providerCallBudgetUsed = 0;
+      const input = violation === 'expired' ? { ...finalizeInput, authoritativeNow: at(60) }
+        : violation === 'attempt' ? { ...finalizeInput, providerAttemptId: 'wrong-attempt' }
+          : finalizeInput;
+      const outcome = await repository.finalizeLeasedAction(input);
+      assert.equal(outcome.outcome, ['stale', 'formal'].includes(violation) ? 'applied' : 'fenced');
+      if (violation === 'stale' || violation === 'formal') assert.equal(task.errorCode, 'SOURCE_STALE');
+      assert.equal(repository.getBodyBatches().filter((item) => item.taskId === task.id).length, 0);
+      assert.equal(repository.getChapterContentVersions().filter((item) => item.sourceTaskId === task.id).length, 0);
+    }
+  });
+
+  it('saves an overlength original and revision only as candidates', async () => {
+    const { repository, task, result, finalizeInput } = await leasedBody('chapter_body_generate');
+    const chapter = repository.getNovelChapters().find((item) => item.id === task.objectId);
+    assert.ok(chapter?.wordTarget);
+    const original = { ...result, content: '文'.repeat(Math.floor(chapter.wordTarget * 1.2)) };
+    const overlength = { ...result, experimentalOriginalDraft: original,
+      experimentalRevisionRequiresConfirmation: true };
+    assert.equal((await repository.finalizeLeasedAction({ ...finalizeInput,
+      validatedResult: overlength as unknown as LeasedCreativeFinalizeInput['validatedResult'] })).outcome, 'applied');
+    const versions = repository.getChapterContentVersions().filter((item) => item.sourceTaskId === task.id);
+    assert.equal(versions.length, 2);
+    assert.ok(versions.every((item) => item.status === VersionStatus.Candidate));
+    assert.equal(chapter.currentContentVersionId, null);
+    assert.equal(task.status, TaskStatus.WaitingConfirmation);
+    assert.deepEqual(new Set(task.resultVersionIds), new Set(versions.map((item) => item.id)));
+    assert.match(task.resultReceiptHash ?? '', /^[0-9a-f]{64}$/);
+    assert.equal(repository.getBodyBatches().find((item) => item.taskId === task.id)?.status, 'paused');
+  });
+
+  it('rejects malformed chapter output before saving an asset', async () => {
+    const { repository, task, result, finalizeInput } = await leasedBody('chapter_body_generate');
+    const malformed = { ...result, chapter: { ...result.chapter, id: 'wrong-chapter' } };
+    assert.equal((await repository.finalizeLeasedAction({ ...finalizeInput,
+      validatedResult: malformed as unknown as LeasedCreativeFinalizeInput['validatedResult'] })).outcome, 'applied');
+    assert.equal(task.errorCode, 'WORKER_PAYLOAD_UNSUPPORTED');
+    assert.equal(task.resultReceiptHash, null);
+    assert.equal(repository.getBodyBatches().filter((item) => item.taskId === task.id).length, 0);
+  });
+
+  it('does not misrepresent a hard-failed paid result as a completed receipt', async () => {
+    const { repository, task, result, finalizeInput } = await leasedBody('chapter_body_generate');
+    assert.equal((await repository.finalizeLeasedAction({ ...finalizeInput,
+      validatedResult: { ...result, hardFailed: true } as unknown as LeasedCreativeFinalizeInput['validatedResult']
+    })).outcome, 'fenced');
+    assert.equal(task.resultReceiptHash, null);
+    assert.equal(task.providerCallBudgetUsed, 1);
+    assert.equal(repository.getBodyBatches().filter((item) => item.taskId === task.id).length, 0);
+  });
+
+  it('keeps batch results fenced until E2 can represent partial batches', async () => {
+    const { repository, task, finalizeInput } = await leasedBody('body_batch_generate');
+    const before = repository.getBodyBatches().length;
+    assert.equal((await repository.finalizeLeasedAction(finalizeInput)).outcome, 'fenced');
+    assert.equal(repository.getBodyBatches().length, before);
+    assert.equal(task.resultReceiptHash, null);
+    assert.equal(task.providerCallBudgetUsed, 1);
   });
 });
 

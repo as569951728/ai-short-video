@@ -48,7 +48,7 @@ import {
 export { NOVEL_PROVIDER_ACTIONS, hashCanonicalJson };
 export type { NovelProviderAction };
 
-export interface ExecuteClaimedGenerationInput<TProviderResult, TFinalResult> {
+export interface ClaimGenerationInput {
   action: NovelProviderAction;
   repository: NovelRepository;
   novel: NovelRecord;
@@ -60,10 +60,33 @@ export interface ExecuteClaimedGenerationInput<TProviderResult, TFinalResult> {
   now: () => Date;
   authorityBarrier?: (phase: 'after_first_authority_load' | 'after_claim') => void | Promise<void>;
   providerCapability?: unknown;
+}
+
+export interface ExecuteClaimedGenerationInput<TProviderResult, TFinalResult> extends ClaimGenerationInput {
   prepare?: (task: GenerationTaskRecord) => Promise<void>;
   provider: (providerInput: unknown) => Promise<TProviderResult>;
   finalize: (task: GenerationTaskRecord, providerResult: TProviderResult) => Promise<TFinalResult>;
 }
+
+export interface QueueGenerationInput extends ClaimGenerationInput {
+  idempotencyKey: string;
+  durationDeadlineAt: Date;
+}
+
+export interface QueuedGenerationResult {
+  reused: boolean;
+  task: GenerationTaskRecord;
+}
+
+type ClaimedGeneration =
+  | { reused: true; task: GenerationTaskRecord }
+  | {
+      reused: false;
+      task: GenerationTaskRecord;
+      authorityInput: Parameters<NovelRepository['loadGenerationAuthority']>[0];
+      authoritySnapshotHash: string;
+      providerInput: unknown;
+    };
 
 export type ExecuteClaimedGenerationResult<T> =
   | { reused: true; task: GenerationTaskRecord; value: null }
@@ -114,215 +137,24 @@ export async function preflightLeasedAction(input: LeasedActionPreflightInput): 
   return failure.outcome === 'applied' ? { outcome: 'failed', task: failure.task } : failure;
 }
 
+export async function claimQueuedGeneration(input: QueueGenerationInput): Promise<QueuedGenerationResult> {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{7,119}$/.test(input.idempotencyKey)) {
+    throw new BusinessError(ErrorCode.ValidationError, '后台任务需要有效的持久提交键。');
+  }
+  if (!(input.durationDeadlineAt instanceof Date) || !Number.isFinite(input.durationDeadlineAt.getTime())) {
+    throw new BusinessError(ErrorCode.ValidationError, '任务执行截止时间无效。');
+  }
+  const claimed = await claimGeneration(input, 'queued');
+  return { reused: claimed.reused, task: claimed.task };
+}
+
 export async function executeClaimedGeneration<TProviderResult, TFinalResult>(
   input: ExecuteClaimedGenerationInput<TProviderResult, TFinalResult>
 ): Promise<ExecuteClaimedGenerationResult<TFinalResult>> {
-  const spec = getActionExecutionPlan(input.action);
-  const providerCapability = input.providerCapability as {
-    assertAvailable?: () => void | Promise<void>;
-    getModelRoutingVersion?: (action: NovelProviderAction) => string;
-    constructor?: { name?: string };
-  } | undefined;
-  const objectId = input.objectId ?? input.novel.id;
-  assertTrustedContext(input.context);
-  if (input.novel.tenantId !== input.context.tenantId) {
-    throw new BusinessError(ErrorCode.VersionConflict, '小说权威归属已变化，请刷新后重试。');
-  }
-  const rawIdempotencyKey = resolveIdempotencyToken(input.idempotencyKey, input.context.requestId);
-  const idempotencyToken = createActorScopedIdempotencyToken({
-    tenantId: input.context.tenantId,
-    userId: input.context.userId,
-    action: input.action,
-    objectId,
-    rawIdempotencyKey
-  });
-  const scopedIdempotentTask = await input.repository.findTaskByIdempotencyToken(
-    input.context.tenantId,
-    spec.taskType,
-    idempotencyToken
-  );
-  const legacyIdempotentTask = scopedIdempotentTask
-    ? null
-    : await input.repository.findTaskByIdempotencyToken(input.context.tenantId, spec.taskType, rawIdempotencyKey);
-  const existingIdempotentTask = scopedIdempotentTask ?? (
-    legacyIdempotentTask?.createdBy === input.context.userId
-    && legacyIdempotentTask.objectId === objectId
-      ? legacyIdempotentTask
-      : null
-  );
-  const modelRoutingVersion = providerCapability?.getModelRoutingVersion?.(input.action)
-    ?? `provider:${providerCapability?.constructor?.name || 'default'}:v1`;
-  assertRequiredClaimSourceRefs(input.action, input.sourceVersionRefs);
-  const normalizedSourceVersionRefs = normalizeClaimSourceRefs(input.action, input.sourceVersionRefs, objectId);
-  const normalizedRequest = normalizeClaimEffectiveRequest(
-    input.action,
-    objectId,
-    input.effectiveRequest,
-    normalizedSourceVersionRefs,
-    input.novel.policyProfileVersionId
-  );
-  if (existingIdempotentTask) {
-    let persistedEnvelope: ExecutionEnvelopeV1_1;
-    try {
-      persistedEnvelope = validateExecutionEnvelopeV1_1ForTask(existingIdempotentTask);
-    } catch (error) {
-      if (error instanceof BusinessError) throw error;
-      if (!(error instanceof WorkerPayloadUnsupportedError)) throw error;
-      throw taskConflict(ErrorCode.IdempotencyConflict, '同一个幂等键已绑定到不受支持的历史请求。', existingIdempotentTask);
-    }
-    if (
-      persistedEnvelope.tenantId !== input.context.tenantId
-      || persistedEnvelope.auditContext.requestedByUserId !== input.context.userId
-      || persistedEnvelope.novelId !== input.novel.id
-      || persistedEnvelope.action !== input.action
-      || persistedEnvelope.objectType !== spec.objectType
-      || persistedEnvelope.objectId !== objectId
-      || persistedEnvelope.policyProfileVersionId !== input.novel.policyProfileVersionId
-      || persistedEnvelope.modelRoutingVersion !== modelRoutingVersion
-      || !requestsMatchForReplay(input.action, persistedEnvelope.normalizedRequest, normalizedRequest)
-    ) {
-      throw taskConflict(ErrorCode.IdempotencyConflict, '同一个幂等键已绑定到不同请求。', existingIdempotentTask);
-    }
-    const replayAuthorityInput = {
-      action: input.action,
-      tenantId: input.context.tenantId,
-      novelId: input.novel.id,
-      objectId,
-      sourceVersionRefs: persistedEnvelope.sourceVersionRefs,
-      normalizedRequest: persistedEnvelope.normalizedRequest
-    };
-    const replayAuthority = await input.repository.loadGenerationAuthority(replayAuthorityInput);
-    if (!matchGenerationAuthority(
-      replayAuthorityInput,
-      persistedEnvelope.sourceVersionRefs.authoritySnapshotHash,
-      replayAuthority
-    ).ok) throw sourceStale();
-    const replayProviderInput = buildAuthoritativeProviderInput(
-      input.action,
-      replayAuthority!,
-      persistedEnvelope.normalizedRequest,
-      persistedEnvelope.sourceVersionRefs
-    );
-    const replayAuthorityRefs = buildActionAuthoritySourceRefs(
-      input.action,
-      replayAuthority!,
-      persistedEnvelope.normalizedRequest,
-      persistedEnvelope.sourceVersionRefs
-    );
-    if (
-      hashCanonicalJson(replayProviderInput) !== persistedEnvelope.sourceVersionRefs.providerInputSnapshotHash
-      || hashCanonicalJson(replayAuthorityRefs) !== hashCanonicalJson(pickActionAuthoritySourceRefs(persistedEnvelope.sourceVersionRefs))
-    ) throw sourceStale();
-    return { reused: true, task: existingIdempotentTask, value: null };
-  }
-  const requestedAt = input.now().toISOString();
-  try {
-    createExecutionEnvelope({
-      action: input.action,
-      objectType: spec.objectType,
-      objectId,
-      effectiveRequest: normalizedRequest,
-      sourceVersionRefs: normalizedSourceVersionRefs,
-      policyProfileVersionId: input.novel.policyProfileVersionId,
-      modelRoutingVersion
-    });
-  } catch (error) {
-    if (error instanceof BusinessError) throw error;
-    if (!(error instanceof WorkerPayloadUnsupportedError)) throw error;
-    throw new BusinessError(ErrorCode.GateBlocked, '生成上下文缺少必需的权威版本引用，请刷新后重试。');
-  }
-  const authorityInput = {
-    action: input.action,
-    tenantId: input.context.tenantId,
-    novelId: input.novel.id,
-    objectId,
-    sourceVersionRefs: normalizedSourceVersionRefs,
-    normalizedRequest
-  };
-  const authority = await input.repository.loadGenerationAuthority(authorityInput);
-  if (!authority) throw sourceStale();
-  const authoritySnapshotHash = hashCanonicalJson(authority);
-  const initialProviderInput = buildAuthoritativeProviderInput(input.action, authority, normalizedRequest, normalizedSourceVersionRefs);
-  const initialProviderInputSnapshotHash = hashCanonicalJson(initialProviderInput);
-  const initialActionAuthorityRefs = buildActionAuthoritySourceRefs(input.action, authority, normalizedRequest, normalizedSourceVersionRefs);
-  await providerCapability?.assertAvailable?.();
-  await input.repository.assertProviderActionSupported(spec.taskType);
-  await input.authorityBarrier?.('after_first_authority_load');
-  const providerAuthority = await input.repository.loadGenerationAuthority(authorityInput);
-  if (!matchGenerationAuthority(authorityInput, authoritySnapshotHash, providerAuthority).ok) throw sourceStale();
-  const authoritativeProviderInput = buildAuthoritativeProviderInput(
-    input.action,
-    providerAuthority!,
-    normalizedRequest,
-    normalizedSourceVersionRefs
-  );
-  const providerInputSnapshotHash = hashCanonicalJson(authoritativeProviderInput);
-  const actionAuthorityRefs = buildActionAuthoritySourceRefs(
-    input.action,
-    providerAuthority!,
-    normalizedRequest,
-    normalizedSourceVersionRefs
-  );
-  if (
-    providerInputSnapshotHash !== initialProviderInputSnapshotHash
-    || hashCanonicalJson(actionAuthorityRefs) !== hashCanonicalJson(initialActionAuthorityRefs)
-  ) throw sourceStale();
-  const executionEnvelopeJson = createExecutionEnvelopeV1_1({
-    tenantId: input.context.tenantId,
-    novelId: input.novel.id,
-    auditContext: { requestedByUserId: input.context.userId, requestedAt },
-    action: input.action,
-    objectType: spec.objectType,
-    objectId,
-    normalizedRequest,
-    sourceVersionRefs: {
-      ...normalizedSourceVersionRefs,
-      ...actionAuthorityRefs,
-      authoritySnapshotHash,
-      providerInputSnapshotHash
-    },
-    policyProfileVersionId: input.novel.policyProfileVersionId,
-    modelRoutingVersion
-  });
-  const requestHash = hashCanonicalJson(executionEnvelopeJson);
-  const conflictKey = spec.conflictScope === 'chapter' ? objectId : input.novel.id;
-  const claim = await input.repository.claimGenerationTask({
-    tenantId: input.context.tenantId,
-    novelId: input.novel.id,
-    taskType: spec.taskType,
-    objectType: spec.objectType,
-    objectId,
-    conflictScope: spec.conflictScope,
-    conflictKey,
-    activeClaimKey: hashCanonicalJson({ conflictScope: spec.conflictScope, conflictKey }),
-    idempotencyToken,
-    requestHash,
-    sourceVersionRefs: executionEnvelopeJson.sourceVersionRefs,
-    executionEnvelopeJson,
-    policyProfileVersionId: input.novel.policyProfileVersionId,
-    modelRoutingVersion,
-    inputSummary: spec.inputSummary,
-    authorityInput,
-    expectedAuthoritySnapshotHash: authoritySnapshotHash,
-    afterClaimBarrier: input.authorityBarrier
-      ? () => input.authorityBarrier?.('after_claim')
-      : undefined,
-    context: input.context,
-    now: input.now()
-  });
-
-  if (claim.outcome === 'idempotency_conflict') {
-    throw taskConflict(ErrorCode.IdempotencyConflict, '同一个幂等键已绑定到不同请求。', claim.task);
-  }
-  if (claim.outcome === 'active_conflict') {
-    throw taskConflict(ErrorCode.ConflictTaskExists, '同一冲突范围已有生成任务正在处理。', claim.task);
-  }
-  if (claim.outcome === 'source_stale') throw sourceStale();
-  if (claim.outcome === 'reused') {
-    return { reused: true, task: claim.task, value: null };
-  }
-
-  const finalProviderInput = authoritativeProviderInput;
+  const claimed = await claimGeneration(input, 'inline');
+  if (claimed.reused) return { reused: true, task: claimed.task, value: null };
+  const { authorityInput, authoritySnapshotHash, providerInput: finalProviderInput } = claimed;
+  const claim = { task: claimed.task };
   const prepareFence = await input.repository.fenceGenerationAuthority({
     tenantId: input.context.tenantId,
     taskId: claim.task.id,
@@ -390,6 +222,230 @@ export async function executeClaimedGeneration<TProviderResult, TFinalResult>(
       ? withClaimTrace(error, claim.task, input.context.requestId)
       : error;
   }
+}
+
+async function claimGeneration(input: ClaimGenerationInput, executionMode: 'inline' | 'queued'): Promise<ClaimedGeneration> {
+  const spec = getActionExecutionPlan(input.action);
+  const providerCapability = input.providerCapability as {
+    assertAvailable?: () => void | Promise<void>;
+    getModelRoutingVersion?: (action: NovelProviderAction) => string;
+    constructor?: { name?: string };
+  } | undefined;
+  const objectId = input.objectId ?? input.novel.id;
+  assertTrustedContext(input.context);
+  if (input.novel.tenantId !== input.context.tenantId) {
+    throw new BusinessError(ErrorCode.VersionConflict, '小说权威归属已变化，请刷新后重试。');
+  }
+  const rawIdempotencyKey = resolveIdempotencyToken(input.idempotencyKey, input.context.requestId);
+  const idempotencyToken = createActorScopedIdempotencyToken({
+    tenantId: input.context.tenantId,
+    userId: input.context.userId,
+    action: input.action,
+    objectId,
+    rawIdempotencyKey
+  });
+  const scopedIdempotentTask = await input.repository.findTaskByIdempotencyToken(
+    input.context.tenantId,
+    spec.taskType,
+    idempotencyToken
+  );
+  const legacyIdempotentTask = scopedIdempotentTask
+    ? null
+    : await input.repository.findTaskByIdempotencyToken(input.context.tenantId, spec.taskType, rawIdempotencyKey);
+  const existingIdempotentTask = scopedIdempotentTask ?? (
+    legacyIdempotentTask?.createdBy === input.context.userId
+    && legacyIdempotentTask.objectId === objectId
+      ? legacyIdempotentTask
+      : null
+  );
+  const modelRoutingVersion = providerCapability?.getModelRoutingVersion?.(input.action)
+    ?? `provider:${providerCapability?.constructor?.name || 'default'}:v1`;
+  assertRequiredClaimSourceRefs(input.action, input.sourceVersionRefs);
+  const normalizedSourceVersionRefs = normalizeClaimSourceRefs(input.action, input.sourceVersionRefs, objectId);
+  const normalizedRequest = normalizeClaimEffectiveRequest(
+    input.action,
+    objectId,
+    input.effectiveRequest,
+    normalizedSourceVersionRefs,
+    input.novel.policyProfileVersionId
+  );
+  if (existingIdempotentTask) {
+    let persistedEnvelope: ExecutionEnvelopeV1_1;
+    try {
+      persistedEnvelope = validateExecutionEnvelopeV1_1ForTask(existingIdempotentTask);
+    } catch (error) {
+      if (error instanceof BusinessError) throw error;
+      if (!(error instanceof WorkerPayloadUnsupportedError)) throw error;
+      throw taskConflict(ErrorCode.IdempotencyConflict, '同一个幂等键已绑定到不受支持的历史请求。', existingIdempotentTask);
+    }
+    if (
+      persistedEnvelope.tenantId !== input.context.tenantId
+      || persistedEnvelope.auditContext.requestedByUserId !== input.context.userId
+      || persistedEnvelope.novelId !== input.novel.id
+      || persistedEnvelope.action !== input.action
+      || persistedEnvelope.objectType !== spec.objectType
+      || persistedEnvelope.objectId !== objectId
+      || (executionMode === 'inline' && persistedEnvelope.policyProfileVersionId !== input.novel.policyProfileVersionId)
+      || (executionMode === 'inline' && persistedEnvelope.modelRoutingVersion !== modelRoutingVersion)
+      || !requestsMatchForReplay(input.action, persistedEnvelope.normalizedRequest, normalizedRequest)
+    ) {
+      throw taskConflict(ErrorCode.IdempotencyConflict, '同一个幂等键已绑定到不同请求。', existingIdempotentTask);
+    }
+    if (executionMode === 'queued') {
+      const replaySourceRefs = normalizeClaimSourceRefs(input.action, persistedEnvelope.sourceVersionRefs, objectId);
+      if (hashCanonicalJson(replaySourceRefs) !== hashCanonicalJson(normalizedSourceVersionRefs)) {
+        throw taskConflict(ErrorCode.IdempotencyConflict, '同一个幂等键已绑定到不同来源版本。', existingIdempotentTask);
+      }
+      return { reused: true, task: existingIdempotentTask };
+    }
+    const replayAuthorityInput = {
+      action: input.action,
+      tenantId: input.context.tenantId,
+      novelId: input.novel.id,
+      objectId,
+      sourceVersionRefs: persistedEnvelope.sourceVersionRefs,
+      normalizedRequest: persistedEnvelope.normalizedRequest
+    };
+    const replayAuthority = await input.repository.loadGenerationAuthority(replayAuthorityInput);
+    if (!matchGenerationAuthority(
+      replayAuthorityInput,
+      persistedEnvelope.sourceVersionRefs.authoritySnapshotHash,
+      replayAuthority
+    ).ok) throw sourceStale();
+    const replayProviderInput = buildAuthoritativeProviderInput(
+      input.action,
+      replayAuthority!,
+      persistedEnvelope.normalizedRequest,
+      persistedEnvelope.sourceVersionRefs
+    );
+    const replayAuthorityRefs = buildActionAuthoritySourceRefs(
+      input.action,
+      replayAuthority!,
+      persistedEnvelope.normalizedRequest,
+      persistedEnvelope.sourceVersionRefs
+    );
+    if (
+      hashCanonicalJson(replayProviderInput) !== persistedEnvelope.sourceVersionRefs.providerInputSnapshotHash
+      || hashCanonicalJson(replayAuthorityRefs) !== hashCanonicalJson(pickActionAuthoritySourceRefs(persistedEnvelope.sourceVersionRefs))
+    ) throw sourceStale();
+    return { reused: true, task: existingIdempotentTask };
+  }
+  if (executionMode === 'queued' && (input as QueueGenerationInput).durationDeadlineAt.getTime() <= input.now().getTime()) {
+    throw new BusinessError(ErrorCode.ValidationError, '任务执行截止时间已过期。');
+  }
+  const requestedAt = input.now().toISOString();
+  try {
+    createExecutionEnvelope({
+      action: input.action,
+      objectType: spec.objectType,
+      objectId,
+      effectiveRequest: normalizedRequest,
+      sourceVersionRefs: normalizedSourceVersionRefs,
+      policyProfileVersionId: input.novel.policyProfileVersionId,
+      modelRoutingVersion
+    });
+  } catch (error) {
+    if (error instanceof BusinessError) throw error;
+    if (!(error instanceof WorkerPayloadUnsupportedError)) throw error;
+    throw new BusinessError(ErrorCode.GateBlocked, '生成上下文缺少必需的权威版本引用，请刷新后重试。');
+  }
+  const authorityInput = {
+    action: input.action,
+    tenantId: input.context.tenantId,
+    novelId: input.novel.id,
+    objectId,
+    sourceVersionRefs: normalizedSourceVersionRefs,
+    normalizedRequest
+  };
+  const authority = await input.repository.loadGenerationAuthority(authorityInput);
+  if (!authority) throw sourceStale();
+  const authoritySnapshotHash = hashCanonicalJson(authority);
+  const initialProviderInput = buildAuthoritativeProviderInput(input.action, authority, normalizedRequest, normalizedSourceVersionRefs);
+  const initialProviderInputSnapshotHash = hashCanonicalJson(initialProviderInput);
+  const initialActionAuthorityRefs = buildActionAuthoritySourceRefs(input.action, authority, normalizedRequest, normalizedSourceVersionRefs);
+  await providerCapability?.assertAvailable?.();
+  await input.repository.assertProviderActionSupported(spec.taskType);
+  if (executionMode === 'queued' && await input.repository.getLeasedExecutionCapability(spec.taskType) !== 'enabled') {
+    throw new BusinessError(ErrorCode.ConfigMissing, '当前生成动作尚不支持后台执行，任务未创建。');
+  }
+  await input.authorityBarrier?.('after_first_authority_load');
+  const providerAuthority = await input.repository.loadGenerationAuthority(authorityInput);
+  if (!matchGenerationAuthority(authorityInput, authoritySnapshotHash, providerAuthority).ok) throw sourceStale();
+  const authoritativeProviderInput = buildAuthoritativeProviderInput(
+    input.action,
+    providerAuthority!,
+    normalizedRequest,
+    normalizedSourceVersionRefs
+  );
+  const providerInputSnapshotHash = hashCanonicalJson(authoritativeProviderInput);
+  const actionAuthorityRefs = buildActionAuthoritySourceRefs(
+    input.action,
+    providerAuthority!,
+    normalizedRequest,
+    normalizedSourceVersionRefs
+  );
+  if (
+    providerInputSnapshotHash !== initialProviderInputSnapshotHash
+    || hashCanonicalJson(actionAuthorityRefs) !== hashCanonicalJson(initialActionAuthorityRefs)
+  ) throw sourceStale();
+  const executionEnvelopeJson = createExecutionEnvelopeV1_1({
+    tenantId: input.context.tenantId,
+    novelId: input.novel.id,
+    auditContext: { requestedByUserId: input.context.userId, requestedAt },
+    action: input.action,
+    objectType: spec.objectType,
+    objectId,
+    normalizedRequest,
+    sourceVersionRefs: {
+      ...normalizedSourceVersionRefs,
+      ...actionAuthorityRefs,
+      authoritySnapshotHash,
+      providerInputSnapshotHash
+    },
+    policyProfileVersionId: input.novel.policyProfileVersionId,
+    modelRoutingVersion
+  });
+  const requestHash = hashCanonicalJson(executionEnvelopeJson);
+  const conflictKey = spec.conflictScope === 'chapter' ? objectId : input.novel.id;
+  const claim = await input.repository.claimGenerationTask({
+    tenantId: input.context.tenantId,
+    novelId: input.novel.id,
+    taskType: spec.taskType,
+    objectType: spec.objectType,
+    objectId,
+    conflictScope: spec.conflictScope,
+    conflictKey,
+    activeClaimKey: hashCanonicalJson({ conflictScope: spec.conflictScope, conflictKey }),
+    idempotencyToken,
+    requestHash,
+    sourceVersionRefs: executionEnvelopeJson.sourceVersionRefs,
+    executionEnvelopeJson,
+    policyProfileVersionId: input.novel.policyProfileVersionId,
+    modelRoutingVersion,
+    inputSummary: spec.inputSummary,
+    authorityInput,
+    expectedAuthoritySnapshotHash: authoritySnapshotHash,
+    afterClaimBarrier: input.authorityBarrier
+      ? () => input.authorityBarrier?.('after_claim')
+      : undefined,
+    context: input.context,
+    now: input.now(),
+    executionMode,
+    durationDeadlineAt: executionMode === 'queued' ? (input as QueueGenerationInput).durationDeadlineAt : undefined
+  });
+
+  if (claim.outcome === 'idempotency_conflict') {
+    throw taskConflict(ErrorCode.IdempotencyConflict, '同一个幂等键已绑定到不同请求。', claim.task);
+  }
+  if (claim.outcome === 'active_conflict') {
+    throw taskConflict(ErrorCode.ConflictTaskExists, '同一冲突范围已有生成任务正在处理。', claim.task);
+  }
+  if (claim.outcome === 'source_stale') throw sourceStale();
+  if (claim.outcome === 'reused') {
+    return { reused: true, task: claim.task };
+  }
+  return { reused: false, task: claim.task, authorityInput, authoritySnapshotHash,
+    providerInput: authoritativeProviderInput };
 }
 
 function assertAuthorityFence(

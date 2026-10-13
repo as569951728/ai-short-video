@@ -579,6 +579,8 @@ export interface ClaimGenerationTaskInput {
   afterClaimBarrier?: () => void | Promise<void>;
   context: RequestContext;
   now: Date;
+  executionMode?: 'inline' | 'queued';
+  durationDeadlineAt?: Date;
 }
 
 export interface LoadGenerationAuthorityInput {

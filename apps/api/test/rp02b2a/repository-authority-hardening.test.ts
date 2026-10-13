@@ -62,7 +62,7 @@ describe('RP-02B2a2 A2 repository authority hardening', () => {
     assert.deepEqual(outcomes, ['created', 'active_conflict', 'active_conflict', 'created']);
     assert.equal(repository.getGenerationTasks().length, 2);
   });
-  it('queries Prisma active claims by tenant, novel, processing state, and overlapping scope', async () => {
+  it('queries Prisma active claims by tenant, novel, queued or processing state, and overlapping scope', async () => {
     const source = createInMemoryNovelRepository();
     const context = { tenantId: 'tenant_prisma_scope', userId: 'user_prisma_scope', requestId: 'request-prisma-scope' };
     const created = await source.createDraft({ request: { title: 'prisma claim scope' }, context, now: at(0) });
@@ -81,9 +81,45 @@ describe('RP-02B2a2 A2 repository authority hardening', () => {
     repository.loadGenerationAuthority = source.loadGenerationAuthority.bind(source);
     assert.equal((await repository.claimGenerationTask(chapterInput)).outcome, 'active_conflict');
     assert.deepEqual(queries[1], {
-      tenantId: context.tenantId, novelId: created.novel.id, status: 'PROCESSING', activeClaimKey: { not: null },
+      tenantId: context.tenantId, novelId: created.novel.id, status: { in: ['QUEUED', 'PROCESSING'] }, activeClaimKey: { not: null },
       OR: [{ conflictScope: null }, { conflictScope: { not: 'chapter' } }, { conflictScope: 'chapter', conflictKey: 'chapter_2' }]
     });
+  });
+  it('creates a Prisma queued claim with no started provider and a one-call budget', async () => {
+    const source = createInMemoryNovelRepository();
+    const context = { tenantId: 'tenant_prisma_queue', userId: 'user_prisma_queue', requestId: 'request-prisma-queue' };
+    const created = await source.createDraft({ request: { title: 'prisma queued claim' }, context, now: at(0) });
+    const input = await claimInput(source, created.novel.id, context, 'prisma-queued');
+    const templateClaim = await source.claimGenerationTask(input);
+    assert.equal(templateClaim.outcome, 'created');
+    const template = toPrismaTask(templateClaim.task);
+    const writes: Record<string, unknown>[] = [];
+    const events: Record<string, unknown>[] = [];
+    const repository = prismaRepositoryWithTransaction({
+      $queryRaw: async () => [],
+      generationTask: {
+        findFirst: async () => null,
+        create: async ({ data }: { data: Record<string, unknown> }) => {
+          writes.push(data);
+          return { ...template, ...data };
+        }
+      },
+      generationTaskEvent: { create: async ({ data }: { data: Record<string, unknown> }) => { events.push(data); return data; } }
+    });
+    repository.loadGenerationAuthority = source.loadGenerationAuthority.bind(source);
+    const result = await repository.claimGenerationTask({
+      ...input, executionMode: 'queued', durationDeadlineAt: at(900)
+    });
+    assert.equal(result.outcome, 'created');
+    assert.equal(result.task.status, TaskStatus.Queued);
+    assert.equal(result.task.startedAt, null);
+    assert.equal(result.task.providerCallBudgetMax, 1);
+    assert.equal(result.task.providerCallBudgetUsed, 0);
+    assert.equal(result.task.durationDeadlineAt?.getTime(), at(900).getTime());
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0]?.maxRetries, 0);
+    assert.equal(events.length, 1);
+    assert.equal(events[0]?.status, 'QUEUED');
   });
   it('rolls back Prisma provisional task and event after a post-claim authority change and locks task-backed authority', async () => {
     const source = createInMemoryNovelRepository();

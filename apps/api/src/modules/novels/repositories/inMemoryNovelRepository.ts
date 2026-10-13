@@ -131,7 +131,7 @@ import {
   verifyHashedSafeResultReceipt
 } from '../domain/executionContract.js';
 import { BusinessError } from '../../../shared/errors.js';
-import { validateFullReviewDraftForPersistence } from '../services/actionExecutionPlan.js';
+import { validateFullReviewDraftForPersistence, type BodyChapterProviderDraft } from '../services/actionExecutionPlan.js';
 
 export interface InMemoryNovelRepository extends NovelRepository {
   getOperationLogs(): OperationLogRecord[];
@@ -268,6 +268,7 @@ export function createInMemoryNovelRepository(options: {
   const operationLogs: OperationLogRecord[] = [];
   const generationTasks: GenerationTaskRecord[] = [];
   const generationTaskEvents: GenerationTaskEventRecord[] = [];
+  const leasedBodyFinalizeTasks = new WeakSet<GenerationTaskRecord>();
   const pendingClaimLocks = new Map<string, Promise<void>>();
   const creativeVersions: CreativeVersionRecord[] = [];
   const assetDecisionRecords: AssetDecisionRecord[] = [];
@@ -1062,6 +1063,11 @@ export function createInMemoryNovelRepository(options: {
       return loadAuthority(input);
     },
     async claimGenerationTask(input: ClaimGenerationTaskInput): Promise<ClaimGenerationTaskResult> {
+      if (input.executionMode === 'queued' && (!(input.durationDeadlineAt instanceof Date)
+        || !Number.isFinite(input.durationDeadlineAt.getTime())
+        || input.durationDeadlineAt.getTime() <= input.now.getTime())) {
+        throw new BusinessError(ErrorCode.ValidationError, '任务执行截止时间无效。');
+      }
       const pendingKeys = [
         `idempotency:${input.tenantId}:${input.taskType}:${input.idempotencyToken}`,
         `novel:${input.tenantId}:${input.novelId}`
@@ -1095,7 +1101,7 @@ export function createInMemoryNovelRepository(options: {
       const activeTask = generationTasks.find(
         (task) => task.tenantId === input.tenantId
           && task.novelId === input.novelId
-          && task.status === TaskStatus.Processing
+          && (task.status === TaskStatus.Processing || task.status === TaskStatus.Queued)
           && task.activeClaimKey !== null
           && generationClaimsOverlap(input, task)
       );
@@ -1110,10 +1116,10 @@ export function createInMemoryNovelRepository(options: {
         taskType: input.taskType,
         objectType: input.objectType,
         objectId: input.objectId,
-        status: TaskStatus.Processing,
-        statusNote: '生成任务已创建，正在调用模型。',
+        status: input.executionMode === 'queued' ? TaskStatus.Queued : TaskStatus.Processing,
+        statusNote: input.executionMode === 'queued' ? '任务已受理，等待后台执行。' : '生成任务已创建，正在调用模型。',
         progress: 0,
-        currentStep: '正在调用模型',
+        currentStep: input.executionMode === 'queued' ? '等待执行' : '正在调用模型',
         triggerSource: 'manual',
         sourceVersionRefs: input.sourceVersionRefs,
         conflictScope: input.conflictScope,
@@ -1135,7 +1141,7 @@ export function createInMemoryNovelRepository(options: {
         userAcceptedResult: false,
         cancelRequestedAt: null,
         cancelReason: null,
-        startedAt: input.now,
+        startedAt: input.executionMode === 'queued' ? null : input.now,
         finishedAt: null,
         createdBy: input.context.userId,
         createdAt: input.now,
@@ -1146,16 +1152,16 @@ export function createInMemoryNovelRepository(options: {
         leaseExpiresAt: null,
         lastHeartbeatAt: null,
         retryCount: 0,
-        maxRetries: 2,
+        maxRetries: input.executionMode === 'queued' ? 0 : 2,
         executionEnvelopeJson: input.executionEnvelopeJson,
         providerAttemptId: null,
         providerAttemptPhase: null,
         providerDispatchedAt: null,
         resultReceiptHash: null,
         rootTaskId: taskId,
-        providerCallBudgetMax: 0,
+        providerCallBudgetMax: input.executionMode === 'queued' ? 1 : 0,
         providerCallBudgetUsed: 0,
-        durationDeadlineAt: input.now,
+        durationDeadlineAt: input.executionMode === 'queued' ? input.durationDeadlineAt : input.now,
         costBudgetMicrosMax: 0,
         costBudgetMicrosUsed: 0
       };
@@ -1163,9 +1169,9 @@ export function createInMemoryNovelRepository(options: {
         id: nextId('event'),
         tenantId: input.tenantId,
         taskId: task.id,
-        status: TaskStatus.Processing,
+        status: task.status,
         eventType: 'task_claimed',
-        message: '生成任务已创建，正在调用模型。',
+        message: input.executionMode === 'queued' ? '任务已受理，等待后台执行。' : '生成任务已创建，正在调用模型。',
         progress: 0,
         payload: { requestId: input.context.requestId },
         createdAt: input.now
@@ -1357,8 +1363,10 @@ export function createInMemoryNovelRepository(options: {
       const isChapterRewrite = envelope.action === 'chapter_rewrite';
       const isOverlengthRevision = envelope.action === 'chapter_overlength_revise';
       const isFullReview = envelope.action === 'novel_full_review';
+      const isChapterBody = envelope.action === 'chapter_body_generate';
       if (!isDirection && !structureType && !isTrialChapterOne && !isTrialFollowup
-        && !isImpactAssessment && !isAdoptImpactAssessment && !isChapterRewrite && !isOverlengthRevision && !isFullReview) {
+        && !isImpactAssessment && !isAdoptImpactAssessment && !isChapterRewrite && !isOverlengthRevision && !isFullReview
+        && !isChapterBody) {
         return { outcome: 'fenced' as const, task: null };
       }
       const authorityInput = {
@@ -1366,11 +1374,137 @@ export function createInMemoryNovelRepository(options: {
         objectId: envelope.objectId, sourceVersionRefs: envelope.sourceVersionRefs,
         normalizedRequest: envelope.normalizedRequest
       };
-      if (!matchGenerationAuthority(authorityInput, envelope.sourceVersionRefs.authoritySnapshotHash, loadAuthority(authorityInput)).ok) {
+      const authority = loadAuthority(authorityInput);
+      if (!matchGenerationAuthority(authorityInput, envelope.sourceVersionRefs.authoritySnapshotHash, authority).ok) {
         return this.failLeasedAction({ ...input, expectedPhase: 'provider_result_validated', reason: 'source_stale' });
       }
       const novel = novels.find((item) => item.tenantId === task.tenantId && item.id === task.novelId && !item.deletedAt);
       if (!novel) return this.failLeasedAction({ ...input, expectedPhase: 'provider_result_validated', reason: 'source_stale' });
+      if (isChapterBody) {
+        if (task.providerCallBudgetUsed !== 1 || typeof task.providerCallBudgetMax !== 'number'
+          || !Number.isSafeInteger(task.providerCallBudgetMax)
+          || task.providerCallBudgetMax < 1 || !task.idempotencyToken) {
+          return { outcome: 'fenced' as const, task: null };
+        }
+        const chapter = chapters.find((item) => item.tenantId === task.tenantId && item.novelId === novel.id
+          && item.id === envelope.objectId && !item.deletedAt);
+        const refs = asRecord(envelope.sourceVersionRefs);
+        const strategy = creativeVersions.find((item) => item.tenantId === task.tenantId && item.novelId === novel.id
+          && item.id === refs.strategySnapshotId && item.versionNo === refs.strategySnapshotVersion
+          && item.status === VersionStatus.Current);
+        if (!chapter || chapter.chapterNo <= 3 || !strategy || novel.creationStage !== NovelCreationStage.Body
+          || chapter.currentContentVersionId
+          || bodyBatches.some((batch) => batch.tenantId === task.tenantId && batch.novelId === novel.id
+            && (batch.taskId === task.id || batch.idempotencyKey === task.idempotencyToken))
+          || chapterContentVersions.some((version) => version.tenantId === task.tenantId && version.sourceTaskId === task.id)) {
+          return this.failLeasedAction({ ...input, expectedPhase: 'provider_result_validated', reason: 'source_stale' });
+        }
+        const raw = input.validatedResult;
+        let draft: BodyBatchGenerationInput['chapters'][number] | null = null;
+        let overlengthDraft: BodyBatchGenerationInput['overlengthDraft'];
+        try {
+          if (!raw || typeof raw !== 'object' || Array.isArray(raw) || !('chapter' in raw)
+            || !('hardFailed' in raw) || !('scoring' in raw)) throw new Error('unsupported body result');
+          const result = raw as unknown as BodyChapterProviderDraft;
+          const original = result.experimentalOriginalDraft ?? result;
+          if (!original || typeof original.content !== 'string' || typeof original.summary !== 'string'
+            || !original.chapter || typeof original.chapter.id !== 'string'
+            || !Number.isInteger(original.chapter.chapterNo)) throw new Error('invalid original body result');
+          if (result.hardFailed) {
+            // E1 receipts cannot represent a failed batch; keep the paid result fenced for E2.
+            return { outcome: 'fenced' as const, task: null };
+          }
+          const originalLength = evaluateChapterLength(original.content, chapter.wordTarget);
+          if (originalLength.status === 'too_long') {
+            if (original.chapter.id !== chapter.id || original.chapter.chapterNo !== chapter.chapterNo) {
+              throw new Error('mismatched overlength chapter');
+            }
+            overlengthDraft = {
+              chapter, originalContent: original.content, originalSummary: original.summary,
+              ...(result.experimentalRevisionRequiresConfirmation ? { revisedContent: result.content } : {})
+            };
+          } else {
+            draft = bindGeneratedBodyChapter(chapter, result);
+            const previousMemory = asRecord(authority?.facts).bodyPreviousMemory as LongTermMemoryRecord | null;
+            draft.memory.factsCannotContradict = [...new Set([
+              ...(previousMemory?.factsCannotContradict ?? []), ...draft.memory.factsCannotContradict
+            ])];
+          }
+        } catch {
+          return this.failLeasedAction({ ...input, expectedPhase: 'provider_result_validated', reason: 'worker_payload_unsupported' });
+        }
+        const context = { tenantId: task.tenantId, userId: task.createdBy!, requestId: `worker:${input.leaseOwnerId}` };
+        const sourceVersionRefs = {
+          currentDirectionVersionId: novel.currentDirectionVersionId,
+          currentSettingVersionId: novel.currentSettingVersionId,
+          currentOutlineVersionId: novel.currentOutlineVersionId,
+          currentStageOutlineVersionId: novel.currentStageOutlineVersionId,
+          currentChapterPlanVersionId: novel.currentChapterPlanVersionId,
+          trialRunId: refs.trialRunId, selectedChapterOneCandidateId: refs.selectedChapterOneCandidateId,
+          strategySnapshotId: strategy.id, strategySnapshotVersion: strategy.versionNo,
+          creationStage: NovelCreationStage.Body
+        };
+        const requestFingerprint = {
+          taskType: 'body_batch_generate', strategySnapshotId: strategy.id,
+          expectedStrategySnapshotVersion: strategy.versionNo,
+          actualStrategySnapshotId: strategy.id, actualStrategySnapshotVersion: strategy.versionNo,
+          requestedStartChapterNo: chapter.chapterNo, requestedEndChapterNo: chapter.chapterNo,
+          startChapterNo: chapter.chapterNo, endChapterNo: chapter.chapterNo, sourceVersionRefs
+        };
+        const beforeSequence = sequence;
+        const restore = [snapshotMutableArray(novels), snapshotMutableArray(chapters),
+          snapshotMutableArray(chapterContentVersions), snapshotMutableArray(chapterFeatureCards),
+          snapshotMutableArray(reviewReports), snapshotMutableArray(longTermMemories),
+          snapshotMutableArray(bodyBatches), snapshotMutableArray(generationTasks),
+          snapshotMutableArray(generationTaskEvents), snapshotMutableArray(operationLogs)];
+        try {
+          // Body persistence must finish synchronously so the receipt is visible with its assets.
+          leasedBodyFinalizeTasks.add(task);
+          void this.generateBodyBatch({
+            novel, strategySnapshot: strategy, task, chapters: draft ? [draft] : [], overlengthDraft,
+            idempotencyKey: task.idempotencyToken, requestFingerprint,
+            startChapterNo: chapter.chapterNo, endChapterNo: chapter.chapterNo,
+            sourceVersionRefs, previousBatchSummary: (asRecord(authority?.facts).bodyPreviousBatch as BodyBatchRecord | null)?.summary ?? null,
+            context, now: input.authoritativeNow
+          });
+          leasedBodyFinalizeTasks.delete(task);
+          const batch = bodyBatches.find((item) => item.taskId === task.id);
+          if (!batch || ![TaskStatus.Completed, TaskStatus.WaitingConfirmation].includes(task.status)) {
+            throw new Error('leased body persistence did not finish synchronously');
+          }
+          options.onLeasedFinalizeStage?.('asset');
+          const receipt = createSafeResultReceipt(task, {
+            status: task.status === TaskStatus.Completed ? 'completed' : 'waiting_confirmation',
+            outcome: task.status === TaskStatus.Completed ? 'completed' : 'candidate_created',
+            resultObjectType: 'body_batch', resultObjectId: batch.id,
+            resultVersionIds: task.resultVersionIds,
+            resultCount: task.resultVersionIds.length
+          });
+          options.onLeasedFinalizeStage?.('receipt');
+          task.resultReceiptHash = receipt.hash;
+          task.providerAttemptPhase = 'finalizing';
+          clearLease(task);
+          options.onLeasedFinalizeStage?.('task');
+          appendLeaseEvent(task, 'task_finalized', task.statusNote ?? '章节正文已生成。', input.authoritativeNow);
+          options.onLeasedFinalizeStage?.('event');
+          operationLogs.unshift({
+            id: nextId('oplog'), tenantId: task.tenantId, userId: context.userId, novelId: novel.id,
+            action: 'generation_task_finalized', objectType: 'generation_task', objectId: task.id,
+            beforeSnapshot: null, afterSnapshot: { resultObjectId: batch.id,
+              resultVersionIds: task.resultVersionIds, receiptHash: receipt.hash },
+            reason: '单章正文生成完成', impactSummary: null, sourceTaskId: task.id,
+            requestId: context.requestId, ip: null, userAgent: null, createdAt: input.authoritativeNow
+          });
+          options.onLeasedFinalizeStage?.('operation_log');
+          return { outcome: 'applied' as const, task };
+        } catch (error) {
+          sequence = beforeSequence;
+          restore.forEach((restoreStore) => restoreStore());
+          throw error;
+        } finally {
+          leasedBodyFinalizeTasks.delete(task);
+        }
+      }
       if (isAdoptImpactAssessment) {
         const chapter = chapters.find((item) => item.tenantId === task.tenantId && item.novelId === novel.id
           && item.id === envelope.objectId && !item.deletedAt);
@@ -3185,7 +3319,16 @@ export function createInMemoryNovelRepository(options: {
     },
 
     async findBodyBatchByIdempotencyKey(tenantId: string, novelId: string, idempotencyKey: string) {
-      return bodyBatches.find((batch) => batch.tenantId === tenantId && batch.novelId === novelId && batch.idempotencyKey === idempotencyKey) ?? null;
+      return bodyBatches.find((batch) => {
+        if (batch.tenantId !== tenantId || batch.novelId !== novelId) return false;
+        if (batch.idempotencyKey === idempotencyKey) return true;
+        const task = generationTasks.find((item) => item.id === batch.taskId && item.tenantId === tenantId);
+        return task?.taskType === 'chapter_body_generate' && task.createdBy != null
+          && batch.idempotencyKey === hashCanonicalJson({
+            tenantId, userId: task.createdBy, action: 'chapter_body_generate',
+            objectId: task.objectId, idempotencyKey
+          });
+      }) ?? null;
     },
 
     async listOpenBlockingImpactCases(tenantId: string, novelId: string) {
@@ -3542,8 +3685,10 @@ export function createInMemoryNovelRepository(options: {
       };
     },
 
-    async generateBodyBatch(input: BodyBatchGenerationInput): Promise<GeneratedBodyBatchRecord> {
-      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task);
+    generateBodyBatch(input: BodyBatchGenerationInput): Promise<GeneratedBodyBatchRecord> {
+      if (!leasedBodyFinalizeTasks.has(input.task)) {
+        assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task);
+      }
       const task = generationTasks.find((item) => item.id === input.task.id && item.tenantId === input.context.tenantId) ?? input.task;
       task.status = TaskStatus.Processing;
       task.statusNote = '模型已返回，正在保存正文版本和批次总结。';
@@ -3766,12 +3911,12 @@ export function createInMemoryNovelRepository(options: {
         updatedAt: input.now
       });
 
-      return {
+      return Promise.resolve({
         novel: cloneNovel(input.novel.id),
         task,
         batch,
         chapters: activeChapters.map((chapter) => ({ ...chapter }))
-      };
+      });
     },
 
     async rewriteChapter(input: ChapterRewriteInput): Promise<RewrittenChapterRecord> {

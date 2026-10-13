@@ -141,7 +141,8 @@ class ClaimSourceStaleRollbackError extends Error {
 }
 function activeGenerationClaimWhere(input: ClaimGenerationTaskInput) {
   return {
-    tenantId: input.tenantId, novelId: input.novelId, status: PrismaTaskStatus.PROCESSING,
+    tenantId: input.tenantId, novelId: input.novelId,
+    status: { in: [PrismaTaskStatus.QUEUED, PrismaTaskStatus.PROCESSING] },
     activeClaimKey: { not: null },
     ...(input.conflictScope === 'chapter' ? {
       OR: [
@@ -562,6 +563,11 @@ export class PrismaNovelRepository implements NovelRepository {
     };
   }
   async claimGenerationTask(input: ClaimGenerationTaskInput): Promise<ClaimGenerationTaskResult> {
+    if (input.executionMode === 'queued' && (!(input.durationDeadlineAt instanceof Date)
+      || !Number.isFinite(input.durationDeadlineAt.getTime())
+      || input.durationDeadlineAt.getTime() <= input.now.getTime())) {
+      throw new BusinessError(ErrorCode.ValidationError, '任务执行截止时间无效。');
+    }
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
         return await this.prisma.$transaction(async (tx) => {
@@ -598,10 +604,10 @@ export class PrismaNovelRepository implements NovelRepository {
               taskType: input.taskType,
               objectType: input.objectType,
               objectId: input.objectId,
-              status: PrismaTaskStatus.PROCESSING,
-              statusNote: '生成任务已创建，正在调用模型。',
+              status: input.executionMode === 'queued' ? PrismaTaskStatus.QUEUED : PrismaTaskStatus.PROCESSING,
+              statusNote: input.executionMode === 'queued' ? '任务已受理，等待后台执行。' : '生成任务已创建，正在调用模型。',
               progress: 0,
-              currentStep: '正在调用模型',
+              currentStep: input.executionMode === 'queued' ? '等待执行' : '正在调用模型',
               triggerSource: 'manual',
               sourceVersionRefs: toJsonObject(input.sourceVersionRefs),
               executionEnvelopeJson: toJsonObject(input.executionEnvelopeJson),
@@ -613,8 +619,11 @@ export class PrismaNovelRepository implements NovelRepository {
               policyProfileVersionId: input.policyProfileVersionId,
               modelRoutingVersion: input.modelRoutingVersion,
               rootTaskId: taskId,
+              providerCallBudgetMax: input.executionMode === 'queued' ? 1 : 0,
+              maxRetries: input.executionMode === 'queued' ? 0 : 2,
+              durationDeadlineAt: input.executionMode === 'queued' ? input.durationDeadlineAt : input.now,
               inputSummary: input.inputSummary,
-              startedAt: input.now,
+              startedAt: input.executionMode === 'queued' ? null : input.now,
               createdBy: input.context.userId,
               createdAt: input.now,
               updatedAt: input.now,
@@ -624,7 +633,7 @@ export class PrismaNovelRepository implements NovelRepository {
           await createTaskEvent(tx, {
             task,
             eventType: 'task_claimed',
-            message: '生成任务已创建，正在调用模型。',
+            message: input.executionMode === 'queued' ? '任务已受理，等待后台执行。' : '生成任务已创建，正在调用模型。',
             progress: 0,
             requestId: input.context.requestId,
             createdAt: input.now
