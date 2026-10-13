@@ -986,6 +986,34 @@ describe('DeepSeek novel provider', () => {
     assert.equal(requests[0].maxTokens, 700);
   });
 
+  it('does not offer opening exposition or quoted dialogue as deletable sentences', async () => {
+    const requests: ChatCompletionRequest[] = [];
+    const target = 1000;
+    const upperBound = Math.floor(target * 1.15);
+    const opening = `开头。${'甲'.repeat(180)}。`;
+    const dialogue = '“醒了？锅里有粥，自己去盛。”';
+    const deletion = `${'冗'.repeat(54)}。`;
+    const ending = '结尾。';
+    const filler = '乙'.repeat(upperBound + 35 - opening.length - dialogue.length - deletion.length - ending.length);
+    const original = `${opening}\n${dialogue}\n${deletion}${filler}${ending}`;
+    const provider = new DeepSeekNovelProvider({
+      client: { async chat(request) {
+        requests.push(request);
+        return { content: JSON.stringify({ sentenceIds: ['s1'] }), model: request.model };
+      } }
+    });
+    const bodyInput = bodyInputForLengthTest(target);
+    const revised = await provider.reviseOverlengthChapter({
+      action: 'chapter_overlength_revise', novel: bodyInput.novel, chapter: bodyInput.chapter,
+      original: { id: 'quoted-dialogue-original', content: original, summary: null }
+    } as any);
+
+    const prompt = JSON.parse(requests[0].messages[1].content);
+    assert.deepEqual(prompt.payload.eligibleSentences, [{ id: 's1', text: deletion }]);
+    assert.equal(revised, original.replace(deletion, ''));
+    assert.equal(evaluateChapterLength(revised, target).status, 'pass');
+  });
+
   it('refuses explicit revision before provider dispatch when removal exceeds the safe bound', async () => {
     let calls = 0;
     const provider = new DeepSeekNovelProvider({
@@ -1267,7 +1295,7 @@ function bodyInputForLengthTest(wordTarget: number): any {
 function createOverlongDeletionFixture(wordTarget: number, withExtraSentence = false) {
   const upperBound = Math.floor(wordTarget * 1.15);
   const deletion = `${'冗'.repeat(54)}。`;
-  const prefix = `开头。${'甲'.repeat(400)}。`;
+  const prefix = `开头。${'甲'.repeat(Math.max(400, Math.ceil((upperBound + 35) * 0.16)))}。`;
   const ending = '结尾。';
   const extra = withExtraSentence ? `${'杂'.repeat(80)}。` : '';
   const filler = '乙'.repeat(upperBound + 35 - prefix.length - deletion.length - extra.length - ending.length);

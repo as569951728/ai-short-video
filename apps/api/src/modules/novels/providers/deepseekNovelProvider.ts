@@ -1365,13 +1365,19 @@ function firstSentence(content: string): string {
 type EligibleBodySentence = { id: string; text: string; start: number; end: number };
 
 function listEligibleBodySentences(original: string): EligibleBodySentence[] {
-  const protectedEdge = Math.min(60, Math.floor(original.length * 0.05));
+  const protectedStart = Math.max(60, Math.floor(original.length * 0.15));
+  const protectedEnd = Math.max(60, Math.floor(original.length * 0.05));
   const sentences: EligibleBodySentence[] = [];
   for (const match of original.matchAll(/[^。！？\n\r]+[。！？][”’」]?/gu)) {
     const start = match.index;
     const text = match[0];
     const end = start + text.length;
-    if (start < protectedEdge || end > original.length - protectedEdge || text.length < 10 || /\d/u.test(text)) continue;
+    const lineStart = original.lastIndexOf('\n', start - 1) + 1;
+    const nextBreak = original.indexOf('\n', end);
+    const lineEnd = nextBreak === -1 ? original.length : nextBreak;
+    const line = original.slice(lineStart, lineEnd);
+    if (start < protectedStart || end > original.length - protectedEnd || text.length < 10 || /\d/u.test(text)
+      || /[“”‘’「」"']/u.test(line)) continue;
     sentences.push({ id: `s${sentences.length + 1}`, text, start, end });
   }
   return sentences;
