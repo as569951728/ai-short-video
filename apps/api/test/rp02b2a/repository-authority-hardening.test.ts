@@ -135,7 +135,8 @@ describe('RP-02B2a2 A2 repository authority hardening', () => {
     const beforeLeaseEvents = repository.getGenerationTaskEvents().length;
     const leased = await repository.leaseNextQueuedTask('worker-a', 'lease-a', at(1), at(30));
     assert.equal(leased?.id, queued.id);
-    assert.ok(leased?.providerAttemptId);
+    assert.equal(leased?.providerAttemptId, null);
+    assert.equal(leased?.providerDispatchedAt, null);
     assert.equal(repository.getGenerationTaskEvents().length, beforeLeaseEvents + 1);
     const recovered = await repository.recoverExpiredTask({
       tenantId: leased!.tenantId,
@@ -382,7 +383,7 @@ describe('RP-02B2a2 A2 repository authority hardening', () => {
     assert.equal(result?.summary.createdAt.toISOString(), latest.summary.createdAt);
     assert.deepEqual(result, inMemoryResult);
     assert.deepEqual(queries, [{
-      where: { tenantId: 'tenant_batch', novelId: 'novel_batch', taskType: 'body_batch_generate', resultObjectType: 'body_batch' },
+      where: { tenantId: 'tenant_batch', novelId: 'novel_batch', taskType: { in: ['body_batch_generate', 'chapter_body_generate'] }, resultObjectType: 'body_batch' },
       orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
       select: { metadata: true }
     }]);

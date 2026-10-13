@@ -624,6 +624,20 @@ export interface ObservedTaskLease {
   leaseExpiresAt: Date;
 }
 
+export type LeasedTaskCheckpoint =
+  | { expectedPhase: 'leased'; nextPhase: 'prepared' }
+  | { expectedPhase: 'prepared'; nextPhase: 'provider_call_started'; providerAttemptId: string }
+  | { expectedPhase: 'provider_call_started'; nextPhase: 'provider_result_validated'; providerAttemptId: string };
+
+export interface LeasedTaskCheckpointInput {
+  tenantId: string;
+  taskId: string;
+  leaseOwnerId: string;
+  leaseToken: string;
+  authoritativeNow: Date;
+  checkpoint: LeasedTaskCheckpoint;
+}
+
 export interface SafeResultReceiptV1 {
   schemaVersion: 1;
   taskId: string;
@@ -1300,6 +1314,7 @@ export interface NovelRepository {
   fenceGenerationAuthority(input: GenerationAuthorityFenceInput): Promise<GenerationAuthorityFenceResult>;
   leaseNextQueuedTask(workerId: string, leaseToken: string, now: Date, leaseUntil: Date): Promise<GenerationTaskRecord | null>;
   heartbeatTask(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, now: Date, leaseUntil: Date): Promise<boolean>;
+  checkpointLeasedTask(input: LeasedTaskCheckpointInput): Promise<LeasedTaskMutationResult>;
   finalizeLeasedTask(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, authoritativeNow: Date, result: HashedSafeResultReceipt): Promise<LeasedTaskMutationResult>;
   failLeasedTask(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, authoritativeNow: Date, failure: LeasedTaskFailure): Promise<LeasedTaskMutationResult>;
   recoverExpiredTask(observedTaskLease: ObservedTaskLease, authoritativeNow: Date): Promise<RecoverExpiredTaskResult>;

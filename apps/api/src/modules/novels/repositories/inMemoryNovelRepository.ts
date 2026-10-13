@@ -70,6 +70,7 @@ import {
   type GenerationAuthoritySnapshot,
   type HashedSafeResultReceipt,
   type LeasedTaskFailure,
+  type LeasedTaskCheckpointInput,
   type ObservedTaskLease,
   type ChapterContentVersionRecord,
   type ChapterFeatureCardRecord,
@@ -715,8 +716,9 @@ export function createInMemoryNovelRepository(): InMemoryNovelRepository {
         task.leaseToken = leaseToken;
         task.leaseExpiresAt = leaseUntil;
         task.lastHeartbeatAt = now;
-        task.providerAttemptId = nextId('attempt');
+        task.providerAttemptId = null;
         task.providerAttemptPhase = 'leased';
+        task.providerDispatchedAt = null;
         task.startedAt = task.startedAt ?? now;
         task.updatedAt = now;
         appendLeaseEvent(task, 'task_leased', 'Worker 已领取任务。', now);
@@ -732,6 +734,34 @@ export function createInMemoryNovelRepository(): InMemoryNovelRepository {
       task.leaseExpiresAt = leaseUntil;
       task.updatedAt = now;
       return true;
+    },
+
+    async checkpointLeasedTask(input: LeasedTaskCheckpointInput) {
+      const task = validLease(input.tenantId, input.taskId, input.leaseOwnerId, input.leaseToken, input.authoritativeNow);
+      if (!task || task.providerAttemptPhase !== input.checkpoint.expectedPhase || task.retryOfTaskId !== null) {
+        return { outcome: 'fenced' as const, task: null };
+      }
+      const checkpoint = input.checkpoint;
+      if (checkpoint.expectedPhase === 'leased') {
+        if (task.providerAttemptId !== null || task.providerDispatchedAt !== null) return { outcome: 'fenced' as const, task: null };
+        task.providerAttemptPhase = 'prepared';
+      } else if (checkpoint.expectedPhase === 'prepared') {
+        if (!checkpoint.providerAttemptId.trim() || task.providerAttemptId !== null || task.providerDispatchedAt !== null ||
+          generationTasks.some((other) => other.id !== task.id && other.tenantId === task.tenantId && other.providerAttemptId === checkpoint.providerAttemptId)) {
+          return { outcome: 'fenced' as const, task: null };
+        }
+        task.providerAttemptId = checkpoint.providerAttemptId;
+        task.providerDispatchedAt = input.authoritativeNow;
+        task.providerAttemptPhase = 'provider_call_started';
+        appendLeaseEvent(task, 'calling_model', '正在调用模型。', input.authoritativeNow);
+      } else {
+        if (!checkpoint.providerAttemptId.trim() || task.providerAttemptId !== checkpoint.providerAttemptId || task.providerDispatchedAt === null) {
+          return { outcome: 'fenced' as const, task: null };
+        }
+        task.providerAttemptPhase = 'provider_result_validated';
+      }
+      task.updatedAt = input.authoritativeNow;
+      return { outcome: 'applied' as const, task };
     },
 
     async finalizeLeasedTask(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, authoritativeNow: Date, result: HashedSafeResultReceipt) {

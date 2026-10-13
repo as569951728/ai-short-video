@@ -45,6 +45,7 @@ import {
   type GenerationAuthoritySnapshot,
   type HashedSafeResultReceipt,
   type LeasedTaskFailure,
+  type LeasedTaskCheckpointInput,
   type ObservedTaskLease,
   type CompletionConfirmationInput,
   type CompletionDecisionRecord,
@@ -745,7 +746,6 @@ export class PrismaNovelRepository implements NovelRepository {
           });
           return { kind: 'retry' as const };
         }
-        const providerAttemptId = randomUUID();
         const claimed = await tx.generationTask.updateMany({
           where: { id: candidate.id, tenantId: candidate.tenantId, status: PrismaTaskStatus.QUEUED, leaseOwnerId: null, leaseToken: null },
           data: {
@@ -756,8 +756,9 @@ export class PrismaNovelRepository implements NovelRepository {
             leaseToken,
             leaseExpiresAt: leaseUntil,
             lastHeartbeatAt: now,
-            providerAttemptId,
+            providerAttemptId: null,
             providerAttemptPhase: PrismaProviderAttemptPhase.LEASED,
+            providerDispatchedAt: null,
             startedAt: candidate.startedAt ?? now,
             updatedAt: now
           }
@@ -780,6 +781,50 @@ export class PrismaNovelRepository implements NovelRepository {
       data: { lastHeartbeatAt: now, leaseExpiresAt: leaseUntil, updatedAt: now }
     });
     return result.count === 1;
+  }
+
+  async checkpointLeasedTask(input: LeasedTaskCheckpointInput) {
+    const checkpoint = input.checkpoint;
+    const expectedPhase = checkpoint.expectedPhase.toUpperCase() as PrismaProviderAttemptPhase;
+    const nextPhase = checkpoint.nextPhase.toUpperCase() as PrismaProviderAttemptPhase;
+    const attemptId = checkpoint.expectedPhase === 'leased' ? null : checkpoint.providerAttemptId.trim();
+    if (checkpoint.expectedPhase !== 'leased' && !attemptId) return { outcome: 'fenced' as const, task: null };
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const transition = await tx.generationTask.updateMany({
+          where: {
+            tenantId: input.tenantId,
+            id: input.taskId,
+            status: PrismaTaskStatus.PROCESSING,
+            leaseOwnerId: input.leaseOwnerId,
+            leaseToken: input.leaseToken,
+            leaseExpiresAt: { gt: input.authoritativeNow },
+            retryOfTaskId: null,
+            providerAttemptPhase: expectedPhase,
+            ...(checkpoint.expectedPhase === 'leased' || checkpoint.expectedPhase === 'prepared'
+              ? { providerAttemptId: null, providerDispatchedAt: null }
+              : { providerAttemptId: attemptId, providerDispatchedAt: { not: null } })
+          },
+          data: {
+            providerAttemptPhase: nextPhase,
+            ...(checkpoint.expectedPhase === 'prepared'
+              ? { providerAttemptId: attemptId, providerDispatchedAt: input.authoritativeNow }
+              : {}),
+            updatedAt: input.authoritativeNow
+          }
+        });
+        if (transition.count !== 1) return { outcome: 'fenced' as const, task: null };
+        const task = await tx.generationTask.findFirstOrThrow({ where: { id: input.taskId, tenantId: input.tenantId } });
+        if (checkpoint.nextPhase === 'provider_call_started') {
+          await createTaskEvent(tx, { task, eventType: 'calling_model', message: '正在调用模型。', progress: task.progress,
+            requestId: `worker:${input.leaseOwnerId}`, createdAt: input.authoritativeNow });
+        }
+        return { outcome: 'applied' as const, task: mapGenerationTask(task) };
+      });
+    } catch (error) {
+      if (isPrismaUniqueConstraintError(error)) return { outcome: 'fenced' as const, task: null };
+      throw error;
+    }
   }
 
   async finalizeLeasedTask(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, authoritativeNow: Date, result: HashedSafeResultReceipt) {
