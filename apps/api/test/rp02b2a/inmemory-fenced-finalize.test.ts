@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import { TaskStatus, type DirectionCandidateContentDTO, type StructureAssetContentDTO, type StructureAssetType } from '@ai-shortvideo/shared';
 import { buildApp } from '../../src/app.js';
 import type { DirectionCandidateDraft, StructureAssetDraft } from '../../src/modules/novels/domain/novelDomain.js';
+import { MockBodyProvider } from '../../src/modules/novels/providers/mockBodyProvider.js';
 import { MockTrialProvider } from '../../src/modules/novels/providers/mockTrialProvider.js';
 import { createInMemoryNovelRepository } from '../../src/modules/novels/repositories/inMemoryNovelRepository.js';
 import type { NovelProviderActionInputFor } from '../../src/modules/novels/services/actionExecutionPlan.js';
@@ -251,6 +252,51 @@ async function leasedTrialFollowup(onLeasedFinalizeStage?: (stage: FinalizeStage
     } })).outcome, 'applied');
     return { repository, task, novelId: fixture.novelId, sourceRun, followup, finalizeInput: {
       ...base, authoritativeNow: at(4), providerAttemptId: 'attempt-followup', validatedResult: followup
+    } };
+  } finally {
+    await fixture.app.close();
+  }
+}
+
+async function leasedImpactAssessment(onLeasedFinalizeStage?: (stage: FinalizeStage) => void) {
+  const repository = createInMemoryNovelRepository({ onLeasedFinalizeStage });
+  const fixture = await createRouteAuthorityFixture('chapter_impact_assess', repository);
+  try {
+    const restoreImpacts = restoreMutableRecords(repository.getImpactCases());
+    const generated = await fixture.runSuccess('leased-impact-assessment');
+    assert.equal(generated.statusCode, 200, generated.body);
+    const task = repository.getGenerationTasks().find((item) => item.id === generated.json().data.task.id);
+    assert.ok(task);
+    const invocation = fixture.providerInvocations().find((item) => item.action === 'chapter_impact_assess');
+    assert.ok(invocation);
+    const impact = await new MockBodyProvider().assessImpact(
+      invocation.input as NovelProviderActionInputFor<'chapter_impact_assess'>
+    );
+    restoreImpacts();
+    task.status = TaskStatus.Queued;
+    task.startedAt = null;
+    task.finishedAt = null;
+    task.providerAttemptId = null;
+    task.providerAttemptPhase = null;
+    task.providerDispatchedAt = null;
+    task.resultReceiptHash = null;
+    task.providerCallBudgetUsed = 0;
+    task.resultObjectType = null;
+    task.resultObjectId = null;
+    task.resultVersionIds = [];
+    assert.equal((await repository.leaseNextQueuedTask('worker-impact', 'lease-impact', at(0), at(60)))?.id, task.id);
+    const base = { tenantId: task.tenantId, taskId: task.id, leaseOwnerId: 'worker-impact', leaseToken: 'lease-impact' };
+    assert.equal((await repository.checkpointLeasedTask({ ...base, authoritativeNow: at(1), checkpoint: {
+      expectedPhase: 'leased', nextPhase: 'prepared'
+    } })).outcome, 'applied');
+    assert.equal((await repository.checkpointLeasedTask({ ...base, authoritativeNow: at(2), checkpoint: {
+      expectedPhase: 'prepared', nextPhase: 'provider_call_started', providerAttemptId: 'attempt-impact'
+    } })).outcome, 'applied');
+    assert.equal((await repository.checkpointLeasedTask({ ...base, authoritativeNow: at(3), checkpoint: {
+      expectedPhase: 'provider_call_started', nextPhase: 'provider_result_validated', providerAttemptId: 'attempt-impact'
+    } })).outcome, 'applied');
+    return { repository, task, impact, finalizeInput: {
+      ...base, authoritativeNow: at(4), providerAttemptId: 'attempt-impact', validatedResult: impact
     } };
   } finally {
     await fixture.app.close();
@@ -639,5 +685,69 @@ describe('RP-02B2a4 in-memory trial followup fenced finalize', () => {
     assert.equal(task.errorCode, 'SOURCE_STALE');
     assert.equal(task.resultReceiptHash, null);
     assert.equal(repository.getChapterContentVersions().length, before);
+  });
+});
+
+describe('RP-02B2a4 in-memory impact assessment fenced finalize', () => {
+  it('writes an impact case with a safe receipt without changing formal chapter content', async () => {
+    const { repository, task, finalizeInput } = await leasedImpactAssessment();
+    const before = { cases: repository.getImpactCases().length,
+      versions: repository.getChapterContentVersions().length,
+      chapters: structuredClone(repository.getNovelChapters()) };
+    assert.equal((await repository.finalizeLeasedAction(finalizeInput)).outcome, 'applied');
+    assert.equal(repository.getImpactCases().length, before.cases + 1);
+    assert.equal(repository.getChapterContentVersions().length, before.versions);
+    assert.deepEqual(repository.getNovelChapters(), before.chapters);
+    assert.equal(task.status, TaskStatus.Completed);
+    assert.equal(task.resultObjectType, 'impact_case');
+    assert.match(task.resultReceiptHash ?? '', /^[0-9a-f]{64}$/);
+    assert.equal((await repository.finalizeLeasedAction(finalizeInput)).outcome, 'fenced');
+  });
+
+  for (const failAt of ['asset', 'receipt', 'task', 'event', 'operation_log'] as const) {
+    it(`rolls back impact assessment when ${failAt} fails`, async () => {
+      const { repository, task, finalizeInput } = await leasedImpactAssessment((stage) => {
+        if (stage === failAt) throw new Error('injected impact fault');
+      });
+      const before = { cases: structuredClone(repository.getImpactCases()),
+        events: repository.getGenerationTaskEvents().length, logs: repository.getOperationLogs().length };
+      await assert.rejects(repository.finalizeLeasedAction(finalizeInput), /injected impact fault/);
+      assert.deepEqual(repository.getImpactCases(), before.cases);
+      assert.equal(repository.getGenerationTaskEvents().length, before.events);
+      assert.equal(repository.getOperationLogs().length, before.logs);
+      assert.equal(task.status, TaskStatus.Processing);
+      assert.equal(task.resultReceiptHash, null);
+      assert.equal(task.leaseToken, 'lease-impact');
+    });
+  }
+
+  it('rejects inconsistent model output before writing a case', async () => {
+    const { repository, task, impact, finalizeInput } = await leasedImpactAssessment();
+    const before = repository.getImpactCases().length;
+    assert.equal((await repository.finalizeLeasedAction({ ...finalizeInput,
+      validatedResult: { ...impact, impactLevel: 'severe', blocksFullReview: false }
+    })).outcome, 'applied');
+    assert.equal(task.status, TaskStatus.Failed);
+    assert.equal(task.errorCode, 'WORKER_PAYLOAD_UNSUPPORTED');
+    assert.equal(repository.getImpactCases().length, before);
+  });
+
+  it('fences cancelled or expired results and fails stale chapter authority', async () => {
+    const expired = await leasedImpactAssessment();
+    assert.equal((await expired.repository.finalizeLeasedAction({ ...expired.finalizeInput,
+      authoritativeNow: at(60) })).outcome, 'fenced');
+    expired.task.status = TaskStatus.Cancelled;
+    assert.equal((await expired.repository.finalizeLeasedAction(expired.finalizeInput)).outcome, 'fenced');
+    assert.equal(expired.repository.getImpactCases().length, 0);
+
+    const stale = await leasedImpactAssessment();
+    const chapter = stale.repository.getNovelChapters().find((item) => item.id === stale.task.objectId);
+    assert.ok(chapter);
+    chapter.currentContentVersionId = 'replaced-content';
+    assert.equal((await stale.repository.finalizeLeasedAction(stale.finalizeInput)).outcome, 'applied');
+    assert.equal(stale.task.status, TaskStatus.Failed);
+    assert.equal(stale.task.errorCode, 'SOURCE_STALE');
+    assert.equal(stale.task.resultReceiptHash, null);
+    assert.equal(stale.repository.getImpactCases().length, 0);
   });
 });

@@ -60,6 +60,7 @@ import {
   type ListNovelRecordsQuery,
   type LongTermMemoryRecord,
   type ImpactAssessmentInput,
+  type ImpactAssessmentDraft,
   type ImpactCaseRecord,
   type ImpactCaseResolveInput,
   type NovelChapterRecord,
@@ -230,6 +231,19 @@ function validLeasedTrialCandidate(value: unknown, chapter: NovelChapterRecord):
     && strings(scoring.evidence) && strings(scoring.penalties)
     && typeof scoring.hardFailure === 'boolean' && strings(scoring.hardFailureReasons)
     && evaluateChapterLength(draft.content, chapter.wordTarget).status === 'pass';
+}
+
+function validLeasedImpactDraft(value: unknown): value is ImpactAssessmentDraft {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const draft = value as ImpactAssessmentDraft;
+  const text = (input: unknown) => typeof input === 'string' && input.trim().length > 0;
+  const strings = (input: unknown) => Array.isArray(input) && input.every(text);
+  return ['none', 'minor', 'medium', 'severe'].includes(draft.impactLevel)
+    && text(draft.summary) && text(draft.recommendedHandling)
+    && strings(draft.changedFacts) && strings(draft.affectedChapterIds)
+    && strings(draft.affectedVideoReferenceIds) && strings(draft.suggestedActions)
+    && draft.suggestedActions.length > 0 && typeof draft.blocksFullReview === 'boolean'
+    && draft.blocksFullReview === ['medium', 'severe'].includes(draft.impactLevel);
 }
 
 export function createInMemoryNovelRepository(options: {
@@ -914,7 +928,8 @@ export function createInMemoryNovelRepository(options: {
       const isDirection = ['direction_generate', 'direction_fuse', 'direction_optimize'].includes(envelope.action);
       const isTrialChapterOne = envelope.action === 'trial_chapter_one_generate';
       const isTrialFollowup = envelope.action === 'trial_followup_generate';
-      if (!isDirection && !structureType && !isTrialChapterOne && !isTrialFollowup) {
+      const isImpactAssessment = envelope.action === 'chapter_impact_assess';
+      if (!isDirection && !structureType && !isTrialChapterOne && !isTrialFollowup && !isImpactAssessment) {
         return { outcome: 'fenced' as const, task: null };
       }
       const authorityInput = {
@@ -927,6 +942,60 @@ export function createInMemoryNovelRepository(options: {
       }
       const novel = novels.find((item) => item.tenantId === task.tenantId && item.id === task.novelId && !item.deletedAt);
       if (!novel) return this.failLeasedAction({ ...input, expectedPhase: 'provider_result_validated', reason: 'source_stale' });
+      if (isImpactAssessment) {
+        const chapter = chapters.find((item) => item.tenantId === task.tenantId && item.novelId === novel.id
+          && item.id === envelope.objectId);
+        const refs = asRecord(envelope.sourceVersionRefs);
+        const currentContent = chapterContentVersions.find((item) => item.tenantId === task.tenantId
+          && item.novelId === novel.id && item.chapterId === chapter?.id
+          && item.id === refs.currentContentVersionId && item.status === VersionStatus.Current);
+        if (!chapter || !currentContent || chapter.currentContentVersionId !== currentContent.id) {
+          return this.failLeasedAction({ ...input, expectedPhase: 'provider_result_validated', reason: 'source_stale' });
+        }
+        if (!validLeasedImpactDraft(input.validatedResult)) {
+          return this.failLeasedAction({ ...input, expectedPhase: 'provider_result_validated', reason: 'worker_payload_unsupported' });
+        }
+        const context = { tenantId: task.tenantId, userId: task.createdBy!, requestId: `worker:${input.leaseOwnerId}` };
+        const request = asRecord(envelope.normalizedRequest);
+        const beforeSequence = sequence;
+        const restore = [snapshotMutableArray(generationTasks), snapshotMutableArray(impactCases),
+          snapshotMutableArray(generationTaskEvents), snapshotMutableArray(operationLogs)];
+        try {
+          const generated = await this.createImpactAssessment({
+            novel, task, chapter, currentContent, impact: input.validatedResult,
+            reason: typeof request.reason === 'string' && request.reason.trim()
+              ? request.reason.trim() : '手动发起章节影响评估',
+            context, now: input.authoritativeNow
+          });
+          options.onLeasedFinalizeStage?.('asset');
+          const receipt = createSafeResultReceipt(task, {
+            status: 'completed', outcome: 'completed',
+            resultObjectType: 'impact_case', resultObjectId: generated.impactCase.id,
+            resultVersionIds: [], resultCount: 1
+          });
+          options.onLeasedFinalizeStage?.('receipt');
+          task.resultReceiptHash = receipt.hash;
+          task.providerAttemptPhase = 'finalizing';
+          task.updatedAt = input.authoritativeNow;
+          clearLease(task);
+          options.onLeasedFinalizeStage?.('task');
+          appendLeaseEvent(task, 'task_finalized', task.statusNote ?? '影响评估已生成。', input.authoritativeNow);
+          options.onLeasedFinalizeStage?.('event');
+          operationLogs.unshift({
+            id: nextId('oplog'), tenantId: task.tenantId, userId: context.userId, novelId: novel.id,
+            action: 'generation_task_finalized', objectType: 'generation_task', objectId: task.id,
+            beforeSnapshot: null, afterSnapshot: { resultObjectId: generated.impactCase.id, receiptHash: receipt.hash },
+            reason: '章节影响评估完成', impactSummary: null, sourceTaskId: task.id,
+            requestId: context.requestId, ip: null, userAgent: null, createdAt: input.authoritativeNow
+          });
+          options.onLeasedFinalizeStage?.('operation_log');
+          return { outcome: 'applied' as const, task };
+        } catch (error) {
+          sequence = beforeSequence;
+          restore.forEach((restoreStore) => restoreStore());
+          throw error;
+        }
+      }
       if (isTrialFollowup) {
         const trialRun = trialRuns.find((item) => item.tenantId === task.tenantId && item.novelId === novel.id
           && item.id === envelope.objectId && item.status === 'waiting_chapter1_selection');

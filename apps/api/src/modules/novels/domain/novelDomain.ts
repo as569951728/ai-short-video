@@ -657,7 +657,7 @@ export interface LeasedCreativeFinalizeInput {
   authoritativeNow: Date;
   providerAttemptId: string;
   validatedResult: DirectionCandidateDraft[] | DirectionCandidateDraft | StructureAssetDraft | TrialChapterCandidateDraft[]
-    | { chapters: TrialFollowupChapterProviderDraft[]; review: TrialReviewDraft };
+    | { chapters: TrialFollowupChapterProviderDraft[]; review: TrialReviewDraft } | ImpactAssessmentDraft;
 }
 
 export interface SafeResultReceiptV1 {
