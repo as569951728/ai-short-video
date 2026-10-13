@@ -645,7 +645,17 @@ export interface LeasedActionFailureInput {
   leaseToken: string;
   authoritativeNow: Date;
   expectedPhase: ProviderAttemptPhase;
-  reason: 'retry_not_available' | 'worker_payload_unsupported';
+  reason: 'retry_not_available' | 'worker_payload_unsupported' | 'source_stale';
+}
+
+export interface LeasedDirectionFinalizeInput {
+  tenantId: string;
+  taskId: string;
+  leaseOwnerId: string;
+  leaseToken: string;
+  authoritativeNow: Date;
+  providerAttemptId: string;
+  validatedResult: DirectionCandidateDraft[] | DirectionCandidateDraft;
 }
 
 export interface SafeResultReceiptV1 {
@@ -680,7 +690,12 @@ export function leasedActionFailure(reason: LeasedActionFailureInput['reason']):
         errorMessage: '历史重试任务暂不支持自动执行。',
         statusNote: '历史重试任务已在模型调用前安全结束。'
       }
-    : {
+    : reason === 'source_stale' ? {
+        failureCategory: 'source_stale',
+        errorCode: 'SOURCE_STALE',
+        errorMessage: 'Generation source changed before result persistence.',
+        statusNote: '生成来源已变化，结果未写入。'
+      } : {
         failureCategory: 'worker_payload_unsupported',
         errorCode: 'WORKER_PAYLOAD_UNSUPPORTED',
         errorMessage: '任务执行合同不受支持。',
@@ -1345,6 +1360,7 @@ export interface NovelRepository {
   heartbeatTask(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, now: Date, leaseUntil: Date): Promise<boolean>;
   checkpointLeasedTask(input: LeasedTaskCheckpointInput): Promise<LeasedTaskMutationResult>;
   failLeasedAction(input: LeasedActionFailureInput): Promise<LeasedTaskMutationResult>;
+  finalizeLeasedAction(input: LeasedDirectionFinalizeInput): Promise<LeasedTaskMutationResult>;
   finalizeLeasedTask(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, authoritativeNow: Date, result: HashedSafeResultReceipt): Promise<LeasedTaskMutationResult>;
   failLeasedTask(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, authoritativeNow: Date, failure: LeasedTaskFailure): Promise<LeasedTaskMutationResult>;
   recoverExpiredTask(observedTaskLease: ObservedTaskLease, authoritativeNow: Date): Promise<RecoverExpiredTaskResult>;

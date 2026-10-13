@@ -48,6 +48,7 @@ import {
   type LeasedTaskFailure,
   type LeasedTaskCheckpointInput,
   type LeasedActionFailureInput,
+  type LeasedDirectionFinalizeInput,
   type ObservedTaskLease,
   type CompletionConfirmationInput,
   type CompletionDecisionRecord,
@@ -894,6 +895,12 @@ export class PrismaNovelRepository implements NovelRepository {
       } });
       return { outcome: 'applied' as const, task: mapGenerationTask(task) };
     });
+  }
+
+  async finalizeLeasedAction(input: LeasedDirectionFinalizeInput) {
+    const task = await this.findTaskById(input.tenantId, input.taskId);
+    if (!task?.providerAttemptPhase) return { outcome: 'fenced' as const, task: null };
+    return this.failLeasedAction({ ...input, expectedPhase: task.providerAttemptPhase, reason: 'worker_payload_unsupported' });
   }
 
   async finalizeLeasedTask(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, authoritativeNow: Date, result: HashedSafeResultReceipt) {

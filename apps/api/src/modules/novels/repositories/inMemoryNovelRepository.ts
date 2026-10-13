@@ -41,6 +41,7 @@ import {
   type ChapterContentAdoptionInput,
   type DirectionAdoptionInput,
   type DirectionCreationInput,
+  type DirectionCandidateDraft,
   type DirectionRevisionInput,
   type DraftCreationInput,
   type ForcedFullReviewRecord,
@@ -73,6 +74,7 @@ import {
   type LeasedTaskFailure,
   type LeasedTaskCheckpointInput,
   type LeasedActionFailureInput,
+  type LeasedDirectionFinalizeInput,
   type ObservedTaskLease,
   type ChapterContentVersionRecord,
   type ChapterFeatureCardRecord,
@@ -112,6 +114,7 @@ import {
   normalizeDraftRequest
 } from '../domain/novelDomain.js';
 import {
+  createSafeResultReceipt,
   hashCanonicalJson,
   isNovelProviderTaskType,
   matchGenerationAuthority,
@@ -144,7 +147,25 @@ export function isInMemoryNovelRepository(repository: NovelRepository): reposito
   return inMemoryNovelRepositories.has(repository);
 }
 
-export function createInMemoryNovelRepository(): InMemoryNovelRepository {
+function validLeasedDirectionDraft(value: DirectionCandidateDraft): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const text = (input: unknown) => typeof input === 'string' && input.trim().length > 0;
+  const strings = (input: unknown) => Array.isArray(input) && input.every(text);
+  const score = (input: unknown) => typeof input === 'number' && Number.isFinite(input) && input >= 0 && input <= 100;
+  const content = value.content;
+  return text(value.title) && text(value.summary) && text(value.recommendedReason)
+    && score(value.score) && score(value.marketScore)
+    && Object.values(RiskLevel).includes(value.riskLevel) && strings(value.riskTags)
+    && !!content && typeof content === 'object' && !Array.isArray(content)
+    && text(content.title) && text(content.logline) && text(content.coreHook)
+    && text(content.audienceAppeal) && text(content.videoPotential)
+    && strings(content.sellingPoints) && strings(content.riskTags) && text(content.recommendation);
+}
+
+export function createInMemoryNovelRepository(options: {
+  onLeasedFinalizeStage?: (stage: 'asset' | 'receipt' | 'task' | 'event' | 'operation_log') => void;
+  onLeasedFailureStage?: (stage: 'event' | 'operation_log') => void;
+} = {}): InMemoryNovelRepository {
   const novels: NovelRecord[] = [];
   const preferences: NovelPreferencesRecord[] = [];
   const operationLogs: OperationLogRecord[] = [];
@@ -782,15 +803,132 @@ export function createInMemoryNovelRepository(): InMemoryNovelRepository {
         return { outcome: 'fenced' as const, task: null };
       }
       const failure = leasedActionFailure(input.reason);
-      applyLeaseFailure(task, failure, input.authoritativeNow);
-      operationLogs.unshift({
-        id: nextId('oplog'), tenantId: task.tenantId, userId: task.createdBy,
-        novelId: task.novelId, action: 'generation_task_failed', objectType: 'generation_task', objectId: task.id,
-        beforeSnapshot: null, afterSnapshot: { failureCategory: failure.failureCategory, errorCode: failure.errorCode },
-        reason: failure.statusNote, impactSummary: null, sourceTaskId: task.id,
-        requestId: `worker:${input.leaseOwnerId}`, ip: null, userAgent: null, createdAt: input.authoritativeNow
-      });
-      return { outcome: 'applied' as const, task };
+      const before = { sequence, task: { ...task }, events: [...generationTaskEvents], logs: [...operationLogs] };
+      try {
+        applyLeaseFailure(task, failure, input.authoritativeNow);
+        options.onLeasedFailureStage?.('event');
+        operationLogs.unshift({
+          id: nextId('oplog'), tenantId: task.tenantId, userId: task.createdBy,
+          novelId: task.novelId, action: 'generation_task_failed', objectType: 'generation_task', objectId: task.id,
+          beforeSnapshot: null, afterSnapshot: { failureCategory: failure.failureCategory, errorCode: failure.errorCode },
+          reason: failure.statusNote, impactSummary: null, sourceTaskId: task.id,
+          requestId: `worker:${input.leaseOwnerId}`, ip: null, userAgent: null, createdAt: input.authoritativeNow
+        });
+        options.onLeasedFailureStage?.('operation_log');
+        return { outcome: 'applied' as const, task };
+      } catch (error) {
+        sequence = before.sequence;
+        Object.assign(task, before.task);
+        generationTaskEvents.splice(0, generationTaskEvents.length, ...before.events);
+        operationLogs.splice(0, operationLogs.length, ...before.logs);
+        throw error;
+      }
+    },
+
+    async finalizeLeasedAction(input: LeasedDirectionFinalizeInput) {
+      const task = validLease(input.tenantId, input.taskId, input.leaseOwnerId, input.leaseToken, input.authoritativeNow);
+      if (!task || task.providerAttemptPhase !== 'provider_result_validated' || task.providerAttemptId !== input.providerAttemptId
+        || task.providerDispatchedAt == null || task.resultReceiptHash != null || task.retryOfTaskId !== null) {
+        return { outcome: 'fenced' as const, task: null };
+      }
+      let envelope;
+      try {
+        envelope = validateExecutionEnvelopeV1_1ForTask(task);
+      } catch {
+        return this.failLeasedAction({ ...input, expectedPhase: 'provider_result_validated', reason: 'worker_payload_unsupported' });
+      }
+      if (!['direction_generate', 'direction_fuse', 'direction_optimize'].includes(envelope.action)) {
+        return { outcome: 'fenced' as const, task: null };
+      }
+      const authorityInput = {
+        action: envelope.action, tenantId: envelope.tenantId, novelId: envelope.novelId,
+        objectId: envelope.objectId, sourceVersionRefs: envelope.sourceVersionRefs,
+        normalizedRequest: envelope.normalizedRequest
+      };
+      if (!matchGenerationAuthority(authorityInput, envelope.sourceVersionRefs.authoritySnapshotHash, loadAuthority(authorityInput)).ok) {
+        return this.failLeasedAction({ ...input, expectedPhase: 'provider_result_validated', reason: 'source_stale' });
+      }
+      const novel = novels.find((item) => item.tenantId === task.tenantId && item.id === task.novelId && !item.deletedAt);
+      if (!novel) return this.failLeasedAction({ ...input, expectedPhase: 'provider_result_validated', reason: 'source_stale' });
+      const isBatch = envelope.action === 'direction_generate';
+      const result = input.validatedResult;
+      const drafts = isBatch
+        ? Array.isArray(result) ? result : []
+        : Array.isArray(result) ? [] : [result];
+      if (drafts.length < 1 || drafts.length > 10 || drafts.some((draft) => !validLeasedDirectionDraft(draft))) {
+        return this.failLeasedAction({ ...input, expectedPhase: 'provider_result_validated', reason: 'worker_payload_unsupported' });
+      }
+      const context = { tenantId: task.tenantId, userId: task.createdBy!, requestId: `worker:${input.leaseOwnerId}` };
+      const refs = asRecord(envelope.sourceVersionRefs);
+      const sourceVersionIds = Array.isArray(refs.sourceVersionIds) ? refs.sourceVersionIds.filter((id): id is string => typeof id === 'string') : [];
+      const request = asRecord(envelope.normalizedRequest);
+      const revisionReason = envelope.action === 'direction_fuse' ? request.reason : request.instruction;
+      const changeReason = isBatch ? '模型生成方向候选'
+        : typeof revisionReason === 'string' && revisionReason.trim() ? revisionReason.trim() : '模型生成方向候选';
+      const baseInput = { novel, task, taskType: task.taskType, changeReason, context, now: input.authoritativeNow };
+      const versionInput: DirectionCreationInput | DirectionRevisionInput = isBatch
+        ? { ...baseInput, candidates: drafts }
+        : { ...baseInput, candidate: drafts[0]!, sourceVersionIds };
+      // Restore every mutable store if any part of the asset/receipt/task/audit bundle fails.
+      const before = {
+        sequence, task: { ...task }, novel: { ...novel }, versions: [...creativeVersions],
+        events: [...generationTaskEvents], logs: [...operationLogs]
+      };
+      try {
+        const versionNo = nextDirectionVersionNo(task.tenantId, novel.id);
+        const versions = drafts.map((draft, index) => createCreativeVersion({
+          id: nextId('cv'), input: versionInput, candidate: draft, taskId: task.id,
+          versionNo: versionNo + index,
+          sourceVersionRefs: isBatch ? { currentDirectionVersionId: novel.currentDirectionVersionId } : { sourceVersionIds }
+        }));
+        creativeVersions.unshift(...versions);
+        options.onLeasedFinalizeStage?.('asset');
+        const receipt = createSafeResultReceipt(task, {
+          status: 'waiting_confirmation', outcome: 'candidate_created',
+          resultObjectType: 'creative_version', resultObjectId: versions[0]!.id,
+          resultVersionIds: versions.map((version) => version.id), resultCount: versions.length
+        });
+        options.onLeasedFinalizeStage?.('receipt');
+        task.status = TaskStatus.WaitingConfirmation;
+        task.statusNote = '方向候选已生成，等待用户确认。';
+        task.progress = 100;
+        task.currentStep = '方向候选已生成，等待选择';
+        task.resultObjectType = receipt.receipt.resultObjectType;
+        task.resultObjectId = receipt.receipt.resultObjectId;
+        task.resultVersionIds = receipt.receipt.resultVersionIds;
+        task.resultReceiptHash = receipt.hash;
+        task.outputSummary = `${versions.length} 个方向候选已生成，等待用户采用。`;
+        task.providerAttemptPhase = 'finalizing';
+        task.finishedAt = input.authoritativeNow;
+        task.updatedAt = input.authoritativeNow;
+        clearLease(task);
+        if (!novel.currentDirectionVersionId) {
+          novel.creationStage = NovelCreationStage.Direction;
+          novel.stageStatus = StageStatus.WaitingUser;
+        }
+        novel.updatedBy = context.userId;
+        novel.updatedAt = input.authoritativeNow;
+        options.onLeasedFinalizeStage?.('task');
+        appendLeaseEvent(task, 'task_finalized', '方向候选已生成，等待用户确认。', input.authoritativeNow);
+        options.onLeasedFinalizeStage?.('event');
+        operationLogs.unshift({
+          id: nextId('oplog'), tenantId: task.tenantId, userId: context.userId, novelId: task.novelId,
+          action: 'generation_task_finalized', objectType: 'generation_task', objectId: task.id,
+          beforeSnapshot: null, afterSnapshot: { resultVersionIds: receipt.receipt.resultVersionIds, receiptHash: receipt.hash },
+          reason: '方向候选生成完成', impactSummary: null, sourceTaskId: task.id,
+          requestId: context.requestId, ip: null, userAgent: null, createdAt: input.authoritativeNow
+        });
+        options.onLeasedFinalizeStage?.('operation_log');
+        return { outcome: 'applied' as const, task };
+      } catch (error) {
+        sequence = before.sequence;
+        Object.assign(task, before.task);
+        Object.assign(novel, before.novel);
+        creativeVersions.splice(0, creativeVersions.length, ...before.versions);
+        generationTaskEvents.splice(0, generationTaskEvents.length, ...before.events);
+        operationLogs.splice(0, operationLogs.length, ...before.logs);
+        throw error;
+      }
     },
 
     async finalizeLeasedTask(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, authoritativeNow: Date, result: HashedSafeResultReceipt) {
