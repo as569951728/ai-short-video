@@ -96,7 +96,8 @@ it('accepts an attested direction task as 202 and recovers the same task after s
 
 it('queues an attested setting task and keeps its result as a candidate', async () => {
   const repository = createInMemoryNovelRepository();
-  repository.getLeasedExecutionCapability = async (taskType) => taskType === 'novel_setting_generate' ? 'enabled' : 'unsupported';
+  repository.getLeasedExecutionCapability = async (taskType) =>
+    ['novel_setting_generate', 'novel_outline_generate'].includes(taskType) ? 'enabled' : 'unsupported';
   let policyEnabled = false;
   const now = new Date('2030-01-01T00:00:10.000Z');
   repository.getAuthoritativeTaskTime = async () => now;
@@ -146,6 +147,24 @@ it('queues an attested setting task and keeps its result as a candidate', async 
     assert.equal(versions[0].objectType, 'setting');
     assert.equal(versions[0].status, 'candidate');
     assert.equal((await repository.findById('tenant-setting-async', novelId))?.currentSettingVersionId, null);
+    const adoptSetting = await app.inject({ method: 'POST',
+      url: `/novels/${novelId}/settings/${versions[0].id}/adopt`, payload: { reason: '确认小说设定' } });
+    assert.equal(adoptSetting.statusCode, 200, adoptSetting.body);
+    const outline = await app.inject({ method: 'POST', url: `/novels/${novelId}/outlines/generate`,
+      headers: { 'idempotency-key': 'outline-async-submit-0001' }, payload });
+    assert.equal(outline.statusCode, 202, outline.body);
+    const outlineTaskId = outline.json().data.taskId as string;
+    const outlineLease = await repository.leaseNextQueuedTask('worker-outline-route', 'lease-outline-route', now,
+      new Date(now.getTime() + 60_000));
+    assert.equal(outlineLease?.id, outlineTaskId);
+    const outlineResult = await handlers.execute({ task: outlineLease!, leaseOwnerId: 'worker-outline-route',
+      leaseToken: 'lease-outline-route', signal: new AbortController().signal, mutate: (operation) => operation() });
+    await handlers.settle({ task: outlineLease!, leaseOwnerId: 'worker-outline-route',
+      leaseToken: 'lease-outline-route', authoritativeNow: now, outcome: { kind: 'fulfilled', value: outlineResult } });
+    assert.equal((await repository.findTaskById('tenant-setting-async', outlineTaskId))?.status,
+      TaskStatus.WaitingConfirmation);
+    assert.equal(repository.getCreativeVersions().filter((version) => version.sourceTaskId === outlineTaskId).length, 1);
+    assert.equal((await repository.findById('tenant-setting-async', novelId))?.currentOutlineVersionId, null);
   } finally {
     await app.close();
   }

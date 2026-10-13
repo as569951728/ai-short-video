@@ -31,6 +31,13 @@ vi.mock('vue-router', () => ({
   useRouter: () => ({ push: mocks.routerPush }),
 }))
 
+vi.mock('../modules/novels/services/asyncNovelTransport', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../modules/novels/services/asyncNovelTransport')>(),
+  getAsyncNovelTransportCapability: vi.fn().mockResolvedValue({
+    contractVersion: 'v1', enabled: false, reasonCode: 'POLICY_DISABLED',
+  }),
+}))
+
 vi.mock('../modules/novels/services/taskService', () => ({
   cancelTask: vi.fn(),
   getTaskDetail: mocks.getTaskDetail,

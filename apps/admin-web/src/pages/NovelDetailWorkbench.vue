@@ -35,6 +35,26 @@
       :closable="true"
       @close="apiError = ''"
     />
+    <el-alert
+      v-if="asyncTaskStatusError"
+      :title="asyncTaskStatusError"
+      type="warning"
+      show-icon
+      :closable="false"
+    />
+    <div v-if="asyncTransport.message.value" class="task-transport-notice" role="status">
+      <span>{{ asyncTransport.message.value }}</span>
+      <el-button
+        v-if="['capability_unavailable', 'scope_suspended'].includes(asyncTransport.phase.value)"
+        size="small"
+        @click="asyncTransport.recheckCapability()"
+      >重新检查</el-button>
+      <el-button
+        v-if="asyncTransport.phase.value === 'tracking' && asyncTaskId"
+        size="small"
+        @click="openTaskDrawer(asyncTaskId)"
+      >查看任务</el-button>
+    </div>
 
     <div v-if="workbenchMode === 'overview'" class="overview-shell">
       <div class="overview-grid">
@@ -130,7 +150,7 @@
               :loading="loading"
               @view="openTaskDrawer(activeRecentTask?.id)"
               @view-result="openTaskResult"
-              @refresh="loadDetail"
+              @refresh="refreshVisibleTask"
             />
           </el-card>
         </aside>
@@ -1094,7 +1114,7 @@
               :loading="loading"
               @view="openTaskDrawer(activeRecentTask?.id)"
               @view-result="openTaskResult"
-              @refresh="loadDetail"
+              @refresh="refreshVisibleTask"
             />
           </el-card>
         </aside>
@@ -1447,6 +1467,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ErrorCode, NovelCreationStage, StageStatus, TaskStatus, VersionStatus, type FullReviewIssueDTO, type RecentTaskSummaryDTO, type StructureAssetType, type TaskDetailDTO } from '@ai-shortvideo/shared'
 import { ApiClientError } from '../shared/services/http'
+import { useNovelAsyncTransport } from '../modules/novels/composables/useNovelAsyncTransport'
+import type { AsyncNovelGenerationAction } from '../modules/novels/services/asyncNovelTransport'
 import TaskProgressPanel from '../modules/novels/components/TaskProgressPanel.vue'
 import {
   adoptChapterPlan,
@@ -1650,6 +1672,16 @@ const taskDrawer = reactive({
   error: '',
 })
 const pendingTask = ref<LocalPendingTaskSummary | null>(null)
+const asyncTaskId = ref('')
+const asyncTaskDetail = ref<TaskDetailDTO | null>(null)
+const asyncTaskStatusError = ref('')
+const pendingSummary = computed(() => asyncTaskDetail.value ?? pendingTask.value)
+const asyncTransport = useNovelAsyncTransport(() => novelId.value, (taskId) => {
+  if (asyncTaskId.value !== taskId) asyncTaskDetail.value = null
+  asyncTaskId.value = taskId
+  syncTaskPolling()
+  void refreshAsyncTask()
+})
 const trialContentDrawer = reactive({
   open: false,
   title: '',
@@ -1712,7 +1744,7 @@ const bodyGeneration = computed(() => detail.value?.bodyGeneration ?? null)
 const latestBodyBatch = computed(() => bodyGeneration.value?.latestBatch ?? null)
 const overlengthBodyChapter = computed(() => latestBodyBatch.value?.chapterResults?.find((result) =>
   result.status === 'pending' && result.lengthGate?.status === 'too_long') ?? null)
-const bodyGenerationTask = computed(() => resolveTaskSummaryForAction(pendingTask.value, detail.value, 'body_batch_generate'))
+const bodyGenerationTask = computed(() => resolveTaskSummaryForAction(pendingSummary.value, detail.value, 'body_batch_generate'))
 const authoritativeBodyGenerationTask = computed(() => resolveTaskSummaryForAction(null, detail.value, 'body_batch_generate'))
 const isAuthoritativeBodyGenerationInFlight = computed(() =>
   authoritativeBodyGenerationTask.value?.status === TaskStatus.Queued ||
@@ -1765,7 +1797,7 @@ const trialLengthGateBlocked = computed(() =>
 )
 const canConfirmTrialReview = computed(() => Boolean(detail.value?.latestTrialRun?.trialReview?.allowNextStep) && !trialLengthGateBlocked.value)
 const latestFullReview = computed(() => detail.value?.latestFullReview ?? null)
-const fullReviewTask = computed(() => resolveTaskSummaryForAction(pendingTask.value, detail.value, 'full_review'))
+const fullReviewTask = computed(() => resolveTaskSummaryForAction(pendingSummary.value, detail.value, 'full_review'))
 const authoritativeFullReviewTask = computed(() => resolveTaskSummaryForAction(null, detail.value, 'full_review'))
 const isAuthoritativeFullReviewInFlight = computed(() =>
   authoritativeFullReviewTask.value?.status === TaskStatus.Queued ||
@@ -1819,8 +1851,8 @@ function fullReviewIssueScopeText(issue: FullReviewIssueDTO) {
     ? `涉及章节：${chapterLabels.join('、')}`
     : '涉及章节：定位信息待同步'
 }
-const activeRecentTask = computed(() => resolveVisibleTaskSummary(pendingTask.value, detail.value))
-const chapterPlanGenerationTask = computed(() => resolveTaskSummaryForAction(pendingTask.value, detail.value, 'chapter_plan_generate'))
+const activeRecentTask = computed(() => asyncTaskDetail.value ?? resolveVisibleTaskSummary(pendingTask.value, detail.value))
+const chapterPlanGenerationTask = computed(() => resolveTaskSummaryForAction(pendingSummary.value, detail.value, 'chapter_plan_generate'))
 const isChapterPlanGenerating = computed(() =>
   structureGeneratingType.value === 'chapter_plan' ||
   chapterPlanGenerationTask.value?.status === TaskStatus.Queued ||
@@ -1846,7 +1878,8 @@ const canGenerateOutline = computed(() => Boolean(detail.value?.currentAssets.se
 const canGenerateStageOutline = computed(() => Boolean(detail.value?.currentAssets.outline))
 const canGenerateChapterPlan = computed(() => Boolean(detail.value?.currentAssets.stageOutline))
 const canGenerateTrial = computed(() => Boolean(detail.value?.currentAssets.chapterPlan) && detail.value?.creationStage === NovelCreationStage.Trial)
-const hasLocalPendingWait = computed(() => [TaskStatus.Queued, TaskStatus.Processing].includes(activeRecentTask.value?.status as TaskStatus))
+const hasLocalPendingWait = computed(() => asyncTransport.blocksNewSubmission.value
+  || [TaskStatus.Queued, TaskStatus.Processing].includes(activeRecentTask.value?.status as TaskStatus))
 const settingGenerationPending = computed(() => isNovelActionRunning('setting_generate'))
 watch(
   activeRecentTask,
@@ -2560,12 +2593,52 @@ function handleLocalPendingStorageChange(event: StorageEvent) {
 
 function syncTaskPolling() {
   stopTaskPolling()
+  if (asyncTaskId.value) {
+    if (asyncTaskDetail.value && ![TaskStatus.Queued, TaskStatus.Processing].includes(asyncTaskDetail.value.status as TaskStatus)) return
+    taskPollTimer = window.setInterval(() => {
+      void refreshAsyncTask()
+    }, 5000)
+    return
+  }
   const task = activeRecentTask.value
   if (!task || ![TaskStatus.Queued, TaskStatus.Processing].includes(task.status as TaskStatus)) return
 
   taskPollTimer = window.setInterval(() => {
     loadDetail(true)
   }, 5000)
+}
+
+async function refreshAsyncTask() {
+  if (!asyncTaskId.value) return
+  const requestedTaskId = asyncTaskId.value
+  try {
+    const task = await getTaskDetail(requestedTaskId)
+    if (asyncTaskId.value !== requestedTaskId) return
+    asyncTaskDetail.value = task
+    asyncTaskStatusError.value = ''
+    try {
+      await asyncTransport.taskUpdated(task)
+    } catch {
+      asyncTaskStatusError.value = '任务状态已读取，但本地恢复记录暂时无法保存。'
+    }
+    if (![TaskStatus.Queued, TaskStatus.Processing].includes(task.status as TaskStatus)) {
+      stopTaskPolling()
+      await loadDetail(true)
+    }
+  } catch (error) {
+    if (asyncTaskId.value !== requestedTaskId) return
+    asyncTaskStatusError.value = error instanceof ApiClientError && error.code === ErrorCode.NotFound
+      ? '当前账号无法查看原任务；请切回提交任务时的账号或空间。'
+      : '任务状态暂时无法确认，已保留任务编号，恢复连接后会继续核对。'
+  }
+}
+
+async function refreshVisibleTask() {
+  if (asyncTaskId.value) {
+    await refreshAsyncTask()
+    return
+  }
+  await loadDetail()
 }
 
 function stopTaskPolling() {
@@ -2589,7 +2662,7 @@ function clearLocalPendingTask(taskId = pendingTask.value?.id) {
 }
 
 function isNovelActionRunning(action: NovelLongRunningAction) {
-  const task = resolveTaskSummaryForAction(pendingTask.value, detail.value, action)
+  const task = resolveTaskSummaryForAction(pendingSummary.value, detail.value, action)
   return [TaskStatus.Queued, TaskStatus.Processing].includes(task?.status as TaskStatus)
 }
 
@@ -2683,21 +2756,26 @@ async function handleGenerateDirection() {
 
   generatingDirection.value = true
   apiError.value = ''
-  startNovelActionPendingTask('direction_generate')
-  const pendingTaskId = pendingTask.value?.id
-
   try {
+    const decision = await asyncTransport.submit('direction_generate')
+    if (decision.kind === 'blocked') return
+    if (decision.kind === 'task') return
+    startNovelActionPendingTask('direction_generate')
+    const pendingTaskId = pendingTask.value?.id
+    try {
     const result = await generateDirections(novelId.value)
     ElMessage.success('方向候选已生成')
     await loadDetail()
     await nextTick()
     focusResultVersion('direction', result.task.resultVersionIds)
+    } finally {
+      clearLocalPendingTask(pendingTaskId)
+    }
   } catch (error) {
     apiError.value = formatApiError(error)
     await loadDetail(true)
   } finally {
     generatingDirection.value = false
-    clearLocalPendingTask(pendingTaskId)
   }
 }
 
@@ -2713,14 +2791,20 @@ async function handleGenerateStructure(
 
   structureGeneratingType.value = objectType
   apiError.value = ''
-  startNovelActionPendingTask(getStructurePendingAction(objectType))
-  const pendingTaskId = pendingTask.value?.id
-
   try {
     const request = {
       ...(regenerateReason ? { regenerateReason } : {}),
       ...(optimization ? { optimization } : {}),
     }
+    const asyncAction: AsyncNovelGenerationAction = objectType === 'setting' ? 'setting_generate'
+      : objectType === 'outline' ? 'outline_generate'
+        : objectType === 'stage_outline' ? 'stage_outline_generate' : 'chapter_plan_generate'
+    const decision = await asyncTransport.submit(asyncAction, request)
+    if (decision.kind === 'blocked') return null
+    if (decision.kind === 'task') return true
+    startNovelActionPendingTask(getStructurePendingAction(objectType))
+    const pendingTaskId = pendingTask.value?.id
+    try {
     const result = objectType === 'setting'
       ? await generateSetting(novelId.value, request)
       : objectType === 'outline'
@@ -2735,13 +2819,15 @@ async function handleGenerateStructure(
     const resultVersionIds = result.task.resultVersionIds.length ? result.task.resultVersionIds : result.candidate ? [result.candidate.id] : []
     focusResultVersion(getStructureStepKey(objectType), resultVersionIds)
     return result
+    } finally {
+      clearLocalPendingTask(pendingTaskId)
+    }
   } catch (error) {
     apiError.value = formatApiError(error)
     await loadDetail(true)
     return null
   } finally {
     structureGeneratingType.value = ''
-    clearLocalPendingTask(pendingTaskId)
   }
 }
 
@@ -3761,7 +3847,8 @@ function formatApiError(error: unknown) {
 onMounted(() => {
   restoreLocalPendingTask()
   window.addEventListener('storage', handleLocalPendingStorageChange)
-  loadDetail()
+  void asyncTransport.restore()
+  void loadDetail()
 })
 
 watch(
@@ -3786,6 +3873,19 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.task-transport-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 10px 14px;
+  border-left: 3px solid #409eff;
+  background: #ecf5ff;
+  color: #334155;
+  font-size: 13px;
+}
+
 .edit-form-grid {
   display: grid;
   gap: 12px;

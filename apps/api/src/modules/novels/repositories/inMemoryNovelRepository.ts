@@ -263,6 +263,7 @@ function validLeasedSummaryCompare(value: unknown): value is ChapterSummaryCompa
 export function createInMemoryNovelRepository(options: {
   onLeasedFinalizeStage?: (stage: 'asset' | 'receipt' | 'task' | 'event' | 'operation_log') => void;
   onLeasedFailureStage?: (stage: 'event' | 'operation_log') => void;
+  enabledLeasedTaskTypes?: ReadonlySet<string>;
 } = {}): InMemoryNovelRepository {
   const novels: NovelRecord[] = [];
   const preferences: NovelPreferencesRecord[] = [];
@@ -1057,6 +1058,7 @@ export function createInMemoryNovelRepository(options: {
 
     async assertProviderActionSupported(_taskType: string) {},
     async getLeasedExecutionCapability(taskType: string) {
+      if (options.enabledLeasedTaskTypes?.has(taskType)) return 'enabled' as const;
       return isNovelProviderTaskType(taskType) ? 'disabled' as const : 'unsupported' as const;
     },
 

@@ -48,6 +48,10 @@ export function unwrapApiResponse<TData>(response: ApiResponse<TData>): TData {
 }
 
 export async function apiRequest<TData>(path: string, options: ApiRequestOptions = {}) {
+  return (await apiRequestWithStatus<TData>(path, options)).data
+}
+
+export async function apiRequestWithStatus<TData>(path: string, options: ApiRequestOptions = {}) {
   const { query, body, headers, ...requestOptions } = options
   const requestId = createRequestId()
   const response = await fetch(buildApiUrl(getApiBaseUrl(), path, query), {
@@ -65,7 +69,7 @@ export async function apiRequest<TData>(path: string, options: ApiRequestOptions
   const payload = await parseJsonResponse(response, requestId)
 
   try {
-    return unwrapApiResponse(payload as ApiResponse<TData>)
+    return { status: response.status, data: unwrapApiResponse(payload as ApiResponse<TData>) }
   } catch (error) {
     if (error instanceof ApiClientError) {
       throw error

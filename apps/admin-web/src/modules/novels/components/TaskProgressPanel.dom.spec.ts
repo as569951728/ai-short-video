@@ -61,4 +61,20 @@ describe('TaskProgressPanel DOM integration', () => {
 
     expect(wrapper.emitted('refresh')).toBeUndefined()
   })
+
+  it('does not describe a queued task as a model call or show fake progress', () => {
+    wrapper = mount(TaskProgressPanel, {
+      attachTo: document.body,
+      props: { summary: {
+        id: 'task-queued-001', taskType: 'novel_outline_generate',
+        status: TaskStatus.Queued, statusText: '等待执行', progress: 0,
+        currentStep: '任务已受理', resultVersionIds: [],
+      } },
+      global: { plugins: [ElementPlus] },
+    })
+
+    expect(wrapper.text()).toContain('任务已受理，尚未开始调用模型')
+    expect(wrapper.text()).not.toContain('正在调用模型生成内容')
+    expect(wrapper.text()).not.toContain('100%')
+  })
 })

@@ -12,6 +12,7 @@ import { MockStructureProvider } from './modules/novels/providers/mockStructureP
 import { MockTrialProvider } from './modules/novels/providers/mockTrialProvider.js';
 import { MockBodyProvider } from './modules/novels/providers/mockBodyProvider.js';
 import { MockFullReviewProvider } from './modules/novels/providers/mockFullReviewProvider.js';
+import { resolveAiProviderMode } from './modules/ai/modelRouting.js';
 
 if (
   isPlaceholderActorIdentifier(env.DEPLOYMENT_ACTOR_TENANT_ID)
@@ -23,10 +24,23 @@ const deploymentActor = Object.freeze({
   tenantId: env.DEPLOYMENT_ACTOR_TENANT_ID!,
   userId: env.DEPLOYMENT_ACTOR_USER_ID!
 });
-const novelRepository = env.DATABASE_URL ? new PrismaNovelRepository() : createInMemoryNovelRepository();
+const developmentAsyncEnabled = env.NOVEL_ASYNC_DISPATCH_DEV_ENABLED === 'true'
+  && env.NODE_ENV === 'development' && !env.DATABASE_URL && resolveAiProviderMode() === 'mock';
+const developmentLeasedTaskTypes = new Set([
+  'novel_direction_generate', 'novel_setting_generate', 'novel_outline_generate',
+  'stage_outline_generate', 'chapter_plan_generate'
+]);
+const novelRepository = env.DATABASE_URL ? new PrismaNovelRepository() : createInMemoryNovelRepository({
+  enabledLeasedTaskTypes: developmentAsyncEnabled ? developmentLeasedTaskTypes : undefined
+});
 const app = await buildApp({
   novelRepository,
-  requestContextResolver: async () => deploymentActor
+  requestContextResolver: async () => deploymentActor,
+  asyncTransportPolicy: {
+    novelAsyncDispatchEnabled: developmentAsyncEnabled,
+    scopeSecret: env.NOVEL_ASYNC_SCOPE_SECRET,
+    apiAudience: env.NOVEL_ASYNC_API_AUDIENCE
+  }
 });
 const recoveryLoop = createNovelRecoveryLoop({
   repository: novelRepository,

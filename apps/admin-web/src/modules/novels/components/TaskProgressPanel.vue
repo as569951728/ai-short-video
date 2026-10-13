@@ -23,11 +23,12 @@
           :status="progressStatus"
           :indeterminate="isProcessing"
           :duration="1.6"
-          :show-text="!isProcessing"
+          :show-text="!isRunning"
         />
-        <span v-if="isProcessing" class="task-progress-label">生成中</span>
+        <span v-if="isRunning" class="task-progress-label">{{ isQueued ? '等待执行' : '生成中' }}</span>
       </div>
-      <p v-if="isProcessing" class="task-progress-hint">阶段进度：正在调用模型或保存结果，当前不展示精确百分比。</p>
+      <p v-if="isQueued" class="task-progress-hint">任务已受理，尚未开始调用模型。</p>
+      <p v-else-if="isProcessing" class="task-progress-hint">阶段进度：正在调用模型或保存结果，当前不展示精确百分比。</p>
       <p class="task-progress-step">{{ displayTask?.currentStep || '等待任务状态更新' }}</p>
       <div v-if="displayTask" class="task-progress-meta">
         <span>状态 {{ displayTask.status }}</span>
@@ -118,10 +119,13 @@ const elapsedText = computed(() => {
 
   return formatDuration(Math.max(0, nowMs.value - startedMs))
 })
-const isProcessing = computed(() => displayTask.value?.status === TaskStatus.Queued || displayTask.value?.status === TaskStatus.Processing)
+const isQueued = computed(() => displayTask.value?.status === TaskStatus.Queued)
+const isProcessing = computed(() => displayTask.value?.status === TaskStatus.Processing)
+const isRunning = computed(() => isQueued.value || isProcessing.value)
 const progressPercentage = computed(() => {
   if (!displayTask.value) return 0
   if (isProcessing.value) return 100
+  if (isQueued.value) return 0
   return displayTask.value.progress ?? 0
 })
 const progressStatus = computed(() => {
