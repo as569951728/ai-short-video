@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import Fastify from 'fastify';
+import Fastify, { type FastifyRequest } from 'fastify';
 import { registerContractRoutes } from './routes/contractRoutes.js';
 import { registerHealthRoutes } from './routes/healthRoutes.js';
 import { registerNovelRoutes } from './modules/novels/routes/novelRoutes.js';
@@ -89,11 +89,22 @@ export async function buildApp(options: BuildAppOptions = {}) {
     env: options.aiProviderEnv,
     llmClient: options.llmClient
   });
+  const actorCache = new WeakMap<FastifyRequest, ReturnType<RequestContextResolver>>();
+  const trustedResolver = options.requestContextResolver
+    ? ((request: FastifyRequest) => {
+        let actor = actorCache.get(request);
+        if (!actor) {
+          actor = options.requestContextResolver!(request);
+          actorCache.set(request, actor);
+        }
+        return actor;
+      }) satisfies RequestContextResolver
+    : undefined;
   const capabilityPolicySnapshotResolver = createCapabilityPolicySnapshotResolver({
     policy: options.asyncTransportPolicy ?? { novelAsyncDispatchEnabled: false },
     runtimeEnvironment: env.NODE_ENV,
     providerMode: resolveAiProviderMode(options.aiProviderEnv),
-    requestContextResolver: options.requestContextResolver ?? undefined,
+    requestContextResolver: trustedResolver,
     now: options.now
   });
   await registerNovelRoutes(app, {
@@ -103,7 +114,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     fullReviewProvider: options.fullReviewProvider ?? novelProviders.fullReviewProvider,
     hotspotReferenceGateway: options.hotspotReferenceGateway,
     now: options.now,
-    requestContextResolver: options.requestContextResolver ?? undefined,
+    requestContextResolver: trustedResolver,
     capabilityPolicySnapshotResolver,
     acceptanceSeeds: {
       enabled: acceptanceSeedsEnabled
@@ -112,7 +123,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   await registerTaskRoutes(app, {
     repository: novelRepository,
     now: options.now,
-    requestContextResolver: options.requestContextResolver ?? undefined
+    requestContextResolver: trustedResolver
   });
   await registerVideoRoutes(app, {
     repository: videoRepository,

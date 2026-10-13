@@ -45,7 +45,9 @@ async function harness(providerFailure = false, providerGate?: Promise<void>,
     let clock = at(1);
     let providerCalls = 0;
     let authorityReadError = false;
+    let workerModelRoute = 'provider:MockDirectionProvider:v1';
     class CountingDirectionProvider extends MockDirectionProvider {
+      getModelRoutingVersion() { return workerModelRoute; }
       override async generateCandidates(input: Parameters<MockDirectionProvider['generateCandidates']>[0]) {
         providerCalls += 1;
         await providerGate;
@@ -71,7 +73,8 @@ async function harness(providerFailure = false, providerGate?: Promise<void>,
       signal: controller.signal, mutate: <T>(operation: () => Promise<T>) => operation() };
     return { repository, task, handlers, context, controller, get providerCalls() { return providerCalls; },
       setClock: (seconds: number) => { clock = at(seconds); },
-      failAuthorityRead: () => { authorityReadError = true; } };
+      failAuthorityRead: () => { authorityReadError = true; },
+      changeModelRouting: () => { workerModelRoute = 'deepseek:other-model:route-v1'; } };
   } finally {
     await app.close();
   }
@@ -115,6 +118,17 @@ describe('leased action executor', () => {
     assert.equal(h.task.providerCallBudgetUsed, 0);
     assert.equal(h.providerCalls, 0);
     assert.equal(h.task.status, TaskStatus.Processing);
+  });
+
+  it('fails a changed model route before reserving the paid call', async () => {
+    const h = await harness();
+    h.changeModelRouting();
+    const result = await h.handlers.execute(h.context);
+    assert.equal(result.kind, 'terminal');
+    assert.equal(h.task.status, TaskStatus.Failed);
+    assert.equal(h.task.errorCode, 'WORKER_PAYLOAD_UNSUPPORTED');
+    assert.equal(h.task.providerCallBudgetUsed, 0);
+    assert.equal(h.providerCalls, 0);
   });
 
   it('fences a returned result after lease expiry and recovery never calls the provider again', async () => {

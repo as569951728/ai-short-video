@@ -1,26 +1,10 @@
-import { createHmac } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { FastifyRequest } from 'fastify';
-import { isPlaceholderActorIdentifier } from '@ai-shortvideo/shared';
+import { ErrorCode, isPlaceholderActorIdentifier, type NovelAsyncTransportCapabilityV1 } from '@ai-shortvideo/shared';
+import { BusinessError } from '../../../shared/errors.js';
 import type { RequestContextResolver } from '../domain/novelDomain.js';
 
-export type NovelAsyncTransportCapabilityV1 =
-  | {
-      contractVersion: 'v1';
-      enabled: false;
-      reasonCode:
-        | 'POLICY_DISABLED'
-        | 'UNSUPPORTED_ENVIRONMENT'
-        | 'TRUSTED_CONTEXT_MISSING'
-        | 'SCOPE_SECRET_MISSING'
-        | 'API_AUDIENCE_MISSING';
-    }
-  | {
-      contractVersion: 'v1';
-      enabled: true;
-      capabilityRevision: string;
-      submissionScopeId: string;
-      expiresAt: string;
-    };
+export type { NovelAsyncTransportCapabilityV1 } from '@ai-shortvideo/shared';
 
 export interface AsyncTransportPolicy {
   novelAsyncDispatchEnabled: boolean;
@@ -32,6 +16,31 @@ export interface AsyncTransportPolicy {
 
 export type AsyncTransportPolicySource = AsyncTransportPolicy | (() => AsyncTransportPolicy);
 export type CapabilityPolicySnapshotResolver = (request: FastifyRequest) => Promise<NovelAsyncTransportCapabilityV1>;
+
+export interface ExpectedAsyncCapability {
+  expectedSubmissionScopeId?: unknown;
+  expectedCapabilityRevision?: unknown;
+  expectedCapabilityExpiresAt?: unknown;
+}
+
+export function assertAsyncCapabilitySubmission(
+  capability: NovelAsyncTransportCapabilityV1,
+  expected: ExpectedAsyncCapability,
+  authoritativeNow: Date
+): asserts capability is Extract<NovelAsyncTransportCapabilityV1, { enabled: true }> {
+  if (!capability.enabled || !Number.isFinite(authoritativeNow.getTime())) {
+    throw new BusinessError(ErrorCode.GateBlocked, '当前无法确认后台任务提交范围，请重新检查。');
+  }
+  const actualScope = decodeScope(capability.submissionScopeId);
+  const expectedScope = decodeScope(expected.expectedSubmissionScopeId);
+  if (!actualScope || !expectedScope || actualScope.length !== 32 || expectedScope.length !== 32
+    || !timingSafeEqual(actualScope, expectedScope)
+    || expected.expectedCapabilityRevision !== capability.capabilityRevision
+    || expected.expectedCapabilityExpiresAt !== capability.expiresAt
+    || authoritativeNow.getTime() >= Date.parse(capability.expiresAt)) {
+    throw new BusinessError(ErrorCode.GateBlocked, '任务提交凭据已变化或过期，请重新检查。');
+  }
+}
 
 interface CapabilityPolicySnapshotOptions {
   policy: AsyncTransportPolicySource;
@@ -106,6 +115,11 @@ function secretBytes(value: string | Uint8Array | undefined): Buffer | null {
   if (typeof value === 'string') return Buffer.from(value, 'utf8');
   if (value instanceof Uint8Array) return Buffer.from(value);
   return null;
+}
+
+function decodeScope(value: unknown): Buffer | null {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value)
+    ? Buffer.from(value, 'base64url') : null;
 }
 
 function hmacBase64Url(secret: Buffer, parts: readonly string[]): string {

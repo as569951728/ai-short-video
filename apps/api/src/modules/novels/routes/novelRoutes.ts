@@ -1,10 +1,10 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { ErrorCode, isPlaceholderActorIdentifier } from '@ai-shortvideo/shared';
+import { ErrorCode, TaskStatus, isPlaceholderActorIdentifier, type NovelProviderAction, type TaskDispatchResponseV1 } from '@ai-shortvideo/shared';
 import { BusinessError } from '../../../shared/errors.js';
 import { sendOk } from '../../../shared/reply.js';
 import { NovelService, type NovelServiceOptions } from '../services/novelService.js';
 import { resolveRequestIdempotencyKey } from '../services/taskClaim.js';
-import type { CapabilityPolicySnapshotResolver } from '../services/asyncTransportCapability.js';
+import { assertAsyncCapabilitySubmission, type CapabilityPolicySnapshotResolver } from '../services/asyncTransportCapability.js';
 import { isInMemoryNovelRepository } from '../repositories/inMemoryNovelRepository.js';
 import type {
   AdoptDirectionRequest,
@@ -34,7 +34,7 @@ import type {
   StartFullReviewRequest,
   UpdateChapterWordTargetsRequest
 } from '@ai-shortvideo/shared';
-import type { RequestContext, RequestContextResolver } from '../domain/novelDomain.js';
+import type { GenerationTaskRecord, RequestContext, RequestContextResolver } from '../domain/novelDomain.js';
 
 const querySchema = {
   type: 'object',
@@ -125,6 +125,19 @@ const fullReviewParamsSchema = {
 
 const idempotencyKeySchema = { type: 'string', minLength: 8, maxLength: 120, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{7,119}$' } as const;
 
+const UNMIGRATED_PROVIDER_ROUTES = new Set([
+  '/novels/:novelId/directions/fuse',
+  '/novels/:novelId/directions/:versionId/optimize',
+  '/novels/:novelId/trial/generate',
+  '/novels/:novelId/chapters/batch-generate',
+  '/novels/:novelId/chapters/:chapterId/generate',
+  '/novels/:novelId/chapters/:chapterId/overlength-revisions',
+  '/novels/:novelId/chapters/:chapterId/rewrite',
+  '/novels/:novelId/chapters/:chapterId/content-versions/:versionId/adopt',
+  '/novels/:novelId/chapters/:chapterId/impact-assessments',
+  '/novels/:novelId/full-review'
+]);
+
 interface AcceptanceSeedRouteAccess {
   enabled: boolean;
 }
@@ -145,6 +158,17 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
   ) {
     throw new Error('acceptance seeds require an explicit in-memory repository with no DATABASE_URL');
   }
+
+  app.addHook('preHandler', async (request) => {
+    if (request.method !== 'POST' || !UNMIGRATED_PROVIDER_ROUTES.has(request.routeOptions.url ?? '')) return;
+    const capability = await options.capabilityPolicySnapshotResolver?.(request);
+    if (capability?.enabled) {
+      throw new BusinessError(ErrorCode.ConfigMissing, '该生成动作尚未接入后台安全执行，任务未创建。');
+    }
+    if (capability && !['POLICY_DISABLED', 'UNSUPPORTED_ENVIRONMENT'].includes(capability.reasonCode)) {
+      throw new BusinessError(ErrorCode.GateBlocked, '暂时无法确认任务提交方式，请重新检查。');
+    }
+  });
 
   app.get(
     '/novels/async-transport-capability',
@@ -319,17 +343,37 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
           type: 'object',
           properties: {
             regenerateReason: { type: ['string', 'null'], maxLength: 500 },
-            idempotencyKey: idempotencyKeySchema
+            idempotencyKey: idempotencyKeySchema,
+            expectedSubmissionScopeId: { type: 'string', minLength: 43, maxLength: 43 },
+            expectedCapabilityRevision: { type: 'string', minLength: 43, maxLength: 43 },
+            expectedCapabilityExpiresAt: { type: 'string', format: 'date-time' }
           },
           additionalProperties: false
         },
         response: {
-          200: responseEnvelopeSchema
+          200: responseEnvelopeSchema,
+          202: responseEnvelopeSchema
         }
       }
     },
     async (request, reply) => {
       const { novelId } = request.params as { novelId: string };
+      const capability = options.capabilityPolicySnapshotResolver
+        ? await options.capabilityPolicySnapshotResolver(request)
+        : { contractVersion: 'v1' as const, enabled: false as const, reasonCode: 'POLICY_DISABLED' as const };
+      if (capability.enabled) {
+        const authoritativeNow = await options.repository.getAuthoritativeTaskTime();
+        assertAsyncCapabilitySubmission(capability, (request.body ?? {}) as Record<string, unknown>, authoritativeNow);
+        const queued = await novelService.queueDirections(novelId,
+          withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as GenerateDirectionsRequest),
+          await resolveProviderContext(options.requestContextResolver, request), authoritativeNow);
+        const dispatch = toTaskDispatchResponse('direction_generate', novelId, queued.task, queued.reused);
+        reply.status(dispatch.kind === 'accepted' ? 202 : 200);
+        return sendOk(request, reply, dispatch);
+      }
+      if (!['POLICY_DISABLED', 'UNSUPPORTED_ENVIRONMENT'].includes(capability.reasonCode)) {
+        throw new BusinessError(ErrorCode.GateBlocked, '暂时无法确认任务提交方式，请重新检查。');
+      }
       const data = await novelService.generateDirections(
         novelId,
         withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as GenerateDirectionsRequest),
@@ -498,6 +542,22 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
     createStructureGenerateRouteSchema(),
     async (request, reply) => {
       const { novelId } = request.params as { novelId: string };
+      const capability = options.capabilityPolicySnapshotResolver
+        ? await options.capabilityPolicySnapshotResolver(request)
+        : { contractVersion: 'v1' as const, enabled: false as const, reasonCode: 'POLICY_DISABLED' as const };
+      if (capability.enabled) {
+        const authoritativeNow = await options.repository.getAuthoritativeTaskTime();
+        assertAsyncCapabilitySubmission(capability, (request.body ?? {}) as Record<string, unknown>, authoritativeNow);
+        const queued = await novelService.queueSetting(novelId,
+          withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as GenerateStructureAssetRequest),
+          await resolveProviderContext(options.requestContextResolver, request), authoritativeNow);
+        const dispatch = toTaskDispatchResponse('setting_generate', novelId, queued.task, queued.reused);
+        reply.status(dispatch.kind === 'accepted' ? 202 : 200);
+        return sendOk(request, reply, dispatch);
+      }
+      if (!['POLICY_DISABLED', 'UNSUPPORTED_ENVIRONMENT'].includes(capability.reasonCode)) {
+        throw new BusinessError(ErrorCode.GateBlocked, '暂时无法确认任务提交方式，请重新检查。');
+      }
       const data = await novelService.generateSetting(
         novelId,
         withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as GenerateStructureAssetRequest),
@@ -546,6 +606,22 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
     createStructureGenerateRouteSchema(),
     async (request, reply) => {
       const { novelId } = request.params as { novelId: string };
+      const capability = options.capabilityPolicySnapshotResolver
+        ? await options.capabilityPolicySnapshotResolver(request)
+        : { contractVersion: 'v1' as const, enabled: false as const, reasonCode: 'POLICY_DISABLED' as const };
+      if (capability.enabled) {
+        const authoritativeNow = await options.repository.getAuthoritativeTaskTime();
+        assertAsyncCapabilitySubmission(capability, (request.body ?? {}) as Record<string, unknown>, authoritativeNow);
+        const queued = await novelService.queueOutline(novelId,
+          withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as GenerateStructureAssetRequest),
+          await resolveProviderContext(options.requestContextResolver, request), authoritativeNow);
+        const dispatch = toTaskDispatchResponse('outline_generate', novelId, queued.task, queued.reused);
+        reply.status(dispatch.kind === 'accepted' ? 202 : 200);
+        return sendOk(request, reply, dispatch);
+      }
+      if (!['POLICY_DISABLED', 'UNSUPPORTED_ENVIRONMENT'].includes(capability.reasonCode)) {
+        throw new BusinessError(ErrorCode.GateBlocked, '暂时无法确认任务提交方式，请重新检查。');
+      }
       const data = await novelService.generateOutline(
         novelId,
         withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as GenerateStructureAssetRequest),
@@ -594,6 +670,22 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
     createStructureGenerateRouteSchema(),
     async (request, reply) => {
       const { novelId } = request.params as { novelId: string };
+      const capability = options.capabilityPolicySnapshotResolver
+        ? await options.capabilityPolicySnapshotResolver(request)
+        : { contractVersion: 'v1' as const, enabled: false as const, reasonCode: 'POLICY_DISABLED' as const };
+      if (capability.enabled) {
+        const authoritativeNow = await options.repository.getAuthoritativeTaskTime();
+        assertAsyncCapabilitySubmission(capability, (request.body ?? {}) as Record<string, unknown>, authoritativeNow);
+        const queued = await novelService.queueStageOutline(novelId,
+          withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as GenerateStructureAssetRequest),
+          await resolveProviderContext(options.requestContextResolver, request), authoritativeNow);
+        const dispatch = toTaskDispatchResponse('stage_outline_generate', novelId, queued.task, queued.reused);
+        reply.status(dispatch.kind === 'accepted' ? 202 : 200);
+        return sendOk(request, reply, dispatch);
+      }
+      if (!['POLICY_DISABLED', 'UNSUPPORTED_ENVIRONMENT'].includes(capability.reasonCode)) {
+        throw new BusinessError(ErrorCode.GateBlocked, '暂时无法确认任务提交方式，请重新检查。');
+      }
       const data = await novelService.generateStageOutline(
         novelId,
         withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as GenerateStructureAssetRequest),
@@ -642,6 +734,22 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
     createStructureGenerateRouteSchema(),
     async (request, reply) => {
       const { novelId } = request.params as { novelId: string };
+      const capability = options.capabilityPolicySnapshotResolver
+        ? await options.capabilityPolicySnapshotResolver(request)
+        : { contractVersion: 'v1' as const, enabled: false as const, reasonCode: 'POLICY_DISABLED' as const };
+      if (capability.enabled) {
+        const authoritativeNow = await options.repository.getAuthoritativeTaskTime();
+        assertAsyncCapabilitySubmission(capability, (request.body ?? {}) as Record<string, unknown>, authoritativeNow);
+        const queued = await novelService.queueChapterPlan(novelId,
+          withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as GenerateStructureAssetRequest),
+          await resolveProviderContext(options.requestContextResolver, request), authoritativeNow);
+        const dispatch = toTaskDispatchResponse('chapter_plan_generate', novelId, queued.task, queued.reused);
+        reply.status(dispatch.kind === 'accepted' ? 202 : 200);
+        return sendOk(request, reply, dispatch);
+      }
+      if (!['POLICY_DISABLED', 'UNSUPPORTED_ENVIRONMENT'].includes(capability.reasonCode)) {
+        throw new BusinessError(ErrorCode.GateBlocked, '暂时无法确认任务提交方式，请重新检查。');
+      }
       const data = await novelService.generateChapterPlan(
         novelId,
         withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as GenerateStructureAssetRequest),
@@ -1379,12 +1487,16 @@ function createStructureGenerateRouteSchema() {
               }
             ]
           },
-          idempotencyKey: idempotencyKeySchema
+          idempotencyKey: idempotencyKeySchema,
+          expectedSubmissionScopeId: { type: 'string', minLength: 43, maxLength: 43 },
+          expectedCapabilityRevision: { type: 'string', minLength: 43, maxLength: 43 },
+          expectedCapabilityExpiresAt: { type: 'string', format: 'date-time' }
         },
         additionalProperties: false
       },
       response: {
-        200: responseEnvelopeSchema
+        200: responseEnvelopeSchema,
+        202: responseEnvelopeSchema
       }
     }
   } as const;
@@ -1748,6 +1860,23 @@ function createStructureEditRouteSchema() {
       }
     }
   } as const;
+}
+
+function toTaskDispatchResponse(
+  action: NovelProviderAction,
+  objectId: string,
+  task: GenerationTaskRecord,
+  reused: boolean
+): TaskDispatchResponseV1 {
+  const common = { taskId: task.id, action, objectId, pollUrl: `/tasks/${encodeURIComponent(task.id)}` };
+  if (task.status === TaskStatus.Queued || task.status === TaskStatus.Processing) {
+    return { ...common, kind: 'accepted', status: task.status, reused };
+  }
+  if (reused && (task.status === TaskStatus.WaitingConfirmation || task.status === TaskStatus.Completed
+    || task.status === TaskStatus.Failed || task.status === TaskStatus.Cancelled)) {
+    return { ...common, kind: 'existing', status: task.status, reused: true };
+  }
+  throw new Error('Queued task returned an unexpected status');
 }
 
 async function resolveProviderContext(

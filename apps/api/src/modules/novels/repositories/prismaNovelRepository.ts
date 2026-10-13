@@ -997,7 +997,8 @@ export class PrismaNovelRepository implements NovelRepository {
   async finalizeLeasedAction(input: LeasedCreativeFinalizeInput) {
     const observed = await this.prisma.generationTask.findFirst({ where: { tenantId: input.tenantId, id: input.taskId } });
     if (!observed) return { outcome: 'fenced' as const, task: null };
-    if (observed.taskType !== 'novel_direction_generate' && observed.taskType !== 'novel_setting_generate') {
+    if (!['novel_direction_generate', 'novel_setting_generate', 'novel_outline_generate',
+      'stage_outline_generate', 'chapter_plan_generate'].includes(observed.taskType)) {
       const task = mapGenerationTask(observed);
       if (!task.providerAttemptPhase) return { outcome: 'fenced' as const, task: null };
       return this.failLeasedAction({ ...input, expectedPhase: task.providerAttemptPhase, reason: 'worker_payload_unsupported' });
@@ -1072,30 +1073,41 @@ export class PrismaNovelRepository implements NovelRepository {
       if (!matchGenerationAuthority(authorityInput, envelope.sourceVersionRefs.authoritySnapshotHash, authority).ok) {
         return fail('source_stale');
       }
-      const isSetting = current.taskType === 'novel_setting_generate';
+      const structureType = current.taskType === 'novel_setting_generate' ? 'setting'
+        : current.taskType === 'novel_outline_generate' ? 'outline'
+          : current.taskType === 'stage_outline_generate' ? 'stage_outline'
+            : current.taskType === 'chapter_plan_generate' ? 'chapter_plan' : null;
       const drafts = input.validatedResult;
-      if (isSetting
-        ? !validPrismaLeasedSettingDraft(drafts)
+      const structureDraft = structureType && validPrismaLeasedStructureDraft(drafts, structureType) ? drafts : null;
+      const chapterLimit = authorityRecord(authorityRecord(authority?.facts).novel).chapterLimit;
+      if (structureType
+        ? !structureDraft
+          || (structureType === 'chapter_plan' && (!Number.isSafeInteger(chapterLimit) || Number(chapterLimit) < 1
+            || structureDraft.content.chapters.length !== chapterLimit
+            || structureDraft.content.chapters.some((chapter, index) => chapter.chapterNo !== index + 1)))
         : !Array.isArray(drafts) || drafts.length < 1 || drafts.length > 10
           || !drafts.every(validPrismaLeasedDirectionDraft)) return fail('worker_payload_unsupported');
       try {
-        assertNoSensitiveExecutionPayload(drafts, isSetting ? 'settingCandidate' : 'directionCandidates');
+        assertNoSensitiveExecutionPayload(drafts, structureType ? 'structureCandidate' : 'directionCandidates');
       } catch {
         return fail('worker_payload_unsupported');
       }
-      const candidates = isSetting ? [] : drafts as DirectionCandidateDraft[];
+      const candidates = structureType ? [] : drafts as DirectionCandidateDraft[];
       const sourceDirectionId = authorityRecord(envelope.sourceVersionRefs).currentDirectionVersionId ?? null;
       const sourceSettingId = authorityRecord(envelope.sourceVersionRefs).currentSettingVersionId ?? null;
-      const firstVersionNo = await getNextVersionNo(tx, input.tenantId, current.novelId!, isSetting ? 'setting' : 'direction');
+      const sourceOutlineId = authorityRecord(envelope.sourceVersionRefs).currentOutlineVersionId ?? null;
+      const sourceStageOutlineId = authorityRecord(envelope.sourceVersionRefs).currentStageOutlineVersionId ?? null;
+      const firstVersionNo = await getNextVersionNo(tx, input.tenantId, current.novelId!, structureType ?? 'direction');
       const versions = [];
-      if (isSetting) {
-        const candidate = drafts as StructureAssetDraft;
+      if (structureType) {
+        const candidate = structureDraft!;
         versions.push(await tx.creativeVersion.create({ data: {
-          tenantId: input.tenantId, novelId: current.novelId!, objectType: 'setting', objectId: 'setting',
+          tenantId: input.tenantId, novelId: current.novelId!, objectType: structureType, objectId: structureType,
           versionNo: firstVersionNo, status: PrismaVersionStatus.CANDIDATE, staleLevel: PrismaStaleLevel.NONE,
           sourceType: 'mock_ai', sourceTaskId: current.id,
           sourceVersionRefs: toJsonObject(envelope.sourceVersionRefs),
-          changeReason: '模型生成设定候选', contentJson: toJsonObject(candidate.content), summary: candidate.summary,
+          changeReason: `模型生成${getStructureObjectText(structureType)}候选`,
+          contentJson: toJsonObject(candidate.content), summary: candidate.summary,
           score: candidate.score, riskLevel: toPrismaRiskLevel(candidate.riskLevel),
           promptTemplateVersionId: current.promptTemplateVersionId,
           policyProfileVersionId: current.policyProfileVersionId, createdBy: current.createdBy,
@@ -1128,25 +1140,29 @@ export class PrismaNovelRepository implements NovelRepository {
         status: 'waiting_confirmation', outcome: 'candidate_created', resultObjectType: 'creative_version',
         resultObjectId: versions[0]!.id, resultVersionIds: versions.map((version) => version.id), resultCount: versions.length
       });
+      const resultLabel = structureType ? getStructureObjectText(structureType) : '方向';
       const transition = await tx.generationTask.updateMany({ where: fence, data: {
         status: PrismaTaskStatus.WAITING_CONFIRMATION,
-        statusNote: isSetting ? '设定候选已生成，等待用户确认。' : '方向候选已生成，等待用户确认。',
-        progress: 100, currentStep: isSetting ? getStructureGenerateStep('setting') : '方向候选已生成，等待选择',
+        statusNote: `${resultLabel}候选已生成，等待用户确认。`,
+        progress: 100, currentStep: structureType ? getStructureGenerateStep(structureType) : '方向候选已生成，等待选择',
         resultObjectType: receipt.receipt.resultObjectType,
         resultObjectId: receipt.receipt.resultObjectId, resultVersionId: versions[0]!.id,
         resultVersionIdsJson: receipt.receipt.resultVersionIds,
-        outputSummary: isSetting ? '设定候选已生成，等待用户采用。' : `${versions.length} 个方向候选已生成，等待用户采用。`,
+        outputSummary: structureType ? `${resultLabel}候选已生成，等待用户采用。`
+          : `${versions.length} 个方向候选已生成，等待用户采用。`,
         resultReceiptHash: receipt.hash, providerAttemptPhase: PrismaProviderAttemptPhase.FINALIZING,
         activeClaimKey: null, leaseOwnerId: null, leaseToken: null, leaseExpiresAt: null,
         finishedAt: input.authoritativeNow, updatedAt: input.authoritativeNow
       } });
       if (transition.count !== 1) throw new Error('Creative finalize lost its fenced task transition.');
-      if (isSetting || sourceDirectionId === null) {
+      if (structureType || sourceDirectionId === null) {
         const stageTransition = await tx.novel.updateMany({ where: {
           tenantId: input.tenantId, id: current.novelId!, deletedAt: null,
           lifecycleStatus: PrismaNovelLifecycleStatus.ACTIVE, currentDirectionVersionId: sourceDirectionId,
-          ...(isSetting ? { currentSettingVersionId: sourceSettingId } : {})
-        }, data: { creationStage: isSetting ? PrismaNovelCreationStage.SETTING : PrismaNovelCreationStage.DIRECTION,
+          ...(structureType ? { currentSettingVersionId: sourceSettingId,
+            currentOutlineVersionId: sourceOutlineId, currentStageOutlineVersionId: sourceStageOutlineId } : {})
+        }, data: { creationStage: structureType
+          ? toPrismaCreationStage(getGenerationStage(structureType)) : PrismaNovelCreationStage.DIRECTION,
           stageStatus: PrismaStageStatus.WAITING_USER, updatedBy: current.createdBy, updatedAt: input.authoritativeNow } });
         if (stageTransition.count !== 1) throw new Error('Creative finalize lost its novel stage transition.');
       }
@@ -1157,7 +1173,7 @@ export class PrismaNovelRepository implements NovelRepository {
         tenantId: input.tenantId, userId: current.createdBy, novelId: current.novelId,
         action: 'generation_task_finalized', objectType: 'generation_task', objectId: current.id,
         afterSnapshot: { resultVersionIds: receipt.receipt.resultVersionIds, receiptHash: receipt.hash },
-        reason: isSetting ? '设定候选生成完成' : '方向候选生成完成',
+        reason: `${resultLabel}候选生成完成`,
         sourceTaskId: current.id, requestId, createdAt: input.authoritativeNow
       } });
       return { outcome: 'applied' as const, task: mapGenerationTask(finalized) };
@@ -5589,10 +5605,10 @@ function validPrismaLeasedDirectionDraft(value: unknown): value is DirectionCand
     && strings(content.sellingPoints) && strings(content.riskTags) && text(content.recommendation);
 }
 
-function validPrismaLeasedSettingDraft(value: unknown): value is StructureAssetDraft {
+function validPrismaLeasedStructureDraft(value: unknown, objectType: StructureAssetDraft['objectType']): value is StructureAssetDraft {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const draft = value as Record<string, unknown>;
-  if (draft.objectType !== 'setting' || !draft.content || typeof draft.content !== 'object'
+  if (draft.objectType !== objectType || !draft.content || typeof draft.content !== 'object'
     || Array.isArray(draft.content)) return false;
   const content = draft.content as Record<string, unknown>;
   const text = (item: unknown, max = 10000) => typeof item === 'string' && item.trim().length > 0 && item.length <= max;
@@ -5614,12 +5630,14 @@ function validPrismaLeasedSettingDraft(value: unknown): value is StructureAssetD
       && fields(stage, ['stageIndex', 'title', 'chapterRange', 'goal', 'conflict', 'payoff'])
       && positiveInteger(stage.stageIndex) && text(stage.title, 200) && text(stage.chapterRange, 200)
       && text(stage.goal) && text(stage.conflict) && text(stage.payoff))
-    && Array.isArray(content.chapters) && content.chapters.length <= 100
+    && (objectType === 'setting' || content.stages.length > 0)
+    && Array.isArray(content.chapters) && content.chapters.length <= (objectType === 'chapter_plan' ? 1000 : 100)
     && content.chapters.every((chapter) => !!chapter && typeof chapter === 'object' && !Array.isArray(chapter)
       && fields(chapter, ['chapterNo', 'stageIndex', 'title', 'wordTarget', 'goal', 'conflict', 'hook'])
       && positiveInteger(chapter.chapterNo) && positiveInteger(chapter.stageIndex)
       && positiveInteger(chapter.wordTarget) && text(chapter.title, 200)
-      && text(chapter.goal) && text(chapter.conflict) && text(chapter.hook));
+      && text(chapter.goal) && text(chapter.conflict) && text(chapter.hook))
+    && (objectType !== 'chapter_plan' || content.chapters.length > 0);
 }
 
 function bodyBatchFromTaskMetadata(metadata: unknown, tenantId: string, novelId: string): BodyBatchRecord | null {

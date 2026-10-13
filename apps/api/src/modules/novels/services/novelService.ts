@@ -135,6 +135,7 @@ import { NovelStatusService } from './novelStatusService.js';
 import { toRecentTaskSummaryDTO } from '../../tasks/services/taskService.js';
 import {
   createActorScopedIdempotencyToken,
+  claimQueuedGeneration,
   executeClaimedGeneration as executeTaskClaimedGeneration,
   type ExecuteClaimedGenerationInput,
   type ExecuteClaimedGenerationResult,
@@ -417,6 +418,31 @@ export class NovelService {
     return this.toDirectionActionResult(result.novel, result.task, result.versions, null);
   }
 
+  async queueDirections(novelId: string, request: GenerateDirectionsRequest, context: RequestContext, authoritativeNow: Date) {
+    const novel = await this.findNovelOrThrow(context.tenantId, novelId);
+    const rawIdempotencyKey = request.idempotencyKey?.trim() ?? '';
+    const idempotencyToken = createActorScopedIdempotencyToken({
+      tenantId: context.tenantId, userId: context.userId, action: 'direction_generate',
+      objectId: novel.id, rawIdempotencyKey
+    });
+    const existingTask = await this.options.repository.findTaskByIdempotencyToken(
+      context.tenantId, 'novel_direction_generate', idempotencyToken
+    );
+    if (!existingTask) {
+      this.ensureLifecycleActive(novel);
+      this.ensureDirectionGenerationStage(novel);
+    }
+    return claimQueuedGeneration({
+      action: 'direction_generate', repository: this.options.repository, novel,
+      idempotencyKey: rawIdempotencyKey,
+      effectiveRequest: { regenerateReason: request.regenerateReason?.trim() || null },
+      sourceVersionRefs: existingTask?.sourceVersionRefs ?? { currentDirectionVersionId: novel.currentDirectionVersionId },
+      context, now: () => authoritativeNow,
+      durationDeadlineAt: new Date(authoritativeNow.getTime() + 15 * 60_000),
+      providerCapability: this.directionProvider
+    });
+  }
+
   async fuseDirections(novelId: string, request: FuseDirectionsRequest, context: RequestContext): Promise<DirectionActionResultDTO> {
     const novel = await this.findNovelOrThrow(context.tenantId, novelId);
     this.ensureLifecycleActive(novel);
@@ -622,12 +648,20 @@ export class NovelService {
     return this.generateStructureAsset(novelId, 'setting', request, context);
   }
 
+  async queueSetting(novelId: string, request: GenerateStructureAssetRequest, context: RequestContext, authoritativeNow: Date) {
+    return this.queueStructureAsset(novelId, 'setting', request, context, authoritativeNow);
+  }
+
   async adoptSetting(novelId: string, versionId: string, request: AdoptStructureAssetRequest, context: RequestContext) {
     return this.adoptStructureAsset(novelId, 'setting', versionId, request, context);
   }
 
   async generateOutline(novelId: string, request: GenerateStructureAssetRequest, context: RequestContext) {
     return this.generateStructureAsset(novelId, 'outline', request, context);
+  }
+
+  async queueOutline(novelId: string, request: GenerateStructureAssetRequest, context: RequestContext, authoritativeNow: Date) {
+    return this.queueStructureAsset(novelId, 'outline', request, context, authoritativeNow);
   }
 
   async adoptOutline(novelId: string, versionId: string, request: AdoptStructureAssetRequest, context: RequestContext) {
@@ -638,12 +672,20 @@ export class NovelService {
     return this.generateStructureAsset(novelId, 'stage_outline', request, context);
   }
 
+  async queueStageOutline(novelId: string, request: GenerateStructureAssetRequest, context: RequestContext, authoritativeNow: Date) {
+    return this.queueStructureAsset(novelId, 'stage_outline', request, context, authoritativeNow);
+  }
+
   async adoptStageOutline(novelId: string, versionId: string, request: AdoptStructureAssetRequest, context: RequestContext) {
     return this.adoptStructureAsset(novelId, 'stage_outline', versionId, request, context);
   }
 
   async generateChapterPlan(novelId: string, request: GenerateStructureAssetRequest, context: RequestContext) {
     return this.generateStructureAsset(novelId, 'chapter_plan', request, context);
+  }
+
+  async queueChapterPlan(novelId: string, request: GenerateStructureAssetRequest, context: RequestContext, authoritativeNow: Date) {
+    return this.queueStructureAsset(novelId, 'chapter_plan', request, context, authoritativeNow);
   }
 
   async editStructureAsset(
@@ -2375,6 +2417,50 @@ export class NovelService {
     const result = execution.value;
 
     return this.toStructureActionResult(result.novel, result.task, versions, result.version, chapters, directionVersions);
+  }
+
+  private async queueStructureAsset(
+    novelId: string,
+    objectType: StructureAssetType,
+    request: GenerateStructureAssetRequest,
+    context: RequestContext,
+    authoritativeNow: Date
+  ) {
+    const novel = await this.findNovelOrThrow(context.tenantId, novelId);
+    const action = getStructureGenerateAction(objectType);
+    const rawIdempotencyKey = request.idempotencyKey?.trim() ?? '';
+    const idempotencyToken = createActorScopedIdempotencyToken({
+      tenantId: context.tenantId, userId: context.userId, action,
+      objectId: novel.id, rawIdempotencyKey
+    });
+    const existingTask = await this.options.repository.findTaskByIdempotencyToken(
+      context.tenantId, getStructureTaskType(objectType), idempotencyToken
+    );
+    const optimization = normalizeStructureOptimizationRequest(request.optimization);
+    if (!existingTask) {
+      this.ensureLifecycleActive(novel);
+      await this.ensureStructureGenerationGate(novel, objectType);
+      if (optimization) {
+        const source = await this.options.repository.findStructureVersionById(
+          context.tenantId, novelId, objectType, optimization.sourceVersionId
+        );
+        if (!source || ![VersionStatus.Candidate, VersionStatus.Current].includes(source.status)) {
+          throw new BusinessError(ErrorCode.VersionConflict, '待优化的结构候选不存在或已不可用，请刷新后重试。');
+        }
+        if (source.staleLevel === StaleLevel.HardStale) {
+          throw new BusinessError(ErrorCode.CandidateStale, '待优化的结构候选已过期，请刷新后重新选择。');
+        }
+      }
+    }
+    return claimQueuedGeneration({
+      action, repository: this.options.repository, novel, idempotencyKey: rawIdempotencyKey,
+      effectiveRequest: { objectType, regenerateReason: request.regenerateReason?.trim() || null, optimization },
+      sourceVersionRefs: existingTask?.sourceVersionRefs
+        ?? createStructureSourceRefs(novel, objectType, optimization ? [optimization.sourceVersionId] : []),
+      context, now: () => authoritativeNow,
+      durationDeadlineAt: new Date(authoritativeNow.getTime() + 15 * 60_000),
+      providerCapability: this.structureProvider
+    });
   }
 
   private async adoptStructureAsset(

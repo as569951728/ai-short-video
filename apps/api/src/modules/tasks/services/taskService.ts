@@ -137,7 +137,7 @@ export class TaskService {
   private async findTaskOrThrow(taskId: string, context: RequestContext) {
     const task = await this.options.repository.findTaskById(context.tenantId, taskId);
 
-    if (!task) {
+    if (!task || task.createdBy !== context.userId) {
       throw new BusinessError(ErrorCode.NotFound, '任务不存在');
     }
 

@@ -10,6 +10,51 @@ export const NOVEL_PROVIDER_ACTIONS = [
 
 export type NovelProviderAction = (typeof NOVEL_PROVIDER_ACTIONS)[number];
 
+export type TaskDispatchResponseV1 =
+  | {
+      kind: 'accepted';
+      taskId: string;
+      action: NovelProviderAction;
+      objectId: string;
+      status: 'queued' | 'processing';
+      reused: boolean;
+      pollUrl: string;
+    }
+  | {
+      kind: 'existing';
+      taskId: string;
+      action: NovelProviderAction;
+      objectId: string;
+      status: 'waiting_confirmation' | 'completed' | 'failed' | 'cancelled';
+      reused: true;
+      pollUrl: string;
+    };
+
+export interface TaskDispatchConflictDetailsV1 {
+  existingTaskId?: string;
+  action: NovelProviderAction;
+  objectId: string;
+}
+
+export type NovelAsyncTransportCapabilityV1 =
+  | {
+      contractVersion: 'v1';
+      enabled: false;
+      reasonCode:
+        | 'TRUSTED_CONTEXT_MISSING'
+        | 'SCOPE_SECRET_MISSING'
+        | 'API_AUDIENCE_MISSING'
+        | 'POLICY_DISABLED'
+        | 'UNSUPPORTED_ENVIRONMENT';
+    }
+  | {
+      contractVersion: 'v1';
+      enabled: true;
+      capabilityRevision: string;
+      submissionScopeId: string;
+      expiresAt: string;
+    };
+
 interface ExecutionEnvelopeBaseV1<A extends NovelProviderAction, O extends string, R, S> {
   schemaVersion: 1;
   action: A;

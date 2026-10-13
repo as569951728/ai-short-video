@@ -6,6 +6,7 @@ import { buildApp } from '../../src/app.js';
 import { createInMemoryNovelRepository } from '../../src/modules/novels/repositories/inMemoryNovelRepository.js';
 import { createInMemoryVideoRepository } from '../../src/modules/videos/repositories/inMemoryVideoRepository.js';
 import {
+  assertAsyncCapabilitySubmission,
   createCapabilityPolicySnapshotResolver,
   type AsyncTransportPolicy,
   type NovelAsyncTransportCapabilityV1
@@ -28,6 +29,29 @@ function expectEnabled(value: NovelAsyncTransportCapabilityV1) {
 }
 
 describe('novel async transport capability', () => {
+  it('requires the exact scope, revision and live database deadline at submission', async () => {
+    const capability = expectEnabled(await createCapabilityPolicySnapshotResolver({
+      policy: enabledPolicy(), runtimeEnvironment: 'development', providerMode: 'mock',
+      requestContextResolver: async () => ({ tenantId: 'tenant-a', userId: 'user-a' }),
+      now: () => new Date('2030-01-01T00:00:00.000Z')
+    })(request));
+    const expected = {
+      expectedSubmissionScopeId: capability.submissionScopeId,
+      expectedCapabilityRevision: capability.capabilityRevision,
+      expectedCapabilityExpiresAt: capability.expiresAt
+    };
+    assert.doesNotThrow(() => assertAsyncCapabilitySubmission(capability, expected, new Date('2030-01-01T00:00:10.000Z')));
+    for (const mismatch of [
+      { expectedSubmissionScopeId: 'a'.repeat(43) },
+      { expectedCapabilityRevision: 'old-revision' },
+      { expectedCapabilityExpiresAt: '2030-01-01T00:02:00.000Z' },
+      { expectedSubmissionScopeId: undefined }
+    ]) {
+      assert.throws(() => assertAsyncCapabilitySubmission(capability, { ...expected, ...mismatch },
+        new Date('2030-01-01T00:00:10.000Z')));
+    }
+    assert.throws(() => assertAsyncCapabilitySubmission(capability, expected, new Date(capability.expiresAt)));
+  });
   it('is a read-only default-off endpoint and ignores client-declared identity', async () => {
     let resolverCalls = 0;
     const repository = createInMemoryNovelRepository();

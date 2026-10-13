@@ -5,6 +5,7 @@ import { hashCanonicalJson, WorkerPayloadUnsupportedError } from '../domain/exec
 import type { NovelRepository } from '../domain/novelDomain.js';
 import {
   executeNovelProviderAction,
+  getActionExecutionPlan,
   validateNovelProviderActionInput,
   type NovelProviderActionResult,
   type NovelProviderSet
@@ -45,6 +46,9 @@ export function createLeasedActionExecutor(
           providerInput = validateNovelProviderActionInput(reconstructed.providerInput);
           if (hashCanonicalJson(providerInput) !== hashCanonicalJson(reconstructed.providerInput)) {
             throw new Error('Provider input changed during validation');
+          }
+          if (preflight.task.modelRoutingVersion !== configuredRoutingVersion(providerInput.action, providers)) {
+            throw new Error('Task model routing no longer matches the worker');
           }
         } catch {
           throw new WorkerPayloadUnsupportedError('Provider input is invalid');
@@ -118,6 +122,16 @@ export function createLeasedActionExecutor(
         });
     }
   };
+}
+
+function configuredRoutingVersion(action: Parameters<typeof getActionExecutionPlan>[0], providers: NovelProviderSet): string {
+  const kind = getActionExecutionPlan(action).providerKind;
+  const provider = kind === 'direction' ? providers.directionProvider
+    : kind === 'structure' ? providers.structureProvider
+      : kind === 'trial' ? providers.trialProvider
+        : kind === 'body' ? providers.bodyProvider : providers.fullReviewProvider;
+  const capability = provider as typeof provider & { getModelRoutingVersion?: (action: string) => string };
+  return capability.getModelRoutingVersion?.(action) ?? `provider:${provider.constructor.name}:v1`;
 }
 
 function isSourceStale(error: unknown): boolean {
