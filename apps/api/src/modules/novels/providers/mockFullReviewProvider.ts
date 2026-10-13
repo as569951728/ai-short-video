@@ -9,6 +9,8 @@ export interface FullReviewProvider {
 }
 
 export class MockFullReviewProvider implements FullReviewProvider {
+  getLeasedPaidCallBudget(): 1 { return 1; }
+
   async generateFullReview(input: FullReviewProviderInput): Promise<FullReviewDraft> {
     const lowScore = input.novel.title.includes('低分全书审稿');
     const videoReadinessFail = input.novel.title.includes('视频化检查失败');

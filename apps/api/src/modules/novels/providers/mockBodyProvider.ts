@@ -27,6 +27,8 @@ export interface BodyProvider {
 const BODY_SCORE_VERSION = 'body-chapter-score-v1';
 
 export class MockBodyProvider implements BodyProvider {
+  getLeasedPaidCallBudget(): 1 { return 1; }
+
   async reviseOverlengthChapter(input: OverlengthRevisionInput): Promise<string> {
     const upperBound = Math.floor((input.chapter.wordTarget ?? 0) * 1.15);
     const original = input.original.content;

@@ -13,6 +13,8 @@ export interface DirectionProvider {
 }
 
 export class MockDirectionProvider implements DirectionProvider {
+  getLeasedPaidCallBudget(): 1 | null { return 1; }
+
   async generateCandidates(input: DirectionGenerateInput) {
     const genre = input.novel.genres[0] ?? '都市逆袭';
     const appeal = input.preferences.appealPoints[0] ?? '低谷翻盘';

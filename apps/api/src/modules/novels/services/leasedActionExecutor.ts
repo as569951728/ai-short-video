@@ -50,6 +50,7 @@ export function createLeasedActionExecutor(
           if (preflight.task.modelRoutingVersion !== configuredRoutingVersion(providerInput.action, providers)) {
             throw new Error('Task model routing no longer matches the worker');
           }
+          assertLeasedPaidCallBudget(providerInput.action, providers);
         } catch {
           throw new WorkerPayloadUnsupportedError('Provider input is invalid');
         }
@@ -125,13 +126,24 @@ export function createLeasedActionExecutor(
 }
 
 function configuredRoutingVersion(action: Parameters<typeof getActionExecutionPlan>[0], providers: NovelProviderSet): string {
+  const provider = providerForAction(action, providers);
+  const capability = provider as typeof provider & { getModelRoutingVersion?: (action: string) => string };
+  return capability.getModelRoutingVersion?.(action) ?? `provider:${provider.constructor.name}:v1`;
+}
+
+function assertLeasedPaidCallBudget(action: Parameters<typeof getActionExecutionPlan>[0], providers: NovelProviderSet): void {
+  const provider = providerForAction(action, providers) as { getLeasedPaidCallBudget?: (action: string) => 1 | null };
+  if (provider.getLeasedPaidCallBudget?.(action) !== 1) {
+    throw new WorkerPayloadUnsupportedError('Provider cannot guarantee one paid call for this leased action');
+  }
+}
+
+function providerForAction(action: Parameters<typeof getActionExecutionPlan>[0], providers: NovelProviderSet) {
   const kind = getActionExecutionPlan(action).providerKind;
-  const provider = kind === 'direction' ? providers.directionProvider
+  return kind === 'direction' ? providers.directionProvider
     : kind === 'structure' ? providers.structureProvider
       : kind === 'trial' ? providers.trialProvider
         : kind === 'body' ? providers.bodyProvider : providers.fullReviewProvider;
-  const capability = provider as typeof provider & { getModelRoutingVersion?: (action: string) => string };
-  return capability.getModelRoutingVersion?.(action) ?? `provider:${provider.constructor.name}:v1`;
 }
 
 function isSourceStale(error: unknown): boolean {

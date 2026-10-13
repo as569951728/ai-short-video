@@ -9,6 +9,8 @@ export interface StructureProvider {
 }
 
 export class MockStructureProvider implements StructureProvider {
+  getLeasedPaidCallBudget(): 1 { return 1; }
+
   async generateAsset(input: StructureProviderInput) {
     const asset = input.objectType === 'setting' ? createSettingAsset(input.novel, input.preferences)
       : input.objectType === 'outline' ? createOutlineAsset(input.novel, input.preferences)

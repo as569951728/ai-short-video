@@ -31,6 +31,8 @@ const OPENING_SCORE_VERSION = 'trial-opening-score-v1';
 const CHAPTER_SCORE_VERSION = 'trial-chapter-score-v1';
 
 export class MockTrialProvider implements TrialProvider {
+  getLeasedPaidCallBudget(): 1 { return 1; }
+
   async generateChapterOneCandidates(input: TrialChapterOneInput) {
     const chapter = input.chapters[0];
     const requestedCount = Math.max(2, Math.min(5, input.chapterCount || 3));

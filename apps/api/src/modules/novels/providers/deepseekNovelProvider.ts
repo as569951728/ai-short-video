@@ -55,6 +55,7 @@ interface DeepSeekNovelProviderOptions {
   structureModel?: string;
   reasonerModel?: string;
   experimentalOverlongRevision?: boolean;
+  singlePaidCallMode?: boolean;
 }
 
 const SINGLE_PAID_CALL_JSON_POLICY = {
@@ -101,10 +102,19 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
     return `deepseek:${model}:${routeVersion}`;
   }
 
+  getLeasedPaidCallBudget(action: string): 1 | null {
+    return this.options.singlePaidCallMode && action !== 'chapter_plan_generate' ? 1 : null;
+  }
+
+  private get singleCallJsonPolicy() {
+    return this.options.singlePaidCallMode ? SINGLE_PAID_CALL_JSON_POLICY : {};
+  }
+
   async generateCandidates(input: DirectionGenerateInput): Promise<DirectionCandidateDraft[]> {
     return requestJsonOutput(this.options.client, {
       taskName: 'novel_direction_generate',
       model: this.model,
+      ...this.singleCallJsonPolicy,
       messages: createMessages('生成 3-4 个小说方向候选，只返回 JSON。', input.novel, input.preferences, M1_OUTPUT_SCHEMA_HINT.direction),
       validate: (value) => readArray(value, 'candidates').map(toDirectionDraft)
     });
@@ -114,6 +124,7 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
     return requestJsonOutput(this.options.client, {
       taskName: 'novel_direction_fuse',
       model: this.model,
+      ...this.singleCallJsonPolicy,
       messages: createMessages('融合多个方向候选，只返回 JSON。', null, {
         sources: input.sources,
         reason: input.reason
@@ -126,6 +137,7 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
     return requestJsonOutput(this.options.client, {
       taskName: 'novel_direction_optimize',
       model: this.model,
+      ...this.singleCallJsonPolicy,
       messages: createMessages('优化一个方向候选，只返回 JSON。', null, {
         source: input.source,
         instruction: input.instruction
@@ -142,6 +154,7 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
     return requestJsonOutput(this.options.client, {
       taskName: `novel_structure_${input.objectType}`,
       model: this.getStructureTaskModel(input.objectType),
+      ...this.singleCallJsonPolicy,
       messages: createMessages(getStructureInstruction(input.objectType), input.novel, {
         preferences: input.preferences,
         currentAssets: structurePromptAssets(input),
@@ -153,6 +166,9 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
   }
 
   private async generateChapterPlanAsset(input: StructureProviderInput): Promise<StructureAssetDraft> {
+    if (this.options.singlePaidCallMode) {
+      throw new LlmProviderError('configuration_error', '章节目录需要分段调用，不能按单次付费任务执行。');
+    }
     const currentAssets = structurePromptAssets(input);
     const chapterCount = Math.max(1, Math.min(input.novel.chapterLimit, 1000));
     const batchSize = 10;
@@ -276,7 +292,7 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
       validate: (value) => toBodyDraft(value, input.novel, input.chapter)
     });
     const originalLength = evaluateChapterLength(original.content, input.chapter.wordTarget);
-    if (originalLength.status !== 'too_long' || !this.options.experimentalOverlongRevision) return original;
+    if (originalLength.status !== 'too_long' || !this.options.experimentalOverlongRevision || this.options.singlePaidCallMode) return original;
     try {
       const content = await this.shortenOverlongContent({
         novel: input.novel, chapter: input.chapter, content: original.content,
@@ -386,6 +402,7 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
     return requestJsonOutput(this.options.client, {
       taskName: 'novel_impact_assess',
       model: this.reasonerModel,
+      ...this.singleCallJsonPolicy,
       messages: createMessages('评估章节改写对后续内容的影响，只返回 JSON。', input.novel, {
         chapter: pickChapter(input.chapter),
         oldSummary: input.oldContent?.summary,
@@ -409,6 +426,7 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
       messages: createFullReviewMessages(input.novel, evidencePayload, expectedReviewPolicyVersionId),
       maxTokens: FULL_REVIEW_MAX_OUTPUT_TOKENS,
       outputRepairRetries: 0,
+      ...(this.options.singlePaidCallMode ? { transportRetries: 0 } : {}),
       validate: (value) => toFullReviewDraft(
         value,
         chapterIdByNo,

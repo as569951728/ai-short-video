@@ -27,6 +27,40 @@ describe('DeepSeek novel provider', () => {
     assert.equal(experimental.getModelRoutingVersion('chapter_body_generate'), 'deepseek:deepseek-general-test:route-v5');
   });
 
+  it('limits leased DeepSeek actions to one external request without changing synchronous JSON repair', async () => {
+    const strictRequests: ChatCompletionRequest[] = [];
+    const strict = new DeepSeekNovelProvider({
+      singlePaidCallMode: true,
+      client: { async chat(request) {
+        strictRequests.push(request);
+        return { content: '不是 JSON', model: request.model };
+      } }
+    });
+    assert.equal(strict.getLeasedPaidCallBudget('direction_generate'), 1);
+    assert.equal(strict.getLeasedPaidCallBudget('chapter_plan_generate'), null);
+    await assert.rejects(() => strict.generateCandidates({ novel: createNovel(), preferences: [] }),
+      (error) => error instanceof LlmProviderError && error.category === 'output_parse_failed');
+    await assert.rejects(() => strict.generateAsset({ objectType: 'setting', novel: createNovel(), preferences: [], currentAssets: {} }),
+      (error) => error instanceof LlmProviderError && error.category === 'output_parse_failed');
+    assert.equal(strictRequests.length, 2);
+    assert.deepEqual(strictRequests.map((request) => request.maxRetries), [0, 0]);
+    await assert.rejects(() => strict.generateAsset({ objectType: 'chapter_plan', novel: createNovel(), preferences: [], currentAssets: {} }),
+      (error) => error instanceof LlmProviderError && error.category === 'configuration_error');
+    assert.equal(strictRequests.length, 2);
+
+    const synchronousRequests: ChatCompletionRequest[] = [];
+    const synchronous = new DeepSeekNovelProvider({
+      client: { async chat(request) {
+        synchronousRequests.push(request);
+        return { content: '不是 JSON', model: request.model };
+      } }
+    });
+    assert.equal(synchronous.getLeasedPaidCallBudget('direction_generate'), null);
+    await assert.rejects(() => synchronous.generateCandidates({ novel: createNovel(), preferences: [] }),
+      (error) => error instanceof LlmProviderError && error.category === 'output_parse_failed');
+    assert.equal(synchronousRequests.length, 2);
+  });
+
   it('maps fake DeepSeek JSON into direction, structure, trial, body, impact, and full-review drafts', async () => {
     const provider = new DeepSeekNovelProvider({
       client: createQueueClient([
@@ -964,6 +998,25 @@ describe('DeepSeek novel provider', () => {
 
     assert.equal(requests.length, 1);
     assert.equal(evaluateChapterLength(draft.content, 100).status, 'too_long');
+  });
+
+  it('does not make a second paid revision call in leased single-call mode', async () => {
+    const requests: ChatCompletionRequest[] = [];
+    const { original } = createOverlongDeletionFixture(1000);
+    const provider = new DeepSeekNovelProvider({
+      singlePaidCallMode: true,
+      experimentalOverlongRevision: true,
+      client: { async chat(request) {
+        requests.push(request);
+        return { content: JSON.stringify({ content: original }), model: request.model };
+      } }
+    });
+
+    const draft = await provider.generateBodyChapter(bodyInputForLengthTest(1000));
+
+    assert.equal(draft.content, original);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].maxRetries, 0);
   });
 
   it('makes one explicit deletion-only revision call without enabling automatic revision', async () => {

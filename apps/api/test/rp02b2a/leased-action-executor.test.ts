@@ -14,7 +14,7 @@ import { createLeasedActionExecutor } from '../../src/modules/novels/services/le
 const at = (seconds: number) => new Date(Date.UTC(2030, 0, 1, 0, 0, seconds));
 
 async function harness(providerFailure = false, providerGate?: Promise<void>,
-  onFailureStage?: (stage: 'event' | 'operation_log') => void) {
+  onFailureStage?: (stage: 'event' | 'operation_log') => void, paidCallBudget: 1 | null | 'missing' = 1) {
   const repository = createInMemoryNovelRepository({ onLeasedFailureStage: onFailureStage });
   const app = await buildApp({ logger: false, novelRepository: repository,
     requestContextResolver: async () => ({ tenantId: 'tenant_executor', userId: 'user_executor' }) });
@@ -48,6 +48,7 @@ async function harness(providerFailure = false, providerGate?: Promise<void>,
     let workerModelRoute = 'provider:MockDirectionProvider:v1';
     class CountingDirectionProvider extends MockDirectionProvider {
       getModelRoutingVersion() { return workerModelRoute; }
+      override getLeasedPaidCallBudget(): 1 | null { return paidCallBudget === 'missing' ? 1 : paidCallBudget; }
       override async generateCandidates(input: Parameters<MockDirectionProvider['generateCandidates']>[0]) {
         providerCalls += 1;
         await providerGate;
@@ -64,8 +65,10 @@ async function harness(providerFailure = false, providerGate?: Promise<void>,
         return repository.loadGenerationAuthority(input);
       }
     };
+    const directionProvider = new CountingDirectionProvider();
+    if (paidCallBudget === 'missing') Object.defineProperty(directionProvider, 'getLeasedPaidCallBudget', { value: undefined });
     const handlers = createLeasedActionExecutor({ repository: enabledRepository, newProviderAttemptId: () => 'attempt-executor',
-      providers: { directionProvider: new CountingDirectionProvider(), structureProvider: new MockStructureProvider(),
+      providers: { directionProvider, structureProvider: new MockStructureProvider(),
         trialProvider: new MockTrialProvider(), bodyProvider: new MockBodyProvider(),
         fullReviewProvider: new MockFullReviewProvider() } });
     const controller = new AbortController();
@@ -126,6 +129,26 @@ describe('leased action executor', () => {
     const result = await h.handlers.execute(h.context);
     assert.equal(result.kind, 'terminal');
     assert.equal(h.task.status, TaskStatus.Failed);
+    assert.equal(h.task.errorCode, 'WORKER_PAYLOAD_UNSUPPORTED');
+    assert.equal(h.task.providerCallBudgetUsed, 0);
+    assert.equal(h.providerCalls, 0);
+  });
+
+  it('rejects a provider that cannot guarantee one paid call before dispatch', async () => {
+    const h = await harness(false, undefined, undefined, null);
+    const result = await h.handlers.execute(h.context);
+    assert.equal(result.kind, 'terminal');
+    assert.equal(h.task.status, TaskStatus.Failed);
+    assert.equal(h.task.errorCode, 'WORKER_PAYLOAD_UNSUPPORTED');
+    assert.equal(h.task.providerCallBudgetUsed, 0);
+    assert.equal(h.task.providerAttemptId, null);
+    assert.equal(h.providerCalls, 0);
+  });
+
+  it('fails closed when a provider omits its leased paid-call capability', async () => {
+    const h = await harness(false, undefined, undefined, 'missing');
+    const result = await h.handlers.execute(h.context);
+    assert.equal(result.kind, 'terminal');
     assert.equal(h.task.errorCode, 'WORKER_PAYLOAD_UNSUPPORTED');
     assert.equal(h.task.providerCallBudgetUsed, 0);
     assert.equal(h.providerCalls, 0);
