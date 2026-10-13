@@ -16,6 +16,7 @@ import {
 import { evaluateChapterLength } from '../domain/chapterLengthPolicy.js';
 import {
   DEFAULT_POLICY_PROFILE_VERSION_ID,
+  leasedActionFailure,
   type AdoptedDirectionRecord,
   type AdoptedStructureAssetRecord,
   type AssetDecisionRecord,
@@ -71,6 +72,7 @@ import {
   type HashedSafeResultReceipt,
   type LeasedTaskFailure,
   type LeasedTaskCheckpointInput,
+  type LeasedActionFailureInput,
   type ObservedTaskLease,
   type ChapterContentVersionRecord,
   type ChapterFeatureCardRecord,
@@ -761,6 +763,24 @@ export function createInMemoryNovelRepository(): InMemoryNovelRepository {
         task.providerAttemptPhase = 'provider_result_validated';
       }
       task.updatedAt = input.authoritativeNow;
+      return { outcome: 'applied' as const, task };
+    },
+
+    async failLeasedAction(input: LeasedActionFailureInput) {
+      const task = validLease(input.tenantId, input.taskId, input.leaseOwnerId, input.leaseToken, input.authoritativeNow);
+      if (!task || task.providerAttemptPhase !== input.expectedPhase ||
+        (input.reason === 'retry_not_available' && task.retryOfTaskId === null)) {
+        return { outcome: 'fenced' as const, task: null };
+      }
+      const failure = leasedActionFailure(input.reason);
+      applyLeaseFailure(task, failure, input.authoritativeNow);
+      operationLogs.unshift({
+        id: nextId('oplog'), tenantId: task.tenantId, userId: task.createdBy,
+        novelId: task.novelId, action: 'generation_task_failed', objectType: 'generation_task', objectId: task.id,
+        beforeSnapshot: null, afterSnapshot: { failureCategory: failure.failureCategory, errorCode: failure.errorCode },
+        reason: failure.statusNote, impactSummary: null, sourceTaskId: task.id,
+        requestId: `worker:${input.leaseOwnerId}`, ip: null, userAgent: null, createdAt: input.authoritativeNow
+      });
       return { outcome: 'applied' as const, task };
     },
 

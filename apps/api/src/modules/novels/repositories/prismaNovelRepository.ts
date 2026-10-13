@@ -18,6 +18,7 @@ import { Prisma } from '../../../generated/prisma/client.js';
 import { evaluateChapterLength } from '../domain/chapterLengthPolicy.js';
 import {
   DEFAULT_POLICY_PROFILE_VERSION_ID,
+  leasedActionFailure,
   type AdoptedDirectionRecord,
   type AdoptedChapterContentRecord,
   type AdoptedStructureAssetRecord,
@@ -46,6 +47,7 @@ import {
   type HashedSafeResultReceipt,
   type LeasedTaskFailure,
   type LeasedTaskCheckpointInput,
+  type LeasedActionFailureInput,
   type ObservedTaskLease,
   type CompletionConfirmationInput,
   type CompletionDecisionRecord,
@@ -825,6 +827,34 @@ export class PrismaNovelRepository implements NovelRepository {
       if (isPrismaUniqueConstraintError(error)) return { outcome: 'fenced' as const, task: null };
       throw error;
     }
+  }
+
+  async failLeasedAction(input: LeasedActionFailureInput) {
+    const failure = leasedActionFailure(input.reason);
+    return this.prisma.$transaction(async (tx) => {
+      const transition = await tx.generationTask.updateMany({
+        where: {
+          tenantId: input.tenantId, id: input.taskId, status: PrismaTaskStatus.PROCESSING,
+          leaseOwnerId: input.leaseOwnerId, leaseToken: input.leaseToken,
+          leaseExpiresAt: { gt: input.authoritativeNow },
+          providerAttemptPhase: input.expectedPhase.toUpperCase() as PrismaProviderAttemptPhase,
+          ...(input.reason === 'retry_not_available' ? { retryOfTaskId: { not: null } } : {})
+        },
+        data: leaseFailureData(failure, input.authoritativeNow)
+      });
+      if (transition.count !== 1) return { outcome: 'fenced' as const, task: null };
+      const task = await tx.generationTask.findFirstOrThrow({ where: { tenantId: input.tenantId, id: input.taskId } });
+      const requestId = `worker:${input.leaseOwnerId.slice(0, 110)}`;
+      await createTaskEvent(tx, { task, eventType: 'task_failed', message: failure.statusNote,
+        progress: task.progress, requestId, createdAt: input.authoritativeNow });
+      await tx.operationLog.create({ data: {
+        tenantId: task.tenantId, userId: task.createdBy, novelId: task.novelId,
+        action: 'generation_task_failed', objectType: 'generation_task', objectId: task.id,
+        afterSnapshot: { failureCategory: failure.failureCategory, errorCode: failure.errorCode },
+        reason: failure.statusNote, sourceTaskId: task.id, requestId, createdAt: input.authoritativeNow
+      } });
+      return { outcome: 'applied' as const, task: mapGenerationTask(task) };
+    });
   }
 
   async finalizeLeasedTask(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, authoritativeNow: Date, result: HashedSafeResultReceipt) {

@@ -41,6 +41,6 @@
 
 ## E1 首个执行检查点
 
-依据既有 `rp-02b2-dispatcher-transport-implementation-package.md` 的 B2a3 顺序，已补内部租约阶段检查点：领取租约仅记录 `leased`，不提前生成 provider attempt；`leased -> prepared -> provider_call_started -> provider_result_validated` 每一步要求同一租户、任务、owner/token、未过期租约和正确前置阶段。真正 dispatch 时才写 attempt ID 与时间。定向 mock 测试覆盖重复检查点、错误 attempt、过期租约、历史 retry child 和 Prisma 条件更新；没有连接真实 MySQL 或真实模型。
+依据既有 `rp-02b2-dispatcher-transport-implementation-package.md` 的 B2a3 顺序，已补内部租约阶段检查点：领取租约仅记录 `leased`，不提前生成 provider attempt；`leased -> prepared -> provider_call_started -> provider_result_validated` 每一步要求同一租户、任务、owner/token、未过期租约和正确前置阶段。真正 dispatch 时才写 attempt ID 与时间。另补受控的 leased 安全失败方法：历史 retry child 在模型调用前写一个终态事件和一个操作记录，重复执行和过期 owner 均无新写入。定向 mock/仓储测试 18/18、后端常规测试 216/216、质量资产测试 4/4、整仓类型检查通过；没有连接真实 MySQL 或真实模型。
 
 **状态仍为修复中**：本检查点尚未启动 worker，不能证明 HTTP 快速返回、进程重启自动恢复、真实库 CAS 或费用对账。后续仍需按 B2a3 的安全失败与审计、B2a4/B2a5 的原子业务落账、B2b/B2c 的运行时和页面合同、B3 的过期扫描与结果未知处理逐关验收；不得仅凭本次定向测试把 E1 标记为通过。

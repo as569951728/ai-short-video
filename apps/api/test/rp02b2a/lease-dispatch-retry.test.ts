@@ -85,11 +85,37 @@ describe('RP-02B2a3 leased dispatch checkpoint', () => {
     const { repository, task } = await queuedTask();
     task.retryOfTaskId = 'parent-task';
     await repository.leaseNextQueuedTask('worker-3', 'lease-3', at(0), at(30));
+    const eventsBefore = repository.getGenerationTaskEvents().length;
+    const logsBefore = repository.getOperationLogs().length;
     assert.equal((await repository.checkpointLeasedTask({ tenantId: task.tenantId, taskId: task.id,
       leaseOwnerId: 'worker-3', leaseToken: 'lease-3', authoritativeNow: at(1), checkpoint: {
         expectedPhase: 'leased', nextPhase: 'prepared'
-      } })).outcome, 'fenced');
+    } })).outcome, 'fenced');
     assert.equal(task.providerAttemptId, null);
+    const failure = { tenantId: task.tenantId, taskId: task.id, leaseOwnerId: 'worker-3', leaseToken: 'lease-3',
+      authoritativeNow: at(2), expectedPhase: 'leased' as const, reason: 'retry_not_available' as const };
+    assert.equal((await repository.failLeasedAction(failure)).outcome, 'applied');
+    assert.equal(task.status, TaskStatus.Failed);
+    assert.equal(task.errorCode, 'RETRY_NOT_AVAILABLE');
+    assert.equal(task.activeClaimKey, null);
+    assert.equal(task.leaseToken, null);
+    assert.equal((await repository.failLeasedAction(failure)).outcome, 'fenced');
+    assert.equal(repository.getGenerationTaskEvents().length, eventsBefore + 1);
+    assert.equal(repository.getOperationLogs().length, logsBefore + 1);
+    assert.equal(repository.getOperationLogs()[0]?.sourceTaskId, task.id);
+  });
+
+  it('fences a non-retry task and an expired owner before writing failure audit', async () => {
+    const { repository, task } = await queuedTask();
+    await repository.leaseNextQueuedTask('worker-4', 'lease-4', at(0), at(30));
+    const auditBefore = repository.getOperationLogs().length;
+    const base = { tenantId: task.tenantId, taskId: task.id, leaseOwnerId: 'worker-4', leaseToken: 'lease-4',
+      expectedPhase: 'leased' as const, reason: 'retry_not_available' as const };
+    assert.equal((await repository.failLeasedAction({ ...base, authoritativeNow: at(1) })).outcome, 'fenced');
+    task.retryOfTaskId = 'parent-task';
+    assert.equal((await repository.failLeasedAction({ ...base, authoritativeNow: at(30) })).outcome, 'fenced');
+    assert.equal(repository.getOperationLogs().length, auditBefore);
+    assert.equal(task.status, TaskStatus.Processing);
   });
 
   it('uses tenant, owner, token, live expiry, phase and attempt in the Prisma checkpoint CAS', async () => {
@@ -106,6 +132,23 @@ describe('RP-02B2a3 leased dispatch checkpoint', () => {
       tenantId: 'tenant-1', id: 'task-1', status: 'PROCESSING', leaseOwnerId: 'worker-1', leaseToken: 'lease-1',
       leaseExpiresAt: { gt: at(10) }, retryOfTaskId: null, providerAttemptPhase: 'PROVIDER_CALL_STARTED',
       providerAttemptId: 'attempt-1', providerDispatchedAt: { not: null }
+    });
+  });
+
+  it('fences Prisma retry-child failure with the same live lease and phase', async () => {
+    const updates: unknown[] = [];
+    const repository = Object.create(PrismaNovelRepository.prototype) as PrismaNovelRepository & { prisma: unknown };
+    Object.defineProperty(repository, 'prisma', { value: { $transaction: async (callback: (tx: unknown) => Promise<unknown>) => callback({
+      generationTask: { updateMany: async (input: unknown) => { updates.push(input); return { count: 0 }; } }
+    }) } });
+    const result = await repository.failLeasedAction({
+      tenantId: 'tenant-1', taskId: 'task-1', leaseOwnerId: 'worker-1', leaseToken: 'lease-1',
+      authoritativeNow: at(10), expectedPhase: 'leased', reason: 'retry_not_available'
+    });
+    assert.equal(result.outcome, 'fenced');
+    assert.deepEqual((updates[0] as { where: unknown }).where, {
+      tenantId: 'tenant-1', id: 'task-1', status: 'PROCESSING', leaseOwnerId: 'worker-1', leaseToken: 'lease-1',
+      leaseExpiresAt: { gt: at(10) }, providerAttemptPhase: 'LEASED', retryOfTaskId: { not: null }
     });
   });
 });

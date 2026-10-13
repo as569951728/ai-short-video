@@ -638,6 +638,16 @@ export interface LeasedTaskCheckpointInput {
   checkpoint: LeasedTaskCheckpoint;
 }
 
+export interface LeasedActionFailureInput {
+  tenantId: string;
+  taskId: string;
+  leaseOwnerId: string;
+  leaseToken: string;
+  authoritativeNow: Date;
+  expectedPhase: ProviderAttemptPhase;
+  reason: 'retry_not_available' | 'worker_payload_unsupported';
+}
+
 export interface SafeResultReceiptV1 {
   schemaVersion: 1;
   taskId: string;
@@ -660,6 +670,22 @@ export interface LeasedTaskFailure {
   errorCode: string;
   errorMessage: string;
   statusNote: string;
+}
+
+export function leasedActionFailure(reason: LeasedActionFailureInput['reason']): LeasedTaskFailure {
+  return reason === 'retry_not_available'
+    ? {
+        failureCategory: 'retry_not_available',
+        errorCode: 'RETRY_NOT_AVAILABLE',
+        errorMessage: '历史重试任务暂不支持自动执行。',
+        statusNote: '历史重试任务已在模型调用前安全结束。'
+      }
+    : {
+        failureCategory: 'worker_payload_unsupported',
+        errorCode: 'WORKER_PAYLOAD_UNSUPPORTED',
+        errorMessage: '任务执行合同不受支持。',
+        statusNote: '任务执行合同不受支持，已在模型调用前安全结束。'
+      };
 }
 
 export type LeasedTaskMutationResult =
@@ -1315,6 +1341,7 @@ export interface NovelRepository {
   leaseNextQueuedTask(workerId: string, leaseToken: string, now: Date, leaseUntil: Date): Promise<GenerationTaskRecord | null>;
   heartbeatTask(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, now: Date, leaseUntil: Date): Promise<boolean>;
   checkpointLeasedTask(input: LeasedTaskCheckpointInput): Promise<LeasedTaskMutationResult>;
+  failLeasedAction(input: LeasedActionFailureInput): Promise<LeasedTaskMutationResult>;
   finalizeLeasedTask(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, authoritativeNow: Date, result: HashedSafeResultReceipt): Promise<LeasedTaskMutationResult>;
   failLeasedTask(tenantId: string, taskId: string, leaseOwnerId: string, leaseToken: string, authoritativeNow: Date, failure: LeasedTaskFailure): Promise<LeasedTaskMutationResult>;
   recoverExpiredTask(observedTaskLease: ObservedTaskLease, authoritativeNow: Date): Promise<RecoverExpiredTaskResult>;
