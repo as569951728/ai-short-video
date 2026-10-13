@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { TaskStatus, type DirectionCandidateContentDTO, type StructureAssetContentDTO, type StructureAssetType } from '@ai-shortvideo/shared';
+import { TaskStatus, VersionStatus, type DirectionCandidateContentDTO, type StructureAssetContentDTO, type StructureAssetType } from '@ai-shortvideo/shared';
 import { buildApp } from '../../src/app.js';
+import { evaluateChapterLength, isBoundedOverlengthRevision } from '../../src/modules/novels/domain/chapterLengthPolicy.js';
 import type { DirectionCandidateDraft, StructureAssetDraft } from '../../src/modules/novels/domain/novelDomain.js';
 import { MockBodyProvider } from '../../src/modules/novels/providers/mockBodyProvider.js';
 import { MockTrialProvider } from '../../src/modules/novels/providers/mockTrialProvider.js';
@@ -297,6 +298,68 @@ async function leasedImpactAssessment(onLeasedFinalizeStage?: (stage: FinalizeSt
     } })).outcome, 'applied');
     return { repository, task, impact, finalizeInput: {
       ...base, authoritativeNow: at(4), providerAttemptId: 'attempt-impact', validatedResult: impact
+    } };
+  } finally {
+    await fixture.app.close();
+  }
+}
+
+async function leasedOverlengthRevision(onLeasedFinalizeStage?: (stage: FinalizeStage) => void) {
+  const repository = createInMemoryNovelRepository({ onLeasedFinalizeStage });
+  const fixture = await createRouteAuthorityFixture('chapter_impact_assess', repository);
+  try {
+    const chapter = repository.getNovelChapters().find((item) => item.id === fixture.authorityObjectId);
+    const novel = await repository.findById('tenant_test', fixture.novelId);
+    assert.ok(chapter && novel && chapter.currentContentVersionId && chapter.wordTarget);
+    const original = repository.getChapterContentVersions().find((item) => item.id === chapter.currentContentVersionId);
+    assert.ok(original);
+    const removable = '这是一句可以删除的冗余描写。';
+    const upperBound = Math.floor(chapter.wordTarget * 1.15);
+    original.content = '稳'.repeat(upperBound - 20) + removable.repeat(4);
+    const lengthGate = evaluateChapterLength(original.content, chapter.wordTarget);
+    assert.equal(lengthGate.status, 'too_long');
+    original.wordCount = lengthGate.actual;
+    original.status = VersionStatus.Candidate;
+    original.sourceType = 'ai_overlength_original';
+    original.sourceVersionRefs = { currentChapterPlanVersionId: novel.currentChapterPlanVersionId };
+    original.metadata = { lengthGate };
+    chapter.currentContentVersionId = null;
+    const generated = await fixture.app.inject({ method: 'POST',
+      url: `/novels/${novel.id}/chapters/${chapter.id}/overlength-revisions`,
+      payload: { sourceCandidateVersionId: original.id } });
+    assert.equal(generated.statusCode, 200, generated.body);
+    const task = repository.getGenerationTasks().find((item) => item.id === generated.json().data.task.id);
+    assert.ok(task);
+    const candidateIndex = repository.getChapterContentVersions().findIndex((item) => item.sourceTaskId === task.id);
+    assert.notEqual(candidateIndex, -1);
+    const revised = repository.getChapterContentVersions()[candidateIndex]!.content;
+    assert.ok(isBoundedOverlengthRevision(original.content, revised, chapter.wordTarget));
+    repository.getChapterContentVersions().splice(candidateIndex, 1);
+    task.status = TaskStatus.Queued;
+    task.startedAt = null;
+    task.finishedAt = null;
+    task.providerAttemptId = null;
+    task.providerAttemptPhase = null;
+    task.providerDispatchedAt = null;
+    task.resultReceiptHash = null;
+    task.providerCallBudgetUsed = 0;
+    task.resultObjectType = null;
+    task.resultObjectId = null;
+    task.resultVersionIds = [];
+    assert.equal((await repository.leaseNextQueuedTask('worker-overlength', 'lease-overlength', at(0), at(60)))?.id, task.id);
+    const base = { tenantId: task.tenantId, taskId: task.id,
+      leaseOwnerId: 'worker-overlength', leaseToken: 'lease-overlength' };
+    assert.equal((await repository.checkpointLeasedTask({ ...base, authoritativeNow: at(1), checkpoint: {
+      expectedPhase: 'leased', nextPhase: 'prepared'
+    } })).outcome, 'applied');
+    assert.equal((await repository.checkpointLeasedTask({ ...base, authoritativeNow: at(2), checkpoint: {
+      expectedPhase: 'prepared', nextPhase: 'provider_call_started', providerAttemptId: 'attempt-overlength'
+    } })).outcome, 'applied');
+    assert.equal((await repository.checkpointLeasedTask({ ...base, authoritativeNow: at(3), checkpoint: {
+      expectedPhase: 'provider_call_started', nextPhase: 'provider_result_validated', providerAttemptId: 'attempt-overlength'
+    } })).outcome, 'applied');
+    return { repository, task, novel, chapter, original, revised, finalizeInput: {
+      ...base, authoritativeNow: at(4), providerAttemptId: 'attempt-overlength', validatedResult: revised
     } };
   } finally {
     await fixture.app.close();
@@ -749,5 +812,70 @@ describe('RP-02B2a4 in-memory impact assessment fenced finalize', () => {
     assert.equal(stale.task.errorCode, 'SOURCE_STALE');
     assert.equal(stale.task.resultReceiptHash, null);
     assert.equal(stale.repository.getImpactCases().length, 0);
+  });
+});
+
+describe('RP-02B2a4 in-memory overlength revision fenced finalize', () => {
+  it('saves one bounded deletion-only candidate without adopting it', async () => {
+    const { repository, task, chapter, original, finalizeInput } = await leasedOverlengthRevision();
+    const before = repository.getChapterContentVersions().length;
+    assert.equal((await repository.finalizeLeasedAction(finalizeInput)).outcome, 'applied');
+    assert.equal(repository.getChapterContentVersions().length, before + 1);
+    const candidate = repository.getChapterContentVersions().find((item) => item.sourceTaskId === task.id);
+    assert.ok(candidate);
+    assert.equal(candidate.sourceType, 'ai_overlength_revision');
+    assert.equal(candidate.status, VersionStatus.Candidate);
+    assert.ok(isBoundedOverlengthRevision(original.content, candidate.content, chapter.wordTarget));
+    assert.equal(chapter.currentContentVersionId, null);
+    assert.equal(task.status, TaskStatus.WaitingConfirmation);
+    assert.match(task.resultReceiptHash ?? '', /^[0-9a-f]{64}$/);
+    assert.equal((await repository.finalizeLeasedAction(finalizeInput)).outcome, 'fenced');
+  });
+
+  for (const failAt of ['asset', 'receipt', 'task', 'event', 'operation_log'] as const) {
+    it(`rolls back overlength revision when ${failAt} fails`, async () => {
+      const { repository, task, chapter, finalizeInput } = await leasedOverlengthRevision((stage) => {
+        if (stage === failAt) throw new Error('injected overlength fault');
+      });
+      const before = { versions: repository.getChapterContentVersions().length,
+        events: repository.getGenerationTaskEvents().length, logs: repository.getOperationLogs().length };
+      await assert.rejects(repository.finalizeLeasedAction(finalizeInput), /injected overlength fault/);
+      assert.equal(repository.getChapterContentVersions().length, before.versions);
+      assert.equal(repository.getGenerationTaskEvents().length, before.events);
+      assert.equal(repository.getOperationLogs().length, before.logs);
+      assert.equal(chapter.currentContentVersionId, null);
+      assert.equal(task.status, TaskStatus.Processing);
+      assert.equal(task.resultReceiptHash, null);
+      assert.equal(task.leaseToken, 'lease-overlength');
+    });
+  }
+
+  it('rejects invented prose or a still-overlong result before saving', async () => {
+    for (const invalid of ['invented', 'overlong'] as const) {
+      const { repository, task, original, revised, finalizeInput } = await leasedOverlengthRevision();
+      const before = repository.getChapterContentVersions().length;
+      const content = invalid === 'invented' ? `${revised}新内容` : original.content;
+      assert.equal((await repository.finalizeLeasedAction({ ...finalizeInput, validatedResult: content })).outcome, 'applied');
+      assert.equal(task.status, TaskStatus.Failed);
+      assert.equal(task.errorCode, 'WORKER_PAYLOAD_UNSUPPORTED');
+      assert.equal(repository.getChapterContentVersions().length, before);
+    }
+  });
+
+  it('fences late results and fails a replaced chapter plan', async () => {
+    const late = await leasedOverlengthRevision();
+    assert.equal((await late.repository.finalizeLeasedAction({ ...late.finalizeInput,
+      authoritativeNow: at(60) })).outcome, 'fenced');
+    late.task.status = TaskStatus.Cancelled;
+    assert.equal((await late.repository.finalizeLeasedAction(late.finalizeInput)).outcome, 'fenced');
+    assert.equal(late.repository.getChapterContentVersions().filter((item) => item.sourceTaskId === late.task.id).length, 0);
+
+    const stale = await leasedOverlengthRevision();
+    stale.novel.currentChapterPlanVersionId = 'replaced-plan';
+    assert.equal((await stale.repository.finalizeLeasedAction(stale.finalizeInput)).outcome, 'applied');
+    assert.equal(stale.task.status, TaskStatus.Failed);
+    assert.equal(stale.task.errorCode, 'SOURCE_STALE');
+    assert.equal(stale.task.resultReceiptHash, null);
+    assert.equal(stale.repository.getChapterContentVersions().filter((item) => item.sourceTaskId === stale.task.id).length, 0);
   });
 });

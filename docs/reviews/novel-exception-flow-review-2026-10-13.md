@@ -80,3 +80,9 @@ B2a4 内存仓储继续覆盖 `trial_followup_generate`：复用同步路径的�
 增加 `chapter_impact_assess` 的内存 fenced finalize：在当前章节正文来源、租约和 attempt 匹配后，校验模型影响等级、处理建议及阻塞语义，仅新增影响案例，不改正式章节正文；影响案例、安全回执、任务完成状态、终态事件和操作日志同单元落账。复用同步持久化函数，避免落账中途 `await` 暴露并发回滚窗口。五个故障点全部回滚；矛盾模型输出安全失败；取消、租约过期和章节正文版本变化均不接受结果。定向测试 52/52 通过。
 
 核对执行范围时发现文档漂移：`rp-02b2-dispatcher-transport-implementation-package.md` 按历史 15 类 action 规定 B2a4/B2a5，而当前 `NOVEL_PROVIDER_ACTIONS` 实际有 16 类，新增的 `chapter_overlength_revise` 是真实模型任务，不能在 E1 的恢复与费用验收中漏掉。当前 InMemory fenced finalize 实际覆盖 **10/16** 类；旧包的 15 类矩阵不能作为全覆盖证据。后续需要同步修订动作矩阵及测试夹具，再逐项放行。capability 仍关闭，Prisma、worker、进程重启和页面验收仍未完成。
+
+## E1 第八个执行检查点
+
+补上历史执行包遗漏的 `chapter_overlength_revise` 内存 fenced finalize：同步流程和租约落账共用字数门禁、纯删除校验及原稿最多删减 12% 的规则；有效结果只生成待复核候选，不自动成为正式章节。来源版本、唯一修订次数、租约和 attempt 均在落账前校验。五个故障点整体回滚；凭空增写、仍超长、取消后的迟到结果与章节目录变化均不落候选。定向故障测试 60/60、后端常规测试 216/216、质量资产测试 4/4、整仓类型检查通过。
+
+**E1 仍为修复中**：InMemory fenced finalize 覆盖 11/16 类 action，capability 保持关闭。旧包的 15 类权威变异测试矩阵仍未纳入超长修订，应在 E1 放行前补齐；Prisma 原子落账、生产 worker、过期扫描、进程重启、浏览器状态验收与真实数据库证据也仍缺失。

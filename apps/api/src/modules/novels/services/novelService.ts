@@ -91,7 +91,7 @@ import {
 } from '@ai-shortvideo/shared';
 import { BusinessError } from '../../../shared/errors.js';
 import { hashCanonicalJson } from '../domain/executionContract.js';
-import { assertChapterLengthGate, evaluateChapterLength } from '../domain/chapterLengthPolicy.js';
+import { assertChapterLengthGate, evaluateChapterLength, isBoundedOverlengthRevision } from '../domain/chapterLengthPolicy.js';
 import { bindTrialFollowupChapters, constructTrialFollowupChapterDraft } from '../domain/trialFollowupBinding.js';
 import {
   DEFAULT_TENANT_ID,
@@ -1419,10 +1419,7 @@ export class NovelService {
         this.getProviderSet(), authoritativeInput as NovelProviderActionInputFor<'chapter_overlength_revise'>
       ),
       finalize: (task, content) => {
-        const originalLength = evaluateChapterLength(original.content, chapter.wordTarget);
-        const revisedLength = evaluateChapterLength(content, chapter.wordTarget);
-        if (revisedLength.status !== 'pass' || !isDeletionOnlyRevision(original.content, content) ||
-          originalLength.actual - revisedLength.actual > Math.floor(originalLength.actual * 0.12)) {
+        if (!isBoundedOverlengthRevision(original.content, content, chapter.wordTarget)) {
           throw new BusinessError(ErrorCode.GateBlocked, '精简稿超出字数或删句边界，原稿已保留。');
         }
         return this.options.repository.createOverlengthRevision({
@@ -4575,17 +4572,6 @@ function bindGeneratedBodyChapter(chapter: NovelChapterRecord, draft: BodyChapte
       }
     }
   };
-}
-
-function isDeletionOnlyRevision(original: string, revised: string): boolean {
-  const source = [...original.normalize('NFC')];
-  const target = [...revised.normalize('NFC')];
-  if (target.length >= source.length) return false;
-  let cursor = 0;
-  for (const character of source) {
-    if (character === target[cursor]) cursor += 1;
-  }
-  return cursor === target.length;
 }
 
 function assertChapterLengthTargetConfigured(target: number | null | undefined): asserts target is number {

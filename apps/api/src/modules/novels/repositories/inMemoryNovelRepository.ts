@@ -14,7 +14,7 @@ import {
   type StructureAssetType,
   type VideoReadinessCheckItemDTO
 } from '@ai-shortvideo/shared';
-import { evaluateChapterLength } from '../domain/chapterLengthPolicy.js';
+import { evaluateChapterLength, isBoundedOverlengthRevision } from '../domain/chapterLengthPolicy.js';
 import { bindTrialFollowupChapters } from '../domain/trialFollowupBinding.js';
 import {
   DEFAULT_POLICY_PROFILE_VERSION_ID,
@@ -521,6 +521,52 @@ export function createInMemoryNovelRepository(options: {
     return { novel: cloneNovel(input.novel.id), task, impactCase };
   }
 
+  function persistOverlengthRevision(input: OverlengthRevisionInput, leased: boolean): SavedOverlengthRevisionRecord {
+    if (!leased) assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task);
+    const task = requireClaimedTask(input.task, input.context.tenantId);
+    const novel = novels.find((item) => item.tenantId === input.context.tenantId && item.id === input.novel.id && !item.deletedAt);
+    const chapter = chapters.find((item) => item.tenantId === input.context.tenantId && item.id === input.chapter.id);
+    const original = chapterContentVersions.find((item) => item.tenantId === input.context.tenantId && item.id === input.original.id);
+    const refs = asRecord(task.sourceVersionRefs);
+    if (!novel || novel.creationStage !== NovelCreationStage.Body ||
+      novel.currentChapterPlanVersionId !== input.novel.currentChapterPlanVersionId ||
+      !chapter || !original || chapter.novelId !== input.novel.id || original.chapterId !== chapter.id ||
+      chapter.currentContentVersionId || chapter.wordTarget !== input.chapter.wordTarget ||
+      original.status !== VersionStatus.Candidate || original.sourceType !== 'ai_overlength_original' ||
+      asRecord(asRecord(original.metadata).lengthGate).target !== chapter.wordTarget ||
+      refs.candidateVersionId !== original.id || refs.currentChapterPlanVersionId !== input.novel.currentChapterPlanVersionId ||
+      chapterContentVersions.some((item) => item.tenantId === input.context.tenantId && item.chapterId === chapter.id &&
+        item.sourceType === 'ai_overlength_revision')) {
+      throw new BusinessError(ErrorCode.CandidateStale, '超长原稿或章节状态已变化，不能保存精简候选。');
+    }
+    const lengthGate = evaluateChapterLength(input.content, chapter.wordTarget);
+    if (lengthGate.status !== 'pass') throw new BusinessError(ErrorCode.GateBlocked, '精简稿未通过字数门禁。');
+    const candidate: ChapterContentVersionRecord = {
+      id: nextId('ccv'), tenantId: input.context.tenantId, novelId: input.novel.id, chapterId: chapter.id,
+      versionNo: nextChapterContentVersionNo(input.context.tenantId, input.novel.id, chapter.id),
+      status: VersionStatus.Candidate, staleLevel: StaleLevel.None,
+      sourceType: 'ai_overlength_revision', sourceTaskId: task.id, sourceVersionRefs: task.sourceVersionRefs,
+      rewriteReason: '用户发起超长正文精简', content: input.content, wordCount: lengthGate.actual,
+      summary: null, reviewScore: null, decisionRecordId: null, createdBy: input.context.userId,
+      createdAt: input.now, metadata: { reviewRequired: true, lengthRecovery: 'revision',
+        revisionOfCandidateId: original.id, lengthGate, chapterNo: chapter.chapterNo, title: chapter.title,
+        riskLevel: RiskLevel.Medium }
+    };
+    chapterContentVersions.unshift(candidate);
+    task.resultVersionIds = [candidate.id];
+    task.resultObjectType = 'chapter_content_version';
+    task.resultObjectId = candidate.id;
+    task.outputSummary = '超长精简候选已保存，待逐版本复核。';
+    task.status = TaskStatus.WaitingConfirmation;
+    task.statusNote = task.outputSummary;
+    task.progress = 100;
+    task.currentStep = '精简候选待复核';
+    task.updatedAt = input.now;
+    task.activeClaimKey = null;
+    appendTaskProgressEvents(task, input.context.requestId, input.now);
+    return { task, candidate };
+  }
+
   const repository: InMemoryNovelRepository = {
     async createDraft(input: DraftCreationInput): Promise<CreatedDraftRecord> {
       const normalized = normalizeDraftRequest(input.request);
@@ -970,7 +1016,9 @@ export function createInMemoryNovelRepository(options: {
       const isTrialChapterOne = envelope.action === 'trial_chapter_one_generate';
       const isTrialFollowup = envelope.action === 'trial_followup_generate';
       const isImpactAssessment = envelope.action === 'chapter_impact_assess';
-      if (!isDirection && !structureType && !isTrialChapterOne && !isTrialFollowup && !isImpactAssessment) {
+      const isOverlengthRevision = envelope.action === 'chapter_overlength_revise';
+      if (!isDirection && !structureType && !isTrialChapterOne && !isTrialFollowup
+        && !isImpactAssessment && !isOverlengthRevision) {
         return { outcome: 'fenced' as const, task: null };
       }
       const authorityInput = {
@@ -983,6 +1031,62 @@ export function createInMemoryNovelRepository(options: {
       }
       const novel = novels.find((item) => item.tenantId === task.tenantId && item.id === task.novelId && !item.deletedAt);
       if (!novel) return this.failLeasedAction({ ...input, expectedPhase: 'provider_result_validated', reason: 'source_stale' });
+      if (isOverlengthRevision) {
+        const chapter = chapters.find((item) => item.tenantId === task.tenantId && item.novelId === novel.id
+          && item.id === envelope.objectId);
+        const refs = asRecord(envelope.sourceVersionRefs);
+        const original = chapterContentVersions.find((item) => item.tenantId === task.tenantId
+          && item.novelId === novel.id && item.chapterId === chapter?.id && item.id === refs.candidateVersionId);
+        if (!chapter || !original || novel.creationStage !== NovelCreationStage.Body
+          || chapter.currentContentVersionId !== null || original.status !== VersionStatus.Candidate
+          || original.sourceType !== 'ai_overlength_original'
+          || chapterContentVersions.some((item) => item.tenantId === task.tenantId && item.chapterId === chapter.id
+            && item.sourceType === 'ai_overlength_revision')) {
+          return this.failLeasedAction({ ...input, expectedPhase: 'provider_result_validated', reason: 'source_stale' });
+        }
+        if (typeof input.validatedResult !== 'string'
+          || !isBoundedOverlengthRevision(original.content, input.validatedResult, chapter.wordTarget)) {
+          return this.failLeasedAction({ ...input, expectedPhase: 'provider_result_validated', reason: 'worker_payload_unsupported' });
+        }
+        const context = { tenantId: task.tenantId, userId: task.createdBy!, requestId: `worker:${input.leaseOwnerId}` };
+        const beforeSequence = sequence;
+        const restore = [snapshotMutableArray(chapterContentVersions), snapshotMutableArray(generationTasks),
+          snapshotMutableArray(generationTaskEvents), snapshotMutableArray(operationLogs)];
+        try {
+          const generated = persistOverlengthRevision({
+            novel, task, chapter, original, content: input.validatedResult,
+            context, now: input.authoritativeNow
+          }, true);
+          options.onLeasedFinalizeStage?.('asset');
+          const receipt = createSafeResultReceipt(task, {
+            status: 'waiting_confirmation', outcome: 'candidate_created',
+            resultObjectType: 'chapter_content_version', resultObjectId: generated.candidate.id,
+            resultVersionIds: [generated.candidate.id], resultCount: 1
+          });
+          options.onLeasedFinalizeStage?.('receipt');
+          task.resultReceiptHash = receipt.hash;
+          task.providerAttemptPhase = 'finalizing';
+          task.finishedAt = input.authoritativeNow;
+          task.updatedAt = input.authoritativeNow;
+          clearLease(task);
+          options.onLeasedFinalizeStage?.('task');
+          appendLeaseEvent(task, 'task_finalized', task.statusNote ?? '精简候选已生成。', input.authoritativeNow);
+          options.onLeasedFinalizeStage?.('event');
+          operationLogs.unshift({
+            id: nextId('oplog'), tenantId: task.tenantId, userId: context.userId, novelId: novel.id,
+            action: 'generation_task_finalized', objectType: 'generation_task', objectId: task.id,
+            beforeSnapshot: null, afterSnapshot: { resultVersionIds: [generated.candidate.id], receiptHash: receipt.hash },
+            reason: '超长正文精简候选生成完成', impactSummary: null, sourceTaskId: task.id,
+            requestId: context.requestId, ip: null, userAgent: null, createdAt: input.authoritativeNow
+          });
+          options.onLeasedFinalizeStage?.('operation_log');
+          return { outcome: 'applied' as const, task };
+        } catch (error) {
+          sequence = beforeSequence;
+          restore.forEach((restoreStore) => restoreStore());
+          throw error;
+        }
+      }
       if (isImpactAssessment) {
         const chapter = chapters.find((item) => item.tenantId === task.tenantId && item.novelId === novel.id
           && item.id === envelope.objectId);
@@ -3353,49 +3457,7 @@ export function createInMemoryNovelRepository(options: {
     },
 
     async createOverlengthRevision(input: OverlengthRevisionInput): Promise<SavedOverlengthRevisionRecord> {
-      assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id, input.task);
-      const task = requireClaimedTask(input.task, input.context.tenantId);
-      const novel = novels.find((item) => item.tenantId === input.context.tenantId && item.id === input.novel.id && !item.deletedAt);
-      const chapter = chapters.find((item) => item.tenantId === input.context.tenantId && item.id === input.chapter.id);
-      const original = chapterContentVersions.find((item) => item.tenantId === input.context.tenantId && item.id === input.original.id);
-      const refs = asRecord(task.sourceVersionRefs);
-      if (!novel || novel.creationStage !== NovelCreationStage.Body ||
-        novel.currentChapterPlanVersionId !== input.novel.currentChapterPlanVersionId ||
-        !chapter || !original || chapter.novelId !== input.novel.id || original.chapterId !== chapter.id ||
-        chapter.currentContentVersionId || chapter.wordTarget !== input.chapter.wordTarget ||
-        original.status !== VersionStatus.Candidate || original.sourceType !== 'ai_overlength_original' ||
-        asRecord(asRecord(original.metadata).lengthGate).target !== chapter.wordTarget ||
-        refs.candidateVersionId !== original.id || refs.currentChapterPlanVersionId !== input.novel.currentChapterPlanVersionId ||
-        chapterContentVersions.some((item) => item.tenantId === input.context.tenantId && item.chapterId === chapter.id &&
-          item.sourceType === 'ai_overlength_revision')) {
-        throw new BusinessError(ErrorCode.CandidateStale, '超长原稿或章节状态已变化，不能保存精简候选。');
-      }
-      const lengthGate = evaluateChapterLength(input.content, chapter.wordTarget);
-      if (lengthGate.status !== 'pass') throw new BusinessError(ErrorCode.GateBlocked, '精简稿未通过字数门禁。');
-      const candidate: ChapterContentVersionRecord = {
-        id: nextId('ccv'), tenantId: input.context.tenantId, novelId: input.novel.id, chapterId: chapter.id,
-        versionNo: nextChapterContentVersionNo(input.context.tenantId, input.novel.id, chapter.id),
-        status: VersionStatus.Candidate, staleLevel: StaleLevel.None,
-        sourceType: 'ai_overlength_revision', sourceTaskId: task.id, sourceVersionRefs: task.sourceVersionRefs,
-        rewriteReason: '用户发起超长正文精简', content: input.content, wordCount: lengthGate.actual,
-        summary: null, reviewScore: null, decisionRecordId: null, createdBy: input.context.userId,
-        createdAt: input.now, metadata: { reviewRequired: true, lengthRecovery: 'revision',
-          revisionOfCandidateId: original.id, lengthGate, chapterNo: chapter.chapterNo, title: chapter.title,
-          riskLevel: RiskLevel.Medium }
-      };
-      chapterContentVersions.unshift(candidate);
-      task.resultVersionIds = [candidate.id];
-      task.resultObjectType = 'chapter_content_version';
-      task.resultObjectId = candidate.id;
-      task.outputSummary = '超长精简候选已保存，待逐版本复核。';
-      task.status = TaskStatus.WaitingConfirmation;
-      task.statusNote = task.outputSummary;
-      task.progress = 100;
-      task.currentStep = '精简候选待复核';
-      task.updatedAt = input.now;
-      task.activeClaimKey = null;
-      appendTaskProgressEvents(task, input.context.requestId, input.now);
-      return { task, candidate };
+      return persistOverlengthRevision(input, false);
     },
 
     async adoptChapterContent(input: ChapterContentAdoptionInput): Promise<AdoptedChapterContentRecord> {

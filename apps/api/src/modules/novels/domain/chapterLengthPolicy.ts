@@ -72,6 +72,21 @@ export function assertChapterLengthGate(content: string, target: number | null):
   return lengthGate;
 }
 
+export function isBoundedOverlengthRevision(original: string, revised: string, target: number | null): boolean {
+  const sourceLength = evaluateChapterLength(original, target);
+  const revisedLength = evaluateChapterLength(revised, target);
+  if (sourceLength.status !== 'too_long' || revisedLength.status !== 'pass'
+    || sourceLength.actual - revisedLength.actual > Math.floor(sourceLength.actual * 0.12)) return false;
+  const source = [...original.normalize('NFC')];
+  const result = [...revised.normalize('NFC')];
+  if (result.length >= source.length) return false;
+  let cursor = 0;
+  for (const character of source) {
+    if (character === result[cursor]) cursor += 1;
+  }
+  return cursor === result.length;
+}
+
 export function sanitizeChapterLengthGate(value: unknown): ChapterLengthGateDTO | null {
   const gate = value && typeof value === 'object' ? value as Record<string, unknown> : null;
   if (!gate || gate.metric !== CHAPTER_LENGTH_COUNT_METRIC
