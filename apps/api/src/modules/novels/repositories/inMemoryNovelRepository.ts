@@ -480,6 +480,47 @@ export function createInMemoryNovelRepository(options: {
       }
     };
   }
+
+  function persistImpactAssessment(input: ImpactAssessmentInput): CreatedImpactAssessmentRecord {
+    const task = requireClaimedTask(input.task, input.context.tenantId);
+    task.status = TaskStatus.Completed;
+    task.progress = 100;
+    task.outputSummary = input.impact.summary;
+    task.statusNote = '影响评估已生成';
+    task.currentStep = '影响评估已生成';
+    task.finishedAt = input.now;
+    task.updatedAt = input.now;
+    task.activeClaimKey = null;
+    const impactCase = createImpactCaseRecord({
+      input: {
+        novel: input.novel,
+        task: input.task,
+        chapter: input.chapter,
+        currentContent: input.currentContent,
+        candidate: input.currentContent,
+        reason: input.reason,
+        summaryCompare: {
+          currentSummary: input.currentContent.summary ?? '',
+          candidateSummary: input.currentContent.summary ?? '',
+          benefit: '补充影响评估',
+          newRisks: [],
+          possibleImpact: input.impact.summary,
+          aiSuggestion: input.impact.recommendedHandling
+        },
+        impact: input.impact,
+        context: input.context,
+        now: input.now
+      },
+      taskId: task.id,
+      decisionRecordId: null
+    });
+    task.resultObjectType = 'impact_case';
+    task.resultObjectId = impactCase.id;
+    appendTaskProgressEvents(task, input.context.requestId, input.now);
+    impactCases.unshift(impactCase);
+    return { novel: cloneNovel(input.novel.id), task, impactCase };
+  }
+
   const repository: InMemoryNovelRepository = {
     async createDraft(input: DraftCreationInput): Promise<CreatedDraftRecord> {
       const normalized = normalizeDraftRequest(input.request);
@@ -961,7 +1002,7 @@ export function createInMemoryNovelRepository(options: {
         const restore = [snapshotMutableArray(generationTasks), snapshotMutableArray(impactCases),
           snapshotMutableArray(generationTaskEvents), snapshotMutableArray(operationLogs)];
         try {
-          const generated = await this.createImpactAssessment({
+          const generated = persistImpactAssessment({
             novel, task, chapter, currentContent, impact: input.validatedResult,
             reason: typeof request.reason === 'string' && request.reason.trim()
               ? request.reason.trim() : '手动发起章节影响评估',
@@ -3467,48 +3508,7 @@ export function createInMemoryNovelRepository(options: {
     },
 
     async createImpactAssessment(input: ImpactAssessmentInput): Promise<CreatedImpactAssessmentRecord> {
-      const task = requireClaimedTask(input.task, input.context.tenantId);
-      task.status = TaskStatus.Completed;
-      task.progress = 100;
-      task.outputSummary = input.impact.summary;
-      task.statusNote = '影响评估已生成';
-      task.currentStep = '影响评估已生成';
-      task.finishedAt = input.now;
-      task.updatedAt = input.now;
-      task.activeClaimKey = null;
-      const impactCase = createImpactCaseRecord({
-        input: {
-          novel: input.novel,
-          task: input.task,
-          chapter: input.chapter,
-          currentContent: input.currentContent,
-          candidate: input.currentContent,
-          reason: input.reason,
-          summaryCompare: {
-            currentSummary: input.currentContent.summary ?? '',
-            candidateSummary: input.currentContent.summary ?? '',
-            benefit: '补充影响评估',
-            newRisks: [],
-            possibleImpact: input.impact.summary,
-            aiSuggestion: input.impact.recommendedHandling
-          },
-          impact: input.impact,
-          context: input.context,
-          now: input.now
-        },
-        taskId: task.id,
-        decisionRecordId: null
-      });
-      task.resultObjectType = 'impact_case';
-      task.resultObjectId = impactCase.id;
-      appendTaskProgressEvents(task, input.context.requestId, input.now);
-      impactCases.unshift(impactCase);
-
-      return {
-        novel: cloneNovel(input.novel.id),
-        task,
-        impactCase
-      };
+      return persistImpactAssessment(input);
     },
 
     async resolveImpactCase(input: ImpactCaseResolveInput): Promise<ResolvedImpactCaseRecord> {
