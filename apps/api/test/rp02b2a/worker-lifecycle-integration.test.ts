@@ -9,7 +9,7 @@ import { MockTrialProvider } from '../../src/modules/novels/providers/mockTrialP
 import { createInMemoryNovelRepository } from '../../src/modules/novels/repositories/inMemoryNovelRepository.js';
 import { claimQueuedGeneration } from '../../src/modules/novels/services/taskClaim.js';
 import { createLeasedActionExecutor } from '../../src/modules/novels/services/leasedActionExecutor.js';
-import { NovelTaskWorkerRuntime, type NovelTaskWorkerScheduler } from '../../src/modules/novels/services/novelTaskWorkerRuntime.js';
+import { NovelTaskWorkerRuntime, type NovelTaskWorkerPolicy, type NovelTaskWorkerScheduler } from '../../src/modules/novels/services/novelTaskWorkerRuntime.js';
 import { sweepExpiredNovelTasks } from '../../src/modules/novels/services/recoveryScanner.js';
 
 const baseMs = Date.UTC(2030, 0, 1);
@@ -47,7 +47,10 @@ class Scheduler implements NovelTaskWorkerScheduler {
   }
 }
 
-async function harness(providerGate?: Promise<void>) {
+async function harness(providerGate?: Promise<void>, options: {
+  durationDeadlineMs?: number;
+  workerPolicy?: NovelTaskWorkerPolicy;
+} = {}) {
   const scheduler = new Scheduler();
   const at = (ms: number) => new Date(baseMs + ms);
   const repository = createInMemoryNovelRepository();
@@ -67,11 +70,11 @@ async function harness(providerGate?: Promise<void>) {
     action: 'direction_generate', repository, novel, context,
     idempotencyKey: 'worker-flow-submission-0001', effectiveRequest: { regenerateReason: null },
     sourceVersionRefs: { currentDirectionVersionId: null }, now: () => at(scheduler.nowMs),
-    durationDeadlineAt: at(1000), providerCapability: directionProvider
+    durationDeadlineAt: at(options.durationDeadlineMs ?? 1000), providerCapability: directionProvider
   });
   const createWorker = (id: string) => new NovelTaskWorkerRuntime({
     repository, scheduler, clock: { now: () => at(scheduler.nowMs) }, workerId: id,
-    policy: { workerConcurrency: 1, leaseDurationMs: 100, heartbeatIntervalMs: 20,
+    policy: options.workerPolicy ?? { workerConcurrency: 1, leaseDurationMs: 100, heartbeatIntervalMs: 20,
       pollIntervalMs: 10, shutdownGracePeriodMs: 10 },
     ...createLeasedActionExecutor({ repository, providers: {
       directionProvider, structureProvider: new MockStructureProvider(), trialProvider: new MockTrialProvider(),
@@ -122,5 +125,34 @@ describe('queued claim through real worker callbacks', () => {
     await h.scheduler.flush();
     assert.equal(h.repository.getCreativeVersions().filter((version) => version.sourceTaskId === h.queued.id).length, 0);
     await restarted.stop();
+  });
+
+  it('keeps one paid call leased for five virtual minutes and accepts only its eventual candidate', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const h = await harness(gate, {
+      durationDeadlineMs: 15 * 60_000,
+      workerPolicy: { workerConcurrency: 1, leaseDurationMs: 60_000, heartbeatIntervalMs: 10_000,
+        pollIntervalMs: 5_000, shutdownGracePeriodMs: 5_000 }
+    });
+    const worker = h.createWorker('worker-slow-model');
+    worker.start();
+    await h.scheduler.advance(0);
+    assert.equal(h.calls, 1);
+    assert.equal(h.queued.status, TaskStatus.Processing);
+    assert.equal(h.queued.providerCallBudgetUsed, 1);
+
+    await h.scheduler.advance(5 * 60_000);
+    assert.equal(h.queued.status, TaskStatus.Processing);
+    assert.equal(h.calls, 1);
+    assert.ok(h.queued.leaseExpiresAt && h.queued.leaseExpiresAt.getTime() > h.at(5 * 60_000).getTime());
+    assert.equal(h.repository.getCreativeVersions().filter((version) => version.sourceTaskId === h.queued.id).length, 0);
+
+    release();
+    await h.scheduler.flush();
+    assert.equal(h.queued.status, TaskStatus.WaitingConfirmation);
+    assert.equal(h.queued.providerCallBudgetUsed, 1);
+    assert.equal(h.repository.getCreativeVersions().filter((version) => version.sourceTaskId === h.queued.id).length, 4);
+    await worker.stop();
   });
 });
