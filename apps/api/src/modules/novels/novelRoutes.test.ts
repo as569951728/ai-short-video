@@ -2925,6 +2925,38 @@ describe('novel package 6 body generation routes', () => {
       await app.close();
     }
   });
+  it('keeps hard failure classification when the failed chapter is also overlength', async () => {
+    const repository = createInMemoryNovelRepository();
+    const app = await buildApp({ logger: false, novelRepository: repository });
+    const generateBody = MockBodyProvider.prototype.generateBodyChapter;
+    try {
+      const { novelId, strategySnapshot } = await createNovelReadyForBody(app, '超长与批量正文暂停同时发生', 8);
+      MockBodyProvider.prototype.generateBodyChapter = async function(input) {
+        const draft = await generateBody.call(this, input);
+        return input.chapter.chapterNo === 6
+          ? { ...draft, content: '长'.repeat((input.chapter.wordTarget ?? 2000) * 2) }
+          : draft;
+      };
+      const response = await app.inject({ method: 'POST', url: `/novels/${novelId}/chapters/batch-generate`,
+        payload: { strategySnapshotId: strategySnapshot.id,
+          expectedStrategySnapshotVersion: strategySnapshot.versionNo, idempotencyKey: 'hard-failed-overlength-1' } });
+      assert.equal(response.statusCode, 200, response.body);
+      const { batch, task } = response.json().data;
+      assert.equal(batch.status, 'paused');
+      assert.equal(batch.completedCount, 2);
+      assert.equal(batch.failedCount, 1);
+      assert.equal(batch.failedChapterNo, 6);
+      assert.equal(batch.chapterResults[2].status, 'failed');
+      assert.equal(batch.chapterResults[2].lengthGate.status, 'too_long');
+      assert.equal(task.status, 'failed');
+      const failedChapter = repository.getNovelChapters().find((chapter) => chapter.novelId === novelId && chapter.chapterNo === 6)!;
+      assert.equal(failedChapter.currentContentVersionId, null);
+      assert.equal(repository.getChapterContentVersions().some((version) => version.chapterId === failedChapter.id), false);
+    } finally {
+      MockBodyProvider.prototype.generateBodyChapter = generateBody;
+      await app.close();
+    }
+  });
   it('keeps a cancelled in-flight body response from saving a late overlength candidate', async () => {
     const repository = createInMemoryNovelRepository();
     const app = await buildApp({ logger: false, novelRepository: repository });

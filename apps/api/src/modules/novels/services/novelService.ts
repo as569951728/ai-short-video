@@ -1071,6 +1071,10 @@ export class NovelService {
             previousBatchNotes: authoritative.previousBatchNotes,
             enhancedReview: authoritative.enhancedReview && chapter.chapterNo <= 10
           });
+          if (providerDraft.hardFailed) {
+            drafts.push(bindGeneratedBodyChapter(chapter, providerDraft, true));
+            break;
+          }
           const originalDraft = providerDraft.experimentalOriginalDraft ?? providerDraft;
           const originalLength = evaluateChapterLength(originalDraft.content, chapter.wordTarget);
           if (originalLength.status === 'too_long') {
@@ -4465,13 +4469,15 @@ function bindAuthoritativeChapter(chapter: NovelChapterRecord, authoritative: Ch
   return { ...chapter, title: authoritative.title, wordTarget: authoritative.wordTarget, statusNote: authoritative.statusNote };
 }
 
-function bindGeneratedBodyChapter(chapter: NovelChapterRecord, draft: BodyChapterProviderDraft): BodyChapterDraft {
+function bindGeneratedBodyChapter(chapter: NovelChapterRecord, draft: BodyChapterProviderDraft, allowHardFailedLengthViolation = false): BodyChapterDraft {
   const providerChapter = draft.chapter;
   if (providerChapter.id !== chapter.id || providerChapter.chapterNo !== chapter.chapterNo) {
     throw new BusinessError(ErrorCode.ValidationError, '模型返回的章节标识与请求章节不一致。');
   }
   if (draft.featureCard.chapterId !== chapter.id) throw new BusinessError(ErrorCode.ValidationError, '模型返回的章节特性卡与请求章节不一致。');
-  const lengthGate = assertChapterLengthGate(draft.content, chapter.wordTarget);
+  const lengthGate = allowHardFailedLengthViolation && draft.hardFailed
+    ? evaluateChapterLength(draft.content, chapter.wordTarget)
+    : assertChapterLengthGate(draft.content, chapter.wordTarget);
   return {
     ...constructTrialFollowupChapterDraft(chapter, draft),
     lengthGate,

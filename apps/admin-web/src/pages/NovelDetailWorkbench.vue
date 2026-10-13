@@ -3044,14 +3044,20 @@ async function handleGenerateBodyBatch() {
   const pendingTaskId = pendingTask.value?.id
 
   try {
-    await generateBodyBatch(novelId.value, {
+    const result = await generateBodyBatch(novelId.value, {
       strategySnapshotId: snapshot.id,
       expectedStrategySnapshotVersion: snapshot.versionNo,
       startChapterNo: state.nextBatchRange.startChapterNo,
       endChapterNo: state.nextBatchRange.endChapterNo,
       idempotencyKey,
     })
-    ElMessage.success('本批正文任务已完成，批次总结已生成')
+    if (result.batch?.status === 'paused') {
+      ElMessage.warning('本批正文已暂停，请查看待处理章节')
+    } else if (!result.batch) {
+      ElMessage.info('正文任务正在生成，请在任务进度中查看')
+    } else {
+      ElMessage.success('本批正文任务已完成，批次总结已生成')
+    }
     bodyBatchIdempotencyKey.value = ''
     await loadDetail()
   } catch (error) {

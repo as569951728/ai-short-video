@@ -1,5 +1,5 @@
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
-import ElementPlus, { ElMessageBox } from 'element-plus'
+import ElementPlus, { ElMessage, ElMessageBox } from 'element-plus'
 import { nextTick } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ErrorCode, NovelCreationStage, StageStatus, StaleLevel, TaskStatus, VersionStatus } from '@ai-shortvideo/shared'
@@ -930,6 +930,30 @@ describe('NovelDetailWorkbench DOM behavior', () => {
     expect(notice.text()).toContain('未完成逐版本复核前不能采用')
     await notice.find('button').trigger('click')
     expect(mocks.routerPush).toHaveBeenCalledWith('/novels/novel-dom-001/chapters/chapter-dom-005')
+  })
+
+  it('does not announce a paused body batch as completed', async () => {
+    mocks.route.query = { step: 'body' }
+    mocks.getNovelDetail.mockResolvedValue(createNovelDetail({
+      creationStage: NovelCreationStage.Body,
+      bodyGeneration: createBodyGenerationFixture({ status: 'pending' }),
+    }))
+    mocks.generateBodyBatch.mockResolvedValueOnce({ batch: { status: 'paused' } })
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const warningSpy = vi.spyOn(ElMessage, 'warning').mockImplementation(() => ({ close: vi.fn() }) as never)
+    const successSpy = vi.spyOn(ElMessage, 'success').mockImplementation(() => ({ close: vi.fn() }) as never)
+    try {
+      wrapper = mount(NovelDetailWorkbench, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+      await flushPromises()
+      await wrapper.findAll('button').find((button) => button.text() === '生成下一批')?.trigger('click')
+      await flushPromises()
+      expect(warningSpy).toHaveBeenCalledWith('本批正文已暂停，请查看待处理章节')
+      expect(successSpy).not.toHaveBeenCalled()
+    } finally {
+      confirmSpy.mockRestore()
+      warningSpy.mockRestore()
+      successSpy.mockRestore()
+    }
   })
 
   it('blocks duplicate body generation after refresh while the authoritative task is processing', async () => {

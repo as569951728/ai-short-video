@@ -18,13 +18,15 @@
 
 在同一隔离 MySQL 中另建 8 章 mock 样本 `cmv618f8p0000hpc8dmk5p6vv`，第 4 章正常保存、第 5 章人为返回超长原稿。`NOVEL_SMOKE_OVERLENGTH=true npm run e2e:novel-prisma-trial-gate` 通过：批次停在第 5 章，任务为 `waiting_confirmation`，原稿是非正式候选，第 5 章正式正文/特性卡/审稿指针均为空，第 6-8 章未写入。同幂等键回放返回同一批次且不重复建候选。关闭并重建应用与 Prisma 客户端后，章节详情仍能回读候选。
 
-另用独立进程执行 `NOVEL_SMOKE_NOVEL_ID=cmv618f8p0000hpc8dmk5p6vv npx tsx scripts/e2e/novel-prisma-overlength-readback.mts`（需传入同一个隔离库 `DATABASE_URL` 和 `AI_PROVIDER_MODE=mock`），任务、候选和正式指针检查通过。两条 smoke 都限制本地 `ai_shortvideo_novel_test`、mock provider 且拒绝模型密钥。新增单元/接口回归覆盖原稿和实验精简稿各有 ID、前序章保留、后续章停止、重复回读、超长候选禁止采用、取消后的迟到结果以及上游版本变化拒写。当前全套 API 209/209、质量资产 4/4、前端 81/81、小说工作台 DOM 31/31，类型检查和前端构建预算通过。
+另用独立进程执行 `NOVEL_SMOKE_NOVEL_ID=cmv618f8p0000hpc8dmk5p6vv npx tsx scripts/e2e/novel-prisma-overlength-readback.mts`（需传入同一个隔离库 `DATABASE_URL` 和 `AI_PROVIDER_MODE=mock`），任务、候选和正式指针检查通过。两条 smoke 都限制本地 `ai_shortvideo_novel_test`、mock provider 且拒绝模型密钥。新增单元/接口回归覆盖原稿和实验精简稿各有 ID、前序章保留、后续章停止、重复回读、超长候选禁止采用、取消后的迟到结果以及上游版本变化拒写。当前全套 API 210/210、质量资产 4/4、前端 81/81、小说工作台 DOM 32/32，类型检查和前端构建预算通过。
 
-再以 `NOVEL_SMOKE_CANCEL_LATE=true npm run e2e:novel-prisma-trial-gate` 使用同一隔离库运行迟到结果场景：模型请求挂起期间可读到 `processing`；取消后放行响应，接口以 409 拒绝，正文候选和第 4 章起的正式正文指针均未写入，任务维持 `CANCELLED`。样本小说 `cmv6231cl0000tgc8xqwdq47g`，任务 `a5911698220f42668efe6a903099d972`。
+再以 `NOVEL_SMOKE_CANCEL_LATE=true npm run e2e:novel-prisma-trial-gate` 使用同一隔离库运行迟到结果场景：模型请求挂起期间可读到 `processing`；同幂等键重复请求回到同一任务且数据库只有一个正文任务。取消后放行响应，接口以 409 拒绝，正文候选和第 4 章起的正式正文指针均未写入，任务维持 `CANCELLED`。样本小说 `cmv62p94s0000jkc8q4lh8ru3`，任务 `a75a9254b84941f38a48bb72de3dd17b`。
+
+以 `NOVEL_SMOKE_HARD_FAILURE=true npm run e2e:novel-prisma-trial-gate` 验证硬失败后重建应用与 Prisma 客户端的续写（仍在同一 Node 进程）：第 4、5 章正式内容和配套资产已保存，第 6 章硬失败暂停，第 7、8 章未生成；重建连接后使用新的幂等键仅续写第 6–8 章并完成批次。复测样本小说 `cmv6412mz0000ric8g5bggy3h`。
 
 ## 未通过或未覆盖
 
 - 超长原稿已持久化；内部实验模式的精简稿也能与原稿分开保存，但实验模式仍默认关闭，且尚无用户点击发起的精简入口。没有基于所选稿重新生成并绑定特性卡、审稿、记忆的人工采用流程，不能据此宣称超长恢复已交付。
-- 隔离 MySQL 已验证正常批次、超长暂停、重放、超长候选的独立进程回读、取消与迟到结果拒写；硬失败后保留前章并跨进程恢复仍需补真实数据库用例。仓储假客户端测试不能替代这个剩余场景。
+- 隔离 MySQL 已验证正常批次、超长暂停、重放、超长候选的独立进程回读、取消与迟到结果拒写，以及硬失败保留前章并在重建客户端后续写。硬失败后的独立进程续写尚未验证；这些均为 mock provider 的安全库场景，尚未覆盖真实模型响应和线上进程调度。
 - 模型请求过程仍在 HTTP 调用内执行，2-5 分钟等待、进程中断后的恢复尚未闭环。真实 DeepSeek 章节质量、长度和情节承接未在本次复测。
 - Prisma 全书审稿、完本确认写链仍未实现。小说不能标为真实数据库全流程完本。

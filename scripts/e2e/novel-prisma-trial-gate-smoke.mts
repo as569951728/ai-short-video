@@ -19,7 +19,10 @@ if (
 
 const overlengthScenario = process.env.NOVEL_SMOKE_OVERLENGTH === 'true';
 const cancelLateScenario = process.env.NOVEL_SMOKE_CANCEL_LATE === 'true';
-if (overlengthScenario && cancelLateScenario) throw new Error('Choose one body smoke scenario.');
+const hardFailureScenario = process.env.NOVEL_SMOKE_HARD_FAILURE === 'true';
+if ([overlengthScenario, cancelLateScenario, hardFailureScenario].filter(Boolean).length > 1) {
+  throw new Error('Choose one body smoke scenario.');
+}
 class OverlengthBodyProvider extends MockBodyProvider {
   async generateBodyChapter(input: Parameters<MockBodyProvider['generateBodyChapter']>[0]) {
     const draft = await super.generateBodyChapter(input);
@@ -45,6 +48,11 @@ class DelayedOverlengthBodyProvider extends OverlengthBodyProvider {
     return super.generateBodyChapter(input);
   }
 }
+class ResumeAfterHardFailureBodyProvider extends MockBodyProvider {
+  async generateBodyChapter(input: Parameters<MockBodyProvider['generateBodyChapter']>[0]) {
+    return super.generateBodyChapter({ ...input, novel: { ...input.novel, title: input.novel.title.replace('批量正文暂停', '重启后恢复') } });
+  }
+}
 const delayedBodyProvider = cancelLateScenario ? new DelayedOverlengthBodyProvider() : null;
 
 const appOptions = {
@@ -68,7 +76,7 @@ async function post(path: string, payload: Record<string, unknown>) {
 
 try {
   const draft = await post('/novels/drafts', {
-    title: `SMOKE-都市重生-试写正式化-${randomUUID().slice(0, 8)}`,
+    title: `SMOKE-都市重生-${hardFailureScenario ? '批量正文暂停' : '试写正式化'}-${randomUUID().slice(0, 8)}`,
     genres: ['都市逆袭'],
     chapterLimit: 8,
     chapterWordRange: { min: 1800, max: 2600 },
@@ -133,6 +141,11 @@ try {
       const during = await app.inject({ method: 'GET', url: `/tasks/${task.id}` });
       assert.equal(during.statusCode, 200, during.body);
       assert.equal(during.json().data.status, 'processing');
+      const duplicate = await post(`/novels/${novelId}/chapters/batch-generate`, bodyRequest);
+      assert.equal(duplicate.task.id, task.id);
+      assert.equal(duplicate.batch, null);
+      assert.equal(await prisma.generationTask.count({ where: { tenantId: 'tenant_novel_prisma_smoke', novelId,
+        taskType: 'body_batch_generate' } }), 1);
       await post(`/tasks/${task.id}/cancel`, { reason: '隔离库迟到结果测试' });
       delayedBodyProvider!.release();
       const late = await pending;
@@ -152,7 +165,34 @@ try {
     }
   } else {
   const body = await post(`/novels/${novelId}/chapters/batch-generate`, bodyRequest);
-  if (overlengthScenario) {
+  if (hardFailureScenario) {
+    assert.equal(body.batch.status, 'paused');
+    assert.equal(body.task.status, 'failed');
+    assert.deepEqual(body.batch.chapterResults.map((result: { chapterNo: number }) => result.chapterNo), [4, 5, 6]);
+    assert.equal(body.batch.completedCount, 2);
+    assert.equal(body.batch.failedChapterNo, 6);
+    const beforeRestart = await prisma.novelChapter.findMany({ where: { tenantId: 'tenant_novel_prisma_smoke', novelId,
+      chapterNo: { gte: 4 } }, orderBy: { chapterNo: 'asc' } });
+    assert.equal(beforeRestart[0].currentContentVersionId !== null, true);
+    assert.equal(beforeRestart[1].currentContentVersionId !== null, true);
+    assert.equal(beforeRestart.slice(2).every((chapter) => chapter.currentContentVersionId === null), true);
+    await app.close();
+    await disconnectPrismaClient();
+    app = await buildApp({ ...appOptions, bodyProvider: new ResumeAfterHardFailureBodyProvider() });
+    const resumed = await post(`/novels/${novelId}/chapters/batch-generate`, {
+      ...bodyRequest, idempotencyKey: `smoke-body-resume-${novelId}`
+    });
+    assert.equal(resumed.batch.status, 'completed');
+    assert.deepEqual(resumed.batch.chapterResults.map((result: { chapterNo: number }) => result.chapterNo), [6, 7, 8]);
+    const afterRestart = await getPrismaClient().novelChapter.findMany({ where: { tenantId: 'tenant_novel_prisma_smoke', novelId,
+      chapterNo: { gte: 4 } }, orderBy: { chapterNo: 'asc' } });
+    assert.equal(afterRestart.length, 5);
+    assert.deepEqual(afterRestart.slice(0, 2).map((chapter) => chapter.currentContentVersionId),
+      beforeRestart.slice(0, 2).map((chapter) => chapter.currentContentVersionId));
+    assert.equal(afterRestart.every((chapter) => chapter.currentContentVersionId !== null), true);
+    console.log(JSON.stringify({ result: 'PASS', scenario: 'prisma_hard_failure_reopened_client_resume', novelId,
+      retainedBeforeRestart: [4, 5], resumedChapters: [6, 7, 8] }));
+  } else if (overlengthScenario) {
     assert.equal(body.batch.status, 'paused');
     assert.equal(body.task.status, 'waiting_confirmation');
     assert.deepEqual(body.batch.chapterResults.map((result: { chapterNo: number }) => result.chapterNo), [4, 5]);
@@ -180,6 +220,10 @@ try {
     assert.equal(reread.statusCode, 200, reread.body);
     assert.equal(reread.json().data.candidateVersions.find((version: { id: string }) => version.id === candidate.id).requiresContentReview, true);
     assert.equal(reread.json().data.chapter.currentContentVersionId, null);
+    const novelDetail = await app.inject({ method: 'GET', url: `/novels/${novelId}` });
+    assert.equal(novelDetail.statusCode, 200, novelDetail.body);
+    assert.equal(novelDetail.json().data.bodyGeneration.latestBatch.chapterResults[1].lengthGate.status, 'too_long');
+    assert.equal(novelDetail.json().data.bodyGeneration.recommendedAction.disabled, true);
     console.log(JSON.stringify({ result: 'PASS', scenario: 'prisma_overlength_candidate_recovery', novelId,
       retainedOriginal: candidate.id, pausedAtChapter: 5, replayedBatch: true, reopenedClient: true }));
   } else {

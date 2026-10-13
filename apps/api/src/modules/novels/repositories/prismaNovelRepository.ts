@@ -9,6 +9,7 @@ import {
   TaskStatus,
   VersionStatus,
   type BodyBatchChapterResultDTO,
+  type ChapterLengthGateDTO,
   type StructureAssetContentDTO,
   type ExecutionEnvelope
 } from '@ai-shortvideo/shared';
@@ -3652,6 +3653,7 @@ function bodyChapterResult(
     status, statusText: status === 'completed' ? '已生成' : '硬失败',
     contentVersionId, featureCardId, reviewReportId, longTermMemoryId,
     score: draft.scoring.totalScore, riskLevel: draft.riskLevel, hardFailed: draft.hardFailed,
+    lengthGate: draft.lengthGate,
     statusNote: status === 'failed' ? '硬失败待处理' : draft.scoring.totalScore < 70 ? '普通风险，已记录。' : null,
     recommendedAction: status === 'failed' ? '进入章节详情处理' : draft.scoring.totalScore < 70 ? '批次完成后可优化本章' : '继续下一章'
   };
@@ -5077,6 +5079,7 @@ function bodyBatchFromTaskMetadata(metadata: unknown, tenantId: string, novelId:
         score: nullableNumber(row.score, 'score'),
         riskLevel: requiredOneOf(row.riskLevel, Object.values(RiskLevel), 'riskLevel'),
         hardFailed: requiredBoolean(row.hardFailed, 'hardFailed'),
+        ...(row.lengthGate == null ? {} : { lengthGate: storedBodyLengthGate(row.lengthGate) }),
         statusNote: nullableString(row.statusNote, 'statusNote'),
         recommendedAction: requiredString(row.recommendedAction, 'recommendedAction')
       };
@@ -5118,6 +5121,20 @@ function bodyBatchFromTaskMetadata(metadata: unknown, tenantId: string, novelId:
   } catch {
     return null;
   }
+}
+
+function storedBodyLengthGate(value: unknown): ChapterLengthGateDTO {
+  const gate = requiredRecord(value, 'lengthGate');
+  return {
+    metric: requiredOneOf(gate.metric, ['unicode_code_point_non_whitespace_nfc_v1'] as const, 'lengthGate.metric'),
+    target: nullableInteger(gate.target, 'lengthGate.target'),
+    lowerBound: nullableInteger(gate.lowerBound, 'lengthGate.lowerBound'),
+    upperBound: nullableInteger(gate.upperBound, 'lengthGate.upperBound'),
+    actual: requiredInteger(gate.actual, 'lengthGate.actual'),
+    status: requiredOneOf(gate.status, ['unconfigured', 'pass', 'too_short', 'too_long'] as const, 'lengthGate.status'),
+    statusText: requiredString(gate.statusText, 'lengthGate.statusText'),
+    canAdopt: requiredBoolean(gate.canAdopt, 'lengthGate.canAdopt')
+  };
 }
 function requiredRecord(value: unknown, path: string): Record<string, unknown> { if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError(`${path} must be an object`); return value as Record<string, unknown>; }
 function requiredArray(value: unknown, path: string): unknown[] { if (!Array.isArray(value)) throw new TypeError(`${path} must be an array`); return value; }
