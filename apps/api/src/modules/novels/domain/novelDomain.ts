@@ -692,6 +692,8 @@ export type LeasedTaskMutationResult =
   | { outcome: 'applied'; task: GenerationTaskRecord }
   | { outcome: 'fenced'; task: null };
 
+export type LeasedExecutionCapability = 'enabled' | 'disabled' | 'unsupported';
+
 export type RecoverExpiredTaskResult =
   | { outcome: 'recovered'; task: GenerationTaskRecord }
   | { outcome: 'not_recovered'; task: null };
@@ -1335,6 +1337,7 @@ export interface NovelRepository {
   listTaskEvents(tenantId: string, taskId: string): Promise<GenerationTaskEventRecord[]>;
   listRecentTasksForNovel(tenantId: string, novelId: string, limit: number): Promise<GenerationTaskRecord[]>;
   assertProviderActionSupported(taskType: string): Promise<void>;
+  getLeasedExecutionCapability(taskType: string): Promise<LeasedExecutionCapability>;
   loadGenerationAuthority(input: LoadGenerationAuthorityInput): Promise<GenerationAuthoritySnapshot | null>;
   claimGenerationTask(input: ClaimGenerationTaskInput): Promise<ClaimGenerationTaskResult>;
   fenceGenerationAuthority(input: GenerationAuthorityFenceInput): Promise<GenerationAuthorityFenceResult>;

@@ -110,6 +110,7 @@ import {
   normalizeDraftRequest
 } from '../domain/novelDomain.js';
 import {
+  isNovelProviderTaskType,
   matchGenerationAuthority,
   validateExecutionEnvelopeV1_1ForTask,
   verifyHashedSafeResultReceipt
@@ -372,6 +373,11 @@ export class PrismaNovelRepository implements NovelRepository {
         capability: 'prisma_novel_provider_finalize'
       });
     }
+  }
+
+
+  async getLeasedExecutionCapability(taskType: string) {
+    return isNovelProviderTaskType(taskType) ? 'disabled' as const : 'unsupported' as const;
   }
 
   async loadGenerationAuthority(
@@ -729,6 +735,39 @@ export class PrismaNovelRepository implements NovelRepository {
           orderBy: [{ createdAt: 'asc' }, { id: 'asc' }]
         });
         if (!candidate) return { kind: 'empty' as const };
+        if (candidate.providerAttemptId !== null || candidate.providerDispatchedAt !== null || candidate.providerAttemptPhase !== null
+          || candidate.providerCallBudgetUsed > 0) {
+          const failed = await tx.generationTask.updateMany({
+            where: {
+              id: candidate.id, tenantId: candidate.tenantId, status: PrismaTaskStatus.QUEUED,
+              leaseOwnerId: null, leaseToken: null,
+              providerAttemptId: candidate.providerAttemptId,
+              providerDispatchedAt: candidate.providerDispatchedAt,
+              providerAttemptPhase: candidate.providerAttemptPhase,
+              providerCallBudgetUsed: candidate.providerCallBudgetUsed
+            },
+            data: {
+              status: PrismaTaskStatus.FAILED,
+              statusNote: '模型调用结果未确认，任务已安全结束。', currentStep: 'failed',
+              failureCategory: 'provider_outcome_unknown', errorCode: 'PROVIDER_OUTCOME_UNKNOWN',
+              errorMessage: 'Queued task contains prior execution evidence.',
+              activeClaimKey: null, leaseOwnerId: null, leaseToken: null, leaseExpiresAt: null,
+              finishedAt: now, updatedAt: now
+            }
+          });
+          if (failed.count === 1) {
+            const task = await tx.generationTask.findFirstOrThrow({ where: { id: candidate.id, tenantId: candidate.tenantId } });
+            await createTaskEvent(tx, { task, eventType: 'task_failed', message: '模型调用结果未确认，任务已安全结束。',
+              progress: task.progress, requestId: 'worker:queued-recovery', createdAt: now });
+            await tx.operationLog.create({ data: {
+              tenantId: task.tenantId, userId: task.createdBy, novelId: task.novelId,
+              action: 'generation_task_failed', objectType: 'generation_task', objectId: task.id,
+              afterSnapshot: { failureCategory: 'provider_outcome_unknown', errorCode: 'PROVIDER_OUTCOME_UNKNOWN' },
+              reason: '模型调用结果未确认，任务已安全结束。', sourceTaskId: task.id, requestId: 'worker:queued-recovery', createdAt: now
+            } });
+          }
+          return { kind: 'retry' as const };
+        }
         try {
           validateExecutionEnvelopeV1_1ForTask(mapGenerationTask(candidate));
         } catch {

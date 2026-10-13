@@ -44,3 +44,9 @@
 依据既有 `rp-02b2-dispatcher-transport-implementation-package.md` 的 B2a3 顺序，已补内部租约阶段检查点：领取租约仅记录 `leased`，不提前生成 provider attempt；`leased -> prepared -> provider_call_started -> provider_result_validated` 每一步要求同一租户、任务、owner/token、未过期租约和正确前置阶段。真正 dispatch 时才写 attempt ID 与时间。另补受控的 leased 安全失败方法：历史 retry child 在模型调用前写一个终态事件和一个操作记录，重复执行和过期 owner 均无新写入。定向 mock/仓储测试 18/18、后端常规测试 216/216、质量资产测试 4/4、整仓类型检查通过；没有连接真实 MySQL 或真实模型。
 
 **状态仍为修复中**：本检查点尚未启动 worker，不能证明 HTTP 快速返回、进程重启自动恢复、真实库 CAS 或费用对账。后续仍需按 B2a3 的安全失败与审计、B2a4/B2a5 的原子业务落账、B2b/B2c 的运行时和页面合同、B3 的过期扫描与结果未知处理逐关验收；不得仅凭本次定向测试把 E1 标记为通过。
+
+## E1 第二个执行检查点
+
+补上了租约领取后的内部预检：仓储权威能力当前对 15 类生成任务一律关闭，未知类型返回不支持；预检先识别历史 retry child、损坏的 V1.1 执行合同和未放行能力，再通过同一 `failLeasedAction` 写入受控终态、唯一事件与操作日志。正常 leased 任务在原子业务落账能力完成前仍不会进入模型调用。排队任务若意外带有此前的模型 attempt/dispatch/phase 标记，领取时不再清除这些标记，而是以 `PROVIDER_OUTCOME_UNKNOWN` 安全终止，防止再次付费调用。
+
+定向隔离测试 12/12、后端常规测试 216/216、质量资产测试 4/4、整仓类型检查通过。常规测试使用无 `DATABASE_URL` 的非 production 测试环境；尚未做真实 MySQL、多进程或浏览器状态验收。**E1 仍为修复中**：当前没有生产 worker、过期任务扫描和异步页面合同，第二检查点只证明领取前后的一部分安全边界，不能将“可恢复执行链”标为通过。

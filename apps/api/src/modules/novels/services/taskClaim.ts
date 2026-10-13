@@ -1,6 +1,7 @@
 import {
   ErrorCode,
   NOVEL_PROVIDER_ACTIONS,
+  TaskStatus,
   createExecutionEnvelope,
   createExecutionEnvelopeV1_1,
   isPlaceholderActorIdentifier,
@@ -67,6 +68,51 @@ export interface ExecuteClaimedGenerationInput<TProviderResult, TFinalResult> {
 export type ExecuteClaimedGenerationResult<T> =
   | { reused: true; task: GenerationTaskRecord; value: null }
   | { reused: false; task: GenerationTaskRecord; value: T };
+
+export interface LeasedActionPreflightInput {
+  repository: NovelRepository;
+  tenantId: string;
+  taskId: string;
+  leaseOwnerId: string;
+  leaseToken: string;
+  authoritativeNow: Date;
+}
+
+export type LeasedActionPreflightResult =
+  | { outcome: 'ready' | 'failed'; task: GenerationTaskRecord }
+  | { outcome: 'fenced'; task: null };
+
+export async function preflightLeasedAction(input: LeasedActionPreflightInput): Promise<LeasedActionPreflightResult> {
+  const task = await input.repository.findTaskById(input.tenantId, input.taskId);
+  if (!task || task.status !== TaskStatus.Processing || task.leaseOwnerId !== input.leaseOwnerId
+    || task.leaseToken !== input.leaseToken || !task.providerAttemptPhase) {
+    return { outcome: 'fenced', task: null };
+  }
+  let reason: 'retry_not_available' | 'worker_payload_unsupported' | null = null;
+  if (task.retryOfTaskId !== null) {
+    reason = 'retry_not_available';
+  } else {
+    try {
+      validateExecutionEnvelopeV1_1ForTask(task);
+    } catch (error) {
+      if (!(error instanceof WorkerPayloadUnsupportedError)) throw error;
+      reason = 'worker_payload_unsupported';
+    }
+    if (!reason && await input.repository.getLeasedExecutionCapability(task.taskType) !== 'enabled') {
+      reason = 'worker_payload_unsupported';
+    }
+    if (!reason && (task.providerAttemptPhase !== 'leased' || task.providerAttemptId !== null || task.providerDispatchedAt !== null)) {
+      reason = 'worker_payload_unsupported';
+    }
+  }
+  if (!reason) return { outcome: 'ready', task };
+  const failure = await input.repository.failLeasedAction({
+    tenantId: input.tenantId, taskId: input.taskId, leaseOwnerId: input.leaseOwnerId,
+    leaseToken: input.leaseToken, authoritativeNow: input.authoritativeNow,
+    expectedPhase: task.providerAttemptPhase, reason
+  });
+  return failure.outcome === 'applied' ? { outcome: 'failed', task: failure.task } : failure;
+}
 
 export async function executeClaimedGeneration<TProviderResult, TFinalResult>(
   input: ExecuteClaimedGenerationInput<TProviderResult, TFinalResult>

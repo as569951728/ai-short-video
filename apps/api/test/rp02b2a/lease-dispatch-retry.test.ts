@@ -4,6 +4,8 @@ import { TaskStatus } from '@ai-shortvideo/shared';
 import { buildApp } from '../../src/app.js';
 import { createInMemoryNovelRepository } from '../../src/modules/novels/repositories/inMemoryNovelRepository.js';
 import { PrismaNovelRepository } from '../../src/modules/novels/repositories/prismaNovelRepository.js';
+import { preflightLeasedAction } from '../../src/modules/novels/services/taskClaim.js';
+import { listActionExecutionPlans } from '../../src/modules/novels/services/actionExecutionPlan.js';
 
 const at = (seconds: number) => new Date(Date.UTC(2030, 0, 1, 0, 0, seconds));
 
@@ -38,6 +40,125 @@ async function queuedTask() {
 }
 
 describe('RP-02B2a3 leased dispatch checkpoint', () => {
+  it('keeps all provider action capabilities disabled until fenced finalize is available', async () => {
+    const inMemory = createInMemoryNovelRepository();
+    const prisma = Object.create(PrismaNovelRepository.prototype) as PrismaNovelRepository;
+    const taskTypes = new Set(listActionExecutionPlans().map((plan) => plan.taskType));
+    assert.equal(taskTypes.size, 15);
+    for (const taskType of taskTypes) {
+      assert.equal(await inMemory.getLeasedExecutionCapability(taskType), 'disabled', taskType);
+      assert.equal(await prisma.getLeasedExecutionCapability(taskType), 'disabled', taskType);
+    }
+    assert.equal(await inMemory.getLeasedExecutionCapability('unknown_task'), 'unsupported');
+    assert.equal(await prisma.getLeasedExecutionCapability('unknown_task'), 'unsupported');
+  });
+
+  it('safely terminates a disabled leased action without an attempt, provider result, or duplicate audit', async () => {
+    const { repository, task } = await queuedTask();
+    await repository.leaseNextQueuedTask('worker-safe', 'lease-safe', at(0), at(30));
+    const beforeEvents = repository.getGenerationTaskEvents().length;
+    const beforeLogs = repository.getOperationLogs().length;
+    const input = { repository, tenantId: task.tenantId, taskId: task.id,
+      leaseOwnerId: 'worker-safe', leaseToken: 'lease-safe', authoritativeNow: at(1) };
+    assert.equal((await preflightLeasedAction({ ...input, leaseOwnerId: 'wrong-owner' })).outcome, 'fenced');
+    assert.equal(repository.getGenerationTaskEvents().length, beforeEvents);
+    assert.equal((await preflightLeasedAction(input)).outcome, 'failed');
+    assert.equal(task.status, TaskStatus.Failed);
+    assert.equal(task.errorCode, 'WORKER_PAYLOAD_UNSUPPORTED');
+    assert.equal(task.providerAttemptId, null);
+    assert.equal(task.providerDispatchedAt, null);
+    assert.equal(task.resultReceiptHash, null);
+    assert.equal(task.activeClaimKey, null);
+    assert.equal(repository.getGenerationTaskEvents().length, beforeEvents + 1);
+    assert.equal(repository.getOperationLogs().length, beforeLogs + 1);
+    assert.equal((await preflightLeasedAction(input)).outcome, 'fenced');
+    assert.equal(repository.getGenerationTaskEvents().length, beforeEvents + 1);
+    assert.equal(repository.getOperationLogs().length, beforeLogs + 1);
+  });
+
+  it('redacts a damaged leased envelope and fences the expired owner', async () => {
+    const { repository, task } = await queuedTask();
+    await repository.leaseNextQueuedTask('worker-damaged', 'lease-damaged', at(0), at(30));
+    task.executionEnvelopeJson = { secret: 'sk-secret-canary' } as never;
+    const input = { repository, tenantId: task.tenantId, taskId: task.id,
+      leaseOwnerId: 'worker-damaged', leaseToken: 'lease-damaged' };
+    assert.equal((await preflightLeasedAction({ ...input, authoritativeNow: at(30) })).outcome, 'fenced');
+    assert.equal(task.status, TaskStatus.Processing);
+    assert.equal((await preflightLeasedAction({ ...input, authoritativeNow: at(1) })).outcome, 'failed');
+    assert.equal(task.errorCode, 'WORKER_PAYLOAD_UNSUPPORTED');
+    assert.equal(JSON.stringify(repository.getGenerationTaskEvents()).includes('sk-secret-canary'), false);
+    assert.equal(JSON.stringify(repository.getOperationLogs()).includes('sk-secret-canary'), false);
+  });
+
+  it('does not erase evidence of an earlier provider attempt when a task is queued again', async () => {
+    const { repository, task } = await queuedTask();
+    task.providerAttemptId = 'earlier-attempt';
+    task.providerDispatchedAt = at(0);
+    task.providerAttemptPhase = 'provider_call_started';
+    const beforeEvents = repository.getGenerationTaskEvents().length;
+    const beforeLogs = repository.getOperationLogs().length;
+    assert.equal(await repository.leaseNextQueuedTask('worker-replay', 'lease-replay', at(1), at(30)), null);
+    assert.equal(task.status, TaskStatus.Failed);
+    assert.equal(task.errorCode, 'PROVIDER_OUTCOME_UNKNOWN');
+    assert.equal(task.providerAttemptId, 'earlier-attempt');
+    assert.equal(task.providerDispatchedAt?.toISOString(), at(0).toISOString());
+    assert.equal(task.leaseOwnerId, null);
+    assert.equal(repository.getGenerationTaskEvents().length, beforeEvents + 1);
+    assert.equal(repository.getOperationLogs().length, beforeLogs + 1);
+    assert.equal(await repository.leaseNextQueuedTask('worker-replay', 'lease-again', at(2), at(30)), null);
+    assert.equal(repository.getGenerationTaskEvents().length, beforeEvents + 1);
+    assert.equal(repository.getOperationLogs().length, beforeLogs + 1);
+  });
+
+  it('does not lease a queued task when only the paid-call budget shows prior use', async () => {
+    const { repository, task } = await queuedTask();
+    task.providerCallBudgetUsed = 1;
+    assert.equal(task.providerAttemptId, null);
+    assert.equal(task.providerDispatchedAt, null);
+    assert.equal(await repository.leaseNextQueuedTask('worker-budget', 'lease-budget', at(1), at(30)), null);
+    assert.equal(task.status, TaskStatus.Failed);
+    assert.equal(task.errorCode, 'PROVIDER_OUTCOME_UNKNOWN');
+    assert.equal(task.providerCallBudgetUsed, 1);
+  });
+
+  it('atomically fails a Prisma queued task with prior dispatch evidence before leasing it', async () => {
+    const row = {
+      id: 'task-old-attempt', tenantId: 'tenant-1', novelId: 'novel-1', createdBy: 'user-1',
+      status: 'QUEUED', statusNote: null as string | null, progress: 0,
+      providerAttemptId: 'attempt-old', providerDispatchedAt: at(0), providerAttemptPhase: 'PROVIDER_CALL_STARTED',
+      providerCallBudgetUsed: 1, leaseOwnerId: null, leaseToken: null
+    };
+    const events: unknown[] = [];
+    const logs: unknown[] = [];
+    const updates: unknown[] = [];
+    const repository = Object.create(PrismaNovelRepository.prototype) as PrismaNovelRepository & { prisma: unknown };
+    Object.defineProperty(repository, 'prisma', { value: {
+      $transaction: async (callback: (tx: unknown) => Promise<unknown>) => callback({
+        generationTask: {
+          findFirst: async () => row.status === 'QUEUED' ? row : null,
+          findFirstOrThrow: async () => row,
+          updateMany: async (input: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
+            updates.push(input);
+            Object.assign(row, input.data);
+            return { count: 1 };
+          }
+        },
+        generationTaskEvent: { create: async (input: unknown) => { events.push(input); } },
+        operationLog: { create: async (input: unknown) => { logs.push(input); } }
+      })
+    } });
+    assert.equal(await repository.leaseNextQueuedTask('worker-1', 'lease-1', at(1), at(30)), null);
+    assert.equal(row.status, 'FAILED');
+    assert.equal(row.providerAttemptId, 'attempt-old');
+    assert.equal(row.providerDispatchedAt.toISOString(), at(0).toISOString());
+    assert.equal((updates[0] as { where: Record<string, unknown> }).where.providerAttemptId, 'attempt-old');
+    assert.equal(events.length, 1);
+    assert.equal(logs.length, 1);
+    assert.equal(await repository.leaseNextQueuedTask('worker-1', 'lease-2', at(2), at(30)), null);
+    assert.equal(events.length, 1);
+    assert.equal(logs.length, 1);
+  });
+
   it('records an attempt only at dispatch and fences duplicate or wrong-phase checkpoints', async () => {
     const { repository, task } = await queuedTask();
     const lease = await repository.leaseNextQueuedTask('worker-1', 'lease-1', at(0), at(60));
@@ -92,14 +213,14 @@ describe('RP-02B2a3 leased dispatch checkpoint', () => {
         expectedPhase: 'leased', nextPhase: 'prepared'
     } })).outcome, 'fenced');
     assert.equal(task.providerAttemptId, null);
-    const failure = { tenantId: task.tenantId, taskId: task.id, leaseOwnerId: 'worker-3', leaseToken: 'lease-3',
-      authoritativeNow: at(2), expectedPhase: 'leased' as const, reason: 'retry_not_available' as const };
-    assert.equal((await repository.failLeasedAction(failure)).outcome, 'applied');
+    const failure = { repository, tenantId: task.tenantId, taskId: task.id, leaseOwnerId: 'worker-3', leaseToken: 'lease-3',
+      authoritativeNow: at(2) };
+    assert.equal((await preflightLeasedAction(failure)).outcome, 'failed');
     assert.equal(task.status, TaskStatus.Failed);
     assert.equal(task.errorCode, 'RETRY_NOT_AVAILABLE');
     assert.equal(task.activeClaimKey, null);
     assert.equal(task.leaseToken, null);
-    assert.equal((await repository.failLeasedAction(failure)).outcome, 'fenced');
+    assert.equal((await preflightLeasedAction(failure)).outcome, 'fenced');
     assert.equal(repository.getGenerationTaskEvents().length, eventsBefore + 1);
     assert.equal(repository.getOperationLogs().length, logsBefore + 1);
     assert.equal(repository.getOperationLogs()[0]?.sourceTaskId, task.id);

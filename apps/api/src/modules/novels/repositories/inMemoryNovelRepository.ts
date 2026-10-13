@@ -113,6 +113,7 @@ import {
 } from '../domain/novelDomain.js';
 import {
   hashCanonicalJson,
+  isNovelProviderTaskType,
   matchGenerationAuthority,
   validateExecutionEnvelopeV1_1ForTask,
   verifyHashedSafeResultReceipt
@@ -531,6 +532,9 @@ export function createInMemoryNovelRepository(): InMemoryNovelRepository {
     },
 
     async assertProviderActionSupported(_taskType: string) {},
+    async getLeasedExecutionCapability(taskType: string) {
+      return isNovelProviderTaskType(taskType) ? 'disabled' as const : 'unsupported' as const;
+    },
 
     async loadGenerationAuthority(input: LoadGenerationAuthorityInput): Promise<GenerationAuthoritySnapshot | null> {
       return loadAuthority(input);
@@ -705,6 +709,11 @@ export function createInMemoryNovelRepository(): InMemoryNovelRepository {
     async leaseNextQueuedTask(workerId: string, leaseToken: string, now: Date, leaseUntil: Date) {
       if (leaseUntil.getTime() <= now.getTime()) return null;
       for (const task of generationTasks.filter((item) => item.status === TaskStatus.Queued).sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())) {
+        if (task.providerAttemptId != null || task.providerDispatchedAt != null || task.providerAttemptPhase != null
+          || (task.providerCallBudgetUsed ?? 0) > 0) {
+          failUnsafeQueuedTask(task, now);
+          continue;
+        }
         try {
           validateExecutionEnvelopeV1_1ForTask(task);
         } catch {
@@ -4754,6 +4763,22 @@ export function createInMemoryNovelRepository(): InMemoryNovelRepository {
     task.activeClaimKey = null;
     task.finishedAt = now;
     task.updatedAt = now;
+  }
+
+  function failUnsafeQueuedTask(task: GenerationTaskRecord, now: Date) {
+    const failure = {
+      failureCategory: 'provider_outcome_unknown', errorCode: 'PROVIDER_OUTCOME_UNKNOWN',
+      errorMessage: 'Queued task contains prior execution evidence.',
+      statusNote: '模型调用结果未确认，任务已安全结束。'
+    };
+    applyLeaseFailure(task, failure, now);
+    operationLogs.unshift({
+      id: nextId('oplog'), tenantId: task.tenantId, userId: task.createdBy,
+      novelId: task.novelId, action: 'generation_task_failed', objectType: 'generation_task', objectId: task.id,
+      beforeSnapshot: null, afterSnapshot: { failureCategory: failure.failureCategory, errorCode: failure.errorCode },
+      reason: failure.statusNote, impactSummary: null, sourceTaskId: task.id,
+      requestId: 'worker:queued-recovery', ip: null, userAgent: null, createdAt: now
+    });
   }
 
   function appendLeaseEvent(task: GenerationTaskRecord, eventType: string, message: string, now: Date) {

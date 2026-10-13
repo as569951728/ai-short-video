@@ -1145,6 +1145,8 @@ describe('novel package 3 structure routes', () => {
     task.status = TaskStatus.Queued;
     task.startedAt = null;
     task.finishedAt = null;
+    task.providerAttemptId = null;
+    task.providerAttemptPhase = null;
     task.providerDispatchedAt = null;
     const leased = await repository.leaseNextQueuedTask(
       'legacy-structure-worker',
