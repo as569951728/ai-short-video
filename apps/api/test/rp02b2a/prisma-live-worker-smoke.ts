@@ -7,12 +7,13 @@ import { MockDirectionProvider } from '../../src/modules/novels/providers/mockDi
 import { MockFullReviewProvider } from '../../src/modules/novels/providers/mockFullReviewProvider.js';
 import { MockStructureProvider } from '../../src/modules/novels/providers/mockStructureProvider.js';
 import { MockTrialProvider } from '../../src/modules/novels/providers/mockTrialProvider.js';
+import type { NovelProviderActionInputFor } from '../../src/modules/novels/services/actionExecutionPlan.js';
 import { PrismaNovelRepository } from '../../src/modules/novels/repositories/prismaNovelRepository.js';
 import { createLeasedActionExecutor } from '../../src/modules/novels/services/leasedActionExecutor.js';
 import { NovelService } from '../../src/modules/novels/services/novelService.js';
 import { NovelTaskWorkerRuntime, createSystemNovelTaskWorkerScheduler } from '../../src/modules/novels/services/novelTaskWorkerRuntime.js';
 import { sweepExpiredNovelTasks } from '../../src/modules/novels/services/recoveryScanner.js';
-import { claimQueuedGeneration } from '../../src/modules/novels/services/taskClaim.js';
+import { claimQueuedGeneration, reconstructLeasedProviderInput } from '../../src/modules/novels/services/taskClaim.js';
 
 const url = process.env.E1_MYSQL_SMOKE_URL;
 if (!url || process.env.DATABASE_URL !== url) throw new Error('Set matching E1_MYSQL_SMOKE_URL and DATABASE_URL.');
@@ -26,7 +27,8 @@ if (target.protocol !== 'mysql:' || !['127.0.0.1', 'localhost'].includes(target.
 
 class IsolatedPrismaRepository extends PrismaNovelRepository {
   override async getLeasedExecutionCapability(taskType: string) {
-    return ['novel_direction_generate', 'novel_direction_fuse', 'novel_direction_optimize'].includes(taskType)
+    return ['novel_direction_generate', 'novel_direction_fuse', 'novel_direction_optimize',
+      'trial_writing_generate'].includes(taskType)
       ? 'enabled' as const : super.getLeasedExecutionCapability(taskType);
   }
 }
@@ -149,6 +151,76 @@ try {
     where: { tenantId: context.tenantId, novelId: novel.id, sourceTaskId: optimizeTask.id }
   }), 1);
 
+  const plan = await prisma.creativeVersion.create({ data: {
+    tenantId: context.tenantId, novelId: novel.id,
+    objectType: 'chapter_plan', objectId: 'chapter_plan', versionNo: 1,
+    status: 'CURRENT', contentJson: { title: '隔离试写目录', summary: '首章试写恢复验证' },
+    createdBy: context.userId
+  } });
+  await prisma.novel.update({ where: { id: novel.id }, data: {
+    currentChapterPlanVersionId: plan.id, creationStage: 'CHAPTER_PLAN', stageStatus: 'WAITING_USER'
+  } });
+  const chapters = [];
+  for (let chapterNo = 1; chapterNo <= 3; chapterNo += 1) {
+    chapters.push(await prisma.novelChapter.create({ data: {
+      tenantId: context.tenantId, novelId: novel.id,
+      chapterNo, title: `隔离试写第${chapterNo}章`, wordTarget: 1800
+    } }));
+  }
+  const trialNow = await repository.getAuthoritativeTaskTime();
+  const trialQueued = await claimQueuedGeneration({
+    action: 'trial_chapter_one_generate', repository,
+    novel: (await repository.findById(context.tenantId, novel.id))!, context,
+    idempotencyKey: `e1-trial-${suffix}`, effectiveRequest: { chapterCount: 3, regenerateReason: null },
+    sourceVersionRefs: { currentDirectionVersionId: versions[0]!.id,
+      currentSettingVersionId: null, currentOutlineVersionId: null,
+      currentStageOutlineVersionId: null, currentChapterPlanVersionId: plan.id,
+      objectType: 'trial_run' }, now: () => trialNow,
+    durationDeadlineAt: new Date(trialNow.getTime() + 15 * 60_000),
+    providerCapability: new MockTrialProvider()
+  });
+  const trialTask = await waitForTerminalTask(repository, context.tenantId, trialQueued.task.id);
+  assert.equal(trialTask.status, TaskStatus.WaitingConfirmation);
+  assert.equal(trialTask.providerCallBudgetUsed, 1);
+  assert.ok(trialTask.resultReceiptHash);
+  assert.equal(trialTask.resultObjectType, 'trial_run');
+  const trialRun = await prisma.trialRun.findFirstOrThrow({ where: {
+    tenantId: context.tenantId, novelId: novel.id, sourceTaskId: trialTask.id
+  } });
+  assert.equal(trialRun.id, trialTask.resultObjectId);
+  assert.equal(trialRun.status, 'waiting_chapter1_selection');
+  const trialVersions = await prisma.chapterContentVersion.findMany({ where: {
+    tenantId: context.tenantId, novelId: novel.id, sourceTaskId: trialTask.id
+  }, orderBy: { versionNo: 'asc' } });
+  assert.equal(trialVersions.length, 3);
+  assert.deepEqual(trialTask.resultVersionIds, trialVersions.map((version) => version.id));
+  assert.ok(trialVersions.every((version) => version.status === 'CANDIDATE'
+    && version.chapterId === chapters[0]!.id
+    && (version.metadata as { trialRunId: string }).trialRunId === trialRun.id));
+  assert.equal(trialVersions.filter((version) =>
+    (version.metadata as { isAiRecommended: boolean }).isAiRecommended).length, 1);
+  assert.equal((await repository.findById(context.tenantId, novel.id))?.creationStage, 'trial');
+  const persistedChapters = await prisma.novelChapter.findMany({ where: {
+    tenantId: context.tenantId, novelId: novel.id
+  } });
+  assert.equal(persistedChapters.length, chapters.length);
+  assert.ok(persistedChapters.every((chapter) => chapter.currentContentVersionId === null));
+  assert.equal((await repository.listTaskEvents(context.tenantId, trialTask.id))
+    .filter((event) => event.eventType === 'task_finalized').length, 1);
+  const reloaded = new IsolatedPrismaRepository();
+  assert.equal((await reloaded.findLatestTrialRun(context.tenantId, novel.id))?.id, trialRun.id);
+  assert.equal((await reloaded.findTaskById(context.tenantId, trialTask.id))?.resultReceiptHash,
+    trialTask.resultReceiptHash);
+  assert.equal((await reloaded.finalizeLeasedAction({
+    tenantId: context.tenantId, taskId: trialTask.id,
+    leaseOwnerId: 'stale-worker', leaseToken: 'stale-lease',
+    authoritativeNow: await repository.getAuthoritativeTaskTime(),
+    providerAttemptId: trialTask.providerAttemptId!, validatedResult: []
+  })).outcome, 'fenced');
+  assert.equal(await prisma.chapterContentVersion.count({ where: {
+    tenantId: context.tenantId, novelId: novel.id, sourceTaskId: trialTask.id
+  } }), 3);
+
   await worker.stop();
   const invalidNow = await repository.getAuthoritativeTaskTime();
   const invalidQueued = await claimQueuedGeneration({
@@ -191,11 +263,66 @@ try {
   }), 0);
   assert.equal((await repository.listTaskEvents(context.tenantId, invalidQueued.task.id))
     .filter((event) => event.eventType === 'task_failed').length, 1);
+  const malformedTrialNow = await repository.getAuthoritativeTaskTime();
+  const malformedTrialQueued = await claimQueuedGeneration({
+    action: 'trial_chapter_one_generate', repository,
+    novel: (await repository.findById(context.tenantId, novel.id))!, context,
+    idempotencyKey: `e1-invalid-trial-${suffix}`,
+    effectiveRequest: { chapterCount: 3, regenerateReason: null },
+    sourceVersionRefs: { currentDirectionVersionId: versions[0]!.id,
+      currentSettingVersionId: null, currentOutlineVersionId: null,
+      currentStageOutlineVersionId: null, currentChapterPlanVersionId: plan.id,
+      objectType: 'trial_run' }, now: () => malformedTrialNow,
+    durationDeadlineAt: new Date(malformedTrialNow.getTime() + 15 * 60_000),
+    providerCapability: new MockTrialProvider()
+  });
+  const malformedTrialLease = {
+    tenantId: context.tenantId, taskId: malformedTrialQueued.task.id,
+    leaseOwnerId: `e1-invalid-trial-${suffix}`, leaseToken: randomUUID()
+  };
+  const trialLeased = await repository.leaseNextQueuedTask(malformedTrialLease.leaseOwnerId,
+    malformedTrialLease.leaseToken, malformedTrialNow, new Date(malformedTrialNow.getTime() + 10_000));
+  assert.equal(trialLeased?.id, malformedTrialQueued.task.id);
+  const malformedTrialInput = (await reconstructLeasedProviderInput(repository, trialLeased!))
+    .providerInput as NovelProviderActionInputFor<'trial_chapter_one_generate'>;
+  const malformedTrialCandidates = await new MockTrialProvider().generateChapterOneCandidates(malformedTrialInput);
+  malformedTrialCandidates[0] = { ...malformedTrialCandidates[0]!, content: '过短正文' };
+  assert.equal((await repository.checkpointLeasedTask({ ...malformedTrialLease,
+    authoritativeNow: await repository.getAuthoritativeTaskTime(),
+    checkpoint: { expectedPhase: 'leased', nextPhase: 'prepared' }
+  })).outcome, 'applied');
+  const malformedTrialAttemptId = randomUUID();
+  assert.equal((await repository.dispatchLeasedTask({ ...malformedTrialLease,
+    authoritativeNow: await repository.getAuthoritativeTaskTime(), providerAttemptId: malformedTrialAttemptId
+  })).outcome, 'applied');
+  assert.equal((await repository.checkpointLeasedTask({ ...malformedTrialLease,
+    authoritativeNow: await repository.getAuthoritativeTaskTime(),
+    checkpoint: { expectedPhase: 'provider_call_started', nextPhase: 'provider_result_validated',
+      providerAttemptId: malformedTrialAttemptId }
+  })).outcome, 'applied');
+  assert.equal((await repository.finalizeLeasedAction({ ...malformedTrialLease,
+    authoritativeNow: await repository.getAuthoritativeTaskTime(),
+    providerAttemptId: malformedTrialAttemptId, validatedResult: malformedTrialCandidates
+  })).outcome, 'applied');
+  const malformedTrialTask = await repository.findTaskById(context.tenantId, malformedTrialQueued.task.id);
+  assert.equal(malformedTrialTask?.status, TaskStatus.Failed);
+  assert.equal(malformedTrialTask?.errorCode, 'WORKER_PAYLOAD_UNSUPPORTED');
+  assert.equal(malformedTrialTask?.providerCallBudgetUsed, 1);
+  assert.equal(await prisma.trialRun.count({ where: {
+    tenantId: context.tenantId, novelId: novel.id, sourceTaskId: malformedTrialQueued.task.id
+  } }), 0);
+  assert.equal(await prisma.chapterContentVersion.count({ where: {
+    tenantId: context.tenantId, novelId: novel.id, sourceTaskId: malformedTrialQueued.task.id
+  } }), 0);
+  assert.equal((await repository.listTaskEvents(context.tenantId, malformedTrialQueued.task.id))
+    .filter((event) => event.eventType === 'task_failed').length, 1);
   process.stdout.write(JSON.stringify({ result: 'passed', taskId: task.id, status: task.status,
     candidateCount: versions.length, providerCallBudgetUsed: task.providerCallBudgetUsed,
     fuseTaskId: fuseTask.id, optimizeTaskId: optimizeTask.id,
     revisionCandidateCount: fusedVersions.length + optimizedVersions.length,
-    malformedResultStatus: invalidTask?.status }) + '\n');
+    trialTaskId: trialTask.id, trialCandidateCount: trialVersions.length,
+    malformedResultStatus: invalidTask?.status,
+    malformedTrialResultStatus: malformedTrialTask?.status }) + '\n');
 } finally {
   await worker.stop();
   await disconnectPrismaClient();
