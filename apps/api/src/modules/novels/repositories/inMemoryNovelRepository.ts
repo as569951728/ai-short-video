@@ -102,6 +102,7 @@ import {
   type RequestContext,
   type ResolvedFullReviewIssueRecord,
   type TrialCandidateCreationInput,
+  type TrialChapterCandidateDraft,
   type TrialChapterResultRecord,
   type TrialConfirmationInput,
   type TrialFollowupGenerationInput,
@@ -185,6 +186,36 @@ function validLeasedStructureDraft(value: unknown, objectType: StructureAssetTyp
       && text(chapter.title) && text(chapter.goal) && text(chapter.conflict) && text(chapter.hook))
     && (objectType === 'setting' || content.stages.length > 0)
     && (objectType !== 'chapter_plan' || content.chapters.length > 0);
+}
+
+function validLeasedTrialCandidate(value: unknown, chapter: NovelChapterRecord): value is TrialChapterCandidateDraft {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const draft = value as TrialChapterCandidateDraft;
+  const text = (input: unknown) => typeof input === 'string' && input.trim().length > 0;
+  const strings = (input: unknown) => Array.isArray(input) && input.every(text);
+  const score = (input: unknown) => typeof input === 'number' && Number.isFinite(input) && input >= 0 && input <= 100;
+  const scoring = draft.scoring;
+  return draft.chapterId === chapter.id && draft.chapterNo === 1
+    && text(draft.title) && text(draft.content) && text(draft.summary)
+    && text(draft.openingStrategy) && text(draft.openingHighlight) && text(draft.firstSentence)
+    && text(draft.first300Summary) && text(draft.endingHook) && text(draft.aiRecommendedReason)
+    && Object.values(RiskLevel).includes(draft.riskLevel) && strings(draft.riskTags)
+    && typeof draft.isAiRecommended === 'boolean' && !!scoring && typeof scoring === 'object'
+    && text(scoring.scoringStrategyVersion) && score(scoring.totalScore)
+    && ['pass', 'warning', 'hard_fail'].includes(scoring.gateResult)
+    && text(scoring.gateResultText)
+    && Array.isArray(scoring.dimensions) && scoring.dimensions.length > 0
+    && scoring.dimensions.every((dimension) => !!dimension && text(dimension.key) && text(dimension.label)
+      && score(dimension.score) && typeof dimension.weight === 'number' && Number.isFinite(dimension.weight)
+      && dimension.weight >= 0 && dimension.weight <= 1 && text(dimension.evidence)
+      && typeof dimension.penaltyPoints === 'number' && Number.isFinite(dimension.penaltyPoints)
+      && dimension.penaltyPoints >= 0)
+    && !!scoring.weights && typeof scoring.weights === 'object' && !Array.isArray(scoring.weights)
+    && Object.values(scoring.weights).every((weight) => typeof weight === 'number' && Number.isFinite(weight)
+      && weight >= 0 && weight <= 1)
+    && strings(scoring.evidence) && strings(scoring.penalties)
+    && typeof scoring.hardFailure === 'boolean' && strings(scoring.hardFailureReasons)
+    && evaluateChapterLength(draft.content, chapter.wordTarget).status === 'pass';
 }
 
 export function createInMemoryNovelRepository(options: {
@@ -867,7 +898,8 @@ export function createInMemoryNovelRepository(options: {
           : envelope.action === 'stage_outline_generate' ? 'stage_outline'
             : envelope.action === 'chapter_plan_generate' ? 'chapter_plan' : null;
       const isDirection = ['direction_generate', 'direction_fuse', 'direction_optimize'].includes(envelope.action);
-      if (!isDirection && !structureType) {
+      const isTrialChapterOne = envelope.action === 'trial_chapter_one_generate';
+      if (!isDirection && !structureType && !isTrialChapterOne) {
         return { outcome: 'fenced' as const, task: null };
       }
       const authorityInput = {
@@ -880,6 +912,104 @@ export function createInMemoryNovelRepository(options: {
       }
       const novel = novels.find((item) => item.tenantId === task.tenantId && item.id === task.novelId && !item.deletedAt);
       if (!novel) return this.failLeasedAction({ ...input, expectedPhase: 'provider_result_validated', reason: 'source_stale' });
+      if (isTrialChapterOne) {
+        const chapter = chapters.find((item) => item.tenantId === task.tenantId && item.novelId === novel.id && item.chapterNo === 1);
+        const request = asRecord(envelope.normalizedRequest);
+        const chapterCount = request.chapterCount;
+        const candidates = input.validatedResult;
+        if (!chapter || !Number.isInteger(chapterCount) || Number(chapterCount) < 2 || Number(chapterCount) > 5
+          || !Array.isArray(candidates) || candidates.length !== chapterCount
+          || !candidates.every((candidate) => validLeasedTrialCandidate(candidate, chapter))
+          || candidates.filter((candidate) => candidate.isAiRecommended).length !== 1) {
+          return this.failLeasedAction({ ...input, expectedPhase: 'provider_result_validated', reason: 'worker_payload_unsupported' });
+        }
+        const context = { tenantId: task.tenantId, userId: task.createdBy!, requestId: `worker:${input.leaseOwnerId}` };
+        const before = {
+          sequence, task: { ...task }, novel: { ...novel }, versions: [...chapterContentVersions],
+          runs: [...trialRuns], events: [...generationTaskEvents], logs: [...operationLogs]
+        };
+        try {
+          const trialRunId = nextId('trial');
+          const versionNo = nextChapterContentVersionNo(task.tenantId, novel.id, chapter.id);
+          const versions: ChapterContentVersionRecord[] = candidates.map((candidate, index) => ({
+            id: nextId('ccv'), tenantId: task.tenantId, novelId: novel.id, chapterId: chapter.id,
+            versionNo: versionNo + index, status: VersionStatus.Candidate, staleLevel: StaleLevel.None,
+            sourceType: 'mock_ai', sourceTaskId: task.id, sourceVersionRefs: envelope.sourceVersionRefs,
+            rewriteReason: typeof request.regenerateReason === 'string' && request.regenerateReason.trim()
+              ? request.regenerateReason.trim() : '模型服务生成第1章试写候选',
+            content: candidate.content, wordCount: countWords(candidate.content), summary: candidate.summary,
+            reviewScore: candidate.scoring.totalScore, decisionRecordId: null,
+            createdBy: context.userId, createdAt: input.authoritativeNow,
+            metadata: {
+              trialRunId, trialStatus: 'candidate', chapterNo: candidate.chapterNo, title: candidate.title,
+              openingStrategy: candidate.openingStrategy, openingHighlight: candidate.openingHighlight,
+              firstSentence: candidate.firstSentence, first300Summary: candidate.first300Summary,
+              endingHook: candidate.endingHook, riskLevel: candidate.riskLevel, riskTags: candidate.riskTags,
+              aiRecommendedReason: candidate.aiRecommendedReason, isAiRecommended: candidate.isAiRecommended,
+              scoring: candidate.scoring
+            }
+          }));
+          const trialRun: TrialRunRecord = {
+            id: trialRunId, tenantId: task.tenantId, novelId: novel.id,
+            chapterPlanVersionId: novel.currentChapterPlanVersionId, trialChapterCount: Number(chapterCount),
+            status: 'waiting_chapter1_selection', totalScore: null, trialResult: null, reviewReportId: null,
+            policyProfileVersionId: novel.policyProfileVersionId, sourceTaskId: task.id,
+            confirmedAt: null, confirmedBy: null, forceReason: null,
+            createdAt: input.authoritativeNow, updatedAt: input.authoritativeNow,
+            metadata: {
+              selectedChapterOneCandidateId: null, currentStep: '选择第1章候选后继续生成第2-3章',
+              blockingReason: null, sourceVersionRefs: envelope.sourceVersionRefs
+            }
+          };
+          trialRuns.unshift(trialRun);
+          chapterContentVersions.unshift(...versions);
+          options.onLeasedFinalizeStage?.('asset');
+          const receipt = createSafeResultReceipt(task, {
+            status: 'waiting_confirmation', outcome: 'candidate_created',
+            resultObjectType: 'trial_run', resultObjectId: trialRunId,
+            resultVersionIds: versions.map((version) => version.id), resultCount: versions.length
+          });
+          options.onLeasedFinalizeStage?.('receipt');
+          task.status = TaskStatus.WaitingConfirmation;
+          task.statusNote = '第1章试写候选已生成，等待用户选择。';
+          task.progress = 100;
+          task.currentStep = '第1章候选已生成，等待选择';
+          task.resultObjectType = receipt.receipt.resultObjectType;
+          task.resultObjectId = receipt.receipt.resultObjectId;
+          task.resultVersionIds = receipt.receipt.resultVersionIds;
+          task.resultReceiptHash = receipt.hash;
+          task.outputSummary = `${versions.length} 个第1章试写候选已生成，等待用户选择。`;
+          task.providerAttemptPhase = 'finalizing';
+          task.finishedAt = input.authoritativeNow;
+          task.updatedAt = input.authoritativeNow;
+          clearLease(task);
+          novel.creationStage = NovelCreationStage.Trial;
+          novel.stageStatus = StageStatus.WaitingUser;
+          novel.updatedBy = context.userId;
+          novel.updatedAt = input.authoritativeNow;
+          options.onLeasedFinalizeStage?.('task');
+          appendLeaseEvent(task, 'task_finalized', task.statusNote, input.authoritativeNow);
+          options.onLeasedFinalizeStage?.('event');
+          operationLogs.unshift({
+            id: nextId('oplog'), tenantId: task.tenantId, userId: context.userId, novelId: novel.id,
+            action: 'generation_task_finalized', objectType: 'generation_task', objectId: task.id,
+            beforeSnapshot: null, afterSnapshot: { resultVersionIds: receipt.receipt.resultVersionIds, receiptHash: receipt.hash },
+            reason: '第1章试写候选生成完成', impactSummary: null, sourceTaskId: task.id,
+            requestId: context.requestId, ip: null, userAgent: null, createdAt: input.authoritativeNow
+          });
+          options.onLeasedFinalizeStage?.('operation_log');
+          return { outcome: 'applied' as const, task };
+        } catch (error) {
+          sequence = before.sequence;
+          Object.assign(task, before.task);
+          Object.assign(novel, before.novel);
+          chapterContentVersions.splice(0, chapterContentVersions.length, ...before.versions);
+          trialRuns.splice(0, trialRuns.length, ...before.runs);
+          generationTaskEvents.splice(0, generationTaskEvents.length, ...before.events);
+          operationLogs.splice(0, operationLogs.length, ...before.logs);
+          throw error;
+        }
+      }
       const isBatch = envelope.action === 'direction_generate';
       const result = input.validatedResult;
       const rawDrafts: unknown[] = isDirection

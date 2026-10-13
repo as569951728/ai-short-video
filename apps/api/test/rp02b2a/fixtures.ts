@@ -136,8 +136,10 @@ export function actionSpec(action: NovelProviderAction, novelId: string) {
 export type AuthorityFixtureRepository = NovelRepository & ReturnType<typeof createInMemoryNovelRepository>;
 export type AuthorityMutation = 'missing' | 'changed';
 export type AuthorityPhase = 'before_claim' | 'after_first_authority_read' | 'after_claim';
-export async function createRouteAuthorityFixture(action: NovelProviderAction) {
-  const repository = createInMemoryNovelRepository();
+export async function createRouteAuthorityFixture(
+  action: NovelProviderAction,
+  repository = createInMemoryNovelRepository()
+) {
   const counters = { provider: 0, intent: 0, authority: 0 };
   const providerInvocations: Array<{ action: NovelProviderAction; input: unknown }> = [];
   let armed: { phase: AuthorityPhase; mutation: AuthorityMutation } | null = null;

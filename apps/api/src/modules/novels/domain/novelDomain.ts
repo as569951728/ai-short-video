@@ -655,7 +655,7 @@ export interface LeasedCreativeFinalizeInput {
   leaseToken: string;
   authoritativeNow: Date;
   providerAttemptId: string;
-  validatedResult: DirectionCandidateDraft[] | DirectionCandidateDraft | StructureAssetDraft;
+  validatedResult: DirectionCandidateDraft[] | DirectionCandidateDraft | StructureAssetDraft | TrialChapterCandidateDraft[];
 }
 
 export interface SafeResultReceiptV1 {
