@@ -8,11 +8,13 @@ import {
   StageStatus,
   TaskStatus,
   VersionStatus,
+  type BodyBatchChapterResultDTO,
   type StructureAssetContentDTO,
   type ExecutionEnvelope
 } from '@ai-shortvideo/shared';
 import { getPrismaClient } from '../../../infrastructure/database/prisma.js';
 import { Prisma } from '../../../generated/prisma/client.js';
+import { evaluateChapterLength } from '../domain/chapterLengthPolicy.js';
 import {
   DEFAULT_POLICY_PROFILE_VERSION_ID,
   type AdoptedDirectionRecord,
@@ -353,7 +355,9 @@ export class PrismaNovelRepository implements NovelRepository {
       'stage_outline_generate',
       'chapter_plan_generate',
       'trial_writing_generate',
-      'trial_followup_generate'
+      'trial_followup_generate',
+      'body_batch_generate',
+      'chapter_body_generate'
     ]);
     if (!supported.has(taskType)) {
       throw new BusinessError(ErrorCode.ConfigMissing, 'Prisma 小说后半写链尚未实现，provider 调用已在 task claim 前阻断。', {
@@ -456,10 +460,10 @@ export class PrismaNovelRepository implements NovelRepository {
           input.tenantId, item.currentReviewReportId!, prisma
         )))
       : [];
-    const fullReviewMemory = input.action === 'novel_full_review'
-      ? await this.findLatestLongTermMemory(input.tenantId, novel.id, null, prisma)
-      : null;
     const finalChapter = orderedChapters.at(-1);
+    const fullReviewMemory = input.action === 'novel_full_review' && finalChapter
+      ? await this.findLatestLongTermMemory(input.tenantId, novel.id, finalChapter.id, prisma)
+      : null;
     if (
       loadedFullReviewContents.some((item, index) => !item || item.chapterId !== orderedChapters[index]?.id)
       || loadedFullReviewFeatureCards.some((item, index) => !item || item.chapterId !== orderedChapters[index]?.id || item.staleLevel === StaleLevel.HardStale)
@@ -498,7 +502,7 @@ export class PrismaNovelRepository implements NovelRepository {
       previousChapter?.currentContentVersionId
         ? this.findChapterContentVersionById(input.tenantId, novel.id, previousChapter.currentContentVersionId, prisma)
         : null,
-      bodyAuthority ? this.findLatestLongTermMemory(input.tenantId, novel.id, null, prisma) : null,
+      bodyAuthority && previousChapter ? this.findLatestLongTermMemory(input.tenantId, novel.id, previousChapter.id, prisma) : null,
       bodyAuthority ? this.findLatestBodyBatch(input.tenantId, novel.id, prisma) : null
     ]);
     return {
@@ -2813,7 +2817,7 @@ export class PrismaNovelRepository implements NovelRepository {
       where: {
         tenantId,
         novelId,
-        taskType: 'body_batch_generate',
+        taskType: { in: ['body_batch_generate', 'chapter_body_generate'] },
         resultObjectType: 'body_batch'
       },
       orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
@@ -2825,8 +2829,19 @@ export class PrismaNovelRepository implements NovelRepository {
       .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime() || right.id.localeCompare(left.id))[0] ?? null;
   }
 
-  async findBodyBatchByIdempotencyKey(_tenantId: string, _novelId: string, _idempotencyKey: string): Promise<BodyBatchRecord | null> {
-    return null;
+  async findBodyBatchByIdempotencyKey(tenantId: string, novelId: string, idempotencyKey: string): Promise<BodyBatchRecord | null> {
+    const tasks = await this.prisma.generationTask.findMany({
+      where: {
+        tenantId,
+        novelId,
+        taskType: { in: ['body_batch_generate', 'chapter_body_generate'] },
+        resultObjectType: 'body_batch',
+        resultObjectId: { not: null }
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }]
+    });
+    const task = tasks.find((item) => toRecord(toRecord(item.metadata).batch).idempotencyKey === idempotencyKey);
+    return task ? mapStoredBodyBatch(task, tenantId, novelId) : null;
   }
 
   async listOpenBlockingImpactCases(tenantId: string, novelId: string): Promise<ImpactCaseRecord[]> {
@@ -2866,14 +2881,49 @@ export class PrismaNovelRepository implements NovelRepository {
     chapterId?: string | null,
     prisma: Prisma.TransactionClient = this.prisma
   ): Promise<LongTermMemoryRecord | null> {
-    const memory = await prisma.longTermMemory.findFirst({
-      where: {
-        tenantId,
-        novelId,
-        ...(chapterId ? { chapterId } : {})
-      },
-      orderBy: { createdAt: 'desc' }
+    const chapters = await prisma.novelChapter.findMany({
+      where: { tenantId, novelId, deletedAt: null, ...(chapterId ? { id: chapterId } : {}) },
+      select: { id: true, chapterNo: true, currentContentVersionId: true }
     });
+    const referencedContentIds = chapters
+      .map((chapter) => chapter.currentContentVersionId)
+      .filter((id): id is string => Boolean(id));
+    if (referencedContentIds.length === 0) return null;
+    const versions = await prisma.chapterContentVersion.findMany({
+      where: { tenantId, novelId, id: { in: referencedContentIds }, status: PrismaVersionStatus.CURRENT },
+      select: { id: true, chapterId: true }
+    });
+    const currentVersionByChapter = new Map(versions.map((version) => [version.chapterId, version.id]));
+    const eligibleChapters = chapters.filter((chapter) =>
+      chapter.currentContentVersionId && currentVersionByChapter.get(chapter.id) === chapter.currentContentVersionId);
+    if (eligibleChapters.length === 0) return null;
+    const where = {
+      tenantId,
+      novelId,
+      status: PrismaVersionStatus.CURRENT,
+      staleLevel: { not: PrismaStaleLevel.HARD_STALE },
+      chapterId: { in: eligibleChapters.map((chapter) => chapter.id) },
+      sourceContentVersionId: { in: eligibleChapters.map((chapter) => chapter.currentContentVersionId!) }
+    };
+    const memory = chapterId
+      ? await prisma.longTermMemory.findFirst({
+          where: { tenantId, novelId, status: PrismaVersionStatus.CURRENT, staleLevel: { not: PrismaStaleLevel.HARD_STALE }, chapterId,
+            sourceContentVersionId: eligibleChapters[0].currentContentVersionId },
+          orderBy: { createdAt: 'desc' }
+        })
+      : await (async () => {
+          const candidates = await prisma.longTermMemory.findMany({
+            where,
+            select: { id: true, chapterId: true, sourceContentVersionId: true, createdAt: true }
+          });
+          const chapterOrder = new Map(eligibleChapters.map((chapter) => [chapter.id, chapter.chapterNo]));
+          const latest = candidates.filter((candidate) =>
+            currentVersionByChapter.get(candidate.chapterId ?? '') === candidate.sourceContentVersionId
+          ).sort((left, right) =>
+            (chapterOrder.get(right.chapterId ?? '') ?? 0) - (chapterOrder.get(left.chapterId ?? '') ?? 0) ||
+            right.createdAt.getTime() - left.createdAt.getTime())[0];
+          return latest ? prisma.longTermMemory.findFirst({ where: { ...where, id: latest.id } }) : null;
+        })();
 
     return memory ? mapLongTermMemory(memory) : null;
   }
@@ -2922,10 +2972,60 @@ export class PrismaNovelRepository implements NovelRepository {
     return null;
   }
 
-  async createBodyBatchTask(_input: BodyBatchTaskCreationInput): Promise<CreatedBodyBatchTaskRecord> {
-    throw new BusinessError(ErrorCode.ConfigMissing, 'Prisma 正文批量写路径尚未实现，不能创建正文批次预占任务；请使用 in-memory 验收路径或先补齐真实数据库写入。', {
-      taskType: 'body_batch_generate',
-      capability: 'prisma_body_batch_write'
+  async createBodyBatchTask(input: BodyBatchTaskCreationInput): Promise<CreatedBodyBatchTaskRecord> {
+    return this.prisma.$transaction(async (tx) => {
+      validateBodyBatchRange(input);
+      const { task } = await verifyBodyBatchWriteContext(tx, input);
+      const existing = readBodyBatchProgress(task);
+      if (existing) {
+        assertMatchingBodyBatchProgress(existing, input);
+        const novel = await tx.novel.findFirstOrThrow({ where: { id: input.novel.id, tenantId: input.context.tenantId } });
+        return { novel: mapNovel(novel), task: mapGenerationTask(task), reused: true };
+      }
+      const chapters = await tx.novelChapter.findMany({
+        where: { tenantId: input.context.tenantId, novelId: input.novel.id, deletedAt: null, chapterNo: { gte: input.startChapterNo, lte: input.endChapterNo } },
+        orderBy: { chapterNo: 'asc' }
+      });
+      if (chapters.length !== input.endChapterNo - input.startChapterNo + 1 || chapters.some((chapter, index) => chapter.chapterNo !== input.startChapterNo + index)) {
+        throw new BusinessError(ErrorCode.GateBlocked, '正文批次章节目录不完整，请刷新后重试。');
+      }
+      if (chapters.some((chapter) => chapter.currentContentVersionId)) {
+        throw new BusinessError(ErrorCode.GateBlocked, '本批范围已有正式正文，不能覆盖。');
+      }
+      const existingVersion = await tx.chapterContentVersion.findFirst({
+        where: { tenantId: input.context.tenantId, novelId: input.novel.id, chapterId: { in: chapters.map((chapter) => chapter.id) } },
+        select: { id: true }
+      });
+      if (existingVersion) throw new BusinessError(ErrorCode.GateBlocked, '本批范围已有正文版本，需先人工处理，不能重复生成。');
+      const batchId = createId('bodybatch');
+      const progress: BodyBatchProgress = {
+        batchId,
+        idempotencyKey: input.idempotencyKey,
+        requestFingerprint: input.requestFingerprint,
+        strategySnapshotId: input.strategySnapshot.id,
+        strategySnapshotVersion: input.strategySnapshot.versionNo,
+        sourceVersionRefs: input.sourceVersionRefs,
+        startChapterNo: input.startChapterNo,
+        endChapterNo: input.endChapterNo,
+        chapterResults: []
+      };
+      const updatedTask = await tx.generationTask.update({
+        where: { id: task.id, tenantId: input.context.tenantId },
+        data: {
+          progress: 8,
+          currentStep: `正在生成第 ${input.startChapterNo}-${input.endChapterNo} 章正文`,
+          statusNote: '正在生成正文，可以稍后回来查看。',
+          resultObjectType: 'body_batch',
+          metadata: toJsonObject({ ...toRecord(task.metadata), bodyBatchProgress: progress }),
+          updatedAt: input.now
+        }
+      });
+      const novel = await tx.novel.update({
+        where: { id: input.novel.id, tenantId: input.context.tenantId },
+        data: { stageStatus: PrismaStageStatus.PROCESSING, updatedBy: input.context.userId, updatedAt: input.now }
+      });
+      await createTaskEvent(tx, { task: updatedTask, eventType: 'calling_model', message: '正在生成本批正文。', progress: 8, requestId: input.context.requestId, createdAt: input.now });
+      return { novel: mapNovel(novel), task: mapGenerationTask(updatedTask), reused: false };
     });
   }
 
@@ -2953,8 +3053,162 @@ export class PrismaNovelRepository implements NovelRepository {
     throw new Error('Package 7 Prisma video-readiness snapshot path is not implemented; use in-memory mock provider for current package verification.');
   }
 
-  async generateBodyBatch(_input: BodyBatchGenerationInput): Promise<GeneratedBodyBatchRecord> {
-    throw new Error('Package 6 Prisma write path is not implemented; use in-memory mock provider for current package verification.');
+  async generateBodyBatch(input: BodyBatchGenerationInput): Promise<GeneratedBodyBatchRecord> {
+    validateBodyBatchRange(input);
+    validateBodyBatchDrafts(input);
+    for (const draft of input.chapters) {
+      const done = await this.prisma.$transaction(async (tx) => {
+        const { task } = await verifyBodyBatchWriteContext(tx, input);
+        const progress = requireBodyBatchProgress(task, input);
+        const prior = progress.chapterResults.find((result) => result.chapterNo === draft.chapter.chapterNo);
+        if (prior) {
+          await verifyPersistedBodyChapterResult(tx, input, prior);
+          return prior.status === 'failed';
+        }
+        if (progress.chapterResults.length !== draft.chapter.chapterNo - input.startChapterNo) {
+          throw new BusinessError(ErrorCode.GateBlocked, '正文批次检查点不连续，已停止写入。');
+        }
+        const chapter = await tx.novelChapter.findFirst({
+          where: { id: draft.chapter.id, tenantId: input.context.tenantId, novelId: input.novel.id, chapterNo: draft.chapter.chapterNo, deletedAt: null }
+        });
+        if (!chapter || chapter.currentContentVersionId) {
+          throw new BusinessError(ErrorCode.GateBlocked, '章节已变化或已有正式正文，不能覆盖。');
+        }
+        if (chapter.wordTarget !== draft.chapter.wordTarget) {
+          throw new BusinessError(ErrorCode.CandidateStale, '章节目标字数已变化，正文批次已停止。');
+        }
+        if (!draft.hardFailed && !evaluateChapterLength(draft.content, chapter.wordTarget).canAdopt) {
+          throw new BusinessError(ErrorCode.GateBlocked, '正文字数超出当前章节允许范围，不能写入正式版本。');
+        }
+        const existingVersion = await tx.chapterContentVersion.findFirst({
+          where: { tenantId: input.context.tenantId, novelId: input.novel.id, chapterId: chapter.id }, select: { id: true }
+        });
+        if (existingVersion) throw new BusinessError(ErrorCode.GateBlocked, '章节已有正文候选或历史版本，不能重复写入。');
+        const locked = await tx.novelChapter.updateMany({
+          where: { id: chapter.id, tenantId: input.context.tenantId, novelId: input.novel.id, deletedAt: null, currentContentVersionId: null },
+          data: { lastGenerationTaskId: task.id, updatedAt: input.now }
+        });
+        if (locked.count !== 1) throw new BusinessError(ErrorCode.GateBlocked, '章节并发写入冲突，已停止本批。');
+        const result = draft.hardFailed
+          ? await persistFailedBodyChapter(tx, input, task.id, draft)
+          : await persistCompletedBodyChapter(tx, input, task.id, progress.batchId, draft);
+        const chapterResults = [...progress.chapterResults, result];
+        const nextProgress = { ...progress, chapterResults };
+        const updatedTask = await tx.generationTask.update({
+          where: { id: task.id, tenantId: input.context.tenantId },
+          data: {
+            progress: Math.min(95, 20 + chapterResults.length * 15),
+            currentStep: `已处理第 ${draft.chapter.chapterNo} 章`,
+            statusNote: draft.hardFailed ? `第 ${draft.chapter.chapterNo} 章硬失败，后续章节暂停。` : `第 ${draft.chapter.chapterNo} 章已保存。`,
+            resultVersionIdsJson: chapterResults.map((item) => item.contentVersionId).filter((id): id is string => Boolean(id)),
+            metadata: toJsonObject({ ...toRecord(task.metadata), bodyBatchProgress: nextProgress }),
+            updatedAt: input.now
+          }
+        });
+        await createTaskEvent(tx, {
+          task: updatedTask,
+          eventType: draft.hardFailed ? 'chapter_failed' : 'chapter_saved',
+          message: draft.hardFailed ? `第 ${draft.chapter.chapterNo} 章硬失败，后续章节暂停。` : `第 ${draft.chapter.chapterNo} 章已保存正文与审稿。`,
+          progress: updatedTask.progress,
+          requestId: input.context.requestId,
+          createdAt: input.now
+        });
+        return draft.hardFailed;
+      });
+      if (done) break;
+    }
+    return this.prisma.$transaction(async (tx) => {
+      const { task } = await verifyBodyBatchWriteContext(tx, input);
+      const progress = requireBodyBatchProgress(task, input);
+      const failed = progress.chapterResults.find((result) => result.status === 'failed') ?? null;
+      const totalCount = input.endChapterNo - input.startChapterNo + 1;
+      if (!failed && progress.chapterResults.length !== totalCount) {
+        throw new BusinessError(ErrorCode.GateBlocked, '正文批次结果不完整，不能标记完成。');
+      }
+      const completedCount = progress.chapterResults.filter((result) => result.status === 'completed').length;
+      const summary: BodyBatchRecord['summary'] = {
+        id: createId('batchsummary'),
+        batchId: progress.batchId,
+        conclusion: failed
+          ? `已完成 ${completedCount} 章，第 ${failed.chapterNo} 章硬失败，后续章节已暂停。`
+          : `第 ${input.startChapterNo}-${input.endChapterNo} 章批量正文已完成。`,
+        chapterResults: progress.chapterResults,
+        riskTrend: failed || progress.chapterResults.some((result) => result.score !== null && result.score < 70)
+          ? '本批存在需要关注的质量风险。' : '本批未发现阻塞风险。',
+        nextBatchNotes: input.previousBatchSummary?.nextBatchNotes ?? [],
+        riskChapterIds: progress.chapterResults.filter((result) => result.hardFailed || (result.score !== null && result.score < 70)).map((result) => result.chapterId),
+        createdAt: input.now
+      };
+      const batch: BodyBatchRecord = {
+        id: progress.batchId,
+        tenantId: input.context.tenantId,
+        novelId: input.novel.id,
+        taskId: task.id,
+        idempotencyKey: input.idempotencyKey,
+        requestFingerprint: input.requestFingerprint,
+        strategySnapshotId: input.strategySnapshot.id,
+        strategySnapshotVersion: input.strategySnapshot.versionNo,
+        sourceVersionRefs: input.sourceVersionRefs,
+        startChapterNo: input.startChapterNo,
+        endChapterNo: input.endChapterNo,
+        status: failed ? 'paused' : 'completed',
+        statusNote: failed ? `第 ${failed.chapterNo} 章硬失败，后续章节未继续。` : '本批正文生成完成。',
+        completedCount,
+        failedCount: failed ? 1 : 0,
+        pendingCount: failed ? totalCount - completedCount - 1 : 0,
+        failedChapterNo: failed?.chapterNo ?? null,
+        chapterResults: progress.chapterResults,
+        summary,
+        createdAt: input.now,
+        metadata: { previousBatchSummaryId: input.previousBatchSummary?.id ?? null }
+      };
+      const updatedTask = await transitionClaimedTask(tx, {
+        taskId: task.id,
+        tenantId: input.context.tenantId,
+        data: {
+          status: failed ? PrismaTaskStatus.FAILED : PrismaTaskStatus.COMPLETED,
+          statusNote: failed ? '硬失败待处理，已完成章节保留。' : '本批正文生成完成。',
+          progress: 100,
+          currentStep: failed ? `第 ${failed.chapterNo} 章硬失败待处理` : '批次总结已生成',
+          outputSummary: summary.conclusion,
+          resultObjectType: 'body_batch',
+          resultObjectId: batch.id,
+          resultVersionIdsJson: progress.chapterResults.map((result) => result.contentVersionId).filter((id): id is string => Boolean(id)),
+          failureCategory: failed ? 'quality_failed' : null,
+          errorCode: failed ? 'QUALITY_GATE_FAILED' : null,
+          errorMessage: failed ? `第 ${failed.chapterNo} 章硬失败，后续章节已暂停。` : null,
+          activeClaimKey: null,
+          finishedAt: input.now,
+          metadata: toJsonObject({ ...toRecord(task.metadata), bodyBatchProgress: progress, batch }),
+          updatedAt: input.now
+        }
+      });
+      await createTaskEvent(tx, {
+        task: updatedTask,
+        eventType: failed ? 'batch_paused' : 'batch_completed',
+        message: summary.conclusion,
+        progress: 100,
+        requestId: input.context.requestId,
+        createdAt: input.now
+      });
+      const remaining = await tx.novelChapter.count({
+        where: { tenantId: input.context.tenantId, novelId: input.novel.id, deletedAt: null, currentContentVersionId: null }
+      });
+      const novel = await tx.novel.update({
+        where: { id: input.novel.id, tenantId: input.context.tenantId },
+        data: {
+          creationStage: PrismaNovelCreationStage.BODY,
+          stageStatus: failed ? PrismaStageStatus.BLOCKED : remaining === 0 ? PrismaStageStatus.COMPLETED : PrismaStageStatus.NOT_STARTED,
+          updatedBy: input.context.userId,
+          updatedAt: input.now
+        }
+      });
+      const chapters = await tx.novelChapter.findMany({
+        where: { tenantId: input.context.tenantId, novelId: input.novel.id, deletedAt: null },
+        orderBy: { chapterNo: 'asc' }
+      });
+      return { novel: mapNovel(novel), task: mapGenerationTask(updatedTask), batch, chapters: chapters.map(mapNovelChapter) };
+    });
   }
 
   async rewriteChapter(_input: ChapterRewriteInput): Promise<RewrittenChapterRecord> {
@@ -3036,6 +3290,307 @@ async function assertNoActiveAuthorityClaimAfterRootLock(
     taskType: activeTask.taskType
   });
 }
+interface BodyBatchProgress {
+  batchId: string;
+  idempotencyKey: string;
+  requestFingerprint: unknown;
+  strategySnapshotId: string;
+  strategySnapshotVersion: number;
+  sourceVersionRefs: unknown;
+  startChapterNo: number;
+  endChapterNo: number;
+  chapterResults: BodyBatchChapterResultDTO[];
+}
+
+function stableBodyValue(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableBodyValue).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableBodyValue(record[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function validateBodyBatchRange(input: BodyBatchTaskCreationInput | BodyBatchGenerationInput) {
+  if (!Number.isInteger(input.startChapterNo) || !Number.isInteger(input.endChapterNo) ||
+      input.startChapterNo <= 3 || input.endChapterNo < input.startChapterNo || input.endChapterNo - input.startChapterNo >= 5) {
+    throw new BusinessError(ErrorCode.GateBlocked, '正文批次范围必须是第 4 章起的连续 1-5 章。');
+  }
+}
+
+function validateBodyBatchDrafts(input: BodyBatchGenerationInput) {
+  const total = input.endChapterNo - input.startChapterNo + 1;
+  if (input.chapters.length === 0 || input.chapters.length > total ||
+      input.chapters.some((draft, index) => draft.chapter.chapterNo !== input.startChapterNo + index ||
+        (draft.hardFailed && index !== input.chapters.length - 1)) ||
+      (!input.chapters.at(-1)?.hardFailed && input.chapters.length !== total)) {
+    throw new BusinessError(ErrorCode.GateBlocked, '模型返回的正文章节不连续或不完整，未写入正文。');
+  }
+}
+
+function readBodyBatchProgress(task: { metadata: unknown }): BodyBatchProgress | null {
+  const raw = toRecord(toRecord(task.metadata).bodyBatchProgress);
+  if (!raw.batchId) return null;
+  if (typeof raw.batchId !== 'string' || raw.batchId.length === 0 || typeof raw.idempotencyKey !== 'string' ||
+      typeof raw.strategySnapshotId !== 'string' || typeof raw.strategySnapshotVersion !== 'number' ||
+      typeof raw.startChapterNo !== 'number' || typeof raw.endChapterNo !== 'number' ||
+      !Array.isArray(raw.chapterResults)) {
+    throw new BusinessError(ErrorCode.GateBlocked, '正文批次检查点损坏，已停止写入。');
+  }
+  return raw as unknown as BodyBatchProgress;
+}
+
+function assertMatchingBodyBatchProgress(progress: BodyBatchProgress, input: BodyBatchTaskCreationInput | BodyBatchGenerationInput) {
+  if (progress.idempotencyKey !== input.idempotencyKey || progress.strategySnapshotId !== input.strategySnapshot.id ||
+      progress.strategySnapshotVersion !== input.strategySnapshot.versionNo || progress.startChapterNo !== input.startChapterNo ||
+      progress.endChapterNo !== input.endChapterNo ||
+      stableBodyValue(progress.requestFingerprint) !== stableBodyValue(input.requestFingerprint) ||
+      stableBodyValue(progress.sourceVersionRefs) !== stableBodyValue(input.sourceVersionRefs)) {
+    throw new BusinessError(ErrorCode.IdempotencyConflict, '正文批次幂等键已绑定到不同请求。');
+  }
+}
+
+function requireBodyBatchProgress(task: { metadata: unknown }, input: BodyBatchGenerationInput): BodyBatchProgress {
+  const progress = readBodyBatchProgress(task);
+  if (!progress) throw new BusinessError(ErrorCode.GateBlocked, '正文批次尚未预占，不能保存模型结果。');
+  assertMatchingBodyBatchProgress(progress, input);
+  return progress;
+}
+
+async function verifyBodyBatchWriteContext(tx: Prisma.TransactionClient, input: BodyBatchTaskCreationInput | BodyBatchGenerationInput) {
+  const tenantId = input.context.tenantId;
+  if (!input.task.activeClaimKey || !input.task.requestHash || !input.task.idempotencyToken ||
+      !['body_batch_generate', 'chapter_body_generate'].includes(input.task.taskType) || input.task.novelId !== input.novel.id) {
+    throw new BusinessError(ErrorCode.GateBlocked, '正文任务缺少有效 claim，不能写入。');
+  }
+  const taskLock = await tx.generationTask.updateMany({
+    where: {
+      id: input.task.id,
+      tenantId,
+      novelId: input.novel.id,
+      taskType: input.task.taskType,
+      status: PrismaTaskStatus.PROCESSING,
+      activeClaimKey: input.task.activeClaimKey,
+      idempotencyToken: input.task.idempotencyToken,
+      requestHash: input.task.requestHash,
+      cancelRequestedAt: null,
+      ...(input.task.leaseToken
+        ? { leaseOwnerId: input.task.leaseOwnerId, leaseToken: input.task.leaseToken, leaseExpiresAt: { gt: input.now } }
+        : { leaseToken: null })
+    },
+    data: { updatedAt: input.now }
+  });
+  if (taskLock.count !== 1) throw new BusinessError(ErrorCode.GateBlocked, '正文任务已取消、失去 claim 或版本变化，结果已丢弃。');
+  const task = await tx.generationTask.findFirstOrThrow({ where: { id: input.task.id, tenantId } });
+  const claimedRefs = toRecord(task.sourceVersionRefs);
+  const requestedRefs = toRecord(input.sourceVersionRefs);
+  if (Object.keys(requestedRefs).some((key) => stableBodyValue(claimedRefs[key]) !== stableBodyValue(requestedRefs[key]))) {
+    throw new BusinessError(ErrorCode.CandidateStale, '正文任务来源版本已变化。');
+  }
+  const refs = toRecord(input.sourceVersionRefs);
+  for (const key of ['currentDirectionVersionId', 'currentSettingVersionId', 'currentOutlineVersionId', 'currentStageOutlineVersionId', 'currentChapterPlanVersionId', 'trialRunId', 'selectedChapterOneCandidateId']) {
+    if (typeof refs[key] !== 'string' || !(refs[key] as string).trim()) {
+      throw new BusinessError(ErrorCode.GateBlocked, '正文批次缺少必需的上游版本引用。', { field: key });
+    }
+  }
+  const novelLock = await tx.novel.updateMany({
+    where: {
+      id: input.novel.id,
+      tenantId,
+      deletedAt: null,
+      lifecycleStatus: PrismaNovelLifecycleStatus.ACTIVE,
+      creationStage: PrismaNovelCreationStage.BODY,
+      currentDirectionVersionId: asNullableBodyRef(refs.currentDirectionVersionId),
+      currentSettingVersionId: asNullableBodyRef(refs.currentSettingVersionId),
+      currentOutlineVersionId: asNullableBodyRef(refs.currentOutlineVersionId),
+      currentStageOutlineVersionId: asNullableBodyRef(refs.currentStageOutlineVersionId),
+      currentChapterPlanVersionId: asNullableBodyRef(refs.currentChapterPlanVersionId)
+    },
+    data: { updatedAt: input.now }
+  });
+  if (novelLock.count !== 1) throw new BusinessError(ErrorCode.CandidateStale, '小说或上游版本已变化，正文批次已停止。');
+  const trialRun = await tx.trialRun.findFirst({
+    where: { id: String(refs.trialRunId), tenantId, novelId: input.novel.id, status: 'confirmed' }
+  });
+  if (!trialRun || toRecord(trialRun.metadata).bodyStrategySnapshotId !== input.strategySnapshot.id) {
+    throw new BusinessError(ErrorCode.CandidateStale, '试写确认或正文策略来源已变化，正文批次已停止。');
+  }
+  const snapshot = await tx.creativeVersion.findFirst({
+    where: {
+      id: input.strategySnapshot.id,
+      tenantId,
+      novelId: input.novel.id,
+      objectType: 'body_strategy_snapshot',
+      versionNo: input.strategySnapshot.versionNo,
+      status: PrismaVersionStatus.CURRENT,
+      staleLevel: PrismaStaleLevel.NONE
+    }
+  });
+  if (!snapshot || refs.strategySnapshotId !== snapshot.id || refs.strategySnapshotVersion !== snapshot.versionNo || refs.creationStage !== 'body') {
+    throw new BusinessError(ErrorCode.CandidateStale, '正文策略快照已变化，不能写入旧批次。');
+  }
+  const snapshotRefs = toRecord(snapshot.sourceVersionRefs);
+  for (const key of ['currentDirectionVersionId', 'currentSettingVersionId', 'currentOutlineVersionId', 'currentStageOutlineVersionId', 'currentChapterPlanVersionId', 'trialRunId', 'selectedChapterOneCandidateId']) {
+    if (refs[key] !== snapshotRefs[key]) throw new BusinessError(ErrorCode.CandidateStale, '正文策略快照的来源版本不匹配。');
+  }
+  return { task };
+}
+
+function asNullableBodyRef(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
+}
+
+async function verifyPersistedBodyChapterResult(tx: Prisma.TransactionClient, input: BodyBatchGenerationInput, result: BodyBatchChapterResultDTO) {
+  const chapter = await tx.novelChapter.findFirst({
+    where: { id: result.chapterId, tenantId: input.context.tenantId, novelId: input.novel.id, chapterNo: result.chapterNo, deletedAt: null }
+  });
+  if (!chapter || chapter.lastGenerationTaskId !== input.task.id) throw new BusinessError(ErrorCode.GateBlocked, '已保存章节的任务归属已变化，不能续写。');
+  if (result.status === 'failed') {
+    if (chapter.currentContentVersionId) throw new BusinessError(ErrorCode.GateBlocked, '失败章节已有正式正文，不能续写。');
+    return;
+  }
+  if (!result.contentVersionId || !result.featureCardId || !result.reviewReportId || !result.longTermMemoryId ||
+      chapter.currentContentVersionId !== result.contentVersionId || chapter.currentFeatureCardVersionId !== result.featureCardId ||
+      chapter.currentReviewReportId !== result.reviewReportId) {
+    throw new BusinessError(ErrorCode.GateBlocked, '已保存章节版本引用不一致，不能续写。');
+  }
+  const [content, card, review, memory] = await Promise.all([
+    tx.chapterContentVersion.findFirst({ where: { id: result.contentVersionId, tenantId: input.context.tenantId, novelId: input.novel.id, chapterId: chapter.id, sourceTaskId: input.task.id, status: PrismaVersionStatus.CURRENT } }),
+    tx.chapterFeatureCard.findFirst({ where: { id: result.featureCardId, tenantId: input.context.tenantId, novelId: input.novel.id, chapterId: chapter.id, sourceTaskId: input.task.id, status: PrismaVersionStatus.CURRENT } }),
+    tx.reviewReport.findFirst({ where: { id: result.reviewReportId, tenantId: input.context.tenantId, novelId: input.novel.id, objectType: 'chapter', objectId: chapter.id, objectVersionId: result.contentVersionId, sourceTaskId: input.task.id } }),
+    tx.longTermMemory.findFirst({ where: { id: result.longTermMemoryId, tenantId: input.context.tenantId, novelId: input.novel.id, chapterId: chapter.id, sourceContentVersionId: result.contentVersionId, sourceTaskId: input.task.id, status: PrismaVersionStatus.CURRENT } })
+  ]);
+  if (!content || !card || !review || !memory) throw new BusinessError(ErrorCode.GateBlocked, '已保存章节配套资产不完整，不能续写。');
+}
+
+async function persistFailedBodyChapter(tx: Prisma.TransactionClient, input: BodyBatchGenerationInput, taskId: string, draft: BodyBatchGenerationInput['chapters'][number]): Promise<BodyBatchChapterResultDTO> {
+  await tx.novelChapter.update({
+    where: { id: draft.chapter.id, tenantId: input.context.tenantId },
+    data: { mainStatus: 'pending', statusNote: '硬失败待处理', impactLevel: PrismaImpactLevel.MEDIUM, lastGenerationTaskId: taskId, updatedAt: input.now }
+  });
+  return bodyChapterResult(draft, 'failed', null, null, null, null);
+}
+
+async function persistCompletedBodyChapter(tx: Prisma.TransactionClient, input: BodyBatchGenerationInput, taskId: string, batchId: string, draft: BodyBatchGenerationInput['chapters'][number]): Promise<BodyBatchChapterResultDTO> {
+  const tenantId = input.context.tenantId;
+  const chapterId = draft.chapter.id;
+  const feature = draft.featureCard;
+  const review = draft.review;
+  const memoryDraft = draft.memory;
+  const lastCard = await tx.chapterFeatureCard.findFirst({ where: { tenantId, chapterId }, orderBy: { versionNo: 'desc' }, select: { versionNo: true } });
+  const contentVersion = await tx.chapterContentVersion.create({
+    data: {
+      tenantId, novelId: input.novel.id, chapterId, versionNo: 1,
+      status: PrismaVersionStatus.CURRENT, staleLevel: PrismaStaleLevel.NONE,
+      sourceType: 'ai', sourceTaskId: taskId, sourceVersionRefs: toJsonObject(input.sourceVersionRefs),
+      rewriteReason: '批量正文生成章节正文', content: draft.content, wordCount: countWords(draft.content),
+      summary: draft.summary, reviewScore: draft.scoring.totalScore, createdBy: input.context.userId, createdAt: input.now,
+      metadata: toJsonObject({
+        batchId,
+        chapterNo: draft.chapter.chapterNo, title: draft.chapter.title, openingStrategy: draft.openingStrategy,
+        openingHighlight: draft.openingHighlight, firstSentence: draft.firstSentence, first300Summary: draft.first300Summary,
+        endingHook: draft.endingHook, riskLevel: draft.riskLevel, riskTags: draft.riskTags,
+        aiRecommendedReason: draft.aiRecommendedReason, isAiRecommended: false, isSelected: true, scoring: draft.scoring
+      })
+    }
+  });
+  await tx.chapterFeatureCard.updateMany({
+    where: { tenantId, novelId: input.novel.id, chapterId, status: PrismaVersionStatus.CURRENT },
+    data: { status: PrismaVersionStatus.HISTORICAL }
+  });
+  const card = await tx.chapterFeatureCard.create({
+    data: {
+      tenantId, novelId: input.novel.id, chapterId, versionNo: (lastCard?.versionNo ?? 0) + 1,
+      status: PrismaVersionStatus.CURRENT, staleLevel: PrismaStaleLevel.NONE,
+      oneLineSummary: feature.oneLineSummary, coreTask: feature.coreTask, mainConflict: feature.mainConflict,
+      appealPoint: feature.appealPoint, emotionKeywordsJson: toJsonObject(feature.emotionKeywords),
+      characterChangesJson: toJsonObject(feature.characterChanges), relationshipChangesJson: toJsonObject(feature.relationshipChanges),
+      keyInformationJson: toJsonObject(feature.keyInformation), foreshadowingOperation: feature.foreshadowingOperation,
+      endingHook: feature.endingHook, factsCannotChangeJson: toJsonObject(feature.factsCannotChange),
+      featuresToStrengthenJson: toJsonObject(feature.featuresToStrengthen), sourceTaskId: taskId, createdAt: input.now,
+      metadata: toJsonObject({ ...toRecord(feature.metadata), sourceContentVersionId: contentVersion.id })
+    }
+  });
+  const report = await tx.reviewReport.create({
+    data: {
+      tenantId, novelId: input.novel.id, objectType: 'chapter', objectId: chapterId, objectVersionId: contentVersion.id,
+      reviewLevel: review.reviewLevel, totalScore: review.totalScore, subScoresJson: toJsonObject(review.subScores),
+      rating: review.rating, summary: review.summary, strengthsJson: toJsonObject(review.strengths),
+      problemsJson: toJsonObject(review.problems), suggestionsJson: toJsonObject(review.suggestions),
+      issueCardsJson: toJsonObject(review.issueCards), actionOptionsJson: toJsonObject(review.actionOptions),
+      recommendedAction: review.recommendedAction, allowNextStep: review.allowNextStep,
+      blockingIssueCount: review.blockingIssueCount, resolvedStatus: review.resolvedStatus,
+      promptTemplateVersionId: review.promptTemplateVersionId,
+      policyProfileVersionId: review.policyProfileVersionId ?? input.novel.policyProfileVersionId,
+      sourceTaskId: taskId, createdAt: input.now, metadata: toJsonObject(review.metadata)
+    }
+  });
+  await tx.longTermMemory.updateMany({
+    where: { tenantId, novelId: input.novel.id, chapterId, status: PrismaVersionStatus.CURRENT },
+    data: { status: PrismaVersionStatus.HISTORICAL }
+  });
+  const memory = await tx.longTermMemory.create({
+    data: {
+      tenantId, novelId: input.novel.id, chapterId, sourceContentVersionId: contentVersion.id,
+      previousSummary: memoryDraft.previousSummary, characterStatesJson: toJsonObject(memoryDraft.characterStates),
+      relationshipStatesJson: toJsonObject(memoryDraft.relationshipStates), locationsJson: toJsonObject(memoryDraft.locations),
+      organizationsJson: toJsonObject(memoryDraft.organizations), itemsJson: toJsonObject(memoryDraft.items),
+      plantedForeshadowingJson: toJsonObject(memoryDraft.plantedForeshadowing),
+      resolvedForeshadowingJson: toJsonObject(memoryDraft.resolvedForeshadowing),
+      unresolvedConflictsJson: toJsonObject(memoryDraft.unresolvedConflicts), newSettingsJson: toJsonObject(memoryDraft.newSettings),
+      factsCannotContradictJson: toJsonObject(memoryDraft.factsCannotContradict), status: PrismaVersionStatus.CURRENT,
+      staleLevel: PrismaStaleLevel.NONE, sourceTaskId: taskId, createdAt: input.now, metadata: toJsonObject(memoryDraft.metadata)
+    }
+  });
+  await tx.novelChapter.update({
+    where: { id: chapterId, tenantId },
+    data: {
+      currentContentVersionId: contentVersion.id, currentFeatureCardVersionId: card.id, currentReviewReportId: report.id,
+      wordCount: contentVersion.wordCount, mainStatus: 'completed',
+      statusNote: draft.scoring.totalScore < 70 ? '普通风险，已进入批次总结。' : '正文已生成并完成单章审稿。',
+      impactLevel: draft.scoring.totalScore < 70 ? PrismaImpactLevel.MINOR : PrismaImpactLevel.NONE,
+      lastGenerationTaskId: taskId, updatedAt: input.now
+    }
+  });
+  return bodyChapterResult(draft, 'completed', contentVersion.id, card.id, report.id, memory.id);
+}
+
+function bodyChapterResult(
+  draft: BodyBatchGenerationInput['chapters'][number],
+  status: 'completed' | 'failed',
+  contentVersionId: string | null,
+  featureCardId: string | null,
+  reviewReportId: string | null,
+  longTermMemoryId: string | null
+): BodyBatchChapterResultDTO {
+  return {
+    chapterId: draft.chapter.id, chapterNo: draft.chapter.chapterNo, title: draft.chapter.title,
+    status, statusText: status === 'completed' ? '已生成' : '硬失败',
+    contentVersionId, featureCardId, reviewReportId, longTermMemoryId,
+    score: draft.scoring.totalScore, riskLevel: draft.riskLevel, hardFailed: draft.hardFailed,
+    statusNote: status === 'failed' ? '硬失败待处理' : draft.scoring.totalScore < 70 ? '普通风险，已记录。' : null,
+    recommendedAction: status === 'failed' ? '进入章节详情处理' : draft.scoring.totalScore < 70 ? '批次完成后可优化本章' : '继续下一章'
+  };
+}
+
+function mapStoredBodyBatch(task: { id: string; tenantId: string; novelId: string | null; resultObjectId: string | null; metadata: unknown }, tenantId: string, novelId: string): BodyBatchRecord {
+  if (task.tenantId !== tenantId || task.novelId !== novelId) {
+    throw new BusinessError(ErrorCode.GateBlocked, '正文批次任务归属不一致。');
+  }
+  const raw = toRecord(toRecord(task.metadata).batch);
+  const summary = toRecord(raw.summary);
+  if (typeof raw.id !== 'string' || raw.id !== task.resultObjectId || raw.taskId !== task.id ||
+      raw.tenantId !== tenantId || raw.novelId !== novelId || !Array.isArray(raw.chapterResults) ||
+      typeof summary.id !== 'string' || !Array.isArray(summary.chapterResults)) {
+    throw new BusinessError(ErrorCode.GateBlocked, '正文批次记录不完整，不能继续生成。');
+  }
+  return {
+    ...raw,
+    createdAt: new Date(String(raw.createdAt)),
+    summary: { ...summary, createdAt: new Date(String(summary.createdAt)) }
+  } as BodyBatchRecord;
+}
+
 function createId(prefix: string) {
   return `${prefix}_${randomUUID().replace(/-/g, '').slice(0, 20)}`;
 }

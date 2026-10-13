@@ -371,9 +371,12 @@ type ChapterReviewProviderOutputV1 = Pick<ReviewReportRecord, 'reviewLevel' | 't
 type LongTermMemoryProviderOutputV1 = Pick<LongTermMemoryRecord, 'previousSummary' | 'characterStates' | 'relationshipStates' | 'locations' | 'organizations' | 'items' | 'plantedForeshadowing' | 'resolvedForeshadowing' | 'unresolvedConflicts' | 'newSettings' | 'factsCannotContradict'> & { metadata: ProviderMetadataV1 };
 type GeneratedChapterProviderDraftV1 = Pick<TrialChapterCandidateDraft, 'content' | 'summary' | 'openingStrategy' | 'openingHighlight' | 'firstSentence' | 'first300Summary' | 'endingHook' | 'riskLevel' | 'riskTags' | 'aiRecommendedReason' | 'scoring'> & { chapter: ChapterResultRefProviderOutputV1; featureCard: ChapterFeatureCardProviderOutputV1; review: ChapterReviewProviderOutputV1; hardFailed: boolean; hardFailureReasons: string[] };
 export type TrialFollowupChapterProviderDraft = GeneratedChapterProviderDraftV1;
-export type BodyChapterProviderDraft = GeneratedChapterProviderDraftV1 & {
+type BodyChapterCoreProviderDraft = GeneratedChapterProviderDraftV1 & {
   memory: LongTermMemoryProviderOutputV1;
+};
+export type BodyChapterProviderDraft = BodyChapterCoreProviderDraft & {
   experimentalRevisionRequiresConfirmation?: boolean;
+  experimentalOriginalDraft?: BodyChapterCoreProviderDraft;
 };
 
 export interface NovelProviderActionResultMap {

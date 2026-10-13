@@ -3084,6 +3084,19 @@ describe('novel package 6 body generation routes', () => {
     });
     const startingMemory = await repository.findLatestLongTermMemory('tenant_test', novelId);
     assert.ok(startingMemory?.factsCannotContradict.length);
+    repository.getLongTermMemories().push(
+      { ...startingMemory, id: 'unadopted_memory', status: VersionStatus.Candidate, factsCannotContradict: ['候选记忆不能进入下一章'], createdAt: new Date(Date.now() + 1000) },
+      { ...startingMemory, id: 'detached_memory', sourceContentVersionId: 'stale_content', factsCannotContradict: ['过期记忆不能进入下一章'], createdAt: new Date(Date.now() + 2000) }
+    );
+    assert.equal((await repository.findLatestLongTermMemory('tenant_test', novelId))?.id, startingMemory.id);
+    const firstChapter = repository.getNovelChapters().find((chapter) => chapter.novelId === novelId && chapter.chapterNo === 1);
+    assert.ok(firstChapter?.currentContentVersionId);
+    repository.getLongTermMemories().push({
+      ...startingMemory, id: 'newer_earlier_chapter_memory', chapterId: firstChapter.id,
+      sourceContentVersionId: firstChapter.currentContentVersionId,
+      factsCannotContradict: ['较早章节后来生成的记忆不能代替上一章'],
+      createdAt: new Date(Date.now() + 3000)
+    });
     const mock = new MockBodyProvider();
     const inputs: Array<{ chapterNo: number; previousMemory: { factsCannotContradict: string[] } | null }> = [];
     const service = new NovelService({
@@ -3115,6 +3128,9 @@ describe('novel package 6 body generation routes', () => {
 
     assert.deepEqual(inputs.map((input) => input.chapterNo), [4, 5, 6]);
     assert.equal(inputs[1]?.previousMemory?.factsCannotContradict.includes('第4章新增事实'), true);
+    assert.equal(inputs[0]?.previousMemory?.factsCannotContradict.includes('候选记忆不能进入下一章'), false);
+    assert.equal(inputs[0]?.previousMemory?.factsCannotContradict.includes('过期记忆不能进入下一章'), false);
+    assert.equal(inputs[0]?.previousMemory?.factsCannotContradict.includes('较早章节后来生成的记忆不能代替上一章'), false);
     assert.equal(inputs[2]?.previousMemory?.factsCannotContradict.includes('第4章新增事实'), true);
     assert.equal(inputs[2]?.previousMemory?.factsCannotContradict.includes('第5章新增事实'), true);
     const savedMemory = await repository.findLatestLongTermMemory('tenant_test', novelId);
@@ -3205,6 +3221,13 @@ describe('novel package 6 body generation routes', () => {
     assert.equal(repository.getGenerationTasks().filter((task) => task.taskType === 'body_batch_generate').length, bodyTaskCountAfterFirst);
     assert.equal(repository.getBodyBatches().length, bodyBatchCountAfterFirst);
     assert.equal(repository.getNovelChapters().find((chapter) => chapter.novelId === novelId && chapter.chapterNo === 9)?.currentContentVersionId, null);
+    await assert.rejects(
+      () => new NovelService({ repository }).generateBodyBatch(novelId, payload, {
+        tenantId: 'tenant_test', userId: 'other_user', requestId: 'body-batch-cross-actor'
+      }),
+      (error) => error instanceof BusinessError && error.code === ErrorCode.IdempotencyConflict
+    );
+    assert.equal(repository.getBodyBatches().length, bodyBatchCountAfterFirst);
     await app.close();
   });
 

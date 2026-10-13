@@ -985,7 +985,7 @@ export class NovelService {
     const sourceVersionRefs = createBodySourceRefs(novel, strategySnapshot);
     const existingBatch = await this.options.repository.findBodyBatchByIdempotencyKey(context.tenantId, novelId, idempotencyKey);
     if (existingBatch) {
-      return this.returnExistingBodyBatch({ novel, request, context, strategySnapshot, sourceVersionRefs, existingBatch, idempotencyKey });
+      return this.returnExistingBodyBatch({ novel, request, context, strategySnapshot, sourceVersionRefs, existingBatch, idempotencyKey, action });
     }
     const chapters = await this.options.repository.listNovelChapters(context.tenantId, novelId);
     const range = calculateBodyBatchRange(chapters, request);
@@ -998,7 +998,10 @@ export class NovelService {
     });
 
     const latestBatch = await this.options.repository.findLatestBodyBatch(context.tenantId, novelId);
-    const previousMemory = await this.options.repository.findLatestLongTermMemory(context.tenantId, novelId, null);
+    const previousChapter = chapters.filter((chapter) => chapter.chapterNo < range.startChapterNo!).at(-1);
+    const previousMemory = previousChapter
+      ? await this.options.repository.findLatestLongTermMemory(context.tenantId, novelId, previousChapter.id)
+      : null;
     const targetChapters = chapters.filter((chapter) => chapter.chapterNo >= range.startChapterNo! && chapter.chapterNo <= range.endChapterNo!);
     targetChapters.forEach((chapter) => assertChapterLengthTargetConfigured(chapter.wordTarget));
     const previousBatchNotes = latestBatch?.summary.nextBatchNotes ?? [];
@@ -1097,7 +1100,7 @@ export class NovelService {
     if (execution.reused) {
       const existingBatch = await this.options.repository.findBodyBatchByIdempotencyKey(context.tenantId, novelId, idempotencyKey);
       if (existingBatch) {
-        return this.returnExistingBodyBatch({ novel, request, context, strategySnapshot, sourceVersionRefs, existingBatch, idempotencyKey });
+        return this.returnExistingBodyBatch({ novel, request, context, strategySnapshot, sourceVersionRefs, existingBatch, idempotencyKey, action });
       }
       return this.returnReservedBodyBatchTask({
         novel,
@@ -1174,7 +1177,18 @@ export class NovelService {
     sourceVersionRefs: Record<string, unknown>;
     existingBatch: BodyBatchRecord;
     idempotencyKey: string;
+    action: 'body_batch_generate' | 'chapter_body_generate';
   }): Promise<BodyBatchActionResultDTO> {
+    const task = await this.options.repository.findTaskById(input.context.tenantId, input.existingBatch.taskId);
+    if (!task) {
+      throw new BusinessError(ErrorCode.InternalError, '幂等批次缺少原始任务记录，请联系管理员处理。', {
+        batchId: input.existingBatch.id,
+        taskId: input.existingBatch.taskId
+      });
+    }
+    if (task.createdBy !== input.context.userId || task.taskType !== input.action || task.novelId !== input.novel.id) {
+      throw new BusinessError(ErrorCode.IdempotencyConflict, '同一个幂等键已绑定到其他任务或操作者。');
+    }
     const expectedFingerprint = createBodyBatchRequestFingerprint(input.request, input.strategySnapshot, input.sourceVersionRefs, {
       startChapterNo: input.existingBatch.startChapterNo,
       endChapterNo: input.existingBatch.endChapterNo
@@ -1184,14 +1198,6 @@ export class NovelService {
         taskType: 'body_batch_generate',
         existingBatchId: input.existingBatch.id,
         existingTaskId: input.existingBatch.taskId
-      });
-    }
-
-    const task = await this.options.repository.findTaskById(input.context.tenantId, input.existingBatch.taskId);
-    if (!task) {
-      throw new BusinessError(ErrorCode.InternalError, '幂等批次缺少原始任务记录，请联系管理员处理。', {
-        batchId: input.existingBatch.id,
-        taskId: input.existingBatch.taskId
       });
     }
 

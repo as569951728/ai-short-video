@@ -323,7 +323,8 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
           content,
           firstSentence: firstSentence(content),
           first300Summary: content.slice(0, 300),
-          experimentalRevisionRequiresConfirmation: true
+          experimentalRevisionRequiresConfirmation: true,
+          experimentalOriginalDraft: original
         };
       }
     });

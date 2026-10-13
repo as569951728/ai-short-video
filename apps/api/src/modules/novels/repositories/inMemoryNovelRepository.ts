@@ -164,6 +164,12 @@ export function createInMemoryNovelRepository(): InMemoryNovelRepository {
     return `${prefix}_${String(sequence++).padStart(6, '0')}`;
   }
 
+  function isCurrentBoundMemory(memory: LongTermMemoryRecord, tenantId: string, novelId: string): boolean {
+    if (memory.tenantId !== tenantId || memory.novelId !== novelId || memory.status !== VersionStatus.Current || memory.staleLevel === StaleLevel.HardStale) return false;
+    const sourceChapter = chapters.find((chapter) => chapter.id === memory.chapterId && chapter.tenantId === tenantId && chapter.novelId === novelId && !chapter.deletedAt);
+    return Boolean(sourceChapter?.currentContentVersionId && sourceChapter.currentContentVersionId === memory.sourceContentVersionId);
+  }
+
   function loadAuthority(input: LoadGenerationAuthorityInput): GenerationAuthoritySnapshot | null {
     const novel = novels.find((item) => item.tenantId === input.tenantId && item.id === input.novelId && !item.deletedAt);
     if (!novel || novel.lifecycleStatus !== NovelLifecycleStatus.Active) return null;
@@ -279,12 +285,12 @@ export function createInMemoryNovelRepository(): InMemoryNovelRepository {
     const loadedFullReviewReviews = input.action === 'novel_full_review'
       ? orderedChapters.map((item) => reviewReportById(item.currentReviewReportId))
       : [];
+    const finalChapter = orderedChapters.at(-1);
     const fullReviewMemory = input.action === 'novel_full_review'
       ? longTermMemories
-          .filter((memory) => memory.tenantId === input.tenantId && memory.novelId === novel.id)
+          .filter((memory) => isCurrentBoundMemory(memory, input.tenantId, novel.id) && memory.chapterId === finalChapter?.id)
           .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())[0] ?? null
       : null;
-    const finalChapter = orderedChapters.at(-1);
     if (
       loadedFullReviewContents.some((item, index) => !item || item.chapterId !== orderedChapters[index]?.id)
       || loadedFullReviewFeatureCards.some((item, index) => !item || item.chapterId !== orderedChapters[index]?.id || item.staleLevel === StaleLevel.HardStale)
@@ -319,7 +325,7 @@ export function createInMemoryNovelRepository(): InMemoryNovelRepository {
       : null;
     const bodyPreviousContent = previousChapter ? contentById(previousChapter.currentContentVersionId) : null;
     const bodyPreviousMemory = bodyAuthority ? longTermMemories
-      .filter((item) => item.tenantId === input.tenantId && item.novelId === novel.id)
+      .filter((item) => isCurrentBoundMemory(item, input.tenantId, novel.id) && item.chapterId === previousChapter?.id)
       .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())[0] ?? null : null;
     const bodyPreviousBatch = bodyAuthority ? bodyBatches
       .filter((item) => item.tenantId === input.tenantId && item.novelId === novel.id)
@@ -2065,8 +2071,12 @@ export function createInMemoryNovelRepository(): InMemoryNovelRepository {
 
     async findLatestLongTermMemory(tenantId: string, novelId: string, chapterId?: string | null) {
       return longTermMemories
-        .filter((memory) => memory.tenantId === tenantId && memory.novelId === novelId && (chapterId === undefined || chapterId === null || memory.chapterId === chapterId))
-        .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())[0] ?? null;
+        .filter((memory) => isCurrentBoundMemory(memory, tenantId, novelId) && (chapterId === undefined || chapterId === null || memory.chapterId === chapterId))
+        .sort((left, right) => {
+          const leftChapterNo = chapters.find((chapter) => chapter.id === left.chapterId)?.chapterNo ?? 0;
+          const rightChapterNo = chapters.find((chapter) => chapter.id === right.chapterId)?.chapterNo ?? 0;
+          return rightChapterNo - leftChapterNo || right.createdAt.getTime() - left.createdAt.getTime();
+        })[0] ?? null;
     },
 
     async createBodyBatchTask(input: BodyBatchTaskCreationInput): Promise<CreatedBodyBatchTaskRecord> {

@@ -937,6 +937,7 @@ describe('DeepSeek novel provider', () => {
 
     assert.equal(draft.content, original.replace(deletion, ''));
     assert.equal(draft.experimentalRevisionRequiresConfirmation, true);
+    assert.equal(draft.experimentalOriginalDraft?.content, original);
     assert.equal(evaluateChapterLength(draft.content, 1000).status, 'pass');
     assert.deepEqual(requests.map((request) => request.taskName), ['novel_body_chapter_generate', 'novel_body_chapter_shorten']);
     assert.deepEqual(requests.map((request) => request.maxRetries), [0, 0]);

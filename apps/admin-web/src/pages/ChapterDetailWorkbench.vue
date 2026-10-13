@@ -57,6 +57,10 @@
                 <el-tag>{{ candidate.statusText }}</el-tag>
               </div>
               <p>评分 {{ candidate.scoreText }} / {{ candidate.gateText }}</p>
+              <p v-if="candidate.lengthGate" class="candidate-length-status">
+                <el-tag :type="candidate.lengthGate.tagType" effect="plain" size="small">{{ candidate.lengthGate.statusText }}</el-tag>
+                <span>实际 {{ candidate.lengthGate.actualText }} / 合格 {{ candidate.lengthGate.rangeText }}</span>
+              </p>
               <p class="muted">{{ candidate.first300Summary }}</p>
               <el-alert
                 v-if="candidateCompareById[candidate.id]"
@@ -68,8 +72,9 @@
               />
               <div class="split-actions">
                 <el-button size="small" @click="openContent(candidate)">看全文</el-button>
-                <el-button v-if="candidate.canSelect" size="small" type="primary" :loading="actionLoading" @click="handleAdoptCandidate(candidate)">采用候选</el-button>
+                <el-button v-if="candidate.canSelectByStatus" size="small" type="primary" :disabled="!candidate.canSelect" :loading="actionLoading" @click="handleAdoptCandidate(candidate)">采用候选</el-button>
               </div>
+              <p v-if="candidate.canSelectByStatus && !candidate.canSelect" class="muted">{{ candidate.selectDisabledReason }}</p>
             </article>
           </div>
         </el-card>
@@ -417,3 +422,12 @@ onMounted(() => {
   loadWorkbench()
 })
 </script>
+
+<style scoped>
+.candidate-length-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+</style>
