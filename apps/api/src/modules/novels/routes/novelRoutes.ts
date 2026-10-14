@@ -1761,7 +1761,7 @@ async function createTrialAcceptanceSeed(
   };
 }
 
-async function createFullReviewAcceptanceSeed(
+export async function createFullReviewAcceptanceSeed(
   service: NovelService,
   body: { title?: string } | undefined,
   context: RequestContext
