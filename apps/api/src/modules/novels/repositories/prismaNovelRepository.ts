@@ -6150,7 +6150,7 @@ function validPrismaLeasedStructureDraft(value: unknown, objectType: StructureAs
       && fields(stage, ['stageIndex', 'title', 'chapterRange', 'goal', 'conflict', 'payoff'])
       && positiveInteger(stage.stageIndex) && text(stage.title, 200) && text(stage.chapterRange, 200)
       && text(stage.goal) && text(stage.conflict) && text(stage.payoff))
-    && (objectType === 'setting' || content.stages.length > 0)
+    && (objectType === 'setting' || objectType === 'outline' || content.stages.length > 0)
     && Array.isArray(content.chapters) && content.chapters.length <= (objectType === 'chapter_plan' ? 1000 : 100)
     && content.chapters.every((chapter) => !!chapter && typeof chapter === 'object' && !Array.isArray(chapter)
       && fields(chapter, ['chapterNo', 'stageIndex', 'title', 'wordTarget', 'goal', 'conflict', 'hook'])

@@ -155,6 +155,7 @@ export class DeepSeekNovelProvider implements DirectionProvider, StructureProvid
       taskName: `novel_structure_${input.objectType}`,
       model: this.getStructureTaskModel(input.objectType),
       ...this.singleCallJsonPolicy,
+      ...(this.options.singlePaidCallMode ? { thinkingMode: 'disabled' as const } : {}),
       messages: createMessages(getStructureInstruction(input.objectType), input.novel, {
         preferences: input.preferences,
         currentAssets: structurePromptAssets(input),

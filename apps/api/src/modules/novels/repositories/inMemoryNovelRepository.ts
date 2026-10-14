@@ -204,7 +204,7 @@ function validLeasedStructureDraft(value: unknown, objectType: StructureAssetTyp
     && Array.isArray(content.chapters) && content.chapters.every((chapter) => !!chapter && positiveInteger(chapter.chapterNo)
       && positiveInteger(chapter.stageIndex) && positiveInteger(chapter.wordTarget)
       && text(chapter.title) && text(chapter.goal) && text(chapter.conflict) && text(chapter.hook))
-    && (objectType === 'setting' || content.stages.length > 0)
+    && (objectType === 'setting' || objectType === 'outline' || content.stages.length > 0)
     && (objectType !== 'chapter_plan' || content.chapters.length > 0);
 }
 

@@ -217,12 +217,24 @@ describe('Prisma outline structure leased fenced finalize', () => {
       }
     });
 
+    if (config.type === 'outline') {
+      it('accepts an outline with no stages, as required by the model prompt', async () => {
+        const { repository, state, input } = fixture(config);
+        const outline = input.validatedResult as StructureAssetDraft;
+        input.validatedResult = { ...outline, content: { ...outline.content, stages: [] } };
+        assert.equal((await repository.finalizeLeasedAction(input)).outcome, 'applied');
+        assert.equal(state.row.status, 'WAITING_CONFIRMATION');
+        assert.equal(state.versions[0]?.status, 'CANDIDATE');
+        assert.deepEqual(state.versions[0]?.contentJson.stages, []);
+      });
+    }
+
     it(`${config.type}: fails stale source and invalid drafts with no asset or receipt`, async () => {
       const valid = draft(config.type);
       const invalid = [
         { ...valid, objectType: 'setting' },
         { ...valid, score: 101 },
-        { ...valid, content: { ...valid.content, stages: [] } },
+        ...(config.type === 'outline' ? [] : [{ ...valid, content: { ...valid.content, stages: [] } }]),
         { ...valid, content: { ...valid.content, sections: [{ title: 'broken' }] } },
         { ...valid, extra: 'unvalidated' },
         ...(config.type === 'chapter_plan' ? [

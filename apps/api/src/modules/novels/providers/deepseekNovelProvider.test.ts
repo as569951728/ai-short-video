@@ -42,11 +42,14 @@ describe('DeepSeek novel provider', () => {
       (error) => error instanceof LlmProviderError && error.category === 'output_parse_failed');
     await assert.rejects(() => strict.generateAsset({ objectType: 'setting', novel: createNovel(), preferences: [], currentAssets: {} }),
       (error) => error instanceof LlmProviderError && error.category === 'output_parse_failed');
-    assert.equal(strictRequests.length, 2);
-    assert.deepEqual(strictRequests.map((request) => request.maxRetries), [0, 0]);
+    await assert.rejects(() => strict.generateAsset({ objectType: 'outline', novel: createNovel(), preferences: [], currentAssets: {} }),
+      (error) => error instanceof LlmProviderError && error.category === 'output_parse_failed');
+    assert.equal(strictRequests.length, 3);
+    assert.deepEqual(strictRequests.map((request) => request.maxRetries), [0, 0, 0]);
+    assert.deepEqual(strictRequests.map((request) => request.thinkingMode), [undefined, 'disabled', 'disabled']);
     await assert.rejects(() => strict.generateAsset({ objectType: 'chapter_plan', novel: createNovel(), preferences: [], currentAssets: {} }),
       (error) => error instanceof LlmProviderError && error.category === 'configuration_error');
-    assert.equal(strictRequests.length, 2);
+    assert.equal(strictRequests.length, 3);
 
     const synchronousRequests: ChatCompletionRequest[] = [];
     const synchronous = new DeepSeekNovelProvider({

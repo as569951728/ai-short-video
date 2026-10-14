@@ -742,6 +742,18 @@ describe('RP-02B2a4 in-memory structure fenced finalize', () => {
     });
   }
 
+  it('accepts an outline without stages while keeping it a candidate', async () => {
+    const { repository, task, asset, finalizeInput } = await leasedStructure('outline');
+    const result = await repository.finalizeLeasedAction({ ...finalizeInput,
+      validatedResult: { ...asset, content: { ...asset.content, stages: [] } }
+    });
+    assert.equal(result.outcome, 'applied');
+    assert.equal(task.status, TaskStatus.WaitingConfirmation);
+    const candidate = repository.getCreativeVersions().find((item) => item.id === task.resultVersionIds[0]);
+    assert.equal(candidate?.status, 'candidate');
+    assert.deepEqual((candidate?.content as StructureAssetContentDTO).stages, []);
+  });
+
   for (const failAt of ['asset', 'receipt', 'task', 'event', 'operation_log'] as const) {
     it(`rolls back chapter-plan writes when ${failAt} fails`, async () => {
       const { repository, task, finalizeInput } = await leasedStructure('chapter_plan', (stage) => {
