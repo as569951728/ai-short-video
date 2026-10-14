@@ -11,14 +11,16 @@ import {
   assertNoSensitiveExecutionPayload,
   type BodyBatchChapterResultDTO,
   type ChapterLengthGateDTO,
+  type ChapterSummaryCompareDTO,
   type StructureAssetContentDTO,
   type ExecutionEnvelope
 } from '@ai-shortvideo/shared';
 import { getPrismaClient } from '../../../infrastructure/database/prisma.js';
 import { Prisma } from '../../../generated/prisma/client.js';
 import { evaluateChapterLength, isBoundedOverlengthRevision } from '../domain/chapterLengthPolicy.js';
+import { bindGeneratedBodyChapter } from '../domain/bodyChapterBinding.js';
 import { bindTrialFollowupChapters } from '../domain/trialFollowupBinding.js';
-import type { TrialFollowupChapterProviderDraft } from '../services/actionExecutionPlan.js';
+import type { BodyChapterProviderDraft, TrialFollowupChapterProviderDraft } from '../services/actionExecutionPlan.js';
 import {
   DEFAULT_POLICY_PROFILE_VERSION_ID,
   leasedActionFailure,
@@ -1004,7 +1006,7 @@ export class PrismaNovelRepository implements NovelRepository {
     if (!['novel_direction_generate', 'novel_direction_fuse', 'novel_direction_optimize',
       'novel_setting_generate', 'novel_outline_generate',
       'stage_outline_generate', 'chapter_plan_generate', 'trial_writing_generate',
-      'trial_followup_generate', 'chapter_overlength_revise'].includes(observed.taskType)) {
+      'trial_followup_generate', 'chapter_overlength_revise', 'chapter_body_rewrite'].includes(observed.taskType)) {
       const task = mapGenerationTask(observed);
       if (!task.providerAttemptPhase) return { outcome: 'fenced' as const, task: null };
       return this.failLeasedAction({ ...input, expectedPhase: task.providerAttemptPhase, reason: 'worker_payload_unsupported' });
@@ -1078,6 +1080,95 @@ export class PrismaNovelRepository implements NovelRepository {
       const authority = await this.loadGenerationAuthority(authorityInput, tx);
       if (!matchGenerationAuthority(authorityInput, envelope.sourceVersionRefs.authoritySnapshotHash, authority).ok) {
         return fail('source_stale');
+      }
+      if (current.taskType === 'chapter_body_rewrite') {
+        const refs = authorityRecord(envelope.sourceVersionRefs);
+        const chapterRow = await tx.novelChapter.findFirst({ where: {
+          tenantId: input.tenantId, novelId: current.novelId!, id: envelope.objectId, deletedAt: null
+        } });
+        const chapter = chapterRow ? mapNovelChapter(chapterRow) : null;
+        const currentContent = typeof refs.currentContentVersionId === 'string'
+          ? await this.findChapterContentVersionById(input.tenantId, current.novelId!, refs.currentContentVersionId, tx)
+          : null;
+        if (envelope.action !== 'chapter_rewrite' || !chapter || !currentContent
+          || chapter.currentContentVersionId !== currentContent.id
+          || currentContent.chapterId !== chapter.id || currentContent.status !== VersionStatus.Current) {
+          return fail('source_stale');
+        }
+        const raw: unknown = input.validatedResult;
+        let candidate: ReturnType<typeof bindGeneratedBodyChapter>;
+        let summaryCompare: ChapterSummaryCompareDTO;
+        try {
+          if (!raw || typeof raw !== 'object' || Array.isArray(raw)
+            || !Object.hasOwn(raw, 'candidate') || !Object.hasOwn(raw, 'summaryCompare')
+            || Object.keys(raw).length !== 2
+            || !validPrismaLeasedSummaryCompare((raw as Record<string, unknown>).summaryCompare)) {
+            throw new Error('invalid chapter rewrite result');
+          }
+          const result = raw as { candidate: BodyChapterProviderDraft; summaryCompare: ChapterSummaryCompareDTO };
+          candidate = bindGeneratedBodyChapter(chapter, result.candidate);
+          summaryCompare = result.summaryCompare;
+          assertNoSensitiveExecutionPayload({
+            candidate: {
+              ...result.candidate,
+              review: {
+                ...result.candidate.review,
+                issueCards: result.candidate.review.issueCards.map(({ message, ...issue }) => ({ ...issue, issueText: message }))
+              }
+            },
+            summaryCompare
+          }, 'chapterRewriteResult');
+        } catch {
+          return fail('worker_payload_unsupported');
+        }
+        const request = authorityRecord(envelope.normalizedRequest);
+        const reason = typeof request.reason === 'string' && request.reason.trim()
+          ? request.reason.trim() : '生成章节重写候选';
+        const versionNo = await getNextChapterContentVersionNo(tx, input.tenantId, current.novelId!, chapter.id);
+        const version = await tx.chapterContentVersion.create({ data: {
+          tenantId: input.tenantId, novelId: current.novelId!, chapterId: chapter.id,
+          versionNo, status: PrismaVersionStatus.CANDIDATE, staleLevel: PrismaStaleLevel.NONE,
+          sourceType: current.modelRoutingVersion?.startsWith('deepseek:') ? 'deepseek' : 'mock_ai',
+          sourceTaskId: current.id, sourceVersionRefs: toJsonObject(envelope.sourceVersionRefs),
+          rewriteReason: reason, content: candidate.content, wordCount: countWords(candidate.content),
+          summary: candidate.summary, reviewScore: candidate.scoring.totalScore,
+          createdBy: current.createdBy, createdAt: input.authoritativeNow,
+          metadata: toJsonObject({
+            chapterNo: chapter.chapterNo, title: chapter.title,
+            openingStrategy: candidate.openingStrategy, openingHighlight: candidate.openingHighlight,
+            firstSentence: candidate.firstSentence, first300Summary: candidate.first300Summary,
+            endingHook: candidate.endingHook, riskLevel: candidate.riskLevel,
+            riskTags: candidate.riskTags, aiRecommendedReason: candidate.aiRecommendedReason,
+            isAiRecommended: false, isSelected: false, scoring: candidate.scoring, summaryCompare
+          })
+        } });
+        const receipt = createSafeResultReceipt(mapGenerationTask(current), {
+          status: 'waiting_confirmation', outcome: 'candidate_created',
+          resultObjectType: 'chapter_content_version', resultObjectId: version.id,
+          resultVersionIds: [version.id], resultCount: 1
+        });
+        const transition = await tx.generationTask.updateMany({ where: fence, data: {
+          status: PrismaTaskStatus.WAITING_CONFIRMATION,
+          statusNote: '章节重写候选已生成，等待采用', progress: 100,
+          currentStep: '章节重写候选已生成，等待采用', outputSummary: summaryCompare.candidateSummary,
+          resultObjectType: 'chapter_content_version', resultObjectId: version.id,
+          resultVersionId: version.id, resultVersionIdsJson: [version.id],
+          resultReceiptHash: receipt.hash, providerAttemptPhase: PrismaProviderAttemptPhase.FINALIZING,
+          activeClaimKey: null, leaseOwnerId: null, leaseToken: null, leaseExpiresAt: null,
+          finishedAt: input.authoritativeNow, updatedAt: input.authoritativeNow
+        } });
+        if (transition.count !== 1) throw new Error('Chapter rewrite lost its fenced task transition.');
+        const finalized = await tx.generationTask.findFirstOrThrow({ where: { tenantId: input.tenantId, id: current.id } });
+        await createTaskEvent(tx, { task: finalized, eventType: 'task_finalized',
+          message: finalized.statusNote!, progress: 100, requestId, createdAt: input.authoritativeNow });
+        await tx.operationLog.create({ data: {
+          tenantId: input.tenantId, userId: current.createdBy, novelId: current.novelId,
+          action: 'generation_task_finalized', objectType: 'generation_task', objectId: current.id,
+          afterSnapshot: { resultVersionIds: [version.id], receiptHash: receipt.hash },
+          reason: '章节重写候选生成完成', sourceTaskId: current.id,
+          requestId, createdAt: input.authoritativeNow
+        } });
+        return { outcome: 'applied' as const, task: mapGenerationTask(finalized) };
       }
       if (current.taskType === 'chapter_overlength_revise') {
         const refs = authorityRecord(envelope.sourceVersionRefs);
@@ -6077,6 +6168,17 @@ function toDirectionContent(value: unknown) {
     riskTags: [],
     recommendation: ''
   };
+}
+
+function validPrismaLeasedSummaryCompare(value: unknown): value is ChapterSummaryCompareDTO {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const compare = value as Record<string, unknown>;
+  const text = (input: unknown) => typeof input === 'string' && input.trim().length > 0;
+  const fields = ['currentSummary', 'candidateSummary', 'benefit', 'newRisks', 'possibleImpact', 'aiSuggestion'];
+  return Object.keys(compare).length === fields.length && fields.every((field) => Object.hasOwn(compare, field))
+    && typeof compare.currentSummary === 'string' && text(compare.candidateSummary)
+    && text(compare.benefit) && text(compare.possibleImpact) && text(compare.aiSuggestion)
+    && Array.isArray(compare.newRisks) && compare.newRisks.every(text);
 }
 
 function validPrismaLeasedDirectionDraft(value: unknown): value is DirectionCandidateDraft {
