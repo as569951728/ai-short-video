@@ -25,7 +25,9 @@ type SubmitDecision = { kind: 'legacy' } | { kind: 'task'; taskId: string } | { 
 
 const actions: readonly AsyncNovelGenerationAction[] = NOVEL_ASYNC_TRANSPORT_ACTIONS
 
-export function useNovelAsyncTransport(novelId: () => string, onTaskId: (taskId: string) => void) {
+export function useNovelAsyncTransport(
+  novelId: () => string, onTaskId: (taskId: string) => void, objectId: () => string = novelId
+) {
   const store = new SubmissionIntentStore()
   const phase = ref<TransportPhase>('idle')
   const message = ref('')
@@ -41,7 +43,7 @@ export function useNovelAsyncTransport(novelId: () => string, onTaskId: (taskId:
 
   function partition(scope: string, action: AsyncNovelGenerationAction): SubmissionPartition {
     return { apiOrigin: new URL(getApiBaseUrl()).origin, submissionScopeId: scope,
-      novelId: novelId(), action, objectId: novelId() }
+      novelId: novelId(), action, objectId: objectId() }
   }
 
   function expected(intent: SubmissionIntentV1, trustedScopeId = intent.submissionScopeId) {
@@ -206,6 +208,7 @@ export function useNovelAsyncTransport(novelId: () => string, onTaskId: (taskId:
     }
     try {
       const result = await submitAsyncNovelGeneration({ novelId: intent.novelId,
+        objectId: intent.objectId,
         action: intent.action as AsyncNovelGenerationAction,
         request, idempotencyKey: intent.idempotencyKey,
         capability: { contractVersion: 'v1', enabled: true,
@@ -301,9 +304,9 @@ export function useNovelAsyncTransport(novelId: () => string, onTaskId: (taskId:
         return { kind: 'blocked' }
       }
       if (!isNovelAsyncTransportActionEnabled(snapshot, action)) {
-        phase.value = 'idle'
-        message.value = ''
-        return { kind: 'legacy' }
+        phase.value = 'blocked'
+        message.value = '当前生成动作尚未开放后台提交，请稍后再试。'
+        return { kind: 'blocked' }
       }
       const normalized = normalizeGenerationRequest(action, request)
       const created = await store.create(scopePartition, normalized, attestation(snapshot), snapshot.submissionScopeId)

@@ -23,6 +23,7 @@ export interface NormalizedGenerationRequest {
   selectionReason?: string
   expectedNovelVersion?: string
   reviewPolicyVersionId?: string
+  sourceCandidateVersionId?: string
 }
 
 export type AsyncDispatchFailure =
@@ -58,6 +59,7 @@ const actionPaths: Record<AsyncNovelGenerationAction, string> = {
   chapter_plan_generate: 'chapter-plans/generate',
   trial_chapter_one_generate: 'trial/generate',
   trial_followup_generate: 'trial/generate',
+  chapter_overlength_revise: 'chapters',
   novel_full_review: 'full-review',
 }
 
@@ -73,8 +75,10 @@ export function normalizeGenerationRequest(
   const fullReview = action === 'novel_full_review'
   const fuse = action === 'direction_fuse'
   const optimize = action === 'direction_optimize'
+  const overlength = action === 'chapter_overlength_revise'
   const allowedFields = fuse ? ['versionIds', 'reason']
     : optimize ? ['versionId', 'instruction']
+    : overlength ? ['sourceCandidateVersionId']
     : fullReview ? ['expectedNovelVersion', 'reviewPolicyVersionId']
     : trialOne ? ['chapterCount', 'regenerateReason']
     : trialFollowup ? ['trialRunId', 'selectedCandidateId', 'confirmRisk', 'selectionReason']
@@ -104,6 +108,14 @@ export function normalizeGenerationRequest(
     }
     normalized.versionId = request.versionId.trim()
     normalized.instruction = request.instruction.trim()
+    return normalized
+  }
+  if (overlength) {
+    if (typeof request.sourceCandidateVersionId !== 'string'
+      || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/.test(request.sourceCandidateVersionId.trim())) {
+      throw new Error('超长原稿候选无效。')
+    }
+    normalized.sourceCandidateVersionId = request.sourceCandidateVersionId.trim()
     return normalized
   }
   if (fullReview) {
@@ -206,6 +218,7 @@ export async function getAsyncNovelTransportCapability(): Promise<NovelAsyncTran
 
 export async function submitAsyncNovelGeneration(input: {
   novelId: string
+  objectId?: string
   action: AsyncNovelGenerationAction
   request: NormalizedGenerationRequest
   idempotencyKey: string
@@ -216,9 +229,15 @@ export async function submitAsyncNovelGeneration(input: {
     || Date.now() >= Date.parse(capability.expiresAt)) {
     throw new ApiClientError('INVALID_RESPONSE', '任务提交方式已失效，请重新检查。')
   }
+  if (action === 'chapter_overlength_revise'
+    && (typeof input.objectId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/.test(input.objectId))) {
+    throw new ApiClientError('INVALID_RESPONSE', '章节对象无法核对，请刷新后重试。')
+  }
   const request = normalizeGenerationRequest(action, input.request)
   const path = action === 'direction_optimize'
     ? `${actionPaths[action]}/${encodeURIComponent(request.versionId!)}/optimize`
+    : action === 'chapter_overlength_revise'
+      ? `${actionPaths[action]}/${encodeURIComponent(input.objectId || '')}/overlength-revisions`
     : actionPaths[action]
   const { status, data } = await apiRequestWithStatus<TaskDispatchResponseV1>(
     `/novels/${encodeURIComponent(novelId)}/${path}`,
@@ -234,7 +253,8 @@ export async function submitAsyncNovelGeneration(input: {
     },
   )
   const expectedObjectId = action === 'trial_followup_generate' ? request.trialRunId
-    : action === 'direction_optimize' ? request.versionId : novelId
+    : action === 'direction_optimize' ? request.versionId
+      : action === 'chapter_overlength_revise' ? input.objectId : novelId
   if (!data || data.action !== action || data.objectId !== expectedObjectId
     || !data.taskId || data.pollUrl !== `/tasks/${data.taskId}`
     || (status === 202 && (data.kind !== 'accepted' || !['queued', 'processing'].includes(data.status)))

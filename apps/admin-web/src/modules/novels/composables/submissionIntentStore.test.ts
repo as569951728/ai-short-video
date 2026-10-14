@@ -63,6 +63,42 @@ test('keeps structure optimization in the strict replay payload', () => {
     versionId: 'cv-1', instruction: '强化冲突',
   }), { versionId: 'cv-1', instruction: '强化冲突' })
   assert.throws(() => normalizeReplayRequest('direction_optimize', { instruction: '强化冲突' }))
+  assert.deepEqual(normalizeReplayRequest('chapter_overlength_revise', {
+    sourceCandidateVersionId: 'original-1',
+  }), { sourceCandidateVersionId: 'original-1' })
+  assert.throws(() => normalizeReplayRequest('chapter_overlength_revise', {
+    sourceCandidateVersionId: 'original-1', reason: 'unsupported',
+  }))
+})
+
+test('overlength submission survives a new page and stays scoped to its chapter', async () => {
+  const chapterPartition = { ...partition('chapter_overlength_revise'), objectId: 'chapter-5' }
+  const firstPage = await page()
+  try {
+    const created = await firstPage.evaluate(async ({ chapterPartition, attestation, scopeA, now }) => {
+      const api = (window as any).SubmissionIntentModule
+      const store = new api.SubmissionIntentStore({ databaseName: 'chapter-revision-replay', now: () => now })
+      return store.create(chapterPartition, { sourceCandidateVersionId: 'original-1' }, attestation, scopeA)
+    }, { chapterPartition, attestation, scopeA, now })
+    assert.equal(created.applied, true)
+    const reopened = await page()
+    try {
+      const restored = await reopened.evaluate(async ({ chapterPartition, scopeA, now }) => {
+        const api = (window as any).SubmissionIntentModule
+        const store = new api.SubmissionIntentStore({ databaseName: 'chapter-revision-replay', now: () => now })
+        const same = await store.read(chapterPartition, scopeA)
+        const otherChapter = await store.read({ ...chapterPartition, objectId: 'chapter-6' }, scopeA)
+        return { same, replay: await api.verifiedReplayRequest(same), otherChapter }
+      }, { chapterPartition, scopeA, now })
+      assert.equal(restored.same.idempotencyKey, created.applied && created.intent.idempotencyKey)
+      assert.deepEqual(restored.replay, { sourceCandidateVersionId: 'original-1' })
+      assert.equal(restored.otherChapter, null)
+    } finally {
+      await reopened.close()
+    }
+  } finally {
+    await firstPage.close()
+  }
 })
 
 test('IndexedDB commit, scoped replay, monotonic revision and retired receipt', async () => {

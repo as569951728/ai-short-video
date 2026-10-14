@@ -130,7 +130,6 @@ const idempotencyKeySchema = { type: 'string', minLength: 8, maxLength: 120, pat
 const UNMIGRATED_PROVIDER_ROUTES = new Set([
   '/novels/:novelId/chapters/batch-generate',
   '/novels/:novelId/chapters/:chapterId/generate',
-  '/novels/:novelId/chapters/:chapterId/overlength-revisions',
   '/novels/:novelId/chapters/:chapterId/rewrite',
   '/novels/:novelId/chapters/:chapterId/content-versions/:versionId/adopt',
   '/novels/:novelId/chapters/:chapterId/impact-assessments'
@@ -1034,16 +1033,43 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
         params: chapterParamsSchema,
         body: {
           type: 'object', required: ['sourceCandidateVersionId'],
-          properties: { sourceCandidateVersionId: { type: 'string', minLength: 1, maxLength: 80 } },
+          properties: {
+            sourceCandidateVersionId: { type: 'string', minLength: 1, maxLength: 80 },
+            idempotencyKey: idempotencyKeySchema,
+            expectedSubmissionScopeId: { type: 'string', minLength: 43, maxLength: 43 },
+            expectedCapabilityRevision: { type: 'string', minLength: 43, maxLength: 43 },
+            expectedCapabilityExpiresAt: { type: 'string', format: 'date-time' }
+          },
           additionalProperties: false
         },
-        response: { 200: responseEnvelopeSchema }
+        response: { 200: responseEnvelopeSchema, 202: responseEnvelopeSchema }
       }
     },
     async (request, reply) => {
       const { novelId, chapterId } = request.params as { novelId: string; chapterId: string };
+      const capability = options.capabilityPolicySnapshotResolver
+        ? await options.capabilityPolicySnapshotResolver(request)
+        : { contractVersion: 'v1' as const, enabled: false as const, reasonCode: 'POLICY_DISABLED' as const };
+      const revisionRequest = withRequestIdempotency(
+        request.headers['idempotency-key'], request.body as ReviseOverlengthChapterRequest
+      );
+      if (isNovelAsyncTransportActionEnabled(capability, 'chapter_overlength_revise')) {
+        const authoritativeNow = await options.repository.getAuthoritativeTaskTime();
+        assertAsyncCapabilitySubmission(capability, request.body as unknown as Record<string, unknown>, authoritativeNow);
+        const queued = await novelService.queueOverlengthRevision(
+          novelId, chapterId, revisionRequest,
+          await resolveProviderContext(options.requestContextResolver, request), authoritativeNow
+        );
+        const dispatch = toTaskDispatchResponse('chapter_overlength_revise', chapterId, queued.task, queued.reused);
+        reply.status(dispatch.kind === 'accepted' ? 202 : 200);
+        return sendOk(request, reply, dispatch);
+      }
+      if (capability.enabled) {
+        throw new BusinessError(ErrorCode.GateBlocked, '该生成动作尚未开放后台执行，任务未创建。');
+      }
+      assertLegacyNovelSubmissionAllowed(capability, request.body as unknown as Record<string, unknown>);
       const data = await novelService.reviseOverlengthChapter(
-        novelId, chapterId, request.body as ReviseOverlengthChapterRequest,
+        novelId, chapterId, revisionRequest,
         await resolveProviderContext(options.requestContextResolver, request)
       );
       return sendOk(request, reply, data);

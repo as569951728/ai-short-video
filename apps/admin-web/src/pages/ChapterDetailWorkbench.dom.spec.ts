@@ -1,6 +1,7 @@
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import ElementPlus, { ElMessageBox } from 'element-plus'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { ref } from 'vue'
 import ChapterDetailWorkbench from './ChapterDetailWorkbench.vue'
 
 const mocks = vi.hoisted(() => ({
@@ -8,6 +9,15 @@ const mocks = vi.hoisted(() => ({
   reviseOverlengthChapter: vi.fn(),
   getTaskDetail: vi.fn(),
   cancelTask: vi.fn(),
+  submitAsync: vi.fn(),
+}))
+
+vi.mock('../modules/novels/composables/useNovelAsyncTransport', () => ({
+  useNovelAsyncTransport: () => ({
+    phase: ref('idle'), message: ref(''), blocksNewSubmission: ref(false),
+    activeIntent: ref(null), restore: async () => undefined, taskUpdated: async () => undefined,
+    submit: mocks.submitAsync,
+  }),
 }))
 
 vi.mock('vue-router', () => ({
@@ -69,6 +79,7 @@ afterEach(() => {
   mocks.reviseOverlengthChapter.mockReset()
   mocks.getTaskDetail.mockReset()
   mocks.cancelTask.mockReset()
+  mocks.submitAsync.mockReset()
 })
 
 describe('ChapterDetailWorkbench overlength recovery', () => {
@@ -77,6 +88,7 @@ describe('ChapterDetailWorkbench overlength recovery', () => {
     mocks.getChapterWorkbench.mockImplementation(async () => workbench(saved ? [original, revised] : [original]))
     let resolveRevision: ((value: unknown) => void) | undefined
     mocks.reviseOverlengthChapter.mockImplementation(() => new Promise((resolve) => { resolveRevision = resolve }))
+    mocks.submitAsync.mockResolvedValue({ kind: 'legacy' })
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
 
     wrapper = mount(ChapterDetailWorkbench, { attachTo: document.body, global: { plugins: [ElementPlus] } })
@@ -99,6 +111,28 @@ describe('ChapterDetailWorkbench overlength recovery', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('精简候选已保留，待内容复核后才能采用。')
     expect(mocks.reviseOverlengthChapter).toHaveBeenCalledTimes(1)
+  })
+
+  it('returns promptly to task tracking when async revision is accepted', async () => {
+    let submitted = false
+    mocks.getChapterWorkbench.mockImplementation(async () => workbench([original], submitted ? {
+      id: 'revision-task-async', taskType: 'chapter_overlength_revise', status: 'queued',
+      statusText: '等待执行', progress: null, currentStep: '等待执行', resultVersionIds: [],
+    } : null))
+    mocks.submitAsync.mockImplementation(async () => {
+      submitted = true
+      return { kind: 'task', taskId: 'revision-task-async' }
+    })
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    wrapper = mount(ChapterDetailWorkbench, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    await wrapper.findAll('button').find((button) => button.text() === '精简一次')!.trigger('click')
+    await flushPromises()
+    expect(mocks.submitAsync).toHaveBeenCalledWith('chapter_overlength_revise', {
+      sourceCandidateVersionId: 'original-1',
+    })
+    expect(mocks.reviseOverlengthChapter).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('等待执行')
   })
 
   it('opens the processing task and lets the user cancel waiting', async () => {

@@ -12,7 +12,7 @@ export type NovelProviderAction = (typeof NOVEL_PROVIDER_ACTIONS)[number];
 
 export const NOVEL_ASYNC_TRANSPORT_ACTIONS = [
   'direction_generate', 'direction_fuse', 'direction_optimize', 'setting_generate', 'outline_generate', 'stage_outline_generate',
-  'chapter_plan_generate', 'trial_chapter_one_generate', 'trial_followup_generate', 'novel_full_review'
+  'chapter_plan_generate', 'trial_chapter_one_generate', 'trial_followup_generate', 'chapter_overlength_revise', 'novel_full_review'
 ] as const satisfies readonly NovelProviderAction[];
 
 export type NovelAsyncTransportAction = (typeof NOVEL_ASYNC_TRANSPORT_ACTIONS)[number];
@@ -1752,6 +1752,7 @@ export interface RewriteChapterRequest {
 
 export interface ReviseOverlengthChapterRequest {
   sourceCandidateVersionId: string;
+  idempotencyKey?: string | null;
 }
 
 export interface AdoptChapterContentVersionRequest {

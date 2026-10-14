@@ -15,6 +15,9 @@
     </div>
 
     <el-alert v-if="apiError" :title="apiError" type="error" show-icon :closable="true" @close="apiError = ''" />
+    <el-alert v-if="transportWarning" :title="transportMessage" type="warning" show-icon :closable="false">
+      <el-button size="small" @click="asyncTransport.recheckCapability()">重新检查</el-button>
+    </el-alert>
 
     <el-card shadow="never">
       <div class="section-title">
@@ -76,7 +79,7 @@
                   v-if="candidate.sourceType === 'ai_overlength_original' && candidate.lengthGate?.status === 'too_long'"
                   size="small"
                   type="warning"
-                  :disabled="hasRevisionAttempt || actionLoading"
+                  :disabled="hasRevisionAttempt || actionLoading || transportBlocksNewSubmission"
                   :loading="actionLoading"
                   @click="handleReviseOverlength(candidate)"
                 >精简一次</el-button>
@@ -194,6 +197,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { TaskStatus, type ChapterWorkbenchDTO, type TaskDetailDTO } from '@ai-shortvideo/shared'
 import { ApiClientError } from '../shared/services/http'
 import TaskProgressPanel from '../modules/novels/components/TaskProgressPanel.vue'
+import { useNovelAsyncTransport } from '../modules/novels/composables/useNovelAsyncTransport'
 import { cancelTask, getTaskDetail, retryTask } from '../modules/novels/services/taskService'
 import {
   adoptChapterContentVersion,
@@ -221,6 +225,11 @@ const contentDrawer = reactive({
 })
 const taskDrawer = reactive({ open: false, taskId: '', task: null as TaskDetailDTO | null,
   loading: false, actionLoading: false, error: '' })
+const asyncTransport = useNovelAsyncTransport(() => novelId.value,
+  (taskId) => { taskDrawer.taskId = taskId }, () => chapterId.value)
+const { phase: transportPhase, message: transportMessage, blocksNewSubmission: transportBlocksNewSubmission } = asyncTransport
+const transportWarning = computed(() => ['transport_unknown', 'capability_unavailable', 'blocked', 'scope_suspended']
+  .includes(transportPhase.value))
 
 const titleText = computed(() => {
   if (!workbench.value) return '章节详情'
@@ -251,6 +260,12 @@ async function loadWorkbench() {
 
   try {
     workbench.value = await getChapterWorkbench(novelId.value, chapterId.value)
+    const recentTask = workbench.value.recentTask
+    if (recentTask && recentTask.id === asyncTransport.activeIntent.value?.taskId
+      && (recentTask.status === TaskStatus.WaitingConfirmation || recentTask.status === TaskStatus.Completed
+        || recentTask.status === TaskStatus.Failed || recentTask.status === TaskStatus.Cancelled)) {
+      await asyncTransport.taskUpdated(await getTaskDetail(recentTask.id))
+    }
   } catch (error) {
     apiError.value = formatApiError(error)
   } finally {
@@ -306,10 +321,15 @@ async function handleReviseOverlength(candidate: TrialCandidateRow) {
   actionLoading.value = true
   apiError.value = ''
   try {
-    const result = await reviseOverlengthChapter(novelId.value, chapterId.value, { sourceCandidateVersionId: candidate.id })
-    if (result.candidate) ElMessage.success('精简候选已生成，待内容复核')
-    else if (result.task.status === TaskStatus.Queued || result.task.status === TaskStatus.Processing) ElMessage.info('精简任务进行中，可刷新查看')
-    else ElMessage.warning('本次精简未生成合格候选，原稿已保留')
+    const dispatch = await asyncTransport.submit('chapter_overlength_revise', { sourceCandidateVersionId: candidate.id })
+    if (dispatch.kind === 'task') {
+      ElMessage.info('精简任务已提交，可离开页面；原稿会保留')
+    } else if (dispatch.kind === 'legacy') {
+      const result = await reviseOverlengthChapter(novelId.value, chapterId.value, { sourceCandidateVersionId: candidate.id })
+      if (result.candidate) ElMessage.success('精简候选已生成，待内容复核')
+      else if (result.task.status === TaskStatus.Queued || result.task.status === TaskStatus.Processing) ElMessage.info('精简任务进行中，可刷新查看')
+      else ElMessage.warning('本次精简未生成合格候选，原稿已保留')
+    }
   } catch (error) {
     apiError.value = formatApiError(error)
   } finally {
@@ -535,7 +555,7 @@ function formatApiError(error: unknown) {
 }
 
 onMounted(() => {
-  void loadWorkbench()
+  void asyncTransport.restore().finally(() => loadWorkbench())
   taskPollTimer = setInterval(() => {
     const status = workbench.value?.recentTask?.status
     if (actionLoading.value || status === TaskStatus.Queued || status === TaskStatus.Processing) {

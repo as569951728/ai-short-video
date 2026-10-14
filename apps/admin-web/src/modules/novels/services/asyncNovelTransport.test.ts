@@ -53,6 +53,39 @@ it('normalizes only bounded, action-specific replay fields', () => {
   }), { expectedNovelVersion: '2030-01-01T00:00:00.000Z', reviewPolicyVersionId: 'policy-v1' })
   assert.throws(() => normalizeGenerationRequest('novel_full_review', { regenerateReason: 'retry' }))
   assert.throws(() => normalizeGenerationRequest('novel_full_review', { expectedNovelVersion: 'invalid' }))
+  assert.deepEqual(normalizeGenerationRequest('chapter_overlength_revise', {
+    sourceCandidateVersionId: ' original-1 ',
+  }), { sourceCandidateVersionId: 'original-1' })
+  assert.throws(() => normalizeGenerationRequest('chapter_overlength_revise', {}))
+  assert.throws(() => normalizeGenerationRequest('chapter_overlength_revise', {
+    sourceCandidateVersionId: 'original-1', reason: '再来一次',
+  }))
+})
+
+it('submits overlength revision against the chapter and rejects a mismatched task object', async () => {
+  const oldFetch = globalThis.fetch
+  let objectId = 'chapter-5'
+  globalThis.fetch = async (url, init) => {
+    assert.match(String(url), /\/novels\/novel-1\/chapters\/chapter-5\/overlength-revisions$/)
+    assert.equal(new Headers(init?.headers).get('Idempotency-Key'), 'revision-stable-key')
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+    assert.equal(body.sourceCandidateVersionId, 'original-1')
+    return Response.json({ success: true, data: {
+      kind: 'accepted', taskId: 'task-revision', action: 'chapter_overlength_revise', objectId,
+      status: 'queued', reused: false, pollUrl: '/tasks/task-revision',
+    }, error: null, requestId: 'req-revision' }, { status: 202 })
+  }
+  try {
+    const input = { novelId: 'novel-1', objectId: 'chapter-5', action: 'chapter_overlength_revise' as const,
+      request: { sourceCandidateVersionId: 'original-1' },
+      idempotencyKey: 'revision-stable-key', capability: enabledCapability }
+    assert.equal((await submitAsyncNovelGeneration(input)).taskId, 'task-revision')
+    objectId = 'novel-1'
+    await assert.rejects(() => submitAsyncNovelGeneration(input),
+      (error) => error instanceof ApiClientError && error.code === 'INVALID_RESPONSE')
+  } finally {
+    globalThis.fetch = oldFetch
+  }
 })
 
 it('submits direction fusion and optimization with stable replay targets', async () => {
