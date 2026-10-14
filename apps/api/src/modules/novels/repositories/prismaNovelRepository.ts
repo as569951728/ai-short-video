@@ -21,6 +21,7 @@ import { evaluateChapterLength, isBoundedOverlengthRevision } from '../domain/ch
 import { bindGeneratedBodyChapter } from '../domain/bodyChapterBinding.js';
 import { bindTrialFollowupChapters } from '../domain/trialFollowupBinding.js';
 import type { BodyChapterProviderDraft, TrialFollowupChapterProviderDraft } from '../services/actionExecutionPlan.js';
+import type { ImpactAssessmentDraft } from '../domain/novelDomain.js';
 import {
   DEFAULT_POLICY_PROFILE_VERSION_ID,
   leasedActionFailure,
@@ -1006,7 +1007,8 @@ export class PrismaNovelRepository implements NovelRepository {
     if (!['novel_direction_generate', 'novel_direction_fuse', 'novel_direction_optimize',
       'novel_setting_generate', 'novel_outline_generate',
       'stage_outline_generate', 'chapter_plan_generate', 'trial_writing_generate',
-      'trial_followup_generate', 'chapter_overlength_revise', 'chapter_body_rewrite'].includes(observed.taskType)) {
+      'trial_followup_generate', 'chapter_overlength_revise', 'chapter_body_rewrite',
+      'chapter_impact_assess'].includes(observed.taskType)) {
       const task = mapGenerationTask(observed);
       if (!task.providerAttemptPhase) return { outcome: 'fenced' as const, task: null };
       return this.failLeasedAction({ ...input, expectedPhase: task.providerAttemptPhase, reason: 'worker_payload_unsupported' });
@@ -1166,6 +1168,78 @@ export class PrismaNovelRepository implements NovelRepository {
           action: 'generation_task_finalized', objectType: 'generation_task', objectId: current.id,
           afterSnapshot: { resultVersionIds: [version.id], receiptHash: receipt.hash },
           reason: '章节重写候选生成完成', sourceTaskId: current.id,
+          requestId, createdAt: input.authoritativeNow
+        } });
+        return { outcome: 'applied' as const, task: mapGenerationTask(finalized) };
+      }
+      if (current.taskType === 'chapter_impact_assess') {
+        const refs = authorityRecord(envelope.sourceVersionRefs);
+        const chapterRow = await tx.novelChapter.findFirst({ where: {
+          tenantId: input.tenantId, novelId: current.novelId!, id: envelope.objectId, deletedAt: null
+        } });
+        const chapter = chapterRow ? mapNovelChapter(chapterRow) : null;
+        const currentContent = typeof refs.currentContentVersionId === 'string'
+          ? await this.findChapterContentVersionById(input.tenantId, current.novelId!, refs.currentContentVersionId, tx)
+          : null;
+        if (envelope.action !== 'chapter_impact_assess' || !chapter || !currentContent
+          || chapter.currentContentVersionId !== currentContent.id
+          || currentContent.chapterId !== chapter.id || currentContent.status !== VersionStatus.Current) {
+          return fail('source_stale');
+        }
+        if (!validPrismaLeasedImpactDraft(input.validatedResult)) return fail('worker_payload_unsupported');
+        const impact = input.validatedResult;
+        try {
+          assertNoSensitiveExecutionPayload(impact, 'chapterImpactResult');
+        } catch {
+          return fail('worker_payload_unsupported');
+        }
+        const request = authorityRecord(envelope.normalizedRequest);
+        const reason = typeof request.reason === 'string' && request.reason.trim()
+          ? request.reason.trim() : '手动发起章节影响评估';
+        const status = impact.blocksFullReview ? 'waiting_decision'
+          : impact.impactLevel === 'none' ? 'resolved' : 'ignored';
+        const impactCase = await tx.impactCase.create({ data: {
+          tenantId: input.tenantId, novelId: current.novelId!, sourceObjectType: 'chapter',
+          sourceObjectId: chapter.id, sourceOldVersionId: currentContent.id,
+          sourceNewVersionId: currentContent.id,
+          impactLevel: PrismaImpactLevel[impact.impactLevel.toUpperCase() as keyof typeof PrismaImpactLevel],
+          status, affectedChapterIdsJson: impact.affectedChapterIds,
+          affectedVideoReferenceIdsJson: impact.affectedVideoReferenceIds,
+          summary: impact.summary, suggestedActionsJson: impact.suggestedActions,
+          decisionRecordId: null, sourceTaskId: current.id, createdAt: input.authoritativeNow,
+          resolvedAt: impact.blocksFullReview ? null : input.authoritativeNow,
+          metadata: toJsonObject({
+            changedFacts: impact.changedFacts, recommendedHandling: impact.recommendedHandling,
+            blocksFullReview: impact.blocksFullReview, reason,
+            summaryCompare: {
+              currentSummary: currentContent.summary ?? '', candidateSummary: currentContent.summary ?? '',
+              benefit: '补充影响评估', newRisks: [], possibleImpact: impact.summary,
+              aiSuggestion: impact.recommendedHandling
+            }
+          })
+        } });
+        const receipt = createSafeResultReceipt(mapGenerationTask(current), {
+          status: 'completed', outcome: 'completed', resultObjectType: 'impact_case',
+          resultObjectId: impactCase.id, resultVersionIds: [], resultCount: 1
+        });
+        const transition = await tx.generationTask.updateMany({ where: fence, data: {
+          status: PrismaTaskStatus.COMPLETED, statusNote: '影响评估已生成', progress: 100,
+          currentStep: '影响评估已生成', outputSummary: impact.summary,
+          resultObjectType: 'impact_case', resultObjectId: impactCase.id,
+          resultVersionId: null, resultVersionIdsJson: [], resultReceiptHash: receipt.hash,
+          providerAttemptPhase: PrismaProviderAttemptPhase.FINALIZING,
+          activeClaimKey: null, leaseOwnerId: null, leaseToken: null, leaseExpiresAt: null,
+          finishedAt: input.authoritativeNow, updatedAt: input.authoritativeNow
+        } });
+        if (transition.count !== 1) throw new Error('Chapter impact assessment lost its fenced task transition.');
+        const finalized = await tx.generationTask.findFirstOrThrow({ where: { tenantId: input.tenantId, id: current.id } });
+        await createTaskEvent(tx, { task: finalized, eventType: 'task_finalized',
+          message: finalized.statusNote!, progress: 100, requestId, createdAt: input.authoritativeNow });
+        await tx.operationLog.create({ data: {
+          tenantId: input.tenantId, userId: current.createdBy, novelId: current.novelId,
+          action: 'generation_task_finalized', objectType: 'generation_task', objectId: current.id,
+          afterSnapshot: { resultObjectId: impactCase.id, receiptHash: receipt.hash },
+          reason: '章节影响评估完成', sourceTaskId: current.id,
           requestId, createdAt: input.authoritativeNow
         } });
         return { outcome: 'applied' as const, task: mapGenerationTask(finalized) };
@@ -6179,6 +6253,22 @@ function validPrismaLeasedSummaryCompare(value: unknown): value is ChapterSummar
     && typeof compare.currentSummary === 'string' && text(compare.candidateSummary)
     && text(compare.benefit) && text(compare.possibleImpact) && text(compare.aiSuggestion)
     && Array.isArray(compare.newRisks) && compare.newRisks.every(text);
+}
+
+function validPrismaLeasedImpactDraft(value: unknown): value is ImpactAssessmentDraft {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const draft = value as Record<string, unknown>;
+  const text = (input: unknown) => typeof input === 'string' && input.trim().length > 0;
+  const strings = (input: unknown) => Array.isArray(input) && input.every(text);
+  const fields = ['impactLevel', 'summary', 'changedFacts', 'affectedChapterIds',
+    'affectedVideoReferenceIds', 'recommendedHandling', 'suggestedActions', 'blocksFullReview'];
+  return Object.keys(draft).length === fields.length && fields.every((field) => Object.hasOwn(draft, field))
+    && ['none', 'minor', 'medium', 'severe'].includes(String(draft.impactLevel))
+    && text(draft.summary) && text(draft.recommendedHandling)
+    && strings(draft.changedFacts) && strings(draft.affectedChapterIds)
+    && strings(draft.affectedVideoReferenceIds) && strings(draft.suggestedActions)
+    && (draft.suggestedActions as unknown[]).length > 0
+    && draft.blocksFullReview === ['medium', 'severe'].includes(String(draft.impactLevel));
 }
 
 function validPrismaLeasedDirectionDraft(value: unknown): value is DirectionCandidateDraft {
