@@ -8,8 +8,11 @@ import { normalizeReplayRequest } from './submissionIntentStore.js'
 
 const scopeA = 'A'.repeat(43)
 const scopeB = 'B'.repeat(43)
+const revisionA = '_'.concat('A'.repeat(42))
+const revisionB = '-'.concat('B'.repeat(42))
+const revisionC = 'C'.repeat(43)
 const now = Date.parse('2026-10-14T00:00:00.000Z')
-const attestation = { submissionScopeId: scopeA, capabilityRevision: 'policy-v1', capabilityExpiresAt: new Date(now + 300_000).toISOString() }
+const attestation = { submissionScopeId: scopeA, capabilityRevision: revisionA, capabilityExpiresAt: new Date(now + 300_000).toISOString() }
 
 let browser: Browser
 let context: BrowserContext
@@ -126,7 +129,7 @@ test('IndexedDB commit, scoped replay, monotonic revision and retired receipt', 
 test('scope switch suspends in readwrite transaction; return resumes same identity and refreshes only attestation', async () => {
   const tab = await page()
   try {
-    const result = await tab.evaluate(async ({ partition, attestation, scopeA, scopeB, now }) => {
+    const result = await tab.evaluate(async ({ partition, attestation, scopeA, scopeB, revisionB, revisionC, now }) => {
       const api = (window as any).SubmissionIntentModule
       const store = new api.SubmissionIntentStore({ databaseName: 'scope-switch', now: () => now })
       const created = await store.create(partition, {}, attestation, scopeA)
@@ -141,21 +144,21 @@ test('scope switch suspends in readwrite transaction; return resumes same identi
       const rotated = await store.refreshAttestation(
         { expectedSubmissionId: resumed.intent.submissionId, expectedRevision: resumed.intent.revision, trustedScopeId: scopeA },
         resumed.intent,
-        { submissionScopeId: scopeA, capabilityRevision: 'policy-v2', capabilityExpiresAt: new Date(now + 600_000).toISOString() },
+        { submissionScopeId: scopeA, capabilityRevision: revisionB, capabilityExpiresAt: new Date(now + 600_000).toISOString() },
       )
       const final = await store.read(partition, scopeA)
       const wrongScopeRefresh = await store.refreshAttestation(
         { expectedSubmissionId: final.submissionId, expectedRevision: final.revision, trustedScopeId: scopeB },
-        final, { submissionScopeId: scopeB, capabilityRevision: 'policy-v3', capabilityExpiresAt: new Date(now + 600_000).toISOString() },
+        final, { submissionScopeId: scopeB, capabilityRevision: revisionC, capabilityExpiresAt: new Date(now + 600_000).toISOString() },
       )
       return { old, switched, hidden, paused, resumed, rotated, final, wrongScopeRefresh }
-    }, { partition: partition(), attestation, scopeA, scopeB, now })
+    }, { partition: partition(), attestation, scopeA, scopeB, revisionB, revisionC, now })
     assert.deepEqual(result.switched, { applied: false, reason: 'scope_suspended' })
     assert.equal(result.hidden, null)
     assert.equal(result.paused.state, 'scope_suspended')
     assert.equal(result.paused.revision, 2)
     assert.equal(result.resumed.intent.state, 'transport_unknown')
-    assert.equal(result.rotated.intent.capabilityRevision, 'policy-v2')
+    assert.equal(result.rotated.intent.capabilityRevision, revisionB)
     assert.equal(result.final.revision, 4)
     for (const field of ['submissionId', 'idempotencyKey', 'requestHash', 'submissionScopeId', 'normalizedReplayRequest']) {
       assert.deepEqual(result.final[field], result.old[field])
@@ -262,6 +265,9 @@ test('request whitelist, replay hash and attestation TTL fail closed', async () 
       try {
         await store.create(partition, {}, { ...attestation, capabilityExpiresAt: new Date(now).toISOString() }, scopeA)
       } catch (error) { errors.push(error.code) }
+      try {
+        await store.create(partition, {}, { ...attestation, capabilityRevision: 'policy-v1' }, scopeA)
+      } catch (error) { errors.push(error.code) }
       const created = await store.create(partition, { regenerateReason: '调整开篇节奏' }, attestation, scopeA)
       if (!created.applied) throw new Error('Create failed')
       let replayConflict: string | undefined
@@ -270,7 +276,7 @@ test('request whitelist, replay hash and attestation TTL fail closed', async () 
       const current = await store.read(partition, scopeA)
       return { errors, replayConflict, current }
     }, { partition: partition(), attestation, scopeA, now })
-    assert.deepEqual(result.errors, ['INVALID_INTENT', 'INVALID_INTENT', 'INVALID_INTENT', 'INVALID_INTENT'])
+    assert.deepEqual(result.errors, Array(5).fill('INVALID_INTENT'))
     assert.equal(result.replayConflict, 'REPLAY_CONFLICT')
     assert.equal(result.current.revision, 1)
   } finally {
@@ -307,7 +313,7 @@ test('blocked ambiguity cannot mint another submission key until explicitly reti
 test('injected IDBFactory is authoritative and expiry boundary rejects a new intent', async () => {
   const tab = await page()
   try {
-    const result = await tab.evaluate(async ({ partition, scopeA, now }) => {
+    const result = await tab.evaluate(async ({ partition, scopeA, revisionA, now }) => {
       const api = (window as any).SubmissionIntentModule
       let opened = 0
       let clock = now - 1
@@ -317,7 +323,7 @@ test('injected IDBFactory is authoritative and expiry boundary rejects a new int
       } } as IDBFactory
       const store = new api.SubmissionIntentStore({ indexedDB: factory, databaseName: 'injected-factory', now: () => clock })
       const boundaryAttestation = {
-        submissionScopeId: scopeA, capabilityRevision: 'policy-v1', capabilityExpiresAt: new Date(now).toISOString(),
+        submissionScopeId: scopeA, capabilityRevision: revisionA, capabilityExpiresAt: new Date(now).toISOString(),
       }
       const beforeExpiry = await store.create(partition, {}, boundaryAttestation, scopeA)
       clock = now
@@ -328,7 +334,7 @@ test('injected IDBFactory is authoritative and expiry boundary rejects a new int
       ) } catch (error) { expiredCode = error.code }
       const current = await store.read(partition, scopeA)
       return { opened, beforeExpiry, expiredCode, current }
-    }, { partition: partition(), scopeA, now })
+    }, { partition: partition(), scopeA, revisionA, now })
     assert.equal(result.opened, 1)
     assert.equal(result.beforeExpiry.applied, true)
     assert.equal(result.expiredCode, 'INVALID_INTENT')

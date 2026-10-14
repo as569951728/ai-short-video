@@ -14,6 +14,7 @@ export type AsyncNovelGenerationAction =
   | 'chapter_plan_generate'
   | 'trial_chapter_one_generate'
   | 'trial_followup_generate'
+  | 'novel_full_review'
 
 export interface NormalizedGenerationRequest {
   regenerateReason?: string
@@ -23,6 +24,8 @@ export interface NormalizedGenerationRequest {
   selectedCandidateId?: string
   confirmRisk?: boolean
   selectionReason?: string
+  expectedNovelVersion?: string
+  reviewPolicyVersionId?: string
 }
 
 export type AsyncDispatchFailure =
@@ -56,6 +59,7 @@ const actionPaths: Record<AsyncNovelGenerationAction, string> = {
   chapter_plan_generate: 'chapter-plans/generate',
   trial_chapter_one_generate: 'trial/generate',
   trial_followup_generate: 'trial/generate',
+  novel_full_review: 'full-review',
 }
 
 export function normalizeGenerationRequest(
@@ -67,13 +71,33 @@ export function normalizeGenerationRequest(
   }
   const trialOne = action === 'trial_chapter_one_generate'
   const trialFollowup = action === 'trial_followup_generate'
-  const allowedFields = trialOne ? ['chapterCount', 'regenerateReason']
+  const fullReview = action === 'novel_full_review'
+  const allowedFields = fullReview ? ['expectedNovelVersion', 'reviewPolicyVersionId']
+    : trialOne ? ['chapterCount', 'regenerateReason']
     : trialFollowup ? ['trialRunId', 'selectedCandidateId', 'confirmRisk', 'selectionReason']
       : ['regenerateReason', 'optimization']
   if (Object.keys(request).some((key) => !allowedFields.includes(key))) {
     throw new Error('生成参数包含不支持的字段。')
   }
   const normalized: NormalizedGenerationRequest = {}
+  if (fullReview) {
+    if (request.expectedNovelVersion !== undefined) {
+      if (typeof request.expectedNovelVersion !== 'string'
+        || request.expectedNovelVersion.length > 80
+        || !Number.isFinite(Date.parse(request.expectedNovelVersion))) {
+        throw new Error('小说版本无效，请刷新后重试。')
+      }
+      normalized.expectedNovelVersion = request.expectedNovelVersion
+    }
+    if (request.reviewPolicyVersionId !== undefined) {
+      if (typeof request.reviewPolicyVersionId !== 'string'
+        || !request.reviewPolicyVersionId.trim() || request.reviewPolicyVersionId.length > 120) {
+        throw new Error('全书审稿策略版本无效。')
+      }
+      normalized.reviewPolicyVersionId = request.reviewPolicyVersionId.trim()
+    }
+    return normalized
+  }
   if (trialOne) {
     if (request.chapterCount !== undefined && ![2, 3, 5].includes(request.chapterCount)) {
       throw new Error('试写章节数无效。')

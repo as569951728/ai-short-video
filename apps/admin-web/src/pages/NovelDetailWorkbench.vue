@@ -3229,22 +3229,29 @@ async function handleStartFullReview() {
 
   startingFullReview.value = true
   apiError.value = ''
-  startNovelActionPendingTask('full_review')
-  const pendingTaskId = pendingTask.value?.id
-
   try {
-    await startFullReview(novelId.value, {
-      idempotencyKey: createActionIdempotencyKey('full-review'),
+    const decision = await asyncTransport.submit('novel_full_review', {
       expectedNovelVersion: detail.value.updatedAt,
     })
-    ElMessage.success('全书审稿已完成，报告已生成')
-    await loadDetail()
+    if (decision.kind === 'blocked') return
+    if (decision.kind === 'task') return
+    startNovelActionPendingTask('full_review')
+    const pendingTaskId = pendingTask.value?.id
+    try {
+      await startFullReview(novelId.value, {
+        idempotencyKey: createActionIdempotencyKey('full-review'),
+        expectedNovelVersion: detail.value.updatedAt,
+      })
+      ElMessage.success('全书审稿已完成，报告已生成')
+      await loadDetail()
+    } finally {
+      clearLocalPendingTask(pendingTaskId)
+    }
   } catch (error) {
     apiError.value = formatApiError(error)
     await loadDetail(true)
   } finally {
     startingFullReview.value = false
-    clearLocalPendingTask(pendingTaskId)
   }
 }
 

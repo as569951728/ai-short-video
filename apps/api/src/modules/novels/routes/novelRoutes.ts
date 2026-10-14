@@ -133,8 +133,7 @@ const UNMIGRATED_PROVIDER_ROUTES = new Set([
   '/novels/:novelId/chapters/:chapterId/overlength-revisions',
   '/novels/:novelId/chapters/:chapterId/rewrite',
   '/novels/:novelId/chapters/:chapterId/content-versions/:versionId/adopt',
-  '/novels/:novelId/chapters/:chapterId/impact-assessments',
-  '/novels/:novelId/full-review'
+  '/novels/:novelId/chapters/:chapterId/impact-assessments'
 ]);
 
 interface AcceptanceSeedRouteAccess {
@@ -1179,17 +1178,40 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
           properties: {
             idempotencyKey: idempotencyKeySchema,
             expectedNovelVersion: { type: ['string', 'null'], maxLength: 80 },
-            reviewPolicyVersionId: { type: ['string', 'null'], maxLength: 120 }
+            reviewPolicyVersionId: { type: ['string', 'null'], maxLength: 120 },
+            expectedSubmissionScopeId: { type: 'string', minLength: 43, maxLength: 43 },
+            expectedCapabilityRevision: { type: 'string', minLength: 43, maxLength: 43 },
+            expectedCapabilityExpiresAt: { type: 'string', format: 'date-time' }
           },
           additionalProperties: false
         },
         response: {
-          200: responseEnvelopeSchema
+          200: responseEnvelopeSchema,
+          202: responseEnvelopeSchema
         }
       }
     },
     async (request, reply) => {
       const { novelId } = request.params as { novelId: string };
+      const capability = options.capabilityPolicySnapshotResolver
+        ? await options.capabilityPolicySnapshotResolver(request)
+        : { contractVersion: 'v1' as const, enabled: false as const, reasonCode: 'POLICY_DISABLED' as const };
+      if (capability.enabled) {
+        const authoritativeNow = await options.repository.getAuthoritativeTaskTime();
+        assertAsyncCapabilitySubmission(capability, (request.body ?? {}) as Record<string, unknown>, authoritativeNow);
+        const reviewRequest = withRequestIdempotency(
+          request.headers['idempotency-key'], (request.body ?? {}) as StartFullReviewRequest
+        );
+        const queued = await novelService.queueFullReview(
+          novelId, reviewRequest, await resolveProviderContext(options.requestContextResolver, request), authoritativeNow
+        );
+        const dispatch = toTaskDispatchResponse('novel_full_review', novelId, queued.task, queued.reused);
+        reply.status(dispatch.kind === 'accepted' ? 202 : 200);
+        return sendOk(request, reply, dispatch);
+      }
+      if (!['POLICY_DISABLED', 'UNSUPPORTED_ENVIRONMENT'].includes(capability.reasonCode)) {
+        throw new BusinessError(ErrorCode.GateBlocked, '暂时无法确认任务提交方式，请重新检查。');
+      }
       const data = await novelService.startFullReview(
         novelId,
         withRequestIdempotency(request.headers['idempotency-key'], request.body as StartFullReviewRequest),

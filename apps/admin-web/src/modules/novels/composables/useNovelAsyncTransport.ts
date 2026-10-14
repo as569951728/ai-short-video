@@ -26,6 +26,7 @@ const actions: AsyncNovelGenerationAction[] = [
   'direction_generate', 'setting_generate', 'outline_generate',
   'stage_outline_generate', 'chapter_plan_generate',
   'trial_chapter_one_generate', 'trial_followup_generate',
+  'novel_full_review',
 ]
 
 export function useNovelAsyncTransport(novelId: () => string, onTaskId: (taskId: string) => void) {

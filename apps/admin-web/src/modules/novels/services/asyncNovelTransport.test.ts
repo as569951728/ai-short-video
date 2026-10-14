@@ -40,6 +40,37 @@ it('normalizes only bounded, action-specific replay fields', () => {
       sourceVersionId: 'v-1', instruction: 'not allowed',
     },
   }))
+  assert.deepEqual(normalizeGenerationRequest('novel_full_review', {
+    expectedNovelVersion: '2030-01-01T00:00:00.000Z', reviewPolicyVersionId: ' policy-v1 ',
+  }), { expectedNovelVersion: '2030-01-01T00:00:00.000Z', reviewPolicyVersionId: 'policy-v1' })
+  assert.throws(() => normalizeGenerationRequest('novel_full_review', { regenerateReason: 'retry' }))
+  assert.throws(() => normalizeGenerationRequest('novel_full_review', { expectedNovelVersion: 'invalid' }))
+})
+
+it('submits full review through its task endpoint with one stable request', async () => {
+  const oldFetch = globalThis.fetch
+  let calls = 0
+  globalThis.fetch = async (url, init) => {
+    calls += 1
+    assert.match(String(url), /\/novels\/novel-1\/full-review$/)
+    assert.equal(new Headers(init?.headers).get('Idempotency-Key'), 'review-stable-key')
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+    assert.equal(body.expectedNovelVersion, '2030-01-01T00:00:00.000Z')
+    assert.equal(body.expectedSubmissionScopeId, enabledCapability.submissionScopeId)
+    return Response.json({ success: true, data: {
+      kind: 'accepted', taskId: 'task-review', action: 'novel_full_review', objectId: 'novel-1',
+      status: 'queued', reused: false, pollUrl: '/tasks/task-review',
+    }, error: null, requestId: 'req-review' }, { status: 202 })
+  }
+  try {
+    const result = await submitAsyncNovelGeneration({ novelId: 'novel-1', action: 'novel_full_review',
+      request: { expectedNovelVersion: '2030-01-01T00:00:00.000Z' },
+      idempotencyKey: 'review-stable-key', capability: enabledCapability })
+    assert.equal(result.taskId, 'task-review')
+    assert.equal(calls, 1)
+  } finally {
+    globalThis.fetch = oldFetch
+  }
 })
 
 it('validates trial followup dispatch against its trial run object, not the novel', async () => {

@@ -24,7 +24,7 @@ const developmentAsyncEnabled = env.NOVEL_ASYNC_DISPATCH_DEV_ENABLED === 'true'
   && env.NODE_ENV === 'development' && !env.DATABASE_URL && resolveAiProviderMode() === 'mock';
 const developmentLeasedTaskTypes = new Set([
   'novel_direction_generate', 'novel_setting_generate', 'novel_outline_generate',
-  'stage_outline_generate', 'chapter_plan_generate'
+  'stage_outline_generate', 'chapter_plan_generate', 'novel_full_review'
 ]);
 const novelRepository = env.DATABASE_URL ? new PrismaNovelRepository() : createInMemoryNovelRepository({
   enabledLeasedTaskTypes: developmentAsyncEnabled ? developmentLeasedTaskTypes : undefined

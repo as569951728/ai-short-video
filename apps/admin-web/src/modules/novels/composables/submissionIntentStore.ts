@@ -259,7 +259,7 @@ function validateShape(intent: SubmissionIntentV1): void {
   if (!plainObject(intent) || Object.keys(intent).some((key) => !INTENT_FIELDS.has(key))) invalid('Unexpected intent field')
   partitionKey(intent)
   if (!validId(intent.submissionId) || !validId(intent.idempotencyKey)
-    || !validId(intent.capabilityRevision) || !HASH_PATTERN.test(intent.requestHash)
+    || !SCOPE_PATTERN.test(intent.capabilityRevision) || !HASH_PATTERN.test(intent.requestHash)
     || !Number.isSafeInteger(intent.revision) || intent.revision < 1
     || !Number.isFinite(Date.parse(intent.capabilityExpiresAt))
     || !Number.isFinite(Date.parse(intent.updatedAt))
@@ -418,7 +418,7 @@ export class SubmissionIntentStore {
     if (trustedScopeId !== partition.submissionScopeId || attestation.submissionScopeId !== trustedScopeId) {
       return { applied: false, reason: 'scope_mismatch' }
     }
-    if (!validId(attestation.capabilityRevision) || !(this.now() < Date.parse(attestation.capabilityExpiresAt))) {
+    if (!SCOPE_PATTERN.test(attestation.capabilityRevision) || !(this.now() < Date.parse(attestation.capabilityExpiresAt))) {
       invalid('Capability attestation expired or invalid')
     }
     const previous = await this.readVerified(partition)
@@ -529,7 +529,7 @@ export class SubmissionIntentStore {
     attestation: SubmissionAttestation): Promise<CompareAndSetResult> {
     if (expected.trustedScopeId !== intent.submissionScopeId
       || attestation.submissionScopeId !== intent.submissionScopeId) return { applied: false, reason: 'scope_mismatch' }
-    if (!validId(attestation.capabilityRevision) || !(this.now() < Date.parse(attestation.capabilityExpiresAt))) {
+    if (!SCOPE_PATTERN.test(attestation.capabilityRevision) || !(this.now() < Date.parse(attestation.capabilityExpiresAt))) {
       invalid('Capability attestation expired or invalid')
     }
     return this.compareAndSet(expected, {

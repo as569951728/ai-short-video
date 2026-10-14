@@ -1846,6 +1846,42 @@ export class NovelService {
     };
   }
 
+  async queueFullReview(novelId: string, request: StartFullReviewRequest, context: RequestContext, authoritativeNow: Date) {
+    const novel = await this.findNovelOrThrow(context.tenantId, novelId);
+    const idempotencyKey = request.idempotencyKey?.trim() ?? '';
+    if (!idempotencyKey) {
+      throw new BusinessError(ErrorCode.ValidationError, '全书审稿后台任务需要稳定的幂等键，任务尚未创建。');
+    }
+    const token = createActorScopedIdempotencyToken({
+      tenantId: context.tenantId, userId: context.userId, action: 'novel_full_review',
+      objectId: novel.id, rawIdempotencyKey: idempotencyKey
+    });
+    const existingTask = await this.options.repository.findTaskByIdempotencyToken(
+      context.tenantId, 'novel_full_review', token
+    );
+    let chapters: NovelChapterRecord[] = [];
+    if (!existingTask) {
+      this.ensureLifecycleActive(novel);
+      if (request.expectedNovelVersion && request.expectedNovelVersion !== novel.updatedAt.toISOString()) {
+        throw new BusinessError(ErrorCode.VersionConflict, '小说版本已变化，请刷新后重新发起全书审稿');
+      }
+      chapters = await this.ensureFullReviewGate(novel, context);
+    }
+    return claimQueuedGeneration({
+      action: 'novel_full_review', repository: this.options.repository, novel,
+      idempotencyKey,
+      effectiveRequest: {
+        reviewPolicyVersionId: request.reviewPolicyVersionId?.trim()
+          || novel.policyProfileVersionId || DEFAULT_POLICY_PROFILE_VERSION_ID,
+        expectedNovelVersion: request.expectedNovelVersion ?? null
+      },
+      sourceVersionRefs: existingTask?.sourceVersionRefs ?? createFullReviewSourceRefs(novel, chapters),
+      context, now: () => authoritativeNow,
+      durationDeadlineAt: new Date(authoritativeNow.getTime() + 30 * 60_000),
+      providerCapability: this.fullReviewProvider
+    });
+  }
+
   async startFullReview(novelId: string, request: StartFullReviewRequest, context: RequestContext): Promise<FullReviewActionResultDTO> {
     const novel = await this.findNovelOrThrow(context.tenantId, novelId);
     this.ensureLifecycleActive(novel);
