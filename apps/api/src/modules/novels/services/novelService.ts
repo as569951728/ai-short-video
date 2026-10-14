@@ -797,6 +797,91 @@ export class NovelService {
     );
   }
 
+  async queueTrial(novelId: string, request: GenerateTrialRequest, context: RequestContext, authoritativeNow: Date) {
+    const novel = await this.findNovelOrThrow(context.tenantId, novelId);
+    const rawIdempotencyKey = request.idempotencyKey?.trim() ?? '';
+    if (!request.trialRunId) {
+      const action = 'trial_chapter_one_generate' as const;
+      const token = createActorScopedIdempotencyToken({
+        tenantId: context.tenantId, userId: context.userId, action,
+        objectId: novel.id, rawIdempotencyKey
+      });
+      const existingTask = await this.options.repository.findTaskByIdempotencyToken(
+        context.tenantId, 'trial_writing_generate', token
+      );
+      const chapterCount = normalizeTrialChapterCount(request.chapterCount);
+      if (!existingTask) {
+        this.ensureLifecycleActive(novel);
+        const chapters = await this.ensureTrialGate(novel, context.tenantId);
+        assertChapterLengthTargetConfigured(chapters.find((chapter) => chapter.chapterNo === 1)?.wordTarget);
+      }
+      return claimQueuedGeneration({
+        action, repository: this.options.repository, novel, idempotencyKey: rawIdempotencyKey,
+        effectiveRequest: { chapterCount, regenerateReason: request.regenerateReason?.trim() || null },
+        sourceVersionRefs: existingTask?.sourceVersionRefs ?? createTrialSourceRefs(novel),
+        context, now: () => authoritativeNow,
+        durationDeadlineAt: new Date(authoritativeNow.getTime() + 15 * 60_000),
+        providerCapability: this.trialProvider
+      });
+    }
+
+    if (!request.selectedCandidateId) {
+      throw new BusinessError(ErrorCode.GateBlocked, '选择第1章候选前，不能生成第2-3章');
+    }
+    const action = 'trial_followup_generate' as const;
+    const trialRun = await this.options.repository.findTrialRunById(context.tenantId, novelId, request.trialRunId);
+    if (!trialRun) throw new BusinessError(ErrorCode.NotFound, '试写记录不存在');
+    const token = createActorScopedIdempotencyToken({
+      tenantId: context.tenantId, userId: context.userId, action,
+      objectId: trialRun.id, rawIdempotencyKey
+    });
+    const existingTask = await this.options.repository.findTaskByIdempotencyToken(
+      context.tenantId, action, token
+    );
+    const selectionReason = request.selectionReason?.trim() ?? '';
+    if (selectionReason) assertSafeTrialSelectionReason(selectionReason);
+    if (!existingTask) {
+      this.ensureLifecycleActive(novel);
+      const chapters = await this.ensureTrialGate(novel, context.tenantId);
+      if (trialRun.status !== 'waiting_chapter1_selection') {
+        throw new BusinessError(ErrorCode.ConflictTaskExists, '本次试写结果正在等待确认，不能用新的幂等键重复生成。', {
+          taskType: action, status: trialRun.status
+        });
+      }
+      const selectedCandidate = await this.options.repository.findChapterContentVersionById(
+        context.tenantId, novelId, request.selectedCandidateId
+      );
+      if (!selectedCandidate || getMetadataString(selectedCandidate.metadata, 'trialRunId') !== trialRun.id) {
+        throw new BusinessError(ErrorCode.NotFound, '第1章候选不存在');
+      }
+      const selectedChapter = chapters.find((chapter) => chapter.id === selectedCandidate.chapterId);
+      if (!selectedChapter) throw new BusinessError(ErrorCode.VersionConflict, '第1章候选对应的权威章节不存在，请刷新后重试。');
+      assertChapterLengthGate(selectedCandidate.content, selectedChapter.wordTarget);
+      chapters.slice(0, trialRun.trialChapterCount).forEach((chapter) => assertChapterLengthTargetConfigured(chapter.wordTarget));
+      const riskLevel = getTrialCandidateRiskLevel(selectedCandidate);
+      if ((riskLevel === RiskLevel.High || riskLevel === RiskLevel.Blocking) && (!request.confirmRisk || !selectionReason)) {
+        throw new BusinessError(ErrorCode.GateBlocked, '高风险试写候选继续生成必须二次确认并填写原因', {
+          confirmRisk: request.confirmRisk === true,
+          issues: [{ path: 'selectionReason', message: 'required for high or blocking trial candidate' }]
+        });
+      }
+    }
+    return claimQueuedGeneration({
+      action, repository: this.options.repository, novel, objectId: trialRun.id,
+      idempotencyKey: rawIdempotencyKey,
+      effectiveRequest: {
+        trialRunId: trialRun.id, selectedCandidateId: request.selectedCandidateId,
+        selectionReason: selectionReason || null, confirmRisk: request.confirmRisk === true
+      },
+      sourceVersionRefs: existingTask?.sourceVersionRefs ?? {
+        ...createTrialSourceRefs(novel), selectedChapterOneCandidateId: request.selectedCandidateId
+      },
+      context, now: () => authoritativeNow,
+      durationDeadlineAt: new Date(authoritativeNow.getTime() + 15 * 60_000),
+      providerCapability: this.trialProvider
+    });
+  }
+
   async generateTrial(novelId: string, request: GenerateTrialRequest, context: RequestContext): Promise<TrialActionResultDTO> {
     const novel = await this.findNovelOrThrow(context.tenantId, novelId);
     this.ensureLifecycleActive(novel);

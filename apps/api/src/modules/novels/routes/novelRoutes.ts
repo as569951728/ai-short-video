@@ -128,7 +128,6 @@ const idempotencyKeySchema = { type: 'string', minLength: 8, maxLength: 120, pat
 const UNMIGRATED_PROVIDER_ROUTES = new Set([
   '/novels/:novelId/directions/fuse',
   '/novels/:novelId/directions/:versionId/optimize',
-  '/novels/:novelId/trial/generate',
   '/novels/:novelId/chapters/batch-generate',
   '/novels/:novelId/chapters/:chapterId/generate',
   '/novels/:novelId/chapters/:chapterId/overlength-revisions',
@@ -850,17 +849,41 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
             confirmRisk: { type: 'boolean' },
             selectionReason: { type: ['string', 'null'], maxLength: 500 },
             regenerateReason: { type: ['string', 'null'], maxLength: 500 },
-            idempotencyKey: idempotencyKeySchema
+            idempotencyKey: idempotencyKeySchema,
+            expectedSubmissionScopeId: { type: 'string', minLength: 43, maxLength: 43 },
+            expectedCapabilityRevision: { type: 'string', minLength: 43, maxLength: 43 },
+            expectedCapabilityExpiresAt: { type: 'string', format: 'date-time' }
           },
           additionalProperties: false
         },
         response: {
-          200: responseEnvelopeSchema
+          200: responseEnvelopeSchema,
+          202: responseEnvelopeSchema
         }
       }
     },
     async (request, reply) => {
       const { novelId } = request.params as { novelId: string };
+      const capability = options.capabilityPolicySnapshotResolver
+        ? await options.capabilityPolicySnapshotResolver(request)
+        : { contractVersion: 'v1' as const, enabled: false as const, reasonCode: 'POLICY_DISABLED' as const };
+      if (capability.enabled) {
+        const authoritativeNow = await options.repository.getAuthoritativeTaskTime();
+        assertAsyncCapabilitySubmission(capability, (request.body ?? {}) as Record<string, unknown>, authoritativeNow);
+        const trialRequest = withRequestIdempotency(
+          request.headers['idempotency-key'], (request.body ?? {}) as GenerateTrialRequest
+        );
+        const queued = await novelService.queueTrial(
+          novelId, trialRequest, await resolveProviderContext(options.requestContextResolver, request), authoritativeNow
+        );
+        const action = trialRequest.trialRunId ? 'trial_followup_generate' : 'trial_chapter_one_generate';
+        const dispatch = toTaskDispatchResponse(action, trialRequest.trialRunId || novelId, queued.task, queued.reused);
+        reply.status(dispatch.kind === 'accepted' ? 202 : 200);
+        return sendOk(request, reply, dispatch);
+      }
+      if (!['POLICY_DISABLED', 'UNSUPPORTED_ENVIRONMENT'].includes(capability.reasonCode)) {
+        throw new BusinessError(ErrorCode.GateBlocked, '暂时无法确认任务提交方式，请重新检查。');
+      }
       const data = await novelService.generateTrial(
         novelId,
         withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as GenerateTrialRequest),

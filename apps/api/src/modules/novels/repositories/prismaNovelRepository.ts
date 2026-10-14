@@ -1083,6 +1083,169 @@ export class PrismaNovelRepository implements NovelRepository {
       if (!matchGenerationAuthority(authorityInput, envelope.sourceVersionRefs.authoritySnapshotHash, authority).ok) {
         return fail('source_stale');
       }
+      if (current.taskType === 'chapter_impact_assess' && envelope.action === 'chapter_adopt_impact_assess') {
+        const refs = authorityRecord(envelope.sourceVersionRefs);
+        const request = authorityRecord(envelope.normalizedRequest);
+        const novel = await this.findById(input.tenantId, current.novelId!, tx);
+        const chapterRow = await tx.novelChapter.findFirst({ where: {
+          tenantId: input.tenantId, novelId: current.novelId!, id: envelope.objectId, deletedAt: null
+        } });
+        const chapter = chapterRow ? mapNovelChapter(chapterRow) : null;
+        const currentContent = typeof refs.currentContentVersionId === 'string'
+          ? await this.findChapterContentVersionById(input.tenantId, current.novelId!, refs.currentContentVersionId, tx)
+          : null;
+        const candidate = typeof refs.candidateVersionId === 'string'
+          ? await this.findChapterContentVersionById(input.tenantId, current.novelId!, refs.candidateVersionId, tx)
+          : null;
+        if (envelope.action !== 'chapter_adopt_impact_assess' || !novel || !chapter || !currentContent || !candidate
+          || request.chapterId !== chapter.id || request.currentContentVersionId !== currentContent.id
+          || request.candidateVersionId !== candidate.id
+          || chapter.currentContentVersionId !== currentContent.id || currentContent.chapterId !== chapter.id
+          || currentContent.status !== VersionStatus.Current || currentContent.staleLevel !== StaleLevel.None
+          || candidate.chapterId !== chapter.id || candidate.id === currentContent.id
+          || candidate.status !== VersionStatus.Candidate || candidate.staleLevel !== StaleLevel.None
+          || (Object.hasOwn(authorityRecord(candidate.sourceVersionRefs), 'currentContentVersionId')
+            && authorityRecord(candidate.sourceVersionRefs).currentContentVersionId !== currentContent.id)
+          || authorityRecord(candidate.metadata).reviewRequired === true
+          || candidate.sourceType?.startsWith('ai_overlength_')
+          || candidate.wordCount !== evaluateChapterLength(candidate.content, chapter.wordTarget).actual
+          || evaluateChapterLength(candidate.content, chapter.wordTarget).status !== 'pass') {
+          return fail('source_stale');
+        }
+        const pageSnapshot = request.pageVersionSnapshot;
+        if (pageSnapshot !== undefined && (!pageSnapshot || typeof pageSnapshot !== 'object'
+          || Array.isArray(pageSnapshot) || JSON.stringify(pageSnapshot).length > 4096)) {
+          return fail('worker_payload_unsupported');
+        }
+        const snapshot = authorityRecord(pageSnapshot);
+        if ((Object.hasOwn(snapshot, 'currentContentVersionId')
+            && snapshot.currentContentVersionId !== currentContent.id)
+          || (Object.hasOwn(snapshot, 'seenCandidateVersionId')
+            && snapshot.seenCandidateVersionId !== candidate.id)
+          || (Object.hasOwn(snapshot, 'candidateVersionId')
+            && snapshot.candidateVersionId !== candidate.id)) return fail('source_stale');
+        if (!validPrismaLeasedImpactDraft(input.validatedResult)) return fail('worker_payload_unsupported');
+        const impact = input.validatedResult;
+        const suppliedReason = typeof request.reason === 'string'
+          && request.reason.trim() !== '采用候选前影响评估' ? request.reason.trim() : '';
+        if (impact.blocksFullReview && !suppliedReason) return fail('worker_payload_unsupported');
+        const reason = suppliedReason || '采用章节候选正文';
+        try {
+          assertNoSensitiveExecutionPayload({ impact, pageSnapshot: snapshot }, 'chapterAdoptImpactResult');
+        } catch {
+          return fail('worker_payload_unsupported');
+        }
+        const comparison = authorityRecord(authorityRecord(candidate.metadata).summaryCompare);
+        const summaryCompare: ChapterSummaryCompareDTO = validPrismaLeasedSummaryCompare(comparison)
+          ? comparison : {
+            currentSummary: currentContent.summary ?? '', candidateSummary: candidate.summary ?? '',
+            benefit: '候选版本优化了本章表达和钩子。', newRisks: [],
+            possibleImpact: '预计主要影响本章表达。', aiSuggestion: '采用前请确认摘要对比和影响提示。'
+          };
+        try {
+          assertNoSensitiveExecutionPayload(summaryCompare, 'chapterAdoptSummaryCompare');
+        } catch {
+          return fail('worker_payload_unsupported');
+        }
+        const decision = await tx.assetDecisionRecord.create({ data: {
+          tenantId: input.tenantId, novelId: current.novelId!, actionType: 'adopt_chapter_content',
+          objectType: 'chapter_content', objectId: chapter.id,
+          candidateVersionId: candidate.id, currentVersionIdBefore: currentContent.id,
+          currentVersionIdAfter: candidate.id, decisionReason: reason, isForced: impact.blocksFullReview,
+          riskSummary: summaryCompare.newRisks.join('；'), impactSummary: impact.summary,
+          pageVersionSnapshot: toJsonObject(pageSnapshot ?? { currentContentVersionId: currentContent.id,
+            seenCandidateVersionId: candidate.id }), sourceTaskId: current.id,
+          createdBy: current.createdBy, createdAt: input.authoritativeNow
+        } });
+        const impactCase = await tx.impactCase.create({ data: {
+          tenantId: input.tenantId, novelId: current.novelId!, sourceObjectType: 'chapter',
+          sourceObjectId: chapter.id, sourceOldVersionId: currentContent.id,
+          sourceNewVersionId: candidate.id,
+          impactLevel: PrismaImpactLevel[impact.impactLevel.toUpperCase() as keyof typeof PrismaImpactLevel],
+          status: impact.blocksFullReview ? 'waiting_decision'
+            : impact.impactLevel === 'none' ? 'resolved' : 'ignored',
+          affectedChapterIdsJson: impact.affectedChapterIds,
+          affectedVideoReferenceIdsJson: impact.affectedVideoReferenceIds,
+          summary: impact.summary, suggestedActionsJson: impact.suggestedActions,
+          decisionRecordId: decision.id, sourceTaskId: current.id,
+          createdAt: input.authoritativeNow,
+          resolvedAt: impact.blocksFullReview ? null : input.authoritativeNow,
+          metadata: toJsonObject({ changedFacts: impact.changedFacts,
+            recommendedHandling: impact.recommendedHandling,
+            blocksFullReview: impact.blocksFullReview, summaryCompare })
+        } });
+        const priorTransition = await tx.chapterContentVersion.updateMany({ where: {
+          tenantId: input.tenantId, novelId: current.novelId!, chapterId: chapter.id,
+          id: currentContent.id, status: PrismaVersionStatus.CURRENT,
+          staleLevel: PrismaStaleLevel.NONE
+        }, data: { status: PrismaVersionStatus.HISTORICAL } });
+        if (priorTransition.count !== 1) throw new Error('Chapter adoption lost its prior version transition.');
+        const candidateTransition = await tx.chapterContentVersion.updateMany({ where: {
+          tenantId: input.tenantId, novelId: current.novelId!, chapterId: chapter.id,
+          id: candidate.id, status: PrismaVersionStatus.CANDIDATE,
+          staleLevel: PrismaStaleLevel.NONE
+        }, data: { status: PrismaVersionStatus.CURRENT, decisionRecordId: decision.id } });
+        if (candidateTransition.count !== 1) throw new Error('Chapter adoption lost its candidate version transition.');
+        const chapterTransition = await tx.novelChapter.updateMany({ where: {
+          tenantId: input.tenantId, novelId: current.novelId!, id: chapter.id,
+          deletedAt: null, currentContentVersionId: currentContent.id
+        }, data: {
+          currentContentVersionId: candidate.id, wordCount: candidate.wordCount,
+          mainStatus: impact.blocksFullReview ? 'pending' : 'completed',
+          statusNote: impact.blocksFullReview ? '重写采用后影响未关闭。' : '重写已采用，影响已同步。',
+          impactLevel: PrismaImpactLevel[impact.impactLevel.toUpperCase() as keyof typeof PrismaImpactLevel],
+          lastGenerationTaskId: current.id, updatedAt: input.authoritativeNow
+        } });
+        if (chapterTransition.count !== 1) throw new Error('Chapter adoption lost its chapter transition.');
+        const novelTransition = await tx.novel.updateMany({ where: {
+          tenantId: input.tenantId, id: current.novelId!, deletedAt: null,
+          lifecycleStatus: PrismaNovelLifecycleStatus.ACTIVE,
+          currentDirectionVersionId: novel.currentDirectionVersionId,
+          currentSettingVersionId: novel.currentSettingVersionId,
+          currentOutlineVersionId: novel.currentOutlineVersionId,
+          currentStageOutlineVersionId: novel.currentStageOutlineVersionId,
+          currentChapterPlanVersionId: novel.currentChapterPlanVersionId
+        }, data: {
+          creationStage: PrismaNovelCreationStage.BODY,
+          stageStatus: impact.blocksFullReview ? PrismaStageStatus.BLOCKED : PrismaStageStatus.NOT_STARTED,
+          updatedBy: current.createdBy, updatedAt: input.authoritativeNow
+        } });
+        if (novelTransition.count !== 1) throw new Error('Chapter adoption lost its novel transition.');
+        const receipt = createSafeResultReceipt(mapGenerationTask(current), {
+          status: 'completed', outcome: 'completed', resultObjectType: 'impact_case',
+          resultObjectId: impactCase.id, resultVersionIds: [candidate.id], resultCount: 1
+        });
+        const transition = await tx.generationTask.updateMany({ where: fence, data: {
+          status: PrismaTaskStatus.COMPLETED, statusNote: '候选已采用，影响评估已记录。',
+          progress: 100, currentStep: '章节候选已采用', outputSummary: '章节候选已采用，影响评估已记录。',
+          resultObjectType: 'impact_case', resultObjectId: impactCase.id,
+          resultVersionId: candidate.id, resultVersionIdsJson: [candidate.id],
+          resultReceiptHash: receipt.hash, providerAttemptPhase: PrismaProviderAttemptPhase.FINALIZING,
+          activeClaimKey: null, leaseOwnerId: null, leaseToken: null, leaseExpiresAt: null,
+          finishedAt: input.authoritativeNow, updatedAt: input.authoritativeNow
+        } });
+        if (transition.count !== 1) throw new Error('Chapter adoption lost its fenced task transition.');
+        const finalized = await tx.generationTask.findFirstOrThrow({ where: { tenantId: input.tenantId, id: current.id } });
+        await createTaskEvent(tx, { task: finalized, eventType: 'task_finalized',
+          message: finalized.statusNote!, progress: 100, requestId, createdAt: input.authoritativeNow });
+        await tx.operationLog.create({ data: {
+          tenantId: input.tenantId, userId: current.createdBy, novelId: current.novelId,
+          action: 'adopt_chapter_content', objectType: 'chapter', objectId: chapter.id,
+          beforeSnapshot: { currentContentVersionId: currentContent.id },
+          afterSnapshot: { currentContentVersionId: candidate.id, impactCaseId: impactCase.id },
+          reason, impactSummary: impact.summary, sourceTaskId: current.id,
+          requestId, createdAt: input.authoritativeNow
+        } });
+        await tx.operationLog.create({ data: {
+          tenantId: input.tenantId, userId: current.createdBy, novelId: current.novelId,
+          action: 'generation_task_finalized', objectType: 'generation_task', objectId: current.id,
+          afterSnapshot: { resultObjectId: impactCase.id, resultVersionIds: [candidate.id],
+            receiptHash: receipt.hash },
+          reason: '章节候选采用与影响评估完成', impactSummary: impact.summary,
+          sourceTaskId: current.id, requestId, createdAt: input.authoritativeNow
+        } });
+        return { outcome: 'applied' as const, task: mapGenerationTask(finalized) };
+      }
       if (current.taskType === 'chapter_body_rewrite') {
         const refs = authorityRecord(envelope.sourceVersionRefs);
         const chapterRow = await tx.novelChapter.findFirst({ where: {

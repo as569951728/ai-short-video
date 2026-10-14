@@ -2881,24 +2881,32 @@ async function handleGenerateTrial(regenerateReason?: string) {
 
   generatingTrial.value = true
   apiError.value = ''
-  startNovelActionPendingTask('trial_generate')
-  const pendingTaskId = pendingTask.value?.id
-
   try {
-    const result = await generateTrial(novelId.value, {
+    const decision = await asyncTransport.submit('trial_chapter_one_generate', {
       chapterCount: 3,
-      regenerateReason,
+      ...(regenerateReason ? { regenerateReason } : {}),
     })
-    ElMessage.success('试写候选已生成')
-    await loadDetail()
-    await nextTick()
-    focusResultVersion('trial', result.task.resultVersionIds)
+    if (decision.kind === 'blocked') return
+    if (decision.kind === 'task') return
+    startNovelActionPendingTask('trial_generate')
+    const pendingTaskId = pendingTask.value?.id
+    try {
+      const result = await generateTrial(novelId.value, {
+        chapterCount: 3,
+        regenerateReason,
+      })
+      ElMessage.success('试写候选已生成')
+      await loadDetail()
+      await nextTick()
+      focusResultVersion('trial', result.task.resultVersionIds)
+    } finally {
+      clearLocalPendingTask(pendingTaskId)
+    }
   } catch (error) {
     apiError.value = formatApiError(error)
     await loadDetail(true)
   } finally {
     generatingTrial.value = false
-    clearLocalPendingTask(pendingTaskId)
   }
 }
 
@@ -2958,26 +2966,35 @@ async function handleSelectTrialCandidate(candidate: TrialCandidateRow) {
 
   selectingTrialCandidateId.value = candidate.id
   apiError.value = ''
-  startNovelActionPendingTask('trial_followup_generate')
-  const pendingTaskId = pendingTask.value?.id
-  ElMessage.info(`已选择「${candidate.title}」，正在生成第 2-3 章和试写总评。`)
-
   try {
-    await generateTrial(novelId.value, {
+    const followupRequest = {
       trialRunId: trialRun.id,
       selectedCandidateId: candidate.id,
-      ...(candidate.requiresRiskConfirm ? { confirmRisk: true, selectionReason } : {}),
-    })
-    ElMessage.success('已选择第 1 章候选，继续生成第 2-3 章')
-    await loadDetail()
-    activeSubStepKey.value = 'review'
+      ...(candidate.requiresRiskConfirm ? { confirmRisk: true, selectionReason: selectionReason ?? '' } : {}),
+    }
+    const decision = await asyncTransport.submit('trial_followup_generate', followupRequest)
+    if (decision.kind === 'blocked') return
+    if (decision.kind === 'task') {
+      ElMessage.info(`已选择「${candidate.title}」，第 2-3 章试写任务已受理。`)
+      return
+    }
+    startNovelActionPendingTask('trial_followup_generate')
+    const pendingTaskId = pendingTask.value?.id
+    ElMessage.info(`已选择「${candidate.title}」，正在生成第 2-3 章和试写总评。`)
+    try {
+      await generateTrial(novelId.value, followupRequest)
+      ElMessage.success('已选择第 1 章候选，继续生成第 2-3 章')
+      await loadDetail()
+      activeSubStepKey.value = 'review'
+    } finally {
+      clearLocalPendingTask(pendingTaskId)
+    }
   } catch (error) {
     apiError.value = formatApiError(error)
     ElMessage.error(apiError.value)
     await loadDetail(true)
   } finally {
     selectingTrialCandidateId.value = ''
-    clearLocalPendingTask(pendingTaskId)
   }
 }
 

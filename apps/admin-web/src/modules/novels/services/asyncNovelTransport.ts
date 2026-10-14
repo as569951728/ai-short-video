@@ -12,10 +12,17 @@ export type AsyncNovelGenerationAction =
   | 'outline_generate'
   | 'stage_outline_generate'
   | 'chapter_plan_generate'
+  | 'trial_chapter_one_generate'
+  | 'trial_followup_generate'
 
 export interface NormalizedGenerationRequest {
   regenerateReason?: string
   optimization?: { sourceVersionId: string; instruction: string }
+  chapterCount?: number
+  trialRunId?: string
+  selectedCandidateId?: string
+  confirmRisk?: boolean
+  selectionReason?: string
 }
 
 export type AsyncDispatchFailure =
@@ -47,6 +54,8 @@ const actionPaths: Record<AsyncNovelGenerationAction, string> = {
   outline_generate: 'outlines/generate',
   stage_outline_generate: 'stage-outlines/generate',
   chapter_plan_generate: 'chapter-plans/generate',
+  trial_chapter_one_generate: 'trial/generate',
+  trial_followup_generate: 'trial/generate',
 }
 
 export function normalizeGenerationRequest(
@@ -56,10 +65,41 @@ export function normalizeGenerationRequest(
   if (!request || typeof request !== 'object' || Array.isArray(request)) {
     throw new Error('生成参数无效，请重新填写。')
   }
-  if (Object.keys(request).some((key) => key !== 'regenerateReason' && key !== 'optimization')) {
+  const trialOne = action === 'trial_chapter_one_generate'
+  const trialFollowup = action === 'trial_followup_generate'
+  const allowedFields = trialOne ? ['chapterCount', 'regenerateReason']
+    : trialFollowup ? ['trialRunId', 'selectedCandidateId', 'confirmRisk', 'selectionReason']
+      : ['regenerateReason', 'optimization']
+  if (Object.keys(request).some((key) => !allowedFields.includes(key))) {
     throw new Error('生成参数包含不支持的字段。')
   }
   const normalized: NormalizedGenerationRequest = {}
+  if (trialOne) {
+    if (request.chapterCount !== undefined && ![2, 3, 5].includes(request.chapterCount)) {
+      throw new Error('试写章节数无效。')
+    }
+    normalized.chapterCount = request.chapterCount ?? 3
+  }
+  if (trialFollowup) {
+    const trialRunId = request.trialRunId?.trim()
+    const selectedCandidateId = request.selectedCandidateId?.trim()
+    if (!trialRunId || trialRunId.length > 80 || !selectedCandidateId || selectedCandidateId.length > 80) {
+      throw new Error('试写记录或候选无效。')
+    }
+    if (request.confirmRisk !== undefined && typeof request.confirmRisk !== 'boolean') {
+      throw new Error('风险确认参数无效。')
+    }
+    if (request.selectionReason !== undefined) {
+      if (typeof request.selectionReason !== 'string' || request.selectionReason.trim().length > 500) {
+        throw new Error('选择原因无效。')
+      }
+      const reason = request.selectionReason.trim()
+      if (reason) normalized.selectionReason = reason
+    }
+    normalized.trialRunId = trialRunId
+    normalized.selectedCandidateId = selectedCandidateId
+    if (request.confirmRisk) normalized.confirmRisk = true
+  }
   if (request.regenerateReason !== undefined) {
     if (typeof request.regenerateReason !== 'string') throw new Error('重新生成原因无效。')
     const reason = request.regenerateReason.trim()
@@ -132,7 +172,8 @@ export async function submitAsyncNovelGeneration(input: {
       },
     },
   )
-  if (!data || data.action !== action || data.objectId !== novelId
+  const expectedObjectId = action === 'trial_followup_generate' ? request.trialRunId : novelId
+  if (!data || data.action !== action || data.objectId !== expectedObjectId
     || !data.taskId || data.pollUrl !== `/tasks/${data.taskId}`
     || (status === 202 && (data.kind !== 'accepted' || !['queued', 'processing'].includes(data.status)))
     || (status === 200 && (data.kind !== 'existing' || ![

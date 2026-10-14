@@ -349,16 +349,23 @@ POST /novels/:novelId/trial/generate
 chapterCount
 trialRunId
 selectedCandidateId
+confirmRisk
+selectionReason
+regenerateReason
+Idempotency-Key
 ```
 
 规则：
 
+- 开发 mock 环境显式启用异步能力时，请求还需携带能力快照中的 `expectedSubmissionScopeId`、`expectedCapabilityRevision`、`expectedCapabilityExpiresAt`；新任务返回 `202 TaskDispatchResponseV1`，原提交重放返回同一任务的 `202` 或终态 `200`。轮询 `pollUrl` 读取任务，不能因页面刷新重新发起付费调用。生产异步能力默认关闭。
 - 章节目录当前版本有效。
 - 不带 `trialRunId` 时创建 `trial_writing_generate` 任务，默认生成 3 个完整第 1 章候选，可支持 2/3/5。
 - 第 1 章候选包含完整正文、开篇看点、首句、前 300 字摘要、结尾钩子、评分、风险、AI 推荐理由。
 - AI 推荐候选只高亮，不自动选择。
 - 带 `trialRunId` 和 `selectedCandidateId` 时，标记第 1 章候选为试写选中版本，再生成第 2-3 章、章节特性卡、单章审稿和试写总评。
 - 选择第 1 章候选前，不能生成第 2-3 章。
+- 高风险首章候选续跑必须先确认风险并填写 `selectionReason`；确认与原因随异步任务请求持久化，不依赖页面内存。
+- 续跑结果先保留为候选，试写总评就绪仍不自动成为正式章节；只有 `trial/confirm` 确认后才切换正式章节指针。
 - 第 2 章硬门槛失败时试写批次进入阻塞，不生成第 3 章。
 - 评分需要返回 `scoringStrategyVersion`、维度分、权重、证据、扣分点和门禁结论。
 

@@ -27,6 +27,45 @@ it('normalizes only bounded, action-specific replay fields', () => {
     optimization: { sourceVersionId: 'cv-1', instruction: '改进节奏' },
   }))
   assert.throws(() => normalizeGenerationRequest('setting_generate', { unsafe: 'secret' } as never))
+  assert.deepEqual(normalizeGenerationRequest('trial_chapter_one_generate', { chapterCount: 3 }), { chapterCount: 3 })
+  assert.deepEqual(normalizeGenerationRequest('trial_followup_generate', {
+    trialRunId: ' run-1 ', selectedCandidateId: ' candidate-1 ', confirmRisk: true,
+    selectionReason: ' 接受风险 ',
+  }), { trialRunId: 'run-1', selectedCandidateId: 'candidate-1', confirmRisk: true,
+    selectionReason: '接受风险' })
+  assert.throws(() => normalizeGenerationRequest('trial_chapter_one_generate', { chapterCount: 4 }))
+  assert.throws(() => normalizeGenerationRequest('trial_followup_generate', { trialRunId: 'run-1' }))
+  assert.throws(() => normalizeGenerationRequest('trial_followup_generate', {
+    trialRunId: 'run-1', selectedCandidateId: 'candidate-1', optimization: {
+      sourceVersionId: 'v-1', instruction: 'not allowed',
+    },
+  }))
+})
+
+it('validates trial followup dispatch against its trial run object, not the novel', async () => {
+  const oldFetch = globalThis.fetch
+  let objectId = 'run-1'
+  globalThis.fetch = async (url, init) => {
+    assert.match(String(url), /\/novels\/novel-1\/trial\/generate$/)
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+    assert.equal(body.trialRunId, 'run-1')
+    assert.equal(body.selectedCandidateId, 'candidate-1')
+    return Response.json({ success: true, data: {
+      kind: 'accepted', taskId: 'task-trial', action: 'trial_followup_generate', objectId,
+      status: 'queued', reused: false, pollUrl: '/tasks/task-trial',
+    }, error: null, requestId: 'req-trial' }, { status: 202 })
+  }
+  try {
+    const input = { novelId: 'novel-1', action: 'trial_followup_generate' as const,
+      request: { trialRunId: 'run-1', selectedCandidateId: 'candidate-1' },
+      idempotencyKey: 'trial-followup-stable-key', capability: enabledCapability }
+    assert.equal((await submitAsyncNovelGeneration(input)).taskId, 'task-trial')
+    objectId = 'novel-1'
+    await assert.rejects(() => submitAsyncNovelGeneration(input),
+      (error) => error instanceof ApiClientError && error.code === 'INVALID_RESPONSE')
+  } finally {
+    globalThis.fetch = oldFetch
+  }
 })
 
 it('checks the capability contract and does not create a task', async () => {

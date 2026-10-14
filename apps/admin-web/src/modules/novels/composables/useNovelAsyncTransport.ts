@@ -25,6 +25,7 @@ type SubmitDecision = { kind: 'legacy' } | { kind: 'task'; taskId: string } | { 
 const actions: AsyncNovelGenerationAction[] = [
   'direction_generate', 'setting_generate', 'outline_generate',
   'stage_outline_generate', 'chapter_plan_generate',
+  'trial_chapter_one_generate', 'trial_followup_generate',
 ]
 
 export function useNovelAsyncTransport(novelId: () => string, onTaskId: (taskId: string) => void) {
