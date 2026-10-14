@@ -8,8 +8,8 @@
       </div>
       <div class="hero-actions">
         <el-tag :type="statusTagType">{{ workbench?.chapter.statusNote || '加载中' }}</el-tag>
-        <el-button :disabled="!currentContent" :loading="actionLoading" @click="handleRewriteChapter">生成重写候选</el-button>
-        <el-button :disabled="!currentContent" :loading="actionLoading" @click="handleCreateImpactAssessment">影响评估</el-button>
+        <el-button :disabled="!currentContent || chapterActionBlocked" :loading="actionLoading" @click="handleRewriteChapter">生成重写候选</el-button>
+        <el-button :disabled="!currentContent || chapterActionBlocked" :loading="actionLoading" @click="handleCreateImpactAssessment">影响评估</el-button>
         <el-button :loading="loading" @click="loadWorkbench">刷新</el-button>
       </div>
     </div>
@@ -26,7 +26,7 @@
           <p class="muted">章节生成、审稿和试写相关任务会在这里显示最近状态。</p>
         </div>
       </div>
-      <TaskProgressPanel :summary="workbench?.recentTask || null" :loading="loading" @refresh="loadWorkbench" @view="openTaskDetail" @view-result="scrollToCandidates" />
+      <TaskProgressPanel :summary="workbench?.recentTask || null" :loading="loading" @refresh="loadWorkbench" @view="openTaskDetail" @view-result="scrollToTaskResult(workbench?.recentTask?.taskType)" />
     </el-card>
 
     <div class="chapter-right-columns">
@@ -79,11 +79,11 @@
                   v-if="candidate.sourceType === 'ai_overlength_original' && candidate.lengthGate?.status === 'too_long'"
                   size="small"
                   type="warning"
-                  :disabled="hasRevisionAttempt || actionLoading || transportBlocksNewSubmission"
+                  :disabled="hasRevisionAttempt || chapterActionBlocked"
                   :loading="actionLoading"
                   @click="handleReviseOverlength(candidate)"
                 >精简一次</el-button>
-                <el-button v-if="candidate.canSelectByStatus" size="small" type="primary" :disabled="!candidate.canSelect" :loading="actionLoading" @click="handleAdoptCandidate(candidate)">采用候选</el-button>
+                <el-button v-if="candidate.canSelectByStatus" size="small" type="primary" :disabled="!candidate.canSelect || chapterActionBlocked" :loading="actionLoading" @click="handleAdoptCandidate(candidate)">采用候选</el-button>
               </div>
               <p v-if="candidate.sourceType === 'ai_overlength_revision'" class="muted">精简候选已保留，待内容复核后才能采用。</p>
               <p v-if="candidate.sourceType === 'ai_overlength_original' && hasOverlengthRevision" class="muted">已有一次精简候选，请查看新版本。</p>
@@ -142,7 +142,7 @@
           </el-descriptions>
         </el-card>
 
-        <el-card shadow="never">
+        <el-card id="chapter-impact-results" shadow="never">
           <div class="section-title">
             <h2>影响评估</h2>
             <el-tag :type="openImpactCases.length ? 'warning' : 'success'" effect="plain">{{ openImpactCases.length ? '待处理' : '无阻塞' }}</el-tag>
@@ -184,7 +184,7 @@
         @refresh="loadTaskDetail"
         @cancel="handleCancelTask"
         @retry="handleRetryTask"
-        @view-result="scrollToCandidates"
+        @view-result="scrollToTaskResult(taskDrawer.task?.taskType)"
       />
     </el-drawer>
   </section>
@@ -230,6 +230,13 @@ const asyncTransport = useNovelAsyncTransport(() => novelId.value,
 const { phase: transportPhase, message: transportMessage, blocksNewSubmission: transportBlocksNewSubmission } = asyncTransport
 const transportWarning = computed(() => ['transport_unknown', 'capability_unavailable', 'blocked', 'scope_suspended']
   .includes(transportPhase.value))
+const chapterTaskPending = computed(() => {
+  const status = workbench.value?.recentTask?.status
+  const intent = asyncTransport.activeIntent.value
+  return status === TaskStatus.Queued || status === TaskStatus.Processing
+    || Boolean(intent && !intent.retired && ['queued', 'processing'].includes(intent.state))
+})
+const chapterActionBlocked = computed(() => actionLoading.value || chapterTaskPending.value || transportBlocksNewSubmission.value)
 
 const titleText = computed(() => {
   if (!workbench.value) return '章节详情'
@@ -261,10 +268,11 @@ async function loadWorkbench() {
   try {
     workbench.value = await getChapterWorkbench(novelId.value, chapterId.value)
     const recentTask = workbench.value.recentTask
-    if (recentTask && recentTask.id === asyncTransport.activeIntent.value?.taskId
-      && (recentTask.status === TaskStatus.WaitingConfirmation || recentTask.status === TaskStatus.Completed
-        || recentTask.status === TaskStatus.Failed || recentTask.status === TaskStatus.Cancelled)) {
-      await asyncTransport.taskUpdated(await getTaskDetail(recentTask.id))
+    const trackedIntent = asyncTransport.activeIntent.value
+    if (trackedIntent?.taskId && !trackedIntent.retired
+      && (recentTask?.id !== trackedIntent.taskId
+        || (recentTask.status !== TaskStatus.Queued && recentTask.status !== TaskStatus.Processing))) {
+      await asyncTransport.taskUpdated(await getTaskDetail(trackedIntent.taskId))
     }
   } catch (error) {
     apiError.value = formatApiError(error)
@@ -274,6 +282,7 @@ async function loadWorkbench() {
 }
 
 async function handleRewriteChapter() {
+  if (chapterActionBlocked.value) return
   const currentVersionId = workbench.value?.chapter.currentContentVersionId
   if (!currentVersionId) {
     apiError.value = '当前章节没有正式正文，不能生成重写候选'
@@ -296,12 +305,18 @@ async function handleRewriteChapter() {
   actionLoading.value = true
   apiError.value = ''
   try {
-    await rewriteChapter(novelId.value, chapterId.value, {
+    const request = {
       instruction,
       reason: '从章节详情生成重写候选',
       currentContentVersionId: currentVersionId,
-    })
-    ElMessage.success('已生成重写候选')
+    }
+    const dispatch = await asyncTransport.submit('chapter_rewrite', request)
+    if (dispatch.kind === 'task') {
+      ElMessage.info('重写任务已提交，生成后可在候选版本中查看')
+    } else if (dispatch.kind === 'legacy') {
+      await rewriteChapter(novelId.value, chapterId.value, request)
+      ElMessage.success('已生成重写候选')
+    }
     await loadWorkbench()
   } catch (error) {
     apiError.value = formatApiError(error)
@@ -311,6 +326,7 @@ async function handleRewriteChapter() {
 }
 
 async function handleReviseOverlength(candidate: TrialCandidateRow) {
+  if (chapterActionBlocked.value) return
   try {
     await ElMessageBox.confirm(
       '将调用模型对本稿最多精简一次。原稿保留，新稿只进入候选池；字数或事实边界不合格时不会保存新稿，也不会修改正式正文。',
@@ -338,9 +354,11 @@ async function handleReviseOverlength(candidate: TrialCandidateRow) {
   }
 }
 
-function scrollToCandidates() {
+function scrollToTaskResult(taskType: string | undefined) {
   taskDrawer.open = false
-  document.getElementById('chapter-candidates')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  const target = taskType === 'chapter_impact_assess' || taskType === 'chapter_adopt_impact_assess'
+    ? 'chapter-impact-results' : 'chapter-candidates'
+  document.getElementById(target)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
 async function openTaskDetail() {
@@ -398,7 +416,12 @@ async function handleRetryTask() {
 }
 
 async function handleAdoptCandidate(candidate: TrialCandidateRow) {
+  if (chapterActionBlocked.value) return
   const currentVersionId = workbench.value?.chapter.currentContentVersionId
+  if (!currentVersionId) {
+    apiError.value = '当前正文版本无法核对，请刷新后重试'
+    return
+  }
   const reason = await promptChapterActionReason({
     title: '采用章节候选',
     message: '采用后会写入决策记录，并触发影响评估；请说明为什么采用这个候选，以及是否接受后续影响检查。',
@@ -417,15 +440,21 @@ async function handleAdoptCandidate(candidate: TrialCandidateRow) {
   actionLoading.value = true
   apiError.value = ''
   try {
-    await adoptChapterContentVersion(novelId.value, chapterId.value, candidate.id, {
+    const request = {
       reason,
       currentContentVersionId: currentVersionId,
       pageVersionSnapshot: {
         seenCandidateVersionId: candidate.id,
         seenAt: new Date().toISOString(),
       },
-    })
-    ElMessage.success('候选已采用，影响评估已记录')
+    }
+    const dispatch = await asyncTransport.submit('chapter_adopt_impact_assess', { ...request, candidateVersionId: candidate.id })
+    if (dispatch.kind === 'task') {
+      ElMessage.info('采用请求已提交，影响评估完成后更新正式正文')
+    } else if (dispatch.kind === 'legacy') {
+      await adoptChapterContentVersion(novelId.value, chapterId.value, candidate.id, request)
+      ElMessage.success('候选已采用，影响评估已记录')
+    }
     await loadWorkbench()
   } catch (error) {
     apiError.value = formatApiError(error)
@@ -435,6 +464,7 @@ async function handleAdoptCandidate(candidate: TrialCandidateRow) {
 }
 
 async function handleCreateImpactAssessment() {
+  if (chapterActionBlocked.value) return
   const currentVersionId = workbench.value?.chapter.currentContentVersionId
   if (!currentVersionId) {
     apiError.value = '当前章节没有正式正文，不能发起影响评估'
@@ -457,8 +487,14 @@ async function handleCreateImpactAssessment() {
   actionLoading.value = true
   apiError.value = ''
   try {
-    await createImpactAssessment(novelId.value, chapterId.value, { reason, currentContentVersionId: currentVersionId })
-    ElMessage.success('影响评估已生成')
+    const request = { reason, currentContentVersionId: currentVersionId }
+    const dispatch = await asyncTransport.submit('chapter_impact_assess', request)
+    if (dispatch.kind === 'task') {
+      ElMessage.info('影响评估已提交，完成后可查看影响案例')
+    } else if (dispatch.kind === 'legacy') {
+      await createImpactAssessment(novelId.value, chapterId.value, request)
+      ElMessage.success('影响评估已生成')
+    }
     await loadWorkbench()
   } catch (error) {
     apiError.value = formatApiError(error)
@@ -557,8 +593,7 @@ function formatApiError(error: unknown) {
 onMounted(() => {
   void asyncTransport.restore().finally(() => loadWorkbench())
   taskPollTimer = setInterval(() => {
-    const status = workbench.value?.recentTask?.status
-    if (actionLoading.value || status === TaskStatus.Queued || status === TaskStatus.Processing) {
+    if (actionLoading.value || chapterTaskPending.value) {
       void loadWorkbench()
     }
   }, 10000)

@@ -24,12 +24,16 @@ export interface NormalizedGenerationRequest {
   expectedNovelVersion?: string
   reviewPolicyVersionId?: string
   sourceCandidateVersionId?: string
+  currentContentVersionId?: string
+  candidateVersionId?: string
+  pageVersionSnapshot?: { seenCandidateVersionId: string; seenAt: string }
 }
 
 export type AsyncDispatchFailure =
   | { kind: 'active_task'; existingTaskId: string | null }
   | { kind: 'idempotency_conflict' }
-  | { kind: 'attestation_stale' }
+  | { kind: 'gate_blocked'; message: string }
+  | { kind: 'rejected'; code: string; message: string }
   | { kind: 'transport_unknown' }
   | { kind: 'other'; message: string }
 
@@ -37,6 +41,7 @@ export function classifyAsyncDispatchFailure(error: unknown): AsyncDispatchFailu
   if (!(error instanceof ApiClientError)) {
     return { kind: 'other', message: error instanceof Error ? error.message : '任务提交失败。' }
   }
+  if (error.httpStatus !== undefined && error.httpStatus >= 500) return { kind: 'transport_unknown' }
   if (error.code === 'NETWORK_ERROR' || error.code === 'INVALID_RESPONSE') return { kind: 'transport_unknown' }
   if (error.code === ErrorCode.ConflictTaskExists) {
     const details = error.details && typeof error.details === 'object' ? error.details as Record<string, unknown> : {}
@@ -45,7 +50,10 @@ export function classifyAsyncDispatchFailure(error: unknown): AsyncDispatchFailu
     return { kind: 'active_task', existingTaskId: taskId }
   }
   if (error.code === ErrorCode.IdempotencyConflict) return { kind: 'idempotency_conflict' }
-  if (error.code === ErrorCode.GateBlocked) return { kind: 'attestation_stale' }
+  if (error.code === ErrorCode.GateBlocked) return { kind: 'gate_blocked', message: error.message }
+  if (error.code === ErrorCode.VersionConflict || error.code === ErrorCode.CandidateStale) {
+    return { kind: 'rejected', code: error.code, message: error.message }
+  }
   return { kind: 'other', message: error.message }
 }
 
@@ -60,6 +68,9 @@ const actionPaths: Record<AsyncNovelGenerationAction, string> = {
   trial_chapter_one_generate: 'trial/generate',
   trial_followup_generate: 'trial/generate',
   chapter_overlength_revise: 'chapters',
+  chapter_rewrite: 'chapters',
+  chapter_impact_assess: 'chapters',
+  chapter_adopt_impact_assess: 'chapters',
   novel_full_review: 'full-review',
 }
 
@@ -76,9 +87,15 @@ export function normalizeGenerationRequest(
   const fuse = action === 'direction_fuse'
   const optimize = action === 'direction_optimize'
   const overlength = action === 'chapter_overlength_revise'
+  const rewrite = action === 'chapter_rewrite'
+  const impact = action === 'chapter_impact_assess'
+  const adopt = action === 'chapter_adopt_impact_assess'
   const allowedFields = fuse ? ['versionIds', 'reason']
     : optimize ? ['versionId', 'instruction']
     : overlength ? ['sourceCandidateVersionId']
+    : rewrite ? ['instruction', 'reason', 'currentContentVersionId']
+    : impact ? ['reason', 'currentContentVersionId']
+    : adopt ? ['candidateVersionId', 'reason', 'currentContentVersionId', 'pageVersionSnapshot']
     : fullReview ? ['expectedNovelVersion', 'reviewPolicyVersionId']
     : trialOne ? ['chapterCount', 'regenerateReason']
     : trialFollowup ? ['trialRunId', 'selectedCandidateId', 'confirmRisk', 'selectionReason']
@@ -87,6 +104,43 @@ export function normalizeGenerationRequest(
     throw new Error('生成参数包含不支持的字段。')
   }
   const normalized: NormalizedGenerationRequest = {}
+  if (rewrite || impact || adopt) {
+    if (typeof request.currentContentVersionId !== 'string'
+      || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/.test(request.currentContentVersionId.trim())) {
+      throw new Error('当前正文版本无法核对，请刷新后重试。')
+    }
+    normalized.currentContentVersionId = request.currentContentVersionId.trim()
+    for (const field of (rewrite ? ['instruction', 'reason'] : ['reason']) as Array<'instruction' | 'reason'>) {
+      const value = request[field]
+      if (value !== undefined) {
+        if (typeof value !== 'string' || !value.trim() || value.trim().length > 1000) {
+          throw new Error('处理说明不能为空且不能超过 1000 字。')
+        }
+        normalized[field] = value.trim()
+      }
+    }
+    if (rewrite && !normalized.instruction) throw new Error('请填写重写要求。')
+    if (adopt) {
+      if (!normalized.reason) throw new Error('请填写采用原因。')
+      if (typeof request.candidateVersionId !== 'string'
+        || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/.test(request.candidateVersionId.trim())) {
+        throw new Error('待采用候选无法核对，请刷新后重试。')
+      }
+      normalized.candidateVersionId = request.candidateVersionId.trim()
+      if (request.pageVersionSnapshot !== undefined) {
+        const snapshot = request.pageVersionSnapshot
+        if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)
+          || Object.keys(snapshot).some((key) => !['seenCandidateVersionId', 'seenAt'].includes(key))
+          || snapshot.seenCandidateVersionId !== normalized.candidateVersionId
+          || typeof snapshot.seenAt !== 'string' || snapshot.seenAt.length > 80
+          || !Number.isFinite(Date.parse(snapshot.seenAt))) {
+          throw new Error('候选确认快照无效，请刷新后重试。')
+        }
+        normalized.pageVersionSnapshot = { ...snapshot }
+      }
+    }
+    return normalized
+  }
   if (fuse) {
     if (!Array.isArray(request.versionIds) || request.versionIds.length < 2 || request.versionIds.length > 5
       || request.versionIds.some((id) => typeof id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/.test(id))
@@ -229,7 +283,8 @@ export async function submitAsyncNovelGeneration(input: {
     || Date.now() >= Date.parse(capability.expiresAt)) {
     throw new ApiClientError('INVALID_RESPONSE', '任务提交方式已失效，请重新检查。')
   }
-  if (action === 'chapter_overlength_revise'
+  const chapterAction = action.startsWith('chapter_') && action !== 'chapter_plan_generate'
+  if (chapterAction
     && (typeof input.objectId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/.test(input.objectId))) {
     throw new ApiClientError('INVALID_RESPONSE', '章节对象无法核对，请刷新后重试。')
   }
@@ -238,14 +293,22 @@ export async function submitAsyncNovelGeneration(input: {
     ? `${actionPaths[action]}/${encodeURIComponent(request.versionId!)}/optimize`
     : action === 'chapter_overlength_revise'
       ? `${actionPaths[action]}/${encodeURIComponent(input.objectId || '')}/overlength-revisions`
+    : action === 'chapter_rewrite'
+      ? `chapters/${encodeURIComponent(input.objectId!)}/rewrite`
+    : action === 'chapter_impact_assess'
+      ? `chapters/${encodeURIComponent(input.objectId!)}/impact-assessments`
+    : action === 'chapter_adopt_impact_assess'
+      ? `chapters/${encodeURIComponent(input.objectId!)}/content-versions/${encodeURIComponent(request.candidateVersionId!)}/adopt`
     : actionPaths[action]
+  const bodyRequest = { ...request }
+  if (action === 'chapter_adopt_impact_assess') delete bodyRequest.candidateVersionId
   const { status, data } = await apiRequestWithStatus<TaskDispatchResponseV1>(
     `/novels/${encodeURIComponent(novelId)}/${path}`,
     {
       method: 'POST',
       headers: { 'Idempotency-Key': idempotencyKey },
       body: {
-        ...request,
+        ...bodyRequest,
         expectedSubmissionScopeId: capability.submissionScopeId,
         expectedCapabilityRevision: capability.capabilityRevision,
         expectedCapabilityExpiresAt: capability.expiresAt,
@@ -254,7 +317,7 @@ export async function submitAsyncNovelGeneration(input: {
   )
   const expectedObjectId = action === 'trial_followup_generate' ? request.trialRunId
     : action === 'direction_optimize' ? request.versionId
-      : action === 'chapter_overlength_revise' ? input.objectId : novelId
+      : chapterAction ? input.objectId : novelId
   if (!data || data.action !== action || data.objectId !== expectedObjectId
     || !data.taskId || data.pollUrl !== `/tasks/${data.taskId}`
     || (status === 202 && (data.kind !== 'accepted' || !['queued', 'processing'].includes(data.status)))

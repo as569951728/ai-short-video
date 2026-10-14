@@ -12,6 +12,7 @@ import {
 } from '../services/asyncNovelTransport.js'
 import {
   SubmissionIntentStore,
+  needsManualRecheck,
   verifiedReplayRequest,
   type SubmissionAttestation,
   type SubmissionIntentV1,
@@ -60,7 +61,7 @@ export function useNovelAsyncTransport(
   }
 
   function scheduleReplay() {
-    if (replayTimer || disposed) return
+    if (replayTimer || disposed || needsManualRecheck(activeIntent.value)) return
     replayTimer = setTimeout(() => {
       replayTimer = undefined
       void reconcileUnknown()
@@ -99,8 +100,12 @@ export function useNovelAsyncTransport(
   }
 
   async function recheckCapability() {
+    if (phase.value === 'submitting') return
     const snapshot = await checkCapability()
-    if (snapshot?.enabled) await restore()
+    if (snapshot?.enabled) {
+      await restore()
+      if (needsManualRecheck(activeIntent.value)) await reconcileUnknown(true)
+    }
   }
 
   async function refreshForIntent(intent: SubmissionIntentV1) {
@@ -160,7 +165,7 @@ export function useNovelAsyncTransport(
   }
 
   async function markUnknown(intent: SubmissionIntentV1) {
-    const unknown = await store.compareAndSet(expected(intent), next(intent, { state: 'transport_unknown' }))
+    const unknown = await store.compareAndSet(expected(intent), next(intent, { state: 'transport_unknown', deliveryUncertain: true }))
     activeIntent.value = unknown.applied ? unknown.intent : await store.read(intent, intent.submissionScopeId)
     if (activeIntent.value?.submissionId !== intent.submissionId) {
       phase.value = 'blocked'
@@ -174,7 +179,9 @@ export function useNovelAsyncTransport(
       return
     }
     phase.value = 'transport_unknown'
-    message.value = '提交结果未确认，正在用原请求核对；请勿再次点击生成。'
+    message.value = needsManualRecheck(activeIntent.value)
+      ? `${activeIntent.value.rejection!.message} 已保留原提交键，请点击重新检查核对；不会自动重提。`
+      : '提交结果未确认，正在用原请求核对；请勿再次点击生成。'
     scheduleReplay()
   }
 
@@ -183,6 +190,34 @@ export function useNovelAsyncTransport(
     activeIntent.value = blocked.applied ? blocked.intent : await store.read(intent, intent.submissionScopeId)
     phase.value = 'blocked'
     message.value = reason
+  }
+
+  async function rejectIntent(intent: SubmissionIntentV1, rejection: NonNullable<SubmissionIntentV1['rejection']>) {
+    if (intent.deliveryUncertain) {
+      await holdForRecheck(intent, rejection)
+      return
+    }
+    const blocked = await store.compareAndSet(expected(intent), next(intent, { state: 'blocked', rejection }))
+    activeIntent.value = blocked.applied ? blocked.intent : await store.read(intent, intent.submissionScopeId)
+    if (blocked.applied && !blocked.intent.deliveryUncertain) {
+      const retired = await store.retire(expected(blocked.intent), blocked.intent)
+      if (retired.applied) activeIntent.value = retired.intent
+    }
+    phase.value = 'blocked'
+    message.value = `${rejection.message}${activeIntent.value?.retired
+      ? ' 请刷新页面或重新检查后，确认新的提交。'
+      : ' 之前的提交结果仍未确认，已保留原提交键，请先核对任务，勿另行提交。'}`
+  }
+
+  async function holdForRecheck(intent: SubmissionIntentV1, rejection: NonNullable<SubmissionIntentV1['rejection']>) {
+    const held = await store.compareAndSet(expected(intent), next(intent, {
+      state: 'transport_unknown', deliveryUncertain: true, rejection,
+    }))
+    activeIntent.value = held.applied ? held.intent : await store.read(intent, intent.submissionScopeId)
+    if (replayTimer) clearTimeout(replayTimer)
+    replayTimer = undefined
+    phase.value = 'transport_unknown'
+    message.value = `${rejection.message} 已保留原提交键，请点击重新检查核对；不会自动重提。`
   }
 
   async function postIntent(intent: SubmissionIntentV1): Promise<SubmitDecision> {
@@ -220,13 +255,15 @@ export function useNovelAsyncTransport(
       if (failure.kind === 'transport_unknown') {
         await markUnknown(intent)
       } else if (failure.kind === 'active_task') {
-        await markBlocked(intent, failure.existingTaskId
-          ? `已有生成任务 ${failure.existingTaskId}，请先查看任务状态。`
-          : '已有生成任务，请先查看任务状态。')
+        await rejectIntent(intent, { code: 'CONFLICT_TASK_EXISTS', message: failure.existingTaskId
+          ? `已有生成任务 ${failure.existingTaskId}，请先查看任务状态。` : '已有生成任务，请先查看任务状态。',
+          ...(failure.existingTaskId ? { existingTaskId: failure.existingTaskId } : {}) })
       } else if (failure.kind === 'idempotency_conflict') {
         await markBlocked(intent, '原提交内容与任务记录不一致，请查看任务详情。')
-      } else if (failure.kind === 'attestation_stale') {
-        await markUnknown(intent)
+      } else if (failure.kind === 'rejected') {
+        await rejectIntent(intent, { code: failure.code, message: failure.message })
+      } else if (failure.kind === 'gate_blocked') {
+        await holdForRecheck(intent, { code: 'GATE_BLOCKED', message: failure.message })
       } else {
         await markUnknown(intent)
       }
@@ -234,10 +271,12 @@ export function useNovelAsyncTransport(
     }
   }
 
-  async function reconcileUnknown() {
+  async function reconcileUnknown(explicitRecheck = false) {
     if (disposed || !activeIntent.value || activeIntent.value.taskId) return
     let intent = activeIntent.value
-    if (!['submitting', 'transport_unknown', 'scope_suspended'].includes(intent.state)) return
+    if (needsManualRecheck(intent) && !explicitRecheck) return
+    if (!['submitting', 'transport_unknown', 'scope_suspended'].includes(intent.state)
+      && !(intent.state === 'blocked' && needsManualRecheck(intent) && explicitRecheck)) return
     try {
       if (intent.state === 'scope_suspended') {
         const snapshot = await getAsyncNovelTransportCapability()
@@ -250,7 +289,7 @@ export function useNovelAsyncTransport(
         if (!resumed.applied) return
         intent = resumed.intent
       } else {
-        const claimed = await store.compareAndSet(expected(intent), next(intent, { state: 'transport_unknown' }))
+        const claimed = await store.compareAndSet(expected(intent), next(intent, { state: 'transport_unknown', deliveryUncertain: true }))
         if (!claimed.applied) {
           activeIntent.value = await store.read(intent, intent.submissionScopeId)
           if (activeIntent.value?.submissionId !== intent.submissionId) {
@@ -341,15 +380,27 @@ export function useNovelAsyncTransport(
         store.read(partition(snapshot.submissionScopeId, action), snapshot.submissionScopeId)))
       const latest = intents.filter((intent): intent is SubmissionIntentV1 => Boolean(intent && !intent.retired))
         .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]
-      if (!latest) return
+      if (!latest) {
+        const rejected = intents.filter((intent): intent is SubmissionIntentV1 => Boolean(intent?.retired && intent.rejection))
+          .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]
+        if (rejected) {
+          activeIntent.value = rejected
+          phase.value = 'ready'
+          message.value = rejected.rejection!.message
+        }
+        return
+      }
       activeIntent.value = latest
       if (latest.taskId) {
         onTaskId(latest.taskId)
         phase.value = 'tracking'
         message.value = '已恢复上次提交的任务。'
+      } else if (needsManualRecheck(latest)) {
+        phase.value = 'transport_unknown'
+        message.value = `${latest.rejection!.message} 已保留原提交键，请点击重新检查核对；不会自动重提。`
       } else if (latest.state === 'blocked') {
         phase.value = 'blocked'
-        message.value = '上次提交已被阻断，请先核对任务状态。'
+        message.value = latest.rejection?.message ?? '上次提交已被阻断，请先核对任务状态。'
       } else {
         phase.value = 'transport_unknown'
         message.value = '正在核对上次提交的任务。'
@@ -362,17 +413,20 @@ export function useNovelAsyncTransport(
   }
 
   async function taskUpdated(task: TaskDetailDTO) {
-    const intent = activeIntent.value
+    let intent = activeIntent.value
     if (!intent || intent.taskId !== task.id || intent.retired) return
     const status = task.status as TaskStatus
     if (![TaskStatus.Queued, TaskStatus.Processing, TaskStatus.WaitingConfirmation,
       TaskStatus.Completed, TaskStatus.Failed, TaskStatus.Cancelled].includes(status)) return
-    if (intent.state === status) return
-    const updated = await store.compareAndSet(expected(intent), next(intent, { state: status }))
-    if (!updated.applied) return
-    activeIntent.value = updated.intent
+    if (intent.state !== status) {
+      const updated = await store.compareAndSet(expected(intent), next(intent, { state: status }))
+      if (!updated.applied) return
+      intent = updated.intent
+      activeIntent.value = intent
+    }
+    // Recovered responses can already have this status without having retired the intent.
     if ([TaskStatus.WaitingConfirmation, TaskStatus.Completed, TaskStatus.Failed, TaskStatus.Cancelled].includes(status)) {
-      const retired = await store.retire(expected(updated.intent), updated.intent)
+      const retired = await store.retire(expected(intent), intent)
       if (retired.applied) activeIntent.value = retired.intent
       phase.value = 'tracking'
       message.value = status === TaskStatus.WaitingConfirmation

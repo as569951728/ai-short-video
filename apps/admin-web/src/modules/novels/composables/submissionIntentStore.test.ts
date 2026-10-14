@@ -101,6 +101,32 @@ test('overlength submission survives a new page and stays scoped to its chapter'
   }
 })
 
+test('chapter adoption keeps the selected candidate and original confirmation snapshot after reopening', async () => {
+  const chapterPartition = { ...partition('chapter_adopt_impact_assess'), objectId: 'chapter-5' }
+  const request = { candidateVersionId: 'candidate-2', currentContentVersionId: 'body-1', reason: '确认采用',
+    pageVersionSnapshot: { seenCandidateVersionId: 'candidate-2', seenAt: new Date(now).toISOString() } }
+  const firstPage = await page()
+  try {
+    const created = await firstPage.evaluate(async ({ chapterPartition, attestation, scopeA, now, request }) => {
+      const api = (window as any).SubmissionIntentModule
+      return new api.SubmissionIntentStore({ databaseName: 'chapter-adopt-replay', now: () => now })
+        .create(chapterPartition, request, attestation, scopeA)
+    }, { chapterPartition, attestation, scopeA, now, request })
+    assert.equal(created.applied, true)
+    const reopened = await page()
+    try {
+      const restored = await reopened.evaluate(async ({ chapterPartition, scopeA, now }) => {
+        const api = (window as any).SubmissionIntentModule
+        const store = new api.SubmissionIntentStore({ databaseName: 'chapter-adopt-replay', now: () => now })
+        const intent = await store.read(chapterPartition, scopeA)
+        return { key: intent.idempotencyKey, request: await api.verifiedReplayRequest(intent) }
+      }, { chapterPartition, scopeA, now })
+      assert.equal(restored.key, created.intent.idempotencyKey)
+      assert.deepEqual(restored.request, request)
+    } finally { await reopened.close() }
+  } finally { await firstPage.close() }
+})
+
 test('IndexedDB commit, scoped replay, monotonic revision and retired receipt', async () => {
   const tab = await page()
   try {

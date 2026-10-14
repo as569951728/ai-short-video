@@ -88,6 +88,60 @@ it('submits overlength revision against the chapter and rejects a mismatched tas
   }
 })
 
+it('preserves the confirmed chapter and candidate across rewrite, assessment and adoption replay', async () => {
+  const oldFetch = globalThis.fetch
+  const snapshot = { seenCandidateVersionId: 'candidate-2', seenAt: '2026-10-14T01:00:00.000Z' }
+  const cases = [
+    { action: 'chapter_rewrite' as const, suffix: '/rewrite',
+      request: { currentContentVersionId: 'body-1', instruction: '强化钩子', reason: '试写优化' } },
+    { action: 'chapter_impact_assess' as const, suffix: '/impact-assessments',
+      request: { currentContentVersionId: 'body-1', reason: '核对伏笔' } },
+    { action: 'chapter_adopt_impact_assess' as const, suffix: '/content-versions/candidate-2/adopt',
+      request: { currentContentVersionId: 'body-1', candidateVersionId: 'candidate-2', reason: '接受新版本', pageVersionSnapshot: snapshot } },
+  ]
+  try {
+    for (const item of cases) {
+      const requests: unknown[] = []
+      let objectId = 'chapter-5'
+      globalThis.fetch = async (url, init) => {
+        assert.ok(String(url).endsWith(`/novels/novel-1/chapters/chapter-5${item.suffix}`))
+        assert.equal(new Headers(init?.headers).get('Idempotency-Key'), 'chapter-stable-key')
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+        assert.equal(body.currentContentVersionId, 'body-1')
+        assert.equal(body.candidateVersionId, undefined)
+        if (item.action === 'chapter_adopt_impact_assess') assert.deepEqual(body.pageVersionSnapshot, snapshot)
+        requests.push(body)
+        return Response.json({ success: true, data: {
+          kind: 'accepted', taskId: 'task-chapter', action: item.action, objectId,
+          status: 'queued', reused: false, pollUrl: '/tasks/task-chapter',
+        }, error: null, requestId: 'req-chapter' }, { status: 202 })
+      }
+      const input = { novelId: 'novel-1', objectId: 'chapter-5', action: item.action, request: item.request,
+        idempotencyKey: 'chapter-stable-key', capability: enabledCapability }
+      await submitAsyncNovelGeneration(input)
+      await submitAsyncNovelGeneration(input)
+      assert.deepEqual(requests[0], requests[1])
+      objectId = 'chapter-6'
+      await assert.rejects(() => submitAsyncNovelGeneration(input),
+        (error) => error instanceof ApiClientError && error.code === 'INVALID_RESPONSE')
+    }
+  } finally { globalThis.fetch = oldFetch }
+})
+
+it('rejects incomplete or changed chapter confirmation fields before submission', () => {
+  assert.throws(() => normalizeGenerationRequest('chapter_rewrite', { instruction: '强化钩子' }))
+  assert.throws(() => normalizeGenerationRequest('chapter_rewrite', { currentContentVersionId: 'body-1' }))
+  const adopt = { currentContentVersionId: 'body-1', candidateVersionId: 'candidate-2', reason: '采用',
+    pageVersionSnapshot: { seenCandidateVersionId: 'candidate-2', seenAt: '2026-10-14T01:00:00.000Z' } }
+  assert.deepEqual(normalizeGenerationRequest('chapter_adopt_impact_assess', adopt), adopt)
+  assert.throws(() => normalizeGenerationRequest('chapter_adopt_impact_assess', { ...adopt,
+    pageVersionSnapshot: { ...adopt.pageVersionSnapshot, seenCandidateVersionId: 'candidate-3' } }))
+  assert.throws(() => normalizeGenerationRequest('chapter_adopt_impact_assess', { ...adopt,
+    pageVersionSnapshot: { ...adopt.pageVersionSnapshot, content: 'not replay data' } } as never))
+  assert.throws(() => normalizeGenerationRequest('chapter_impact_assess', { currentContentVersionId: 'body-1',
+    pageVersionSnapshot: adopt.pageVersionSnapshot }))
+})
+
 it('submits direction fusion and optimization with stable replay targets', async () => {
   const oldFetch = globalThis.fetch
   const requests: Array<{ url: string; body: Record<string, unknown> }> = []
@@ -267,7 +321,27 @@ it('classifies safe conflict details and keeps network ambiguity distinct', () =
   assert.deepEqual(classifyAsyncDispatchFailure(new ApiClientError('IDEMPOTENCY_CONFLICT', '提交内容已改变')),
     { kind: 'idempotency_conflict' })
   assert.deepEqual(classifyAsyncDispatchFailure(new ApiClientError('GATE_BLOCKED', '凭证已失效')),
-    { kind: 'attestation_stale' })
+    { kind: 'gate_blocked', message: '凭证已失效' })
   assert.deepEqual(classifyAsyncDispatchFailure(new ApiClientError('NETWORK_ERROR', '网络中断')),
     { kind: 'transport_unknown' })
+})
+
+it('classifies explicit preflight rejection codes without guessing from messages', () => {
+  for (const code of ['VERSION_CONFLICT', 'CANDIDATE_STALE'] as const) {
+    assert.deepEqual(classifyAsyncDispatchFailure(new ApiClientError(code, 'same human text')),
+      { kind: 'rejected', code, message: 'same human text' })
+  }
+})
+
+it('keeps every 5xx outcome ambiguous even when its body names a preflight rejection', async () => {
+  const oldFetch = globalThis.fetch
+  try {
+    for (const code of ['VERSION_CONFLICT', 'CANDIDATE_STALE', 'GATE_BLOCKED', 'CONFLICT_TASK_EXISTS']) {
+      globalThis.fetch = async () => Response.json({ success: false,
+        error: { code, message: 'not a reliable rejection' } }, { status: 503 })
+      await assert.rejects(() => submitAsyncNovelGeneration({ novelId: 'novel-1', action: 'outline_generate',
+        request: {}, idempotencyKey: 'original-key', capability: enabledCapability }),
+      (error) => classifyAsyncDispatchFailure(error).kind === 'transport_unknown')
+    }
+  } finally { globalThis.fetch = oldFetch }
 })

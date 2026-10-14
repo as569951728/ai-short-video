@@ -36,7 +36,7 @@ const REQUEST_FIELDS: Record<NovelProviderAction, Record<string, FieldRule>> = {
   chapter_rewrite: { instruction: 'nullableText', reason: 'nullableText', currentContentVersionId: 'nullableId' },
   chapter_impact_assess: { reason: 'nullableText', currentContentVersionId: 'nullableId' },
   chapter_adopt_impact_assess: {
-    reason: 'nullableText', currentContentVersionId: 'nullableId', pageVersionSnapshot: 'pageSnapshot',
+    candidateVersionId: 'id', reason: 'nullableText', currentContentVersionId: 'nullableId', pageVersionSnapshot: 'pageSnapshot',
   },
   novel_full_review: { expectedNovelVersion: 'nullableId', reviewPolicyVersionId: 'nullableId' },
 }
@@ -63,6 +63,7 @@ const INTENT_FIELDS = new Set([
   'apiOrigin', 'submissionScopeId', 'novelId', 'action', 'objectId', 'submissionId',
   'idempotencyKey', 'normalizedReplayRequest', 'requestHash', 'taskId', 'pollUrl',
   'state', 'revision', 'capabilityRevision', 'capabilityExpiresAt', 'updatedAt', 'retired',
+  'deliveryUncertain', 'rejection',
 ])
 const RECEIPT_FIELDS = new Set([
   'apiOrigin', 'submissionScopeId', 'novelId', 'action', 'objectId', 'submissionId',
@@ -72,6 +73,7 @@ const PAGE_SNAPSHOT_FIELDS = new Set([
   'novelUpdatedAt', 'currentDirectionVersionId', 'currentSettingVersionId',
   'currentOutlineVersionId', 'currentStageOutlineVersionId', 'currentChapterPlanVersionId',
   'chapterCurrentContentVersionId',
+  'seenCandidateVersionId', 'seenAt',
 ])
 
 export type SubmissionIntentState =
@@ -106,6 +108,8 @@ export interface SubmissionIntentV1 extends SubmissionPartition {
   capabilityExpiresAt: string
   updatedAt: string
   retired: boolean
+  deliveryUncertain?: boolean
+  rejection?: { code: string; message: string; existingTaskId?: string }
 }
 
 export interface PendingTaskReceiptV1 extends SubmissionPartition {
@@ -188,7 +192,7 @@ function checkField(rule: FieldRule, value: unknown): boolean {
   if (rule === 'pageSnapshot') {
     return value === null || (plainObject(value) && Object.keys(value).length <= PAGE_SNAPSHOT_FIELDS.size
       && Object.keys(value).every((key) => PAGE_SNAPSHOT_FIELDS.has(key)
-        && (key === 'novelUpdatedAt'
+        && (key === 'novelUpdatedAt' || key === 'seenAt'
           ? typeof value[key] === 'string' && Number.isFinite(Date.parse(value[key]))
           : checkField('nullableId', value[key]))))
   }
@@ -266,6 +270,11 @@ function validateShape(intent: SubmissionIntentV1): void {
     || !Number.isFinite(Date.parse(intent.updatedAt))
     || typeof intent.retired !== 'boolean' || !STATES.includes(intent.state)) invalid('Invalid intent metadata')
   if (intent.taskId !== undefined && !validId(intent.taskId)) invalid('Invalid task ID')
+  if (intent.deliveryUncertain !== undefined && typeof intent.deliveryUncertain !== 'boolean') invalid('Invalid delivery uncertainty')
+  if (intent.rejection !== undefined && (!plainObject(intent.rejection)
+    || Object.keys(intent.rejection).some((key) => !['code', 'message', 'existingTaskId'].includes(key))
+    || !validId(intent.rejection.code) || !validText(intent.rejection.message)
+    || (intent.rejection.existingTaskId !== undefined && !validId(intent.rejection.existingTaskId)))) invalid('Invalid rejection')
   if (intent.pollUrl !== undefined && (!intent.pollUrl.startsWith('/tasks/') || intent.pollUrl.length > 512)) invalid('Invalid poll URL')
   if ((intent.taskId === undefined) !== (intent.pollUrl === undefined)) invalid('Task and poll URL must bind together')
   if (intent.taskId === undefined && !['submitting', 'transport_unknown', 'scope_suspended', 'blocked'].includes(intent.state)) {
@@ -287,6 +296,11 @@ function validTransition(from: SubmissionIntentState, to: SubmissionIntentState)
   if (from === 'queued') return ['processing', ...TASK_SETTLED_STATES].includes(to)
   if (from === 'processing') return TASK_SETTLED_STATES.includes(to)
   return false
+}
+
+export function needsManualRecheck(intent: SubmissionIntentV1 | null): boolean {
+  return Boolean(intent && !intent.retired && !intent.taskId && intent.deliveryUncertain
+    && intent.rejection && ['GATE_BLOCKED', 'VERSION_CONFLICT', 'CANDIDATE_STALE', 'CONFLICT_TASK_EXISTS'].includes(intent.rejection.code))
 }
 
 function validateReceipt(receipt: PendingTaskReceiptV1, partition: SubmissionPartition, submissionId: string): void {
@@ -413,6 +427,20 @@ export class SubmissionIntentStore {
     return receipt
   }
 
+  async readRejection(partition: SubmissionPartition, submissionId: string, trustedScopeId: string): Promise<SubmissionIntentV1 | null> {
+    if (partition.submissionScopeId !== trustedScopeId) return null
+    if (!validId(submissionId)) invalid('Invalid submission ID')
+    const rejected = await this.readStored<SubmissionIntentV1>(RECEIPTS_STORE,
+      JSON.stringify(['rejection', partitionKey(partition), submissionId]))
+    if (rejected) {
+      validateShape(rejected)
+      if (partitionKey(rejected) !== partitionKey(partition) || rejected.submissionId !== submissionId
+        || !rejected.rejection || rejected.state !== 'blocked' || !rejected.retired) invalid('Invalid rejected receipt')
+      await verifiedReplayRequest(rejected)
+    }
+    return rejected
+  }
+
   async create(partition: SubmissionPartition, request: unknown, attestation: SubmissionAttestation,
     trustedScopeId: string): Promise<CompareAndSetResult> {
     partitionKey(partition)
@@ -490,7 +518,11 @@ export class SubmissionIntentStore {
                 || nextIntent.retired || nextIntent.taskId) return
             } else if (current) {
               if (current.retired || !sameIdentity(current, nextIntent)) return
-              if (!validTransition(current.state, nextIntent.state)) return
+              if (current.deliveryUncertain && !nextIntent.deliveryUncertain) return
+              if (nextIntent.retired && nextIntent.state === 'blocked' && nextIntent.deliveryUncertain) return
+              const resumesRejected = current.state === 'blocked' && nextIntent.state === 'transport_unknown'
+                && needsManualRecheck(current) && canonical(current.rejection) === canonical(nextIntent.rejection)
+              if (!validTransition(current.state, nextIntent.state) && !resumesRejected) return
               if (current.taskId && (current.taskId !== nextIntent.taskId || current.pollUrl !== nextIntent.pollUrl)) return
               if (current.state === 'scope_suspended' && nextIntent.state !== 'transport_unknown') return
               if (nextIntent.state === 'scope_suspended') return
@@ -504,6 +536,10 @@ export class SubmissionIntentStore {
             }
 
             intentStore.put(nextIntent, key)
+            if (nextIntent.retired && nextIntent.state === 'blocked' && nextIntent.rejection) {
+              transaction.objectStore(RECEIPTS_STORE).put(nextIntent,
+                JSON.stringify(['rejection', key, nextIntent.submissionId]))
+            }
             const receipt = receiptFor(nextIntent)
             if (receipt) transaction.objectStore(RECEIPTS_STORE).put(receipt, JSON.stringify([key, receipt.submissionId]))
             outcome = { applied: true, intent: clone(nextIntent) }

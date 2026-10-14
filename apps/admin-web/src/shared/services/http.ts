@@ -6,13 +6,15 @@ export class ApiClientError extends Error {
   readonly code: ErrorCode | 'NETWORK_ERROR' | 'INVALID_RESPONSE'
   readonly requestId?: string
   readonly details?: unknown
+  readonly httpStatus?: number
 
-  constructor(code: ApiClientError['code'], message: string, requestId?: string, details?: unknown) {
+  constructor(code: ApiClientError['code'], message: string, requestId?: string, details?: unknown, httpStatus?: number) {
     super(message)
     this.name = 'ApiClientError'
     this.code = code
     this.requestId = requestId
     this.details = details
+    this.httpStatus = httpStatus
   }
 }
 
@@ -69,13 +71,18 @@ export async function apiRequestWithStatus<TData>(path: string, options: ApiRequ
   const payload = await parseJsonResponse(response, requestId)
 
   try {
+    if (!payload || typeof payload.success !== 'boolean'
+      || (!response.ok && payload.success)
+      || (!payload.success && (typeof payload.error?.code !== 'string' || typeof payload.error?.message !== 'string'))) {
+      throw new ApiClientError('INVALID_RESPONSE', '后端响应格式不符合统一结构', requestId)
+    }
     return { status: response.status, data: unwrapApiResponse(payload as ApiResponse<TData>) }
   } catch (error) {
     if (error instanceof ApiClientError) {
-      throw error
+      throw new ApiClientError(error.code, error.message, error.requestId ?? requestId, error.details, response.status)
     }
 
-    throw new ApiClientError('INVALID_RESPONSE', '后端响应格式不符合统一结构', requestId, payload)
+    throw new ApiClientError('INVALID_RESPONSE', '后端响应格式不符合统一结构', requestId, undefined, response.status)
   }
 }
 
@@ -83,7 +90,7 @@ async function parseJsonResponse(response: Response, requestId: string) {
   try {
     return await response.json()
   } catch {
-    throw new ApiClientError('INVALID_RESPONSE', '后端响应不是有效 JSON', requestId)
+    throw new ApiClientError('INVALID_RESPONSE', '后端响应不是有效 JSON', requestId, undefined, response.status)
   }
 }
 

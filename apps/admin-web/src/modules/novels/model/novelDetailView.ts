@@ -264,6 +264,30 @@ export function getTaskResultPlacement(task: (Pick<RecentTaskSummaryDTO, 'status
     }
   }
 
+  if (taskType === 'chapter_overlength_revise') {
+    return {
+      summary: '精简候选已保存，内容复核通过后才能采用。',
+      actionLabel: '查看精简候选',
+      stepKey: 'body',
+    }
+  }
+
+  if (taskType === 'chapter_body_rewrite') {
+    return {
+      summary: '重写候选已生成，请比较正文后决定是否采用。',
+      actionLabel: '查看重写候选',
+      stepKey: 'body',
+    }
+  }
+
+  if (taskType === 'chapter_impact_assess') {
+    return {
+      summary: '影响评估已完成，请查看影响案例和当前正文状态。',
+      actionLabel: '查看影响评估',
+      stepKey: 'body',
+    }
+  }
+
   if (taskType.includes('body_batch')) {
     return {
       summary: '正文批次已生成，请查看章节表、失败章节和批次确认状态。',
