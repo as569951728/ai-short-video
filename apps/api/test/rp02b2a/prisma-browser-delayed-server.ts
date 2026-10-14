@@ -26,13 +26,14 @@ const port = Number(process.env.PORT);
 const browserAction = process.env.E1_BROWSER_ACTION ?? 'direction';
 if (!Number.isSafeInteger(delayMs) || delayMs < 120_000 || delayMs > 300_000
   || !Number.isSafeInteger(port) || port < 1024 || port > 65535
-  || !['direction', 'trial', 'fullReview'].includes(browserAction)) {
+  || !['direction', 'directionEdit', 'trial', 'fullReview'].includes(browserAction)) {
   throw new Error('Set a 2-5 minute delay and an explicit unprivileged port.');
 }
 
 class IsolatedPrismaRepository extends PrismaNovelRepository {
   constructor() {
     super({ enabledLeasedTaskTypes: new Set(browserAction === 'direction' ? ['novel_direction_generate']
+      : browserAction === 'directionEdit' ? ['novel_direction_fuse', 'novel_direction_optimize']
       : browserAction === 'trial' ? ['trial_writing_generate', 'trial_followup_generate']
         : ['novel_full_review']) });
   }
@@ -62,8 +63,9 @@ function errorCode(error: unknown): string {
 }
 
 const repository = new IsolatedPrismaRepository();
-let asyncEnabled = browserAction !== 'trial';
+let asyncEnabled = !['trial', 'directionEdit'].includes(browserAction);
 const enabledActions = browserAction === 'direction' ? ['direction_generate'] as const
+  : browserAction === 'directionEdit' ? ['direction_fuse', 'direction_optimize'] as const
   : browserAction === 'trial' ? ['trial_chapter_one_generate', 'trial_followup_generate'] as const
     : ['novel_full_review'] as const;
 const fullReviewProvider = new MockFullReviewProvider();
@@ -114,6 +116,23 @@ if (browserAction === 'trial') {
   asyncEnabled = true;
   process.stdout.write(`E1_TRIAL_BROWSER_NOVEL_ID=${novelId}\n`);
 }
+if (browserAction === 'directionEdit') {
+  const post = async (path: string, body: Record<string, unknown> = {}) => {
+    const response = await app.inject({ method: 'POST', url: path, payload: body });
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw new Error(`Direction edit browser fixture setup failed: ${path} ${response.statusCode}`);
+    }
+    return response.json().data as Record<string, any>;
+  };
+  const novel = await post('/novels/drafts', { title: 'E1 都市重生方向融合与优化验收' });
+  const novelId = String(novel.id);
+  const direction = await post(`/novels/${novelId}/directions/generate`);
+  if (!Array.isArray(direction.candidates) || direction.candidates.length < 2) {
+    throw new Error('Direction edit browser fixture has fewer than two candidates.');
+  }
+  asyncEnabled = true;
+  process.stdout.write(`E1_DIRECTION_EDIT_BROWSER_NOVEL_ID=${novelId}\n`);
+}
 if (browserAction === 'fullReview') {
   await repository.getAuthoritativeTaskTime();
   const actor = { tenantId: 'e1_browser_mysql_tenant', userId: 'e1_browser_mysql_user',
@@ -130,6 +149,18 @@ if (browserAction === 'direction') {
   directionProvider.generateCandidates = async (input) => {
     await new Promise((resolve) => setTimeout(resolve, delayMs));
     return generate(input);
+  };
+}
+if (browserAction === 'directionEdit') {
+  const fuse = directionProvider.fuseCandidates.bind(directionProvider);
+  directionProvider.fuseCandidates = async (input) => {
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    return fuse(input);
+  };
+  const optimize = directionProvider.optimizeCandidate.bind(directionProvider);
+  directionProvider.optimizeCandidate = async (input) => {
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    return optimize(input);
   };
 }
 const trialProvider = new MockTrialProvider();
