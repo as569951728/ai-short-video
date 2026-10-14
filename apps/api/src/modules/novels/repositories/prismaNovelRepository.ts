@@ -16,7 +16,7 @@ import {
 } from '@ai-shortvideo/shared';
 import { getPrismaClient } from '../../../infrastructure/database/prisma.js';
 import { Prisma } from '../../../generated/prisma/client.js';
-import { evaluateChapterLength } from '../domain/chapterLengthPolicy.js';
+import { evaluateChapterLength, isBoundedOverlengthRevision } from '../domain/chapterLengthPolicy.js';
 import { bindTrialFollowupChapters } from '../domain/trialFollowupBinding.js';
 import type { TrialFollowupChapterProviderDraft } from '../services/actionExecutionPlan.js';
 import {
@@ -1004,7 +1004,7 @@ export class PrismaNovelRepository implements NovelRepository {
     if (!['novel_direction_generate', 'novel_direction_fuse', 'novel_direction_optimize',
       'novel_setting_generate', 'novel_outline_generate',
       'stage_outline_generate', 'chapter_plan_generate', 'trial_writing_generate',
-      'trial_followup_generate'].includes(observed.taskType)) {
+      'trial_followup_generate', 'chapter_overlength_revise'].includes(observed.taskType)) {
       const task = mapGenerationTask(observed);
       if (!task.providerAttemptPhase) return { outcome: 'fenced' as const, task: null };
       return this.failLeasedAction({ ...input, expectedPhase: task.providerAttemptPhase, reason: 'worker_payload_unsupported' });
@@ -1078,6 +1078,81 @@ export class PrismaNovelRepository implements NovelRepository {
       const authority = await this.loadGenerationAuthority(authorityInput, tx);
       if (!matchGenerationAuthority(authorityInput, envelope.sourceVersionRefs.authoritySnapshotHash, authority).ok) {
         return fail('source_stale');
+      }
+      if (current.taskType === 'chapter_overlength_revise') {
+        const refs = authorityRecord(envelope.sourceVersionRefs);
+        const novel = await this.findById(input.tenantId, current.novelId!, tx);
+        const chapterRow = await tx.novelChapter.findFirst({ where: {
+          tenantId: input.tenantId, novelId: current.novelId!, id: envelope.objectId, deletedAt: null
+        } });
+        const chapter = chapterRow ? mapNovelChapter(chapterRow) : null;
+        const original = typeof refs.candidateVersionId === 'string'
+          ? await this.findChapterContentVersionById(input.tenantId, current.novelId!, refs.candidateVersionId, tx)
+          : null;
+        const priorRevision = chapter ? await tx.chapterContentVersion.findFirst({ where: {
+          tenantId: input.tenantId, novelId: current.novelId!, chapterId: chapter.id,
+          sourceType: 'ai_overlength_revision'
+        } }) : null;
+        if (envelope.action !== 'chapter_overlength_revise' || !novel || !chapter || !original
+          || novel.creationStage !== NovelCreationStage.Body
+          || novel.currentChapterPlanVersionId !== refs.currentChapterPlanVersionId
+          || chapter.currentContentVersionId !== null || refs.currentContentVersionId !== null
+          || original.chapterId !== chapter.id || original.status !== VersionStatus.Candidate
+          || original.staleLevel !== StaleLevel.None || original.sourceType !== 'ai_overlength_original'
+          || authorityRecord(original.sourceVersionRefs).currentChapterPlanVersionId !== novel.currentChapterPlanVersionId
+          || authorityRecord(authorityRecord(original.metadata).lengthGate).target !== chapter.wordTarget
+          || evaluateChapterLength(original.content, chapter.wordTarget).status !== 'too_long'
+          || priorRevision) return fail('source_stale');
+        if (typeof input.validatedResult !== 'string'
+          || !isBoundedOverlengthRevision(original.content, input.validatedResult, chapter.wordTarget)) {
+          return fail('worker_payload_unsupported');
+        }
+        try {
+          assertNoSensitiveExecutionPayload({ content: input.validatedResult }, 'overlengthRevision');
+        } catch {
+          return fail('worker_payload_unsupported');
+        }
+        const lengthGate = evaluateChapterLength(input.validatedResult, chapter.wordTarget);
+        const versionNo = await getNextChapterContentVersionNo(tx, input.tenantId, current.novelId!, chapter.id);
+        const candidate = await tx.chapterContentVersion.create({ data: {
+          tenantId: input.tenantId, novelId: current.novelId!, chapterId: chapter.id,
+          versionNo, status: PrismaVersionStatus.CANDIDATE, staleLevel: PrismaStaleLevel.NONE,
+          sourceType: 'ai_overlength_revision', sourceTaskId: current.id,
+          sourceVersionRefs: toJsonObject(envelope.sourceVersionRefs),
+          rewriteReason: '用户发起超长正文精简', content: input.validatedResult,
+          wordCount: lengthGate.actual, summary: null, reviewScore: null,
+          createdBy: current.createdBy, createdAt: input.authoritativeNow,
+          metadata: toJsonObject({ reviewRequired: true, lengthRecovery: 'revision',
+            revisionOfCandidateId: original.id, lengthGate, chapterNo: chapter.chapterNo,
+            title: chapter.title, riskLevel: RiskLevel.Medium })
+        } });
+        const receipt = createSafeResultReceipt(mapGenerationTask(current), {
+          status: 'waiting_confirmation', outcome: 'candidate_created',
+          resultObjectType: 'chapter_content_version', resultObjectId: candidate.id,
+          resultVersionIds: [candidate.id], resultCount: 1
+        });
+        const transition = await tx.generationTask.updateMany({ where: fence, data: {
+          status: PrismaTaskStatus.WAITING_CONFIRMATION,
+          statusNote: '超长精简候选已保存，待逐版本复核。', progress: 100,
+          currentStep: '精简候选待复核', outputSummary: '精简候选已保存，正式正文未改变。',
+          resultObjectType: 'chapter_content_version', resultObjectId: candidate.id,
+          resultVersionId: candidate.id, resultVersionIdsJson: [candidate.id],
+          resultReceiptHash: receipt.hash, providerAttemptPhase: PrismaProviderAttemptPhase.FINALIZING,
+          activeClaimKey: null, leaseOwnerId: null, leaseToken: null, leaseExpiresAt: null,
+          finishedAt: input.authoritativeNow, updatedAt: input.authoritativeNow
+        } });
+        if (transition.count !== 1) throw new Error('Overlength revision lost its fenced task transition.');
+        const finalized = await tx.generationTask.findFirstOrThrow({ where: { tenantId: input.tenantId, id: current.id } });
+        await createTaskEvent(tx, { task: finalized, eventType: 'task_finalized',
+          message: finalized.statusNote!, progress: 100, requestId, createdAt: input.authoritativeNow });
+        await tx.operationLog.create({ data: {
+          tenantId: input.tenantId, userId: current.createdBy, novelId: current.novelId,
+          action: 'generation_task_finalized', objectType: 'generation_task', objectId: current.id,
+          afterSnapshot: { resultVersionIds: [candidate.id], receiptHash: receipt.hash },
+          reason: '超长正文精简候选生成完成', sourceTaskId: current.id,
+          requestId, createdAt: input.authoritativeNow
+        } });
+        return { outcome: 'applied' as const, task: mapGenerationTask(finalized) };
       }
       if (current.taskType === 'trial_followup_generate') {
         const refs = authorityRecord(envelope.sourceVersionRefs);
