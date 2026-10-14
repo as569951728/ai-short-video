@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { TaskStatus } from '@ai-shortvideo/shared';
-import type { NovelRepository, ObservedTaskLease } from '../../src/modules/novels/domain/novelDomain.js';
+import type { NovelRepository, ObservedTaskLease, ObservedUnleasedTask } from '../../src/modules/novels/domain/novelDomain.js';
 import { createInMemoryNovelRepository } from '../../src/modules/novels/repositories/inMemoryNovelRepository.js';
-import { createNovelRecoveryLoop, sweepExpiredNovelTasks } from '../../src/modules/novels/services/recoveryScanner.js';
+import { UNLEASED_TASK_STALE_AFTER_MS, createNovelRecoveryLoop, sweepExpiredNovelTasks } from '../../src/modules/novels/services/recoveryScanner.js';
 import { createRouteAuthorityFixture } from './fixtures.js';
 
 const at = (seconds: number) => new Date(Date.UTC(2030, 0, 1, 0, 0, seconds));
@@ -52,7 +52,8 @@ describe('novel recovery scanner', () => {
         recovered.push(lease.taskId);
         leases.splice(leases.findIndex((item) => item.taskId === lease.taskId), 1);
         return { outcome: 'recovered', task: null };
-      }
+      },
+      listStaleUnleasedTasks: async () => []
     } as unknown as NovelRepository;
     assert.deepEqual(await sweepExpiredNovelTasks(repository, at(30), 2), {
       observed: 2, recovered: 2, raced: 0, failed: 0
@@ -69,7 +70,8 @@ describe('novel recovery scanner', () => {
     let calls = 0;
     const repository = {
       listExpiredTaskLeases: async () => [lease],
-      recoverExpiredTask: async () => { calls += 1; return { outcome: 'not_recovered', task: null }; }
+      recoverExpiredTask: async () => { calls += 1; return { outcome: 'not_recovered', task: null }; },
+      listStaleUnleasedTasks: async () => []
     } as unknown as NovelRepository;
     assert.deepEqual(await sweepExpiredNovelTasks(repository, at(30)), {
       observed: 1, recovered: 0, raced: 1, failed: 0
@@ -89,7 +91,8 @@ describe('novel recovery scanner', () => {
         attempts.push(lease.taskId);
         if (lease.taskId === 'task-poison') throw new Error('sensitive internal failure');
         return { outcome: 'recovered', task: null };
-      }
+      },
+      listStaleUnleasedTasks: async () => []
     } as unknown as NovelRepository;
     assert.deepEqual(await sweepExpiredNovelTasks(repository, at(30)), {
       observed: 2, recovered: 1, raced: 0, failed: 1
@@ -112,7 +115,8 @@ describe('novel recovery scanner', () => {
         resolveSweep();
         await readHeld;
         return [];
-      }
+      },
+      listStaleUnleasedTasks: async () => []
     } as unknown as NovelRepository;
     const loop = createNovelRecoveryLoop({ repository, intervalMs: 1_000 });
     loop.start();
@@ -130,5 +134,56 @@ describe('novel recovery scanner', () => {
     const repository = { listExpiredTaskLeases: async () => { reads += 1; return []; } } as unknown as NovelRepository;
     await assert.rejects(sweepExpiredNovelTasks(repository, at(30), 101), RangeError);
     assert.equal(reads, 0);
+  });
+
+  it('ends an unleased inline task only after six hours without updates and never replays its provider', async () => {
+    const repository = createInMemoryNovelRepository();
+    const fixture = await createRouteAuthorityFixture('direction_generate', repository);
+    try {
+      const response = await fixture.runSuccess('stale-inline-scan');
+      assert.equal(response.statusCode, 200, response.body);
+      const task = repository.getGenerationTasks().find((item) => item.id === response.json().data.task.id);
+      assert.ok(task);
+      task.status = TaskStatus.Processing;
+      task.finishedAt = null;
+      task.updatedAt = at(0);
+      task.providerDispatchedAt = at(0);
+      task.activeClaimKey = 'stale-inline-claim';
+      const beforeEvents = repository.getGenerationTaskEvents().length;
+      assert.deepEqual(await sweepExpiredNovelTasks(repository, new Date(at(0).getTime() + UNLEASED_TASK_STALE_AFTER_MS - 1)),
+        { observed: 0, recovered: 0, raced: 0, failed: 0 });
+      assert.deepEqual(await sweepExpiredNovelTasks(repository, new Date(at(0).getTime() + UNLEASED_TASK_STALE_AFTER_MS)),
+        { observed: 1, recovered: 1, raced: 0, failed: 0 });
+      assert.equal(task.status, TaskStatus.Failed);
+      assert.equal(task.errorCode, 'PROVIDER_OUTCOME_UNKNOWN');
+      assert.equal(task.activeClaimKey, null);
+      assert.equal(repository.getGenerationTaskEvents().length, beforeEvents + 1);
+      assert.deepEqual(await sweepExpiredNovelTasks(repository, at(25200)),
+        { observed: 0, recovered: 0, raced: 0, failed: 0 });
+    } finally {
+      await fixture.app.close();
+    }
+  });
+
+  it('fences an observed unleased task if another request updates it before recovery', async () => {
+    const repository = createInMemoryNovelRepository();
+    const fixture = await createRouteAuthorityFixture('direction_generate', repository);
+    try {
+      const response = await fixture.runSuccess('stale-inline-race');
+      assert.equal(response.statusCode, 200, response.body);
+      const task = repository.getGenerationTasks().find((item) => item.id === response.json().data.task.id);
+      assert.ok(task);
+      task.status = TaskStatus.Processing;
+      task.finishedAt = null;
+      task.updatedAt = at(0);
+      const staleBefore = at(0);
+      const observed: ObservedUnleasedTask[] = await repository.listStaleUnleasedTasks(staleBefore, 10);
+      assert.equal(observed.length, 1);
+      task.updatedAt = at(1);
+      assert.equal((await repository.recoverStaleUnleasedTask(observed[0]!, staleBefore, at(3600))).outcome, 'not_recovered');
+      assert.equal(task.status, TaskStatus.Processing);
+    } finally {
+      await fixture.app.close();
+    }
   });
 });

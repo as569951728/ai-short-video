@@ -25,6 +25,8 @@ const TASK_ACTIONS: Record<string, readonly NovelProviderAction[]> = {
   chapter_impact_assess: ['chapter_impact_assess', 'chapter_adopt_impact_assess'], novel_full_review: ['novel_full_review']
 };
 
+export const NOVEL_PROVIDER_TASK_TYPES = Object.freeze(Object.keys(TASK_ACTIONS));
+
 export function isNovelProviderTaskType(taskType: string): boolean {
   return Object.hasOwn(TASK_ACTIONS, taskType);
 }

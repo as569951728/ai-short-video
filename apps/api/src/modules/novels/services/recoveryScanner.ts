@@ -7,6 +7,8 @@ export interface RecoverySweepResult {
   failed: number;
 }
 
+export const UNLEASED_TASK_STALE_AFTER_MS = 6 * 60 * 60_000;
+
 export async function sweepExpiredNovelTasks(
   repository: NovelRepository,
   authoritativeNow: Date,
@@ -26,7 +28,18 @@ export async function sweepExpiredNovelTasks(
       failed += 1;
     }
   }
-  return { observed: leases.length, recovered, raced: leases.length - recovered - failed, failed };
+  const staleBefore = new Date(authoritativeNow.getTime() - UNLEASED_TASK_STALE_AFTER_MS);
+  const unleasedTasks = await repository.listStaleUnleasedTasks(staleBefore, limit);
+  for (const task of unleasedTasks) {
+    try {
+      const result = await repository.recoverStaleUnleasedTask(task, staleBefore, authoritativeNow);
+      if (result.outcome === 'recovered') recovered += 1;
+    } catch {
+      failed += 1;
+    }
+  }
+  const observed = leases.length + unleasedTasks.length;
+  return { observed, recovered, raced: observed - recovered - failed, failed };
 }
 
 export function createNovelRecoveryLoop(input: {

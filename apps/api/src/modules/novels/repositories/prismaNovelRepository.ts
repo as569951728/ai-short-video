@@ -58,6 +58,7 @@ import {
   type LeasedActionFailureInput,
   type LeasedCreativeFinalizeInput,
   type ObservedTaskLease,
+  type ObservedUnleasedTask,
   type CompletionConfirmationInput,
   type CompletionDecisionRecord,
   type ConfirmedCompletionRecord,
@@ -123,6 +124,7 @@ import {
   normalizeDraftRequest
 } from '../domain/novelDomain.js';
 import {
+  NOVEL_PROVIDER_TASK_TYPES,
   isNovelProviderTaskType,
   createSafeResultReceipt,
   matchGenerationAuthority,
@@ -1965,6 +1967,24 @@ export class PrismaNovelRepository implements NovelRepository {
       : []);
   }
 
+  async listStaleUnleasedTasks(staleBefore: Date, limit: number): Promise<ObservedUnleasedTask[]> {
+    const take = Number.isInteger(limit) ? Math.min(Math.max(limit, 0), 100) : 0;
+    if (take === 0) return [];
+    const rows = await this.prisma.generationTask.findMany({
+      where: {
+        status: PrismaTaskStatus.PROCESSING,
+        taskType: { in: [...NOVEL_PROVIDER_TASK_TYPES] },
+        providerCallBudgetMax: 0,
+        leaseOwnerId: null, leaseToken: null, leaseExpiresAt: null,
+        startedAt: { not: null }, updatedAt: { lte: staleBefore }
+      },
+      select: { tenantId: true, id: true, updatedAt: true },
+      orderBy: [{ updatedAt: 'asc' }, { id: 'asc' }],
+      take
+    });
+    return rows.map((row) => ({ tenantId: row.tenantId, taskId: row.id, updatedAt: row.updatedAt }));
+  }
+
   async getAuthoritativeTaskTime(): Promise<Date> {
     const rows = await this.prisma.$queryRaw<Array<{ now_ms: bigint | number | string }>>`
       SELECT CAST(ROUND(UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3)) * 1000) AS UNSIGNED) AS now_ms
@@ -2017,6 +2037,46 @@ export class PrismaNovelRepository implements NovelRepository {
         action: 'generation_task_recovered', objectType: 'generation_task', objectId: task.id,
         afterSnapshot: { failureCategory: failure.failureCategory, errorCode: failure.errorCode },
         reason: failure.statusNote, sourceTaskId: task.id, requestId: 'worker:recovery', createdAt: authoritativeNow
+      } });
+      return { outcome: 'recovered' as const, task: mapGenerationTask(task) };
+    });
+  }
+
+  async recoverStaleUnleasedTask(observed: ObservedUnleasedTask, staleBefore: Date, authoritativeNow: Date) {
+    return this.prisma.$transaction(async (tx) => {
+      const current = await tx.generationTask.findFirst({ where: {
+        tenantId: observed.tenantId, id: observed.taskId, status: PrismaTaskStatus.PROCESSING,
+        taskType: { in: [...NOVEL_PROVIDER_TASK_TYPES] }, providerCallBudgetMax: 0,
+        leaseOwnerId: null, leaseToken: null, leaseExpiresAt: null, startedAt: { not: null },
+        updatedAt: observed.updatedAt
+      } });
+      if (!current || current.updatedAt.getTime() > staleBefore.getTime()) {
+        return { outcome: 'not_recovered' as const, task: null };
+      }
+      const failure = {
+        failureCategory: 'provider_outcome_unknown', errorCode: 'PROVIDER_OUTCOME_UNKNOWN',
+        errorMessage: 'Unleased inline provider outcome is unknown.',
+        statusNote: '旧生成任务长时间未更新，模型调用结果未确认；系统不会自动重试。'
+      };
+      const transition = await tx.generationTask.updateMany({
+        where: {
+          tenantId: observed.tenantId, id: observed.taskId, status: PrismaTaskStatus.PROCESSING,
+          taskType: { in: [...NOVEL_PROVIDER_TASK_TYPES] }, providerCallBudgetMax: 0,
+          leaseOwnerId: null, leaseToken: null, leaseExpiresAt: null, startedAt: { not: null },
+          updatedAt: { equals: observed.updatedAt, lte: staleBefore }
+        },
+        data: leaseFailureData(failure, authoritativeNow)
+      });
+      if (transition.count !== 1) return { outcome: 'not_recovered' as const, task: null };
+      const task = await tx.generationTask.findFirstOrThrow({ where: { tenantId: observed.tenantId, id: observed.taskId } });
+      await createTaskEvent(tx, { task, eventType: 'task_recovered', message: failure.statusNote,
+        progress: task.progress, requestId: 'worker:unleased-recovery', createdAt: authoritativeNow });
+      await tx.operationLog.create({ data: {
+        tenantId: task.tenantId, userId: task.createdBy, novelId: task.novelId,
+        action: 'generation_task_recovered', objectType: 'generation_task', objectId: task.id,
+        afterSnapshot: { failureCategory: failure.failureCategory, errorCode: failure.errorCode },
+        reason: failure.statusNote, sourceTaskId: task.id,
+        requestId: 'worker:unleased-recovery', createdAt: authoritativeNow
       } });
       return { outcome: 'recovered' as const, task: mapGenerationTask(task) };
     });

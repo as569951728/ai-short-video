@@ -83,6 +83,7 @@ import {
   type LeasedActionFailureInput,
   type LeasedCreativeFinalizeInput,
   type ObservedTaskLease,
+  type ObservedUnleasedTask,
   type ChapterContentVersionRecord,
   type ChapterFeatureCardRecord,
   type ChapterWorkbenchRecord,
@@ -2219,6 +2220,19 @@ export function createInMemoryNovelRepository(options: {
         }));
     },
 
+    async listStaleUnleasedTasks(staleBefore: Date, limit: number): Promise<ObservedUnleasedTask[]> {
+      if (!Number.isInteger(limit) || limit <= 0) return [];
+      return generationTasks
+        .filter((task) => task.status === TaskStatus.Processing && isNovelProviderTaskType(task.taskType)
+          && task.providerCallBudgetMax === 0 && task.startedAt !== null
+          && task.leaseOwnerId === null && task.leaseToken === null && task.leaseExpiresAt === null
+          && task.updatedAt.getTime() <= staleBefore.getTime())
+        .sort((left, right) => left.updatedAt.getTime() - right.updatedAt.getTime()
+          || left.id.localeCompare(right.id))
+        .slice(0, limit)
+        .map((task) => ({ tenantId: task.tenantId, taskId: task.id, updatedAt: new Date(task.updatedAt) }));
+    },
+
     async recoverExpiredTask(observed: ObservedTaskLease, authoritativeNow: Date) {
       const task = generationTasks.find((item) => item.tenantId === observed.tenantId && item.id === observed.taskId);
       if (!task || task.status !== TaskStatus.Processing || task.leaseOwnerId !== observed.leaseOwnerId || task.leaseToken !== observed.leaseToken
@@ -2255,6 +2269,42 @@ export function createInMemoryNovelRepository(options: {
           beforeSnapshot: null, afterSnapshot: { failureCategory: failure.failureCategory, errorCode: failure.errorCode },
           reason: failure.statusNote, impactSummary: null, sourceTaskId: task.id,
           requestId: `worker:${observed.leaseOwnerId}`, ip: null, userAgent: null, createdAt: authoritativeNow
+        });
+        options.onLeasedFailureStage?.('operation_log');
+        return { outcome: 'recovered' as const, task };
+      } catch (error) {
+        sequence = beforeSequence;
+        restore.forEach((restoreStore) => restoreStore());
+        throw error;
+      }
+    },
+
+    async recoverStaleUnleasedTask(observed: ObservedUnleasedTask, staleBefore: Date, authoritativeNow: Date) {
+      const task = generationTasks.find((item) => item.tenantId === observed.tenantId && item.id === observed.taskId);
+      if (!task || task.status !== TaskStatus.Processing || !isNovelProviderTaskType(task.taskType)
+        || task.providerCallBudgetMax !== 0 || task.startedAt === null
+        || task.leaseOwnerId !== null || task.leaseToken !== null || task.leaseExpiresAt !== null
+        || task.updatedAt.getTime() !== observed.updatedAt.getTime()
+        || task.updatedAt.getTime() > staleBefore.getTime()) {
+        return { outcome: 'not_recovered' as const, task: null };
+      }
+      const failure = {
+        failureCategory: 'provider_outcome_unknown', errorCode: 'PROVIDER_OUTCOME_UNKNOWN',
+        errorMessage: 'Unleased inline provider outcome is unknown.',
+        statusNote: '旧生成任务长时间未更新，模型调用结果未确认；系统不会自动重试。'
+      };
+      const beforeSequence = sequence;
+      const restore = [snapshotMutableArray(generationTasks), snapshotMutableArray(generationTaskEvents),
+        snapshotMutableArray(operationLogs)];
+      try {
+        applyLeaseFailure(task, failure, authoritativeNow, 'task_recovered');
+        options.onLeasedFailureStage?.('event');
+        operationLogs.unshift({
+          id: nextId('oplog'), tenantId: task.tenantId, userId: task.createdBy,
+          novelId: task.novelId, action: 'generation_task_recovered', objectType: 'generation_task', objectId: task.id,
+          beforeSnapshot: null, afterSnapshot: { failureCategory: failure.failureCategory, errorCode: failure.errorCode },
+          reason: failure.statusNote, impactSummary: null, sourceTaskId: task.id,
+          requestId: 'worker:unleased-recovery', ip: null, userAgent: null, createdAt: authoritativeNow
         });
         options.onLeasedFailureStage?.('operation_log');
         return { outcome: 'recovered' as const, task };

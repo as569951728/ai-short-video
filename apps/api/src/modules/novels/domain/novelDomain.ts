@@ -627,6 +627,12 @@ export interface ObservedTaskLease {
   leaseExpiresAt: Date;
 }
 
+export interface ObservedUnleasedTask {
+  tenantId: string;
+  taskId: string;
+  updatedAt: Date;
+}
+
 export type LeasedTaskCheckpoint =
   | { expectedPhase: 'leased'; nextPhase: 'prepared' }
   | { expectedPhase: 'prepared'; nextPhase: 'provider_call_started'; providerAttemptId: string }
@@ -1381,6 +1387,8 @@ export interface NovelRepository {
   getAuthoritativeTaskTime(): Promise<Date>;
   listExpiredTaskLeases(authoritativeNow: Date, limit: number): Promise<ObservedTaskLease[]>;
   recoverExpiredTask(observedTaskLease: ObservedTaskLease, authoritativeNow: Date): Promise<RecoverExpiredTaskResult>;
+  listStaleUnleasedTasks(staleBefore: Date, limit: number): Promise<ObservedUnleasedTask[]>;
+  recoverStaleUnleasedTask(observedTask: ObservedUnleasedTask, staleBefore: Date, authoritativeNow: Date): Promise<RecoverExpiredTaskResult>;
   findActiveTaskByConflict(tenantId: string, conflictScope: string, conflictKey: string): Promise<GenerationTaskRecord | null>;
   createDirectionCandidates(input: DirectionCreationInput): Promise<CreatedDirectionCandidatesRecord>;
   createDirectionRevision(input: DirectionRevisionInput): Promise<CreatedDirectionRevisionRecord>;
