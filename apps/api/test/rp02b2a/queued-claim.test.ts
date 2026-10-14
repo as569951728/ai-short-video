@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { TaskStatus } from '@ai-shortvideo/shared';
 import { createInMemoryNovelRepository } from '../../src/modules/novels/repositories/inMemoryNovelRepository.js';
-import { claimQueuedGeneration } from '../../src/modules/novels/services/taskClaim.js';
+import { claimQueuedGeneration, executeClaimedGeneration } from '../../src/modules/novels/services/taskClaim.js';
 
 const at = (minutes: number) => new Date(Date.UTC(2030, 0, 1, 0, minutes));
 
@@ -78,5 +78,30 @@ describe('queued generation claim', () => {
     await assert.rejects(claimQueuedGeneration({ ...input, idempotencyKey: '' }));
     await assert.rejects(claimQueuedGeneration({ ...input, idempotencyKey: 'expired-submission-0001' }));
     assert.equal(repository.getGenerationTasks().length, 0);
+  });
+
+  it('uses the leased capability for queued work without opening the legacy inline write path', async () => {
+    const repository = createInMemoryNovelRepository();
+    const context = { tenantId: 'tenant-queue', userId: 'user-queue', requestId: 'request-queue' };
+    const { novel } = await repository.createDraft({ request: { title: 'Leased-only novel' }, context, now: at(0) });
+    let legacyChecks = 0;
+    repository.assertProviderActionSupported = async () => {
+      legacyChecks += 1;
+      throw new Error('Legacy inline write path is unavailable');
+    };
+    repository.getLeasedExecutionCapability = async () => 'enabled';
+    const base = { action: 'direction_generate' as const, repository, novel,
+      effectiveRequest: { regenerateReason: null },
+      sourceVersionRefs: { currentDirectionVersionId: null }, context, now: () => at(0) };
+    const queued = await claimQueuedGeneration({ ...base, idempotencyKey: 'leased-only-0001',
+      durationDeadlineAt: at(15) });
+    assert.equal(queued.task.status, TaskStatus.Queued);
+    assert.equal(legacyChecks, 0);
+    await assert.rejects(executeClaimedGeneration({ ...base, idempotencyKey: 'inline-only-0001',
+      provider: async () => { throw new Error('Provider must not run'); },
+      finalize: async () => { throw new Error('Finalize must not run'); }
+    }), /Legacy inline write path is unavailable/);
+    assert.equal(legacyChecks, 1);
+    assert.equal(repository.getGenerationTasks().length, 1);
   });
 });

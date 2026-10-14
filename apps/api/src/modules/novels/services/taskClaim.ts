@@ -400,9 +400,13 @@ async function claimGeneration(input: ClaimGenerationInput, executionMode: 'inli
   const initialProviderInputSnapshotHash = hashCanonicalJson(initialProviderInput);
   const initialActionAuthorityRefs = buildActionAuthoritySourceRefs(input.action, authority, normalizedRequest, normalizedSourceVersionRefs);
   await providerCapability?.assertAvailable?.();
-  await input.repository.assertProviderActionSupported(spec.taskType);
-  if (executionMode === 'queued' && await input.repository.getLeasedExecutionCapability(spec.taskType) !== 'enabled') {
-    throw new BusinessError(ErrorCode.ConfigMissing, '当前生成动作尚不支持后台执行，任务未创建。');
+  // Leased finalization and legacy inline writes have separate capability gates.
+  if (executionMode === 'queued') {
+    if (await input.repository.getLeasedExecutionCapability(spec.taskType) !== 'enabled') {
+      throw new BusinessError(ErrorCode.ConfigMissing, '当前生成动作尚不支持后台执行，任务未创建。');
+    }
+  } else {
+    await input.repository.assertProviderActionSupported(spec.taskType);
   }
   await input.authorityBarrier?.('after_first_authority_load');
   const providerAuthority = await input.repository.loadGenerationAuthority(authorityInput);

@@ -23,10 +23,6 @@ if (target.protocol !== 'mysql:' || !['127.0.0.1', 'localhost'].includes(target.
 }
 
 class IsolatedPrismaRepository extends PrismaNovelRepository {
-  override async assertProviderActionSupported(taskType: string) {
-    if (taskType !== 'chapter_body_rewrite') await super.assertProviderActionSupported(taskType);
-  }
-
   override async getLeasedExecutionCapability(taskType: string) {
     return taskType === 'chapter_body_rewrite' ? 'enabled' as const
       : super.getLeasedExecutionCapability(taskType);

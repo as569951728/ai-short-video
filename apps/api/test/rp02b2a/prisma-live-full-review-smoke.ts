@@ -31,10 +31,6 @@ if (target.protocol !== 'mysql:' || !['127.0.0.1', 'localhost'].includes(target.
 }
 
 class IsolatedPrismaRepository extends PrismaNovelRepository {
-  override async assertProviderActionSupported(taskType: string) {
-    if (taskType !== 'novel_full_review') await super.assertProviderActionSupported(taskType);
-  }
-
   override async getLeasedExecutionCapability(taskType: string) {
     return taskType === 'novel_full_review' ? 'enabled' as const
       : super.getLeasedExecutionCapability(taskType);

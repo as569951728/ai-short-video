@@ -35,12 +35,6 @@ if (!Number.isSafeInteger(delayMs) || delayMs < 120_000 || delayMs > 300_000
 }
 
 class IsolatedPrismaRepository extends PrismaNovelRepository {
-  override async assertProviderActionSupported(taskType: string) {
-    if (browserAction !== 'fullReview' || taskType !== 'novel_full_review') {
-      await super.assertProviderActionSupported(taskType);
-    }
-  }
-
   override async getLeasedExecutionCapability(taskType: string) {
     const allowed = browserAction === 'direction' ? ['novel_direction_generate']
       : browserAction === 'trial' ? ['trial_writing_generate', 'trial_followup_generate']
