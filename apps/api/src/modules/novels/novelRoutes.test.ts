@@ -1905,9 +1905,9 @@ describe('novel package 5 trial writing routes', () => {
     assert.equal(workbenchResponse.statusCode, 200);
     const workbench = workbenchResponse.json().data;
     assert.equal(workbench.chapter.id, chapterId);
-    assert.equal(workbench.currentContent.id, selectedCandidate.id);
-    assert.equal(workbench.featureCard.chapterId, chapterId);
-    assert.ok(workbench.reviewIssues.length >= 1);
+    assert.equal(workbench.currentContent, null);
+    assert.equal(workbench.featureCard, null);
+    assert.equal(workbench.reviewIssues.length, 0);
     assert.equal(workbench.candidateVersions.length, 3);
     assert.equal(workbench.recommendedAction.label, '查看试写总评');
     assert.ok(repository.getOperationLogs().some((log) => log.action === 'select_trial_chapter1_candidate'));
@@ -2172,6 +2172,16 @@ describe('novel package 5 trial writing routes', () => {
       selectedCandidateId: riskyCandidate.id
     });
     assert.equal(followup.trialRun.trialReview.requiresRiskConfirmation, true);
+    const pendingResults = await repository.listTrialChapterResults('tenant_test', followup.trialRun.id);
+    assert.equal(pendingResults.length, 3);
+    assert.ok(repository.getNovelChapters().filter((chapter) => chapter.novelId === novelId
+      && chapter.chapterNo <= 3).every((chapter) => chapter.currentContentVersionId === null
+      && chapter.currentFeatureCardVersionId === null && chapter.currentReviewReportId === null));
+    assert.ok(pendingResults.every((result) =>
+      repository.getChapterContentVersions().find((version) => version.id === result.contentVersionId)?.status
+        === VersionStatus.Candidate
+      && repository.getChapterFeatureCards().find((card) => card.id === result.featureCardVersionId)?.status
+        === VersionStatus.Candidate));
 
     const blockedConfirm = await app.inject({
       method: 'POST',
@@ -2214,8 +2224,46 @@ describe('novel package 5 trial writing routes', () => {
     assert.equal(detailAfterConfirm.recentTask.taskType, 'trial_followup_generate');
     assert.equal(detailAfterConfirm.recentTask.status, TaskStatus.Completed);
     assert.equal(detailAfterConfirm.statusSummary.recommendedAction.type, 'start_body_batch');
+    assert.ok(detailAfterConfirm.chapters.filter((chapter: any) => chapter.chapterNo <= 3)
+      .every((chapter: any) => chapter.currentContentVersionId && chapter.mainStatus === 'completed'));
+    assert.ok(repository.getNovelChapters().filter((chapter) => chapter.novelId === novelId
+      && chapter.chapterNo <= 3).every((chapter) => chapter.currentFeatureCardVersionId
+        && chapter.currentReviewReportId));
+    assert.ok(pendingResults.every((result) =>
+      repository.getChapterContentVersions().find((version) => version.id === result.contentVersionId)?.status
+        === VersionStatus.Current
+      && repository.getChapterFeatureCards().find((card) => card.id === result.featureCardVersionId)?.status
+        === VersionStatus.Current));
 
     await app.close();
+  });
+
+  it('returns a trial upstream without promoting generated chapter candidates', async () => {
+    const repository = createInMemoryNovelRepository();
+    const app = await buildApp({ logger: false, novelRepository: repository });
+    try {
+      const { novelId } = await createNovelReadyForTrial(app, '试写退回候选保护');
+      const first = await postTrialGenerate(app, novelId);
+      const selected = first.trialRun.chapterOneCandidates.find((candidate: any) => candidate.isAiRecommended);
+      const followup = await postTrialGenerate(app, novelId, {
+        trialRunId: first.trialRun.id, selectedCandidateId: selected.id
+      });
+      const results = await repository.listTrialChapterResults('tenant_test', followup.trialRun.id);
+      const response = await app.inject({ method: 'POST', url: `/novels/${novelId}/trial/confirm`,
+        payload: { trialRunId: followup.trialRun.id, decision: 'return_upstream',
+          reason: '需要重新调整开篇方向' } });
+      assertUnifiedSuccess(response);
+      assert.equal(response.json().data.trialRun.status, 'returned_upstream');
+      assert.equal(response.json().data.bodyStrategySnapshot, null);
+      assert.ok(repository.getNovelChapters().filter((chapter) => chapter.novelId === novelId
+        && chapter.chapterNo <= 3).every((chapter) => chapter.currentContentVersionId === null
+        && chapter.currentFeatureCardVersionId === null && chapter.currentReviewReportId === null));
+      assert.ok(results.every((result) =>
+        repository.getChapterContentVersions().find((version) => version.id === result.contentVersionId)?.status
+          === VersionStatus.Historical
+        && repository.getChapterFeatureCards().find((card) => card.id === result.featureCardVersionId)?.status
+          === VersionStatus.Historical));
+    } finally { await app.close(); }
   });
 
   it('rechecks every trial chapter against current targets before confirming', async () => {

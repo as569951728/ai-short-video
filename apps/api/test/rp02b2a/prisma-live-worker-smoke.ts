@@ -304,14 +304,42 @@ try {
     tenantId: context.tenantId, novelId: novel.id
   }, orderBy: { chapterNo: 'asc' } });
   assert.equal(writtenChapters.length, 3);
-  assert.deepEqual(writtenChapters.map((chapter) => chapter.currentContentVersionId),
-    followupTask.resultVersionIds);
-  assert.ok(writtenChapters.every((chapter) => chapter.currentFeatureCardVersionId
-    && chapter.currentReviewReportId));
+  assert.ok(writtenChapters.every((chapter) => !chapter.currentContentVersionId
+    && !chapter.currentFeatureCardVersionId && !chapter.currentReviewReportId));
+  const candidateContents = await prisma.chapterContentVersion.findMany({ where: {
+    tenantId: context.tenantId, novelId: novel.id, id: { in: followupTask.resultVersionIds }
+  } });
+  assert.equal(candidateContents.length, 3);
+  assert.ok(candidateContents.every((content) => content.status === 'CANDIDATE'));
+  const candidateCards = await prisma.chapterFeatureCard.findMany({ where: {
+    tenantId: context.tenantId, novelId: novel.id, sourceTaskId: followupTask.id
+  } });
+  assert.equal(candidateCards.length, 3);
+  assert.ok(candidateCards.every((card) => card.status === 'CANDIDATE'));
   assert.equal((await repository.listTaskEvents(context.tenantId, followupTask.id))
     .filter((event) => event.eventType === 'task_finalized').length, 1);
   assert.equal((await new IsolatedPrismaRepository().findTrialRunById(
     context.tenantId, novel.id, trialRun.id))?.reviewReportId, completedRun.reviewReportId);
+
+  const confirmed = await service.confirmTrial(novel.id, {
+    trialRunId: trialRun.id, decision: 'confirm_pass'
+  }, context);
+  assert.equal(confirmed.trialRun.status, 'confirmed');
+  const confirmedChapters = await prisma.novelChapter.findMany({ where: {
+    tenantId: context.tenantId, novelId: novel.id
+  }, orderBy: { chapterNo: 'asc' } });
+  assert.deepEqual(confirmedChapters.map((chapter) => chapter.currentContentVersionId),
+    followupTask.resultVersionIds);
+  assert.ok(confirmedChapters.every((chapter) => chapter.currentFeatureCardVersionId
+    && chapter.currentReviewReportId));
+  assert.equal(await prisma.chapterContentVersion.count({ where: {
+    tenantId: context.tenantId, novelId: novel.id,
+    id: { in: followupTask.resultVersionIds }, status: 'CURRENT'
+  } }), 3);
+  assert.equal(await prisma.chapterFeatureCard.count({ where: {
+    tenantId: context.tenantId, novelId: novel.id,
+    sourceTaskId: followupTask.id, status: 'CURRENT'
+  } }), 3);
 
   await worker.stop();
   const invalidNow = await repository.getAuthoritativeTaskTime();

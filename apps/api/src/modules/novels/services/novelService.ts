@@ -4055,12 +4055,16 @@ function toChapterWorkbenchDTO(record: {
   const openBlockingImpactCase = record.impactCases.find((impactCase) => toImpactCaseDTO(impactCase).blocksFullReview);
   const actionableCandidate = record.candidateVersions.find((version) => version.status === VersionStatus.Candidate && typeof toRecord(version.metadata).trialRunId !== 'string');
   const needsContentReview = actionableCandidate && toRecord(actionableCandidate.metadata).reviewRequired === true;
+  const hasTrialResult = record.candidateVersions.some((version) =>
+    toRecord(version.metadata).trialStatus === 'selected_for_trial');
   const recommendedAction = novel.creationStage === NovelCreationStage.Trial
     ? createLocalRecommendedAction({
-        type: currentContent ? 'view_trial_review' : 'generate_trial',
-        label: currentContent ? '查看试写总评' : '生成试写',
-        reasonText: currentContent ? '章节已有试写正文，可查看试写总评和审稿问题。' : '章节还没有试写正文，需要先生成试写候选。',
-        taskType: currentContent ? null : 'trial_writing_generate'
+        type: currentContent || hasTrialResult ? 'view_trial_review' : 'generate_trial',
+        label: currentContent || hasTrialResult ? '查看试写总评' : '生成试写',
+        reasonText: currentContent || hasTrialResult
+          ? '试写结果已生成，请返回小说工作台查看总评并确认。'
+          : '章节还没有试写正文，需要先生成试写候选。',
+        taskType: currentContent || hasTrialResult ? null : 'trial_writing_generate'
       })
     : openBlockingImpactCase
     ? createLocalRecommendedAction({

@@ -638,7 +638,6 @@ export function createInMemoryNovelRepository(options: {
     selectedMetadata.trialStatus = 'selected_for_trial';
     selectedMetadata.isSelected = true;
     selectedMetadata.followupStatus = 'completed';
-    input.selectedCandidate.status = VersionStatus.Current;
     input.selectedCandidate.metadata = selectedMetadata;
 
     for (const version of chapterContentVersions) {
@@ -738,18 +737,6 @@ export function createInMemoryNovelRepository(options: {
       createdFeatureCards.push(featureCard);
       createdReviewReports.push(reviewReport);
       createdResults.push(result);
-
-      const chapter = chapters.find((item) => item.id === chapterDraft.chapter.id);
-      if (chapter) {
-        chapter.currentContentVersionId = contentVersion.id;
-        chapter.currentFeatureCardVersionId = featureCard.id;
-        chapter.currentReviewReportId = reviewReport.id;
-        chapter.lastGenerationTaskId = task.id;
-        chapter.wordCount = contentVersion.wordCount;
-        chapter.mainStatus = chapterDraft.hardFailed ? 'blocked' : 'trial_written';
-        chapter.statusNote = chapterDraft.hardFailed ? '试写硬门槛未通过，暂停继续生成。' : '试写正文已生成，等待总评确认。';
-        chapter.updatedAt = input.now;
-      }
     }
 
     const trialReviewReport = createTrialReviewReport({
@@ -3153,6 +3140,45 @@ export function createInMemoryNovelRepository(options: {
     async confirmTrial(input: TrialConfirmationInput): Promise<ConfirmedTrialRecord> {
       assertNoActiveAuthorityClaim(input.context.tenantId, input.novel.id);
       const isReturnUpstream = input.decision === 'return_upstream';
+      if (input.trialRun.status !== 'review_ready'
+        || input.trialRun.chapterPlanVersionId !== input.novel.currentChapterPlanVersionId
+        || getMetadataString(input.selectedCandidate.metadata, 'trialRunId') !== input.trialRun.id) {
+        throw new BusinessError(ErrorCode.VersionConflict, '试写结果已变化，请刷新后重试。');
+      }
+      const trialChapters = chapters.filter((chapter) => chapter.tenantId === input.context.tenantId
+        && chapter.novelId === input.novel.id && !chapter.deletedAt
+        && chapter.chapterNo <= input.trialRun.trialChapterCount);
+      const results = trialChapterResults.filter((result) => result.tenantId === input.context.tenantId
+        && result.trialRunId === input.trialRun.id);
+      if (trialChapters.length !== input.trialRun.trialChapterCount || results.length !== trialChapters.length) {
+        throw new BusinessError(ErrorCode.VersionConflict, '试写章节结果已变化，请刷新后重试。');
+      }
+      const promotion = trialChapters.map((chapter) => {
+        const result = results.find((item) => item.chapterId === chapter.id);
+        const content = chapterContentVersions.find((version) => version.id === result?.contentVersionId
+          && version.tenantId === input.context.tenantId && version.novelId === input.novel.id
+          && version.chapterId === chapter.id);
+        const feature = chapterFeatureCards.find((card) => card.id === result?.featureCardVersionId
+          && card.tenantId === input.context.tenantId && card.novelId === input.novel.id
+          && card.chapterId === chapter.id);
+        const report = reviewReports.find((item) => item.id === result?.reviewReportId
+          && item.tenantId === input.context.tenantId && item.novelId === input.novel.id
+          && item.objectType === 'chapter' && item.objectId === chapter.id
+          && item.objectVersionId === content?.id);
+        if (!result || !content || !feature || !report
+          || (!isReturnUpstream && result.status !== 'completed')
+          || getMetadataString(content.metadata, 'trialRunId') !== input.trialRun.id
+          || (content.status !== VersionStatus.Candidate
+            && (content.status !== VersionStatus.Current
+              || chapter.currentContentVersionId !== content.id))
+          || (feature.status !== VersionStatus.Candidate
+            && (feature.status !== VersionStatus.Current
+              || chapter.currentFeatureCardVersionId !== feature.id))
+          || (!isReturnUpstream && evaluateChapterLength(content.content, chapter.wordTarget).status !== 'pass')) {
+          throw new BusinessError(ErrorCode.VersionConflict, '试写候选版本已变化，请刷新后重试。');
+        }
+        return { chapter, result, content, feature };
+      });
       let snapshot: CreativeVersionRecord | null = null;
       const snapshotVersionId = isReturnUpstream ? null : nextId('cv');
 
@@ -3261,15 +3287,42 @@ export function createInMemoryNovelRepository(options: {
         });
       }
 
-      if (!isReturnUpstream) {
-        const results = trialChapterResults.filter((result) => result.tenantId === input.context.tenantId && result.trialRunId === input.trialRun.id);
-        for (const result of results) {
-          const chapter = chapters.find((item) => item.id === result.chapterId);
-          if (!chapter || result.status === 'hard_failed') continue;
-          chapter.mainStatus = 'completed';
-          chapter.statusNote = '试写已确认，作为批量正文前置正式版本。';
-          chapter.updatedAt = input.now;
+      for (const { chapter, content, feature, result } of promotion) {
+        if (isReturnUpstream) {
+          if (content.status === VersionStatus.Candidate) {
+            content.status = VersionStatus.Historical;
+            content.decisionRecordId = decisionRecord.id;
+            content.metadata = { ...toMutableMetadata(content.metadata), trialStatus: 'historical' };
+          }
+          if (feature.status === VersionStatus.Candidate) {
+            feature.status = VersionStatus.Historical;
+            feature.decisionRecordId = decisionRecord.id;
+          }
+          continue;
         }
+        for (const version of chapterContentVersions) {
+          if (version.tenantId === input.context.tenantId && version.novelId === input.novel.id
+            && version.chapterId === chapter.id && version.id !== content.id
+            && version.status === VersionStatus.Current) version.status = VersionStatus.Historical;
+        }
+        for (const card of chapterFeatureCards) {
+          if (card.tenantId === input.context.tenantId && card.novelId === input.novel.id
+            && card.chapterId === chapter.id && card.id !== feature.id
+            && card.status === VersionStatus.Current) card.status = VersionStatus.Historical;
+        }
+        content.status = VersionStatus.Current;
+        content.decisionRecordId = decisionRecord.id;
+        content.metadata = { ...toMutableMetadata(content.metadata), trialStatus: 'confirmed' };
+        feature.status = VersionStatus.Current;
+        feature.decisionRecordId = decisionRecord.id;
+        chapter.currentContentVersionId = content.id;
+        chapter.currentFeatureCardVersionId = feature.id;
+        chapter.currentReviewReportId = result.reviewReportId;
+        chapter.lastGenerationTaskId = input.trialRun.sourceTaskId;
+        chapter.wordCount = content.wordCount;
+        chapter.mainStatus = 'completed';
+        chapter.statusNote = '试写已确认，作为批量正文前置正式版本。';
+        chapter.updatedAt = input.now;
       }
 
       mutateNovel(input.novel.id, {
@@ -3324,12 +3377,15 @@ export function createInMemoryNovelRepository(options: {
       const currentContent = chapter.currentContentVersionId
         ? chapterContentVersions.find((version) => version.id === chapter.currentContentVersionId) ?? null
         : null;
-      const featureCard = chapterFeatureCards
-        .filter((card) => card.tenantId === tenantId && card.novelId === novelId && card.chapterId === chapterId)
-        .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())[0] ?? null;
-      const reviewReport = reviewReports
-        .filter((report) => report.tenantId === tenantId && report.novelId === novelId && report.objectType === 'chapter' && report.objectId === chapterId)
-        .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())[0] ?? null;
+      const featureCard = chapter.currentFeatureCardVersionId
+        ? chapterFeatureCards.find((card) => card.id === chapter.currentFeatureCardVersionId
+          && card.tenantId === tenantId && card.novelId === novelId && card.chapterId === chapterId) ?? null
+        : null;
+      const reviewReport = chapter.currentReviewReportId
+        ? reviewReports.find((report) => report.id === chapter.currentReviewReportId
+          && report.tenantId === tenantId && report.novelId === novelId
+          && report.objectType === 'chapter' && report.objectId === chapterId) ?? null
+        : null;
       const recentTask = generationTasks
         .filter((task) => task.tenantId === tenantId && task.novelId === novelId && (
           (task.objectType === 'chapter' && task.objectId === chapterId) ||
@@ -4888,7 +4944,7 @@ export function createInMemoryNovelRepository(options: {
       novelId: options.input.novel.id,
       chapterId: options.chapterDraft.chapter.id,
       versionNo: nextChapterContentVersionNo(options.input.context.tenantId, options.input.novel.id, options.chapterDraft.chapter.id),
-      status: VersionStatus.Current,
+      status: VersionStatus.Candidate,
       staleLevel: StaleLevel.None,
       sourceType: 'mock_ai',
       sourceTaskId: options.taskId,
@@ -4934,7 +4990,7 @@ export function createInMemoryNovelRepository(options: {
       novelId: options.input.novel.id,
       chapterId: options.chapterDraft.chapter.id,
       versionNo: nextFeatureCardVersionNo(options.input.context.tenantId, options.chapterDraft.chapter.id),
-      status: VersionStatus.Current,
+      status: VersionStatus.Candidate,
       staleLevel: StaleLevel.None,
       oneLineSummary: draft.oneLineSummary,
       coreTask: draft.coreTask,

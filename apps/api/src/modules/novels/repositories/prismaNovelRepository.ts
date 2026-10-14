@@ -2964,7 +2964,6 @@ export class PrismaNovelRepository implements NovelRepository {
       const selected = await tx.chapterContentVersion.update({
         where: { id: input.selectedCandidate.id },
         data: {
-          status: PrismaVersionStatus.CURRENT,
           metadata: toJsonObject(selectedMetadata)
         }
       });
@@ -3032,7 +3031,7 @@ export class PrismaNovelRepository implements NovelRepository {
                   novelId: input.novel.id,
                   chapterId: chapterDraft.chapter.id,
                   versionNo: await getNextChapterContentVersionNo(tx, input.context.tenantId, input.novel.id, chapterDraft.chapter.id),
-                  status: PrismaVersionStatus.CURRENT,
+                  status: PrismaVersionStatus.CANDIDATE,
                   staleLevel: PrismaStaleLevel.NONE,
                   sourceType: 'mock_ai',
                   sourceTaskId: task.id,
@@ -3073,7 +3072,7 @@ export class PrismaNovelRepository implements NovelRepository {
             novelId: input.novel.id,
             chapterId: chapterDraft.chapter.id,
             versionNo: await getNextFeatureCardVersionNo(tx, input.context.tenantId, chapterDraft.chapter.id),
-            status: PrismaVersionStatus.CURRENT,
+            status: PrismaVersionStatus.CANDIDATE,
             staleLevel: PrismaStaleLevel.NONE,
             oneLineSummary: chapterDraft.featureCard.oneLineSummary,
             coreTask: chapterDraft.featureCard.coreTask,
@@ -3118,19 +3117,6 @@ export class PrismaNovelRepository implements NovelRepository {
           }
         });
 
-        await tx.novelChapter.update({
-          where: { id: chapterDraft.chapter.id },
-          data: {
-            currentContentVersionId: contentVersion.id,
-            currentFeatureCardVersionId: featureCard.id,
-            currentReviewReportId: reviewReport.id,
-            lastGenerationTaskId: task.id,
-            wordCount: countWords(chapterDraft.content),
-            mainStatus: chapterDraft.hardFailed ? 'blocked' : 'trial_written',
-            statusNote: chapterDraft.hardFailed ? '试写硬门槛未通过，暂停继续生成。' : '试写正文已生成，等待总评确认。',
-            updatedAt: input.now
-          }
-        });
         featureCards.push(mapChapterFeatureCard(featureCard));
         reviewReports.push(mapReviewReport(reviewReport));
         chapterResults.push(mapTrialChapterResult(result));
@@ -3222,6 +3208,57 @@ export class PrismaNovelRepository implements NovelRepository {
     return this.prisma.$transaction(async (tx) => {
       await assertNoActiveAuthorityClaim(tx, input.context.tenantId, input.novel.id);
       const isReturnUpstream = input.decision === 'return_upstream';
+      if (input.trialRun.status !== 'review_ready'
+        || input.trialRun.chapterPlanVersionId !== input.novel.currentChapterPlanVersionId
+        || authorityRecord(input.selectedCandidate.metadata).trialRunId !== input.trialRun.id
+        || !input.trialRun.sourceTaskId) {
+        throw new BusinessError(ErrorCode.VersionConflict, '试写结果已变化，请刷新后重试。');
+      }
+      const trialChapters = await tx.novelChapter.findMany({ where: {
+        tenantId: input.context.tenantId, novelId: input.novel.id,
+        chapterNo: { lte: input.trialRun.trialChapterCount }, deletedAt: null
+      }, orderBy: { chapterNo: 'asc' } });
+      const trialResults = await tx.trialChapterResult.findMany({ where: {
+        tenantId: input.context.tenantId, trialRunId: input.trialRun.id
+      } });
+      if (trialChapters.length !== input.trialRun.trialChapterCount
+        || trialResults.length !== trialChapters.length) {
+        throw new BusinessError(ErrorCode.VersionConflict, '试写章节结果已变化，请刷新后重试。');
+      }
+      const promotion = [];
+      for (const chapter of trialChapters) {
+        const result = trialResults.find((item) => item.chapterId === chapter.id);
+        if (!result?.contentVersionId || !result.featureCardVersionId || !result.reviewReportId
+          || (!isReturnUpstream && result.status !== 'completed')) {
+          throw new BusinessError(ErrorCode.GateBlocked, '试写章节尚未全部完成，不能进入批量正文。');
+        }
+        const [content, feature, report] = await Promise.all([
+          tx.chapterContentVersion.findFirst({ where: {
+            tenantId: input.context.tenantId, novelId: input.novel.id,
+            chapterId: chapter.id, id: result.contentVersionId
+          } }),
+          tx.chapterFeatureCard.findFirst({ where: {
+            tenantId: input.context.tenantId, novelId: input.novel.id,
+            chapterId: chapter.id, id: result.featureCardVersionId
+          } }),
+          tx.reviewReport.findFirst({ where: {
+            tenantId: input.context.tenantId, novelId: input.novel.id,
+            objectType: 'chapter', objectId: chapter.id,
+            objectVersionId: result.contentVersionId, id: result.reviewReportId
+          } })
+        ]);
+        if (!content || !feature || !report
+          || authorityRecord(content.metadata).trialRunId !== input.trialRun.id
+          || (content.status !== PrismaVersionStatus.CANDIDATE
+            && (content.status !== PrismaVersionStatus.CURRENT
+              || chapter.currentContentVersionId !== content.id))
+          || (feature.status !== PrismaVersionStatus.CANDIDATE
+            && (feature.status !== PrismaVersionStatus.CURRENT
+              || chapter.currentFeatureCardVersionId !== feature.id))) {
+          throw new BusinessError(ErrorCode.VersionConflict, '试写候选版本已变化，请刷新后重试。');
+        }
+        promotion.push({ chapter, result, content, feature, report });
+      }
       let snapshot: any = null;
       if (!isReturnUpstream) {
         await tx.creativeVersion.updateMany({
@@ -3302,8 +3339,10 @@ export class PrismaNovelRepository implements NovelRepository {
           data: { decisionRecordId: decision.id }
         });
       }
-      const trialRun = await tx.trialRun.update({
-        where: { id: input.trialRun.id },
+      const trialTransition = await tx.trialRun.updateMany({
+        where: { id: input.trialRun.id, tenantId: input.context.tenantId,
+          novelId: input.novel.id, status: 'review_ready',
+          chapterPlanVersionId: input.novel.currentChapterPlanVersionId },
         data: {
           status: isReturnUpstream ? 'returned_upstream' : 'confirmed',
           confirmedAt: input.now,
@@ -3318,28 +3357,53 @@ export class PrismaNovelRepository implements NovelRepository {
           }
         }
       });
+      if (trialTransition.count !== 1) {
+        throw new BusinessError(ErrorCode.VersionConflict, '试写状态已变化，请刷新后重试。');
+      }
+      const trialRun = await tx.trialRun.findFirstOrThrow({ where: {
+        id: input.trialRun.id, tenantId: input.context.tenantId, novelId: input.novel.id
+      } });
       if (!isReturnUpstream) {
-        const trialResults = await tx.trialChapterResult.findMany({
-          where: { tenantId: input.context.tenantId, trialRunId: input.trialRun.id },
-          select: { chapterId: true, contentVersionId: true, status: true }
-        });
-        if (trialResults.length !== input.trialRun.trialChapterCount) {
-          throw new BusinessError(ErrorCode.VersionConflict, '试写章节结果已变化，请刷新后重试。');
-        }
-        for (const result of trialResults) {
-          if (result.status !== 'completed' || !result.contentVersionId) {
-            throw new BusinessError(ErrorCode.GateBlocked, '试写章节尚未全部完成，不能进入批量正文。');
+        for (const { chapter, result, content, feature } of promotion) {
+          await tx.chapterContentVersion.updateMany({ where: {
+            tenantId: input.context.tenantId, novelId: input.novel.id,
+            chapterId: chapter.id, id: { not: content.id }, status: PrismaVersionStatus.CURRENT
+          }, data: { status: PrismaVersionStatus.HISTORICAL } });
+          await tx.chapterFeatureCard.updateMany({ where: {
+            tenantId: input.context.tenantId, novelId: input.novel.id,
+            chapterId: chapter.id, id: { not: feature.id }, status: PrismaVersionStatus.CURRENT
+          }, data: { status: PrismaVersionStatus.HISTORICAL } });
+          const [contentTransition, featureTransition] = await Promise.all([
+            tx.chapterContentVersion.updateMany({ where: {
+              tenantId: input.context.tenantId, novelId: input.novel.id,
+              id: content.id, status: content.status
+            }, data: { status: PrismaVersionStatus.CURRENT,
+              decisionRecordId: decision.id,
+              metadata: toJsonObject({ ...authorityRecord(content.metadata), trialStatus: 'confirmed' }) } }),
+            tx.chapterFeatureCard.updateMany({ where: {
+              tenantId: input.context.tenantId, novelId: input.novel.id,
+              id: feature.id, status: feature.status
+            }, data: { status: PrismaVersionStatus.CURRENT, decisionRecordId: decision.id } })
+          ]);
+          if (contentTransition.count !== 1 || featureTransition.count !== 1) {
+            throw new BusinessError(ErrorCode.VersionConflict, '试写候选版本已变化，请刷新后重试。');
           }
           const promoted = await tx.novelChapter.updateMany({
             where: {
-              id: result.chapterId,
+              id: chapter.id,
               tenantId: input.context.tenantId,
               novelId: input.novel.id,
-              currentContentVersionId: result.contentVersionId,
-              mainStatus: 'trial_written',
+              currentContentVersionId: chapter.currentContentVersionId,
+              currentFeatureCardVersionId: chapter.currentFeatureCardVersionId,
+              currentReviewReportId: chapter.currentReviewReportId,
               deletedAt: null
             },
             data: {
+              currentContentVersionId: content.id,
+              currentFeatureCardVersionId: feature.id,
+              currentReviewReportId: result.reviewReportId,
+              lastGenerationTaskId: input.trialRun.sourceTaskId,
+              wordCount: content.wordCount,
               mainStatus: 'completed',
               statusNote: '试写已确认，作为批量正文前置正式版本。',
               updatedAt: input.now
@@ -3347,6 +3411,23 @@ export class PrismaNovelRepository implements NovelRepository {
           });
           if (promoted.count !== 1) {
             throw new BusinessError(ErrorCode.VersionConflict, '试写章节正文版本已变化，请刷新后重试。');
+          }
+        }
+      } else {
+        for (const { content, feature } of promotion) {
+          if (content.status === PrismaVersionStatus.CANDIDATE) {
+            await tx.chapterContentVersion.updateMany({ where: {
+              tenantId: input.context.tenantId, novelId: input.novel.id,
+              id: content.id, status: PrismaVersionStatus.CANDIDATE
+            }, data: { status: PrismaVersionStatus.HISTORICAL,
+              decisionRecordId: decision.id,
+              metadata: toJsonObject({ ...authorityRecord(content.metadata), trialStatus: 'historical' }) } });
+          }
+          if (feature.status === PrismaVersionStatus.CANDIDATE) {
+            await tx.chapterFeatureCard.updateMany({ where: {
+              tenantId: input.context.tenantId, novelId: input.novel.id,
+              id: feature.id, status: PrismaVersionStatus.CANDIDATE
+            }, data: { status: PrismaVersionStatus.HISTORICAL, decisionRecordId: decision.id } });
           }
         }
       }
@@ -3380,8 +3461,12 @@ export class PrismaNovelRepository implements NovelRepository {
           createdAt: input.now
         });
       }
-      const novel = await tx.novel.update({
-        where: { id: input.novel.id },
+      const novelTransition = await tx.novel.updateMany({
+        where: {
+          id: input.novel.id,
+          tenantId: input.context.tenantId,
+          currentChapterPlanVersionId: input.trialRun.chapterPlanVersionId
+        },
         data: {
           creationStage: isReturnUpstream ? PrismaNovelCreationStage.TRIAL : PrismaNovelCreationStage.BODY,
           stageStatus: isReturnUpstream ? PrismaStageStatus.BLOCKED : PrismaStageStatus.NOT_STARTED,
@@ -3389,6 +3474,12 @@ export class PrismaNovelRepository implements NovelRepository {
           updatedAt: input.now
         }
       });
+      if (novelTransition.count !== 1) {
+        throw new BusinessError(ErrorCode.VersionConflict, '章节目录已变化，请刷新后重试。');
+      }
+      const novel = await tx.novel.findFirstOrThrow({ where: {
+        id: input.novel.id, tenantId: input.context.tenantId
+      } });
       const operationLog = await tx.operationLog.create({
         data: {
           id: createId('oplog'),
@@ -3434,14 +3525,15 @@ export class PrismaNovelRepository implements NovelRepository {
         where: { tenantId, novelId, chapterId },
         orderBy: { versionNo: 'desc' }
       }),
-      this.prisma.chapterFeatureCard.findFirst({
-        where: { tenantId, novelId, chapterId },
-        orderBy: { createdAt: 'desc' }
-      }),
-      this.prisma.reviewReport.findFirst({
-        where: { tenantId, novelId, objectType: 'chapter', objectId: chapterId },
-        orderBy: { createdAt: 'desc' }
-      }),
+      chapter.currentFeatureCardVersionId
+        ? this.prisma.chapterFeatureCard.findFirst({
+            where: { tenantId, novelId, chapterId, id: chapter.currentFeatureCardVersionId }
+          }) : Promise.resolve(null),
+      chapter.currentReviewReportId
+        ? this.prisma.reviewReport.findFirst({
+            where: { tenantId, novelId, objectType: 'chapter', objectId: chapterId,
+              id: chapter.currentReviewReportId }
+          }) : Promise.resolve(null),
       this.prisma.generationTask.findFirst({
         where: { tenantId, novelId, OR: [
           { objectType: 'chapter', objectId: chapterId },
@@ -5302,37 +5394,22 @@ async function persistLeasedTrialFollowupAssets(
   const selectedTransition = await tx.chapterContentVersion.updateMany({ where: {
     tenantId: context.tenantId, novelId: novel.id, id: selectedCandidate.id,
     status: PrismaVersionStatus.CANDIDATE
-  }, data: { status: PrismaVersionStatus.CURRENT,
-    metadata: toJsonObject({ ...authorityRecord(selectedCandidate.metadata),
+  }, data: { metadata: toJsonObject({ ...authorityRecord(selectedCandidate.metadata),
       trialStatus: 'selected_for_trial', isSelected: true, followupStatus: 'completed' }) } });
   if (selectedTransition.count !== 1) throw new Error('Trial followup lost its selected candidate.');
   await tx.chapterContentVersion.updateMany({ where: {
     tenantId: context.tenantId, novelId: novel.id, chapterId: selectedCandidate.chapterId,
     id: { not: selectedCandidate.id }, status: PrismaVersionStatus.CANDIDATE
   }, data: { status: PrismaVersionStatus.HISTORICAL } });
-  await tx.chapterContentVersion.updateMany({ where: {
-    tenantId: context.tenantId, novelId: novel.id, chapterId: selectedCandidate.chapterId,
-    id: { not: selectedCandidate.id }, status: PrismaVersionStatus.CURRENT
-  }, data: { status: PrismaVersionStatus.HISTORICAL } });
   const sourceType = modelRoutingVersion?.startsWith('deepseek:') ? 'deepseek' : 'mock_ai';
   const contentVersionIds: string[] = [];
   for (const chapterDraft of chapters) {
     const chapter = chapterDraft.chapter;
-    if (chapter.chapterNo !== 1) {
-      await tx.chapterContentVersion.updateMany({ where: {
-        tenantId: context.tenantId, novelId: novel.id, chapterId: chapter.id,
-        status: PrismaVersionStatus.CURRENT
-      }, data: { status: PrismaVersionStatus.HISTORICAL } });
-    }
-    await tx.chapterFeatureCard.updateMany({ where: {
-      tenantId: context.tenantId, novelId: novel.id, chapterId: chapter.id,
-      status: PrismaVersionStatus.CURRENT
-    }, data: { status: PrismaVersionStatus.HISTORICAL } });
     const contentVersion = chapter.chapterNo === 1 ? { id: selectedCandidate.id }
       : await tx.chapterContentVersion.create({ data: {
         tenantId: context.tenantId, novelId: novel.id, chapterId: chapter.id,
         versionNo: await getNextChapterContentVersionNo(tx, context.tenantId, novel.id, chapter.id),
-        status: PrismaVersionStatus.CURRENT, staleLevel: PrismaStaleLevel.NONE,
+        status: PrismaVersionStatus.CANDIDATE, staleLevel: PrismaStaleLevel.NONE,
         sourceType, sourceTaskId: task.id,
         sourceVersionRefs: toJsonObject(sourceVersionRefs),
         rewriteReason: '连续试写生成章节正文', content: chapterDraft.content,
@@ -5354,7 +5431,7 @@ async function persistLeasedTrialFollowupAssets(
     const featureCard = await tx.chapterFeatureCard.create({ data: {
       tenantId: context.tenantId, novelId: novel.id, chapterId: chapter.id,
       versionNo: await getNextFeatureCardVersionNo(tx, context.tenantId, chapter.id),
-      status: PrismaVersionStatus.CURRENT, staleLevel: PrismaStaleLevel.NONE,
+      status: PrismaVersionStatus.CANDIDATE, staleLevel: PrismaStaleLevel.NONE,
       oneLineSummary: feature.oneLineSummary, coreTask: feature.coreTask,
       mainConflict: feature.mainConflict, appealPoint: feature.appealPoint,
       emotionKeywordsJson: feature.emotionKeywords,
@@ -5378,15 +5455,6 @@ async function persistLeasedTrialFollowupAssets(
       status: chapterDraft.hardFailed ? 'hard_failed' : 'completed',
       createdAt: now, metadata: { hardFailed: chapterDraft.hardFailed,
         hardFailureReasons: chapterDraft.hardFailureReasons }
-    } });
-    await tx.novelChapter.update({ where: { id: chapter.id }, data: {
-      currentContentVersionId: contentVersion.id,
-      currentFeatureCardVersionId: featureCard.id,
-      currentReviewReportId: reviewReport.id, lastGenerationTaskId: task.id,
-      wordCount: countWords(chapterDraft.content),
-      mainStatus: chapterDraft.hardFailed ? 'blocked' : 'trial_written',
-      statusNote: chapterDraft.hardFailed ? '试写硬门槛未通过，暂停继续生成。'
-        : '试写正文已生成，等待总评确认。', updatedAt: now
     } });
   }
   const trialReview = await tx.reviewReport.create({ data: createTrialReviewReportData(input, task.id) });
