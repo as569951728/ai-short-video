@@ -579,7 +579,7 @@ function normalizeClaimEffectiveRequest(action: NovelProviderAction, objectId: s
     case 'chapter_rewrite': return compact({ chapterId: objectId, currentContentVersionId: request.currentContentVersionId ?? refs.currentContentVersionId, instruction: request.instruction || request.reason || '基于审稿建议优化本章', reason: request.reason });
     case 'chapter_impact_assess': return compact({ chapterId: objectId, currentContentVersionId: request.currentContentVersionId ?? refs.currentContentVersionId, instruction: request.instruction ?? request.reason, reason: request.reason });
     case 'chapter_adopt_impact_assess': return compact({ chapterId: objectId, candidateVersionId: refs.candidateVersionId, currentContentVersionId: request.currentContentVersionId ?? refs.currentContentVersionId, reason: request.reason || '采用候选前影响评估', pageVersionSnapshot: request.pageVersionSnapshot });
-    case 'novel_full_review': return { policyProfileVersionId: request.reviewPolicyVersionId ?? policyProfileVersionId };
+    case 'novel_full_review': return compact({ policyProfileVersionId: request.reviewPolicyVersionId ?? policyProfileVersionId, expectedNovelVersion: request.expectedNovelVersion });
   }
 }
 

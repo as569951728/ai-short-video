@@ -132,7 +132,7 @@ import {
   verifyHashedSafeResultReceipt
 } from '../domain/executionContract.js';
 import { BusinessError } from '../../../shared/errors.js';
-import { validateFullReviewDraftForPersistence, type BodyChapterProviderDraft } from '../services/actionExecutionPlan.js';
+import { fullReviewRequestFingerprintFromExecution, validateFullReviewDraftForPersistence, type BodyChapterProviderDraft } from '../services/actionExecutionPlan.js';
 
 export interface InMemoryNovelRepository extends NovelRepository {
   getOperationLogs(): OperationLogRecord[];
@@ -1673,7 +1673,7 @@ export function createInMemoryNovelRepository(options: {
         try {
           const generated = persistFullReview({
             novel, task, chapters: scopedChapters, draft, idempotencyKey,
-            requestFingerprint: envelope.normalizedRequest, sourceVersionRefs: envelope.sourceVersionRefs,
+            requestFingerprint: fullReviewRequestFingerprintFromExecution(envelope), sourceVersionRefs: envelope.sourceVersionRefs,
             context, now: input.authoritativeNow
           });
           options.onLeasedFinalizeStage?.('asset');

@@ -20,7 +20,7 @@ import { Prisma } from '../../../generated/prisma/client.js';
 import { evaluateChapterLength, isBoundedOverlengthRevision } from '../domain/chapterLengthPolicy.js';
 import { bindGeneratedBodyChapter } from '../domain/bodyChapterBinding.js';
 import { bindTrialFollowupChapters } from '../domain/trialFollowupBinding.js';
-import type { BodyChapterProviderDraft, TrialFollowupChapterProviderDraft } from '../services/actionExecutionPlan.js';
+import { fullReviewRequestFingerprintFromExecution, validateFullReviewDraftForPersistence, type BodyChapterProviderDraft, type TrialFollowupChapterProviderDraft } from '../services/actionExecutionPlan.js';
 import type { ImpactAssessmentDraft } from '../domain/novelDomain.js';
 import {
   DEFAULT_POLICY_PROFILE_VERSION_ID,
@@ -85,6 +85,7 @@ import {
   type ImpactCaseResolveInput,
   type ForcedFullReviewRecord,
   type FullReviewCreationInput,
+  type FullReviewDraft,
   type FullReviewForcePassInput,
   type FullReviewGateRecord,
   type FullReviewIssueResolutionInput,
@@ -1008,6 +1009,7 @@ export class PrismaNovelRepository implements NovelRepository {
       'novel_setting_generate', 'novel_outline_generate',
       'stage_outline_generate', 'chapter_plan_generate', 'trial_writing_generate',
       'trial_followup_generate', 'chapter_overlength_revise', 'chapter_body_rewrite',
+      'novel_full_review',
       'chapter_impact_assess'].includes(observed.taskType)) {
       const task = mapGenerationTask(observed);
       if (!task.providerAttemptPhase) return { outcome: 'fenced' as const, task: null };
@@ -1082,6 +1084,105 @@ export class PrismaNovelRepository implements NovelRepository {
       const authority = await this.loadGenerationAuthority(authorityInput, tx);
       if (!matchGenerationAuthority(authorityInput, envelope.sourceVersionRefs.authoritySnapshotHash, authority).ok) {
         return fail('source_stale');
+      }
+      if (current.taskType === 'novel_full_review') {
+        const request = authorityRecord(envelope.normalizedRequest);
+        const policyVersion = request.policyProfileVersionId;
+        const novel = await this.findById(input.tenantId, current.novelId!, tx);
+        const chapters = await tx.novelChapter.findMany({
+          where: { tenantId: input.tenantId, novelId: current.novelId!, deletedAt: null },
+          orderBy: [{ chapterNo: 'asc' }, { id: 'asc' }]
+        });
+        const priorReport = await tx.reviewReport.findFirst({
+          where: { tenantId: input.tenantId, novelId: current.novelId!, sourceTaskId: current.id, reviewLevel: 'full_novel' }
+        });
+        if (!novel || novel.creationStage !== NovelCreationStage.Body || novel.stageStatus !== StageStatus.Completed
+          || !current.idempotencyToken || typeof policyVersion !== 'string' || !policyVersion.trim()
+          || !chapters.length || priorReport
+          || chapters.some((chapter, index) => chapter.chapterNo !== index + 1
+            || chapter.mainStatus !== 'completed' || !chapter.currentContentVersionId
+            || !chapter.currentFeatureCardVersionId || !chapter.currentReviewReportId)) {
+          return fail('source_stale');
+        }
+        let draft: FullReviewDraft;
+        try {
+          draft = validateFullReviewDraftForPersistence(input.validatedResult as FullReviewDraft, {
+            expectedReviewPolicyVersionId: policyVersion,
+            chapterManifest: chapters.map((chapter) => ({ chapterId: chapter.id, chapterNo: chapter.chapterNo }))
+          });
+          assertNoSensitiveExecutionPayload(draft, 'fullReviewResult');
+        } catch {
+          return fail('worker_payload_unsupported');
+        }
+        const reviewId = randomUUID().replaceAll('-', '');
+        const issues = draft.issues.map((issue) => ({ ...issue, sourceReviewReportId: reviewId }));
+        const blockingIssueCount = issues.filter((issue) => issue.blocking && issue.status === 'open').length;
+        const warningIssueCount = issues.filter((issue) => issue.severity === 'warning' && issue.status === 'open').length;
+        const allowCompletion = draft.gateResult !== 'blocked';
+        await tx.reviewReport.create({ data: {
+          id: reviewId, tenantId: input.tenantId, novelId: current.novelId!,
+          objectType: 'novel', objectId: current.novelId!, objectVersionId: null,
+          reviewLevel: 'full_novel', totalScore: draft.totalScore,
+          subScoresJson: toJsonObject(draft.dimensionScores), rating: draft.rating,
+          summary: draft.summary, strengthsJson: toJsonObject(draft.strengths),
+          problemsJson: toJsonObject(draft.problems), suggestionsJson: toJsonObject(draft.suggestions),
+          issueCardsJson: toJsonObject(issues), actionOptionsJson: toJsonObject(draft.suggestions),
+          recommendedAction: allowCompletion ? '确认小说完成' : '优化全书问题',
+          allowNextStep: allowCompletion, blockingIssueCount, resolvedStatus: 'open',
+          promptTemplateVersionId: null, policyProfileVersionId: draft.reviewPolicyVersionId,
+          sourceTaskId: current.id, createdAt: input.authoritativeNow,
+          metadata: toJsonObject({
+            version: 1, reviewPolicyVersionId: draft.reviewPolicyVersionId,
+            videoSuggestion: draft.videoSuggestion, firstVideoSuggestion: draft.firstVideoSuggestion,
+            platformRisks: draft.platformRisks, originalityRisks: draft.originalityRisks,
+            aiFlavorRisks: draft.aiFlavorRisks, lowScoreContinueRisks: draft.lowScoreContinueRisks,
+            sourceVersionRefs: envelope.sourceVersionRefs,
+            requestFingerprint: fullReviewRequestFingerprintFromExecution(envelope)
+          })
+        } });
+        const gate = await tx.fullReviewGate.create({ data: {
+          tenantId: input.tenantId, novelId: current.novelId!, reviewReportId: reviewId,
+          gateResult: draft.gateResult, allowCompletion, allowVideoReady: allowCompletion,
+          blockingIssueCount, warningIssueCount, isStale: false, staleReason: null,
+          policyProfileVersionId: draft.reviewPolicyVersionId, createdAt: input.authoritativeNow,
+          metadata: toJsonObject({
+            score: draft.totalScore, idempotencyKey: current.idempotencyToken,
+            forcePassAllowed: draft.gateResult === 'blocked' && draft.totalScore >= 60 && draft.totalScore < 70,
+            forcePassReason: null, sourceVersionRefs: envelope.sourceVersionRefs,
+            updatedAt: input.authoritativeNow.toISOString()
+          })
+        } });
+        await tx.novel.update({ where: { id: novel.id, tenantId: input.tenantId }, data: {
+          creationStage: allowCompletion ? PrismaNovelCreationStage.COMPLETION_CONFIRM : PrismaNovelCreationStage.FULL_REVIEW,
+          stageStatus: allowCompletion ? PrismaStageStatus.WAITING_USER : PrismaStageStatus.BLOCKED,
+          updatedBy: current.createdBy, updatedAt: input.authoritativeNow
+        } });
+        const receipt = createSafeResultReceipt(mapGenerationTask(current), {
+          status: 'completed', outcome: 'review_created', resultObjectType: 'full_review',
+          resultObjectId: reviewId, resultVersionIds: [], resultCount: 1
+        });
+        const statusNote = '全书审稿完成，已生成完成门禁。';
+        const transition = await tx.generationTask.updateMany({ where: fence, data: {
+          status: PrismaTaskStatus.COMPLETED, statusNote, progress: 100,
+          currentStep: allowCompletion ? '全书审稿已完成，可确认小说完成。' : '全书审稿已完成，请先处理阻塞问题。',
+          outputSummary: draft.summary, resultObjectType: 'full_review', resultObjectId: reviewId,
+          resultVersionId: null, resultVersionIdsJson: [], resultReceiptHash: receipt.hash,
+          providerAttemptPhase: PrismaProviderAttemptPhase.FINALIZING,
+          activeClaimKey: null, leaseOwnerId: null, leaseToken: null, leaseExpiresAt: null,
+          finishedAt: input.authoritativeNow, updatedAt: input.authoritativeNow
+        } });
+        if (transition.count !== 1) throw new Error('Full review lost its fenced task transition.');
+        const finalized = await tx.generationTask.findFirstOrThrow({ where: { tenantId: input.tenantId, id: current.id } });
+        await createTaskEvent(tx, { task: finalized, eventType: 'task_finalized',
+          message: statusNote, progress: 100, requestId, createdAt: input.authoritativeNow });
+        await tx.operationLog.create({ data: {
+          tenantId: input.tenantId, userId: current.createdBy, novelId: current.novelId,
+          action: 'generation_task_finalized', objectType: 'generation_task', objectId: current.id,
+          afterSnapshot: { resultObjectId: reviewId, gateId: gate.id, receiptHash: receipt.hash },
+          reason: '全书审稿生成完成', sourceTaskId: current.id,
+          requestId, createdAt: input.authoritativeNow
+        } });
+        return { outcome: 'applied' as const, task: mapGenerationTask(finalized) };
       }
       if (current.taskType === 'chapter_impact_assess' && envelope.action === 'chapter_adopt_impact_assess') {
         const refs = authorityRecord(envelope.sourceVersionRefs);
@@ -4090,20 +4191,35 @@ export class PrismaNovelRepository implements NovelRepository {
     return memory ? mapLongTermMemory(memory) : null;
   }
 
-  async findLatestFullReview(_tenantId: string, _novelId: string): Promise<{ reviewReport: ReviewReportRecord; gate: FullReviewGateRecord } | null> {
-    return null;
+  async findLatestFullReview(tenantId: string, novelId: string): Promise<{ reviewReport: ReviewReportRecord; gate: FullReviewGateRecord } | null> {
+    const report = await this.prisma.reviewReport.findFirst({
+      where: { tenantId, novelId, reviewLevel: 'full_novel' }, orderBy: { createdAt: 'desc' }
+    });
+    if (!report) return null;
+    const gate = await this.prisma.fullReviewGate.findFirst({ where: { tenantId, novelId, reviewReportId: report.id } });
+    return gate ? { reviewReport: mapReviewReport(report), gate: mapFullReviewGate(gate) } : null;
   }
 
-  async findFullReviewGateById(_tenantId: string, _novelId: string, _gateId: string): Promise<FullReviewGateRecord | null> {
-    return null;
+  async findFullReviewGateById(tenantId: string, novelId: string, gateId: string): Promise<FullReviewGateRecord | null> {
+    const gate = await this.prisma.fullReviewGate.findFirst({ where: { tenantId, novelId, id: gateId } });
+    return gate ? mapFullReviewGate(gate) : null;
   }
 
   async findFullReviewByIdempotencyKey(
-    _tenantId: string,
-    _novelId: string,
-    _idempotencyKey: string
+    tenantId: string,
+    novelId: string,
+    idempotencyKey: string
   ): Promise<{ task: GenerationTaskRecord; reviewReport: ReviewReportRecord; gate: FullReviewGateRecord } | null> {
-    return null;
+    const task = await this.prisma.generationTask.findFirst({
+      where: { tenantId, novelId, taskType: 'novel_full_review', idempotencyToken: idempotencyKey }
+    });
+    if (!task?.resultObjectId) return null;
+    const report = await this.prisma.reviewReport.findFirst({
+      where: { tenantId, novelId, id: task.resultObjectId, reviewLevel: 'full_novel', sourceTaskId: task.id }
+    });
+    if (!report) return null;
+    const gate = await this.prisma.fullReviewGate.findFirst({ where: { tenantId, novelId, reviewReportId: report.id } });
+    return gate ? { task: mapGenerationTask(task), reviewReport: mapReviewReport(report), gate: mapFullReviewGate(gate) } : null;
   }
 
   async findCompletionDecisionById(_tenantId: string, _novelId: string, _decisionId: string): Promise<CompletionDecisionRecord | null> {
@@ -5551,6 +5667,39 @@ function mapReviewReport(report: {
     sourceTaskId: report.sourceTaskId,
     createdAt: report.createdAt,
     metadata: report.metadata
+  };
+}
+
+function mapFullReviewGate(gate: {
+  id: string;
+  tenantId: string;
+  novelId: string;
+  reviewReportId: string;
+  gateResult: string;
+  allowCompletion: boolean;
+  allowVideoReady: boolean;
+  blockingIssueCount: number;
+  warningIssueCount: number;
+  isStale: boolean;
+  staleReason: string | null;
+  policyProfileVersionId: string | null;
+  createdAt: Date;
+  metadata: unknown;
+}): FullReviewGateRecord {
+  const metadata = toRecord(gate.metadata);
+  const updatedAt = typeof metadata.updatedAt === 'string' ? new Date(metadata.updatedAt) : gate.createdAt;
+  return {
+    id: gate.id, tenantId: gate.tenantId, novelId: gate.novelId,
+    reviewReportId: gate.reviewReportId, gateResult: gate.gateResult as FullReviewGateRecord['gateResult'],
+    allowCompletion: gate.allowCompletion, allowVideoReady: gate.allowVideoReady,
+    blockingIssueCount: gate.blockingIssueCount, warningIssueCount: gate.warningIssueCount,
+    forcePassAllowed: metadata.forcePassAllowed === true,
+    forcePassReason: typeof metadata.forcePassReason === 'string' ? metadata.forcePassReason : null,
+    isStale: gate.isStale, staleReason: gate.staleReason,
+    sourceVersionRefs: metadata.sourceVersionRefs ?? null,
+    policyProfileVersionId: gate.policyProfileVersionId, createdAt: gate.createdAt,
+    updatedAt: Number.isNaN(updatedAt.getTime()) ? gate.createdAt : updatedAt,
+    metadata: gate.metadata
   };
 }
 

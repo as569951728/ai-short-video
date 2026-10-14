@@ -4,6 +4,7 @@ import {
   type ChapterReviewIssueDTO,
   type ChapterSummaryCompareDTO,
   type DirectionCandidateContentDTO,
+  type ExecutionEnvelopeV1_1,
   type NovelProviderAction,
   type StructureAssetContentDTO,
   type StructureAssetType
@@ -33,6 +34,24 @@ import type { TrialChapterCandidateDraftLike, TrialProvider } from '../providers
 import { hashCanonicalJson } from '../domain/executionContract.js';
 
 export interface NovelProviderInputV1 { id: string; title: string; genres: string[]; chapterLimit: number; chapterWordMin: number; chapterWordMax: number; policyProfileVersionId: string | null; }
+
+export function fullReviewRequestFingerprintFromExecution(envelope: ExecutionEnvelopeV1_1) {
+  if (envelope.action !== 'novel_full_review') throw new Error('full review execution envelope is required');
+  const refs = envelope.sourceVersionRefs;
+  return {
+    taskType: 'novel_full_review',
+    reviewPolicyVersionId: envelope.normalizedRequest.policyProfileVersionId,
+    expectedNovelVersion: envelope.normalizedRequest.expectedNovelVersion ?? null,
+    sourceVersionRefs: {
+      currentDirectionVersionId: refs.currentDirectionVersionId,
+      currentSettingVersionId: refs.currentSettingVersionId,
+      currentOutlineVersionId: refs.currentOutlineVersionId,
+      currentStageOutlineVersionId: refs.currentStageOutlineVersionId,
+      currentChapterPlanVersionId: refs.currentChapterPlanVersionId,
+      chapterContentVersionIds: refs.chapterContentVersionIds
+    }
+  };
+}
 
 export interface ChapterProviderInputV1 {
   id: string;
