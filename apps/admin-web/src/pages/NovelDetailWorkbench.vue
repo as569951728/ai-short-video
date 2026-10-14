@@ -989,7 +989,7 @@
 
             <template v-else-if="activeStep.key === 'fullReview'">
               <div class="task-notice-actions mb-16">
-                <el-button v-if="!videoReadyEntryAction" type="primary" :disabled="!canStartFullReview || isAuthoritativeFullReviewInFlight" :loading="startingFullReview || isAuthoritativeFullReviewInFlight" @click="handleStartFullReview">{{ fullReviewStartActionLabel }}</el-button>
+                <el-button v-if="!videoReadyEntryAction" type="primary" :disabled="!canStartFullReview || isFullReviewInFlight || hasLocalPendingWait" :loading="startingFullReview || isFullReviewInFlight" @click="handleStartFullReview">{{ fullReviewStartActionLabel }}</el-button>
                 <el-button v-if="!videoReadyEntryAction" :disabled="!canConfirmCompletion || Boolean(failedFullReviewTask)" :loading="confirmingCompletion" @click="handleConfirmCompletion">确认小说完成</el-button>
               </div>
 
@@ -1799,6 +1799,10 @@ const canConfirmTrialReview = computed(() => Boolean(detail.value?.latestTrialRu
 const latestFullReview = computed(() => detail.value?.latestFullReview ?? null)
 const fullReviewTask = computed(() => resolveTaskSummaryForAction(pendingSummary.value, detail.value, 'full_review'))
 const authoritativeFullReviewTask = computed(() => resolveTaskSummaryForAction(null, detail.value, 'full_review'))
+const isFullReviewInFlight = computed(() =>
+  fullReviewTask.value?.status === TaskStatus.Queued ||
+  fullReviewTask.value?.status === TaskStatus.Processing
+)
 const isAuthoritativeFullReviewInFlight = computed(() =>
   authoritativeFullReviewTask.value?.status === TaskStatus.Queued ||
   authoritativeFullReviewTask.value?.status === TaskStatus.Processing
@@ -3198,7 +3202,7 @@ async function handleGenerateBodyBatch() {
 
 async function handleStartFullReview() {
   if (!detail.value) return
-  if (isAuthoritativeFullReviewInFlight.value) {
+  if (isFullReviewInFlight.value) {
     ElMessage.info('全书审稿任务正在执行中，请查看最近任务进度。')
     return
   }

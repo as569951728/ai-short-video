@@ -78,6 +78,22 @@ describe('TaskProgressPanel DOM integration', () => {
     expect(wrapper.text()).not.toContain('100%')
   })
 
+  it('shows a user-facing stage while the worker has leased a long-running task', () => {
+    wrapper = mount(TaskProgressPanel, {
+      attachTo: document.body,
+      props: { summary: {
+        id: 'task-review-processing-001', taskType: 'novel_full_review',
+        status: TaskStatus.Processing, statusText: '生成中', progress: 0,
+        currentStep: 'worker_leased', resultVersionIds: [],
+      } },
+      global: { plugins: [ElementPlus] },
+    })
+
+    expect(wrapper.text()).toContain('后台已接手，正在准备模型调用')
+    expect(wrapper.text()).not.toContain('worker_leased')
+    expect(wrapper.text()).not.toContain('100%')
+  })
+
   it('shows an unknown model-call outcome and does not offer automatic retry', () => {
     const reason = '模型调用结果无法确认，可能已产生费用；系统不会自动重试。请核对任务与模型账单后，再决定是否重新生成。'
     const detail: TaskDetailDTO = {

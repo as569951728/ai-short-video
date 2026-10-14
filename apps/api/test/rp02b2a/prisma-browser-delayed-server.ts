@@ -7,7 +7,9 @@ import { MockFullReviewProvider } from '../../src/modules/novels/providers/mockF
 import { MockStructureProvider } from '../../src/modules/novels/providers/mockStructureProvider.js';
 import { MockTrialProvider } from '../../src/modules/novels/providers/mockTrialProvider.js';
 import { PrismaNovelRepository } from '../../src/modules/novels/repositories/prismaNovelRepository.js';
+import { createFullReviewAcceptanceSeed } from '../../src/modules/novels/routes/novelRoutes.js';
 import { createLeasedActionExecutor } from '../../src/modules/novels/services/leasedActionExecutor.js';
+import { NovelService } from '../../src/modules/novels/services/novelService.js';
 import { NovelTaskWorkerRuntime, createSystemNovelTaskWorkerScheduler } from '../../src/modules/novels/services/novelTaskWorkerRuntime.js';
 import { createNovelRecoveryLoop } from '../../src/modules/novels/services/recoveryScanner.js';
 
@@ -20,7 +22,7 @@ const target = new URL(url);
 if (target.protocol !== 'mysql:' || !['127.0.0.1', 'localhost'].includes(target.hostname)
   || !/^\/ai_shortvideo_e1_[a-z0-9_]+$/.test(target.pathname)
   || !target.port || target.port === '3306' || target.search || target.hash
-  || !target.username || !target.password) {
+  || !/^e1_[a-z0-9_]+$/.test(target.username) || !target.password) {
   throw new Error('E1 browser MySQL smoke requires a dedicated loopback schema and non-default port.');
 }
 const delayMs = Number(process.env.E1_BROWSER_MODEL_DELAY_MS);
@@ -28,14 +30,21 @@ const port = Number(process.env.PORT);
 const browserAction = process.env.E1_BROWSER_ACTION ?? 'direction';
 if (!Number.isSafeInteger(delayMs) || delayMs < 120_000 || delayMs > 300_000
   || !Number.isSafeInteger(port) || port < 1024 || port > 65535
-  || !['direction', 'trial'].includes(browserAction)) {
+  || !['direction', 'trial', 'fullReview'].includes(browserAction)) {
   throw new Error('Set a 2-5 minute delay and an explicit unprivileged port.');
 }
 
 class IsolatedPrismaRepository extends PrismaNovelRepository {
+  override async assertProviderActionSupported(taskType: string) {
+    if (browserAction !== 'fullReview' || taskType !== 'novel_full_review') {
+      await super.assertProviderActionSupported(taskType);
+    }
+  }
+
   override async getLeasedExecutionCapability(taskType: string) {
     const allowed = browserAction === 'direction' ? ['novel_direction_generate']
-      : ['trial_writing_generate', 'trial_followup_generate'];
+      : browserAction === 'trial' ? ['trial_writing_generate', 'trial_followup_generate']
+        : ['novel_full_review'];
     return allowed.includes(taskType) ? 'enabled' as const : super.getLeasedExecutionCapability(taskType);
   }
 
@@ -64,10 +73,19 @@ function errorCode(error: unknown): string {
 }
 
 const repository = new IsolatedPrismaRepository();
-let asyncEnabled = browserAction === 'direction';
+let asyncEnabled = browserAction !== 'trial';
+const fullReviewProvider = new MockFullReviewProvider();
+if (browserAction === 'fullReview') {
+  const generateFullReview = fullReviewProvider.generateFullReview.bind(fullReviewProvider);
+  fullReviewProvider.generateFullReview = async (input) => {
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    return generateFullReview(input);
+  };
+}
 const app = await buildApp({
   logger: false,
   novelRepository: repository,
+  fullReviewProvider,
   requestContextResolver: async () => ({ tenantId: 'e1_browser_mysql_tenant', userId: 'e1_browser_mysql_user' }),
   asyncTransportPolicy: () => ({
     novelAsyncDispatchEnabled: asyncEnabled,
@@ -103,6 +121,16 @@ if (browserAction === 'trial') {
   asyncEnabled = true;
   process.stdout.write(`E1_TRIAL_BROWSER_NOVEL_ID=${novelId}\n`);
 }
+if (browserAction === 'fullReview') {
+  await repository.getAuthoritativeTaskTime();
+  const actor = { tenantId: 'e1_browser_mysql_tenant', userId: 'e1_browser_mysql_user',
+    requestId: `e1-browser-full-review-${randomUUID()}` };
+  const seed = await createFullReviewAcceptanceSeed(
+    new NovelService({ repository, now: () => new Date() }),
+    { title: 'E1 都市重生全书审稿长等待验收' }, actor
+  );
+  process.stdout.write(`E1_FULL_REVIEW_BROWSER_NOVEL_ID=${seed.novelId}\n`);
+}
 const directionProvider = new MockDirectionProvider();
 const generate = directionProvider.generateCandidates.bind(directionProvider);
 if (browserAction === 'direction') {
@@ -132,7 +160,7 @@ const worker = new NovelTaskWorkerRuntime({
   ...createLeasedActionExecutor({ repository, providers: {
     directionProvider, structureProvider: new MockStructureProvider(),
     trialProvider, bodyProvider: new MockBodyProvider(),
-    fullReviewProvider: new MockFullReviewProvider()
+    fullReviewProvider
   } }),
   onRuntimeError: (stage) => app.log.warn({ stage }, 'E1 browser MySQL worker operation failed.')
 });

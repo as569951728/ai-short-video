@@ -29,7 +29,7 @@
       </div>
       <p v-if="isQueued" class="task-progress-hint">任务已受理，尚未开始调用模型。</p>
       <p v-else-if="isProcessing" class="task-progress-hint">阶段进度：正在调用模型或保存结果，当前不展示精确百分比。</p>
-      <p class="task-progress-step">{{ displayTask?.currentStep || '等待任务状态更新' }}</p>
+      <p class="task-progress-step">{{ visibleCurrentStep }}</p>
       <div v-if="displayTask" class="task-progress-meta">
         <span v-if="taskStartedAt">开始 {{ formatDateTime(taskStartedAt) }}</span>
         <span v-if="elapsedText">已耗时 {{ elapsedText }}</span>
@@ -121,6 +121,13 @@ const elapsedText = computed(() => {
 const isQueued = computed(() => displayTask.value?.status === TaskStatus.Queued)
 const isProcessing = computed(() => displayTask.value?.status === TaskStatus.Processing)
 const isRunning = computed(() => isQueued.value || isProcessing.value)
+const visibleCurrentStep = computed(() => {
+  const step = displayTask.value?.currentStep
+  if (step === 'worker_leased') return '后台已接手，正在准备模型调用'
+  if (step === 'finalized') return '结果已保存'
+  if (step === 'failed') return '任务失败，请查看失败原因'
+  return step || '等待任务状态更新'
+})
 const progressPercentage = computed(() => {
   if (!displayTask.value) return 0
   if (isProcessing.value) return 100
