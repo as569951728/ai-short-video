@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { resolveIsolatedNovelAsyncEnabled } from '../../src/config/isolatedNovelAsyncPolicy.js';
 import { buildApp } from '../../src/app.js';
 import { disconnectPrismaClient } from '../../src/infrastructure/database/prisma.js';
 import { MockBodyProvider } from '../../src/modules/novels/providers/mockBodyProvider.js';
@@ -18,13 +19,8 @@ if (!url || process.env.DATABASE_URL !== url || process.env.NODE_ENV !== 'develo
   || process.env.AI_PROVIDER_MODE !== 'mock' || process.env.E1_BROWSER_SMOKE !== 'true') {
   throw new Error('E1 browser MySQL smoke requires explicit development/mock test configuration.');
 }
-const target = new URL(url);
-if (target.protocol !== 'mysql:' || !['127.0.0.1', 'localhost'].includes(target.hostname)
-  || !/^\/ai_shortvideo_e1_[a-z0-9_]+$/.test(target.pathname)
-  || !target.port || target.port === '3306' || target.search || target.hash
-  || !/^e1_[a-z0-9_]+$/.test(target.username) || !target.password) {
-  throw new Error('E1 browser MySQL smoke requires a dedicated loopback schema and non-default port.');
-}
+resolveIsolatedNovelAsyncEnabled({ flag: 'true', runtimeEnvironment: process.env.NODE_ENV,
+  providerMode: process.env.AI_PROVIDER_MODE, databaseUrl: process.env.DATABASE_URL, smokeUrl: url });
 const delayMs = Number(process.env.E1_BROWSER_MODEL_DELAY_MS);
 const port = Number(process.env.PORT);
 const browserAction = process.env.E1_BROWSER_ACTION ?? 'direction';
@@ -35,11 +31,10 @@ if (!Number.isSafeInteger(delayMs) || delayMs < 120_000 || delayMs > 300_000
 }
 
 class IsolatedPrismaRepository extends PrismaNovelRepository {
-  override async getLeasedExecutionCapability(taskType: string) {
-    const allowed = browserAction === 'direction' ? ['novel_direction_generate']
+  constructor() {
+    super({ enabledLeasedTaskTypes: new Set(browserAction === 'direction' ? ['novel_direction_generate']
       : browserAction === 'trial' ? ['trial_writing_generate', 'trial_followup_generate']
-        : ['novel_full_review'];
-    return allowed.includes(taskType) ? 'enabled' as const : super.getLeasedExecutionCapability(taskType);
+        : ['novel_full_review']) });
   }
 
   override async getAuthoritativeTaskTime() {
@@ -68,6 +63,9 @@ function errorCode(error: unknown): string {
 
 const repository = new IsolatedPrismaRepository();
 let asyncEnabled = browserAction !== 'trial';
+const enabledActions = browserAction === 'direction' ? ['direction_generate'] as const
+  : browserAction === 'trial' ? ['trial_chapter_one_generate', 'trial_followup_generate'] as const
+    : ['novel_full_review'] as const;
 const fullReviewProvider = new MockFullReviewProvider();
 if (browserAction === 'fullReview') {
   const generateFullReview = fullReviewProvider.generateFullReview.bind(fullReviewProvider);
@@ -83,6 +81,7 @@ const app = await buildApp({
   requestContextResolver: async () => ({ tenantId: 'e1_browser_mysql_tenant', userId: 'e1_browser_mysql_user' }),
   asyncTransportPolicy: () => ({
     novelAsyncDispatchEnabled: asyncEnabled,
+    enabledActions,
     scopeSecret: process.env.NOVEL_ASYNC_SCOPE_SECRET,
     apiAudience: process.env.NOVEL_ASYNC_API_AUDIENCE
   })
