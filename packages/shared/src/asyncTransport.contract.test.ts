@@ -1,5 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { isNovelAsyncTransportActionEnabled } from './index.js';
 import type {
   NovelAsyncTransportCapabilityV1,
   NovelProviderAction,
@@ -29,7 +30,7 @@ type ContractChecks = [
     'POLICY_DISABLED' | 'UNSUPPORTED_ENVIRONMENT'>>,
   Expect<Equal<keyof Disabled, 'contractVersion' | 'enabled' | 'reasonCode'>>,
   Expect<Equal<keyof Enabled,
-    'contractVersion' | 'enabled' | 'capabilityRevision' | 'submissionScopeId' | 'expiresAt'>>,
+    'contractVersion' | 'enabled' | 'capabilityRevision' | 'submissionScopeId' | 'expiresAt' | 'enabledActions'>>,
   Expect<Equal<NovelAsyncTransportCapabilityV1['contractVersion'], 'v1'>>
 ];
 
@@ -83,5 +84,9 @@ describe('shared B2b async transport contracts', () => {
     assert.equal(disabled.enabled, false);
     assert.equal(enabled.enabled, true);
     assert.equal(enabled.submissionScopeId, 'scope-1');
+    assert.equal(isNovelAsyncTransportActionEnabled(enabled, 'chapter_plan_generate'), true);
+    const partial = { ...enabled, enabledActions: ['direction_generate'] } as const;
+    assert.equal(isNovelAsyncTransportActionEnabled(partial, 'direction_generate'), true);
+    assert.equal(isNovelAsyncTransportActionEnabled(partial, 'chapter_plan_generate'), false);
   });
 });

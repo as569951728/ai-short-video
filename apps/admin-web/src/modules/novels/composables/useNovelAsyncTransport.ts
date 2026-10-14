@@ -1,5 +1,6 @@
 import { computed, onBeforeUnmount, ref, shallowRef } from 'vue'
-import { TaskStatus, type NovelAsyncTransportCapabilityV1, type TaskDetailDTO } from '@ai-shortvideo/shared'
+import { NOVEL_ASYNC_TRANSPORT_ACTIONS, TaskStatus, isNovelAsyncTransportActionEnabled,
+  type NovelAsyncTransportCapabilityV1, type TaskDetailDTO } from '@ai-shortvideo/shared'
 import { getApiBaseUrl } from '../../../shared/services/http.js'
 import {
   classifyAsyncDispatchFailure,
@@ -22,12 +23,7 @@ type TransportPhase = 'idle' | 'capability_checking' | 'capability_unavailable' 
 
 type SubmitDecision = { kind: 'legacy' } | { kind: 'task'; taskId: string } | { kind: 'blocked' }
 
-const actions: AsyncNovelGenerationAction[] = [
-  'direction_generate', 'setting_generate', 'outline_generate',
-  'stage_outline_generate', 'chapter_plan_generate',
-  'trial_chapter_one_generate', 'trial_followup_generate',
-  'novel_full_review',
-]
+const actions: readonly AsyncNovelGenerationAction[] = NOVEL_ASYNC_TRANSPORT_ACTIONS
 
 export function useNovelAsyncTransport(novelId: () => string, onTaskId: (taskId: string) => void) {
   const store = new SubmissionIntentStore()
@@ -109,6 +105,10 @@ export function useNovelAsyncTransport(novelId: () => string, onTaskId: (taskId:
     const snapshot = await getAsyncNovelTransportCapability()
     capability.value = snapshot
     if (!snapshot.enabled || Date.now() >= Date.parse(snapshot.expiresAt)) return null
+    if (!isNovelAsyncTransportActionEnabled(snapshot, intent.action as AsyncNovelGenerationAction)) {
+      await markBlocked(intent, '原生成动作已暂停后台提交；请先核对最近任务，勿重复生成。')
+      return null
+    }
     if (snapshot.submissionScopeId !== intent.submissionScopeId) {
       await store.compareAndSet(expected(intent, snapshot.submissionScopeId), next(intent, {}))
       activeIntent.value = null
@@ -126,6 +126,10 @@ export function useNovelAsyncTransport(novelId: () => string, onTaskId: (taskId:
         || confirmed.capabilityRevision !== intent.capabilityRevision
         || confirmed.expiresAt !== intent.capabilityExpiresAt
         || Date.now() >= Date.parse(confirmed.expiresAt)) return null
+      if (!isNovelAsyncTransportActionEnabled(confirmed, intent.action as AsyncNovelGenerationAction)) {
+        await markBlocked(intent, '原生成动作已暂停后台提交；请先核对最近任务，勿重复生成。')
+        return null
+      }
     }
     return intent
   }
@@ -182,7 +186,7 @@ export function useNovelAsyncTransport(novelId: () => string, onTaskId: (taskId:
   async function postIntent(intent: SubmissionIntentV1): Promise<SubmitDecision> {
     const ready = await refreshForIntent(intent)
     if (!ready) {
-      if (phase.value !== 'scope_suspended') {
+      if (phase.value !== 'scope_suspended' && phase.value !== 'blocked') {
         phase.value = 'transport_unknown'
         message.value = '提交方式暂时无法核对，已保留原提交记录。'
         scheduleReplay()
@@ -277,7 +281,6 @@ export function useNovelAsyncTransport(novelId: () => string, onTaskId: (taskId:
     const snapshot = await checkCapability()
     if (!snapshot) return { kind: 'blocked' }
     if (!snapshot.enabled) return { kind: 'legacy' }
-    const normalized = normalizeGenerationRequest(action, request)
     const scopePartition = partition(snapshot.submissionScopeId, action)
     try {
       const existing = await store.read(scopePartition, snapshot.submissionScopeId)
@@ -297,6 +300,12 @@ export function useNovelAsyncTransport(novelId: () => string, onTaskId: (taskId:
         await reconcileUnknown()
         return { kind: 'blocked' }
       }
+      if (!isNovelAsyncTransportActionEnabled(snapshot, action)) {
+        phase.value = 'idle'
+        message.value = ''
+        return { kind: 'legacy' }
+      }
+      const normalized = normalizeGenerationRequest(action, request)
       const created = await store.create(scopePartition, normalized, attestation(snapshot), snapshot.submissionScopeId)
       if (!created.applied) {
         activeIntent.value = await store.read(scopePartition, snapshot.submissionScopeId)

@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { FastifyRequest } from 'fastify';
-import { ErrorCode, isPlaceholderActorIdentifier, type NovelAsyncTransportCapabilityV1 } from '@ai-shortvideo/shared';
+import { ErrorCode, NOVEL_ASYNC_TRANSPORT_ACTIONS, isPlaceholderActorIdentifier,
+  type NovelAsyncTransportAction, type NovelAsyncTransportCapabilityV1 } from '@ai-shortvideo/shared';
 import { BusinessError } from '../../../shared/errors.js';
 import type { RequestContextResolver } from '../domain/novelDomain.js';
 
@@ -12,6 +13,7 @@ export interface AsyncTransportPolicy {
   capabilityTtlMs?: number;
   scopeSecret?: string | Uint8Array;
   apiAudience?: string;
+  enabledActions?: readonly NovelAsyncTransportAction[];
 }
 
 export type AsyncTransportPolicySource = AsyncTransportPolicy | (() => AsyncTransportPolicy);
@@ -91,16 +93,40 @@ export function createCapabilityPolicySnapshotResolver(
       throw new Error('Invalid async transport capability expiry');
     }
     const expiresAt = new Date(expiryMs).toISOString();
+    const enabledActions = normalizeEnabledActions(policy.enabledActions);
+    if (enabledActions?.length === 0) return disabled('POLICY_DISABLED');
     const submissionScopeId = hmacBase64Url(secret, [
       'rp02b2-scope', 'v1', apiAudience, tenantId, userId
     ]);
     const capabilityRevision = hmacBase64Url(secret, [
       'rp02b2-capability', 'v1', policy.policyRevision ?? '',
       String(ttlMs), options.runtimeEnvironment, options.providerMode,
-      apiAudience, tenantId, userId, expiresAt
+      apiAudience, tenantId, userId, expiresAt, JSON.stringify(enabledActions ?? ['*'])
     ]);
-    return { contractVersion: 'v1', enabled: true, capabilityRevision, submissionScopeId, expiresAt };
+    return { contractVersion: 'v1', enabled: true, capabilityRevision, submissionScopeId, expiresAt,
+      ...(enabledActions ? { enabledActions } : {}) };
   };
+}
+
+export function assertLegacyNovelSubmissionAllowed(
+  capability: NovelAsyncTransportCapabilityV1,
+  body: Record<string, unknown>
+): void {
+  if ((!capability.enabled && !['POLICY_DISABLED', 'UNSUPPORTED_ENVIRONMENT'].includes(capability.reasonCode))
+    || ['expectedSubmissionScopeId', 'expectedCapabilityRevision', 'expectedCapabilityExpiresAt']
+      .some((key) => Object.hasOwn(body, key))) {
+    throw new BusinessError(ErrorCode.GateBlocked, '暂时无法确认任务提交方式，请重新检查。');
+  }
+}
+
+function normalizeEnabledActions(actions: readonly NovelAsyncTransportAction[] | undefined) {
+  if (actions === undefined) return undefined;
+  if (!Array.isArray(actions) || new Set(actions).size !== actions.length
+    || actions.some((action) => !NOVEL_ASYNC_TRANSPORT_ACTIONS.includes(action))) {
+    throw new Error('Invalid async transport action policy');
+  }
+  const allowed = new Set(actions);
+  return NOVEL_ASYNC_TRANSPORT_ACTIONS.filter((action) => allowed.has(action));
 }
 
 function disabled(reasonCode: Extract<NovelAsyncTransportCapabilityV1, { enabled: false }>['reasonCode']) {

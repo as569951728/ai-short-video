@@ -6,6 +6,8 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3001),
   DATABASE_URL: z.string().min(1).optional(),
   NOVEL_ASYNC_DISPATCH_DEV_ENABLED: z.enum(['true', 'false']).default('false'),
+  NOVEL_ASYNC_DISPATCH_E1_MYSQL_ENABLED: z.enum(['true', 'false']).default('false'),
+  E1_MYSQL_SMOKE_URL: z.string().optional(),
   NOVEL_ASYNC_SCOPE_SECRET: z.string().optional(),
   NOVEL_ASYNC_API_AUDIENCE: z.string().optional(),
   DEPLOYMENT_ACTOR_TENANT_ID: z.string().trim().min(1).optional(),

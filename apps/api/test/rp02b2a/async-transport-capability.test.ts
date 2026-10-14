@@ -7,6 +7,7 @@ import { createInMemoryNovelRepository } from '../../src/modules/novels/reposito
 import { createInMemoryVideoRepository } from '../../src/modules/videos/repositories/inMemoryVideoRepository.js';
 import {
   assertAsyncCapabilitySubmission,
+  assertLegacyNovelSubmissionAllowed,
   createCapabilityPolicySnapshotResolver,
   type AsyncTransportPolicy,
   type NovelAsyncTransportCapabilityV1
@@ -232,6 +233,30 @@ describe('novel async transport capability', () => {
     assert.notEqual(renewed.capabilityRevision, revised.capabilityRevision);
     policy = { ...policy, novelAsyncDispatchEnabled: false };
     assert.equal((await resolver(request) as { reasonCode: string }).reasonCode, 'POLICY_DISABLED');
+  });
+
+  it('binds a partial action allowlist to the capability revision and fences stale async submissions', async () => {
+    let policy: AsyncTransportPolicy = { ...enabledPolicy(), enabledActions: ['direction_generate'] };
+    const resolver = createCapabilityPolicySnapshotResolver({
+      policy: () => policy, runtimeEnvironment: 'development', providerMode: 'mock',
+      requestContextResolver: async () => ({ tenantId: 'tenant-a', userId: 'user-a' }),
+      now: () => new Date('2030-01-01T00:00:10.000Z')
+    });
+    const first = expectEnabled(await resolver(request));
+    assert.deepEqual(first.enabledActions, ['direction_generate']);
+    const attestation = { expectedSubmissionScopeId: first.submissionScopeId,
+      expectedCapabilityRevision: first.capabilityRevision,
+      expectedCapabilityExpiresAt: first.expiresAt };
+    assert.doesNotThrow(() => assertLegacyNovelSubmissionAllowed(first, {}));
+    assert.throws(() => assertLegacyNovelSubmissionAllowed(first, attestation));
+    policy = { ...policy, enabledActions: ['setting_generate'] };
+    const second = expectEnabled(await resolver(request));
+    assert.equal(second.submissionScopeId, first.submissionScopeId);
+    assert.notEqual(second.capabilityRevision, first.capabilityRevision);
+    assert.throws(() => assertAsyncCapabilitySubmission(second, attestation,
+      new Date('2030-01-01T00:00:10.000Z')));
+    policy = { ...policy, enabledActions: [] };
+    assert.deepEqual(await resolver(request), { contractVersion: 'v1', enabled: false, reasonCode: 'POLICY_DISABLED' });
   });
 
   it('serves an enabled snapshot only with an injected trusted resolver, mock provider and valid scope config', async () => {

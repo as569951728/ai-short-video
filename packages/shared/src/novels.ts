@@ -10,6 +10,13 @@ export const NOVEL_PROVIDER_ACTIONS = [
 
 export type NovelProviderAction = (typeof NOVEL_PROVIDER_ACTIONS)[number];
 
+export const NOVEL_ASYNC_TRANSPORT_ACTIONS = [
+  'direction_generate', 'setting_generate', 'outline_generate', 'stage_outline_generate',
+  'chapter_plan_generate', 'trial_chapter_one_generate', 'trial_followup_generate', 'novel_full_review'
+] as const satisfies readonly NovelProviderAction[];
+
+export type NovelAsyncTransportAction = (typeof NOVEL_ASYNC_TRANSPORT_ACTIONS)[number];
+
 export type TaskDispatchResponseV1 =
   | {
       kind: 'accepted';
@@ -53,7 +60,15 @@ export type NovelAsyncTransportCapabilityV1 =
       capabilityRevision: string;
       submissionScopeId: string;
       expiresAt: string;
+      enabledActions?: readonly NovelAsyncTransportAction[];
     };
+
+export function isNovelAsyncTransportActionEnabled(
+  capability: NovelAsyncTransportCapabilityV1,
+  action: NovelAsyncTransportAction
+): boolean {
+  return capability.enabled && (capability.enabledActions === undefined || capability.enabledActions.includes(action));
+}
 
 interface ExecutionEnvelopeBaseV1<A extends NovelProviderAction, O extends string, R, S> {
   schemaVersion: 1;

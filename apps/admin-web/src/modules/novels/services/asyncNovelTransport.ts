@@ -1,20 +1,13 @@
 import type {
+  NovelAsyncTransportAction,
   NovelAsyncTransportCapabilityV1,
   TaskDispatchResponseV1,
 } from '@ai-shortvideo/shared'
-import { ErrorCode } from '@ai-shortvideo/shared'
+import { ErrorCode, NOVEL_ASYNC_TRANSPORT_ACTIONS, isNovelAsyncTransportActionEnabled } from '@ai-shortvideo/shared'
 import { getApiMode } from '../../../shared/services/apiMode.js'
 import { ApiClientError, apiRequest, apiRequestWithStatus } from '../../../shared/services/http.js'
 
-export type AsyncNovelGenerationAction =
-  | 'direction_generate'
-  | 'setting_generate'
-  | 'outline_generate'
-  | 'stage_outline_generate'
-  | 'chapter_plan_generate'
-  | 'trial_chapter_one_generate'
-  | 'trial_followup_generate'
-  | 'novel_full_review'
+export type AsyncNovelGenerationAction = NovelAsyncTransportAction
 
 export interface NormalizedGenerationRequest {
   regenerateReason?: string
@@ -162,6 +155,13 @@ export async function getAsyncNovelTransportCapability(): Promise<NovelAsyncTran
     || !Number.isFinite(Date.parse(capability.expiresAt)))) {
     throw new ApiClientError('INVALID_RESPONSE', '任务提交方式暂时无法确认。')
   }
+  if (capability.enabled && capability.enabledActions !== undefined
+    && (!Array.isArray(capability.enabledActions)
+      || capability.enabledActions.length === 0
+      || new Set(capability.enabledActions).size !== capability.enabledActions.length
+      || capability.enabledActions.some((action) => !NOVEL_ASYNC_TRANSPORT_ACTIONS.includes(action)))) {
+    throw new ApiClientError('INVALID_RESPONSE', '任务提交方式暂时无法确认。')
+  }
   if (!capability.enabled && ![
     'POLICY_DISABLED', 'UNSUPPORTED_ENVIRONMENT', 'TRUSTED_CONTEXT_MISSING',
     'SCOPE_SECRET_MISSING', 'API_AUDIENCE_MISSING',
@@ -179,7 +179,8 @@ export async function submitAsyncNovelGeneration(input: {
   capability: Extract<NovelAsyncTransportCapabilityV1, { enabled: true }>
 }): Promise<TaskDispatchResponseV1> {
   const { novelId, action, idempotencyKey, capability } = input
-  if (!idempotencyKey || !capability.enabled || Date.now() >= Date.parse(capability.expiresAt)) {
+  if (!idempotencyKey || !isNovelAsyncTransportActionEnabled(capability, action)
+    || Date.now() >= Date.parse(capability.expiresAt)) {
     throw new ApiClientError('INVALID_RESPONSE', '任务提交方式已失效，请重新检查。')
   }
   const request = normalizeGenerationRequest(action, input.request)

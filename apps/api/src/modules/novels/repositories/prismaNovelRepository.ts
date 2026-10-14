@@ -167,6 +167,8 @@ function activeGenerationClaimWhere(input: ClaimGenerationTaskInput) {
 export class PrismaNovelRepository implements NovelRepository {
   private readonly prisma = getPrismaClient();
 
+  constructor(private readonly options: { enabledLeasedTaskTypes?: ReadonlySet<string> } = {}) {}
+
   async createDraft(input: DraftCreationInput): Promise<CreatedDraftRecord> {
     const normalized = normalizeDraftRequest(input.request);
 
@@ -394,7 +396,8 @@ export class PrismaNovelRepository implements NovelRepository {
 
 
   async getLeasedExecutionCapability(taskType: string) {
-    return isNovelProviderTaskType(taskType) ? 'disabled' as const : 'unsupported' as const;
+    if (!isNovelProviderTaskType(taskType)) return 'unsupported' as const;
+    return this.options?.enabledLeasedTaskTypes?.has(taskType) ? 'enabled' as const : 'disabled' as const;
   }
 
   async loadGenerationAuthority(

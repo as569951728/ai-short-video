@@ -9,6 +9,8 @@ import { createLeasedActionExecutor } from './modules/novels/services/leasedActi
 import { createSystemNovelTaskWorkerScheduler, NovelTaskWorkerRuntime } from './modules/novels/services/novelTaskWorkerRuntime.js';
 import { createLeasedNovelProvidersFromEnv } from './modules/novels/providers/providerFactory.js';
 import { resolveAiProviderMode } from './modules/ai/modelRouting.js';
+import { ISOLATED_E1_ACTIONS, ISOLATED_E1_TASK_TYPES,
+  resolveIsolatedNovelAsyncEnabled } from './config/isolatedNovelAsyncPolicy.js';
 
 if (
   isPlaceholderActorIdentifier(env.DEPLOYMENT_ACTOR_TENANT_ID)
@@ -22,18 +24,28 @@ const deploymentActor = Object.freeze({
 });
 const developmentAsyncEnabled = env.NOVEL_ASYNC_DISPATCH_DEV_ENABLED === 'true'
   && env.NODE_ENV === 'development' && !env.DATABASE_URL && resolveAiProviderMode() === 'mock';
+const isolatedMysqlAsyncEnabled = resolveIsolatedNovelAsyncEnabled({
+  flag: env.NOVEL_ASYNC_DISPATCH_E1_MYSQL_ENABLED,
+  runtimeEnvironment: env.NODE_ENV,
+  providerMode: resolveAiProviderMode(),
+  databaseUrl: env.DATABASE_URL,
+  smokeUrl: env.E1_MYSQL_SMOKE_URL
+});
 const developmentLeasedTaskTypes = new Set([
   'novel_direction_generate', 'novel_setting_generate', 'novel_outline_generate',
   'stage_outline_generate', 'chapter_plan_generate', 'novel_full_review'
 ]);
-const novelRepository = env.DATABASE_URL ? new PrismaNovelRepository() : createInMemoryNovelRepository({
+const novelRepository = env.DATABASE_URL ? new PrismaNovelRepository({
+  enabledLeasedTaskTypes: isolatedMysqlAsyncEnabled ? ISOLATED_E1_TASK_TYPES : undefined
+}) : createInMemoryNovelRepository({
   enabledLeasedTaskTypes: developmentAsyncEnabled ? developmentLeasedTaskTypes : undefined
 });
 const app = await buildApp({
   novelRepository,
   requestContextResolver: async () => deploymentActor,
   asyncTransportPolicy: {
-    novelAsyncDispatchEnabled: developmentAsyncEnabled,
+    novelAsyncDispatchEnabled: developmentAsyncEnabled || isolatedMysqlAsyncEnabled,
+    enabledActions: isolatedMysqlAsyncEnabled ? ISOLATED_E1_ACTIONS : undefined,
     scopeSecret: env.NOVEL_ASYNC_SCOPE_SECRET,
     apiAudience: env.NOVEL_ASYNC_API_AUDIENCE
   }

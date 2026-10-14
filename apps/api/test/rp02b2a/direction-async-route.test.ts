@@ -169,3 +169,52 @@ it('queues an attested setting task and keeps its result as a candidate', async 
     await app.close();
   }
 });
+
+it('routes only allowlisted actions to the worker and rejects stale attested fallback', async () => {
+  const repository = createInMemoryNovelRepository();
+  repository.getLeasedExecutionCapability = async (taskType) =>
+    taskType === 'novel_setting_generate' ? 'enabled' : 'unsupported';
+  let enabledActions: Array<'setting_generate' | 'direction_generate'> = ['setting_generate'];
+  const app = await buildApp({ logger: false, novelRepository: repository,
+    aiProviderEnv: { AI_PROVIDER_MODE: 'mock' },
+    asyncTransportPolicy: () => ({ novelAsyncDispatchEnabled: true, enabledActions,
+      scopeSecret: 'partial-async-scope-secret-32-bytes-min', apiAudience: 'novel-api' }),
+    requestContextResolver: async () => ({ tenantId: 'tenant-partial', userId: 'user-partial' }) });
+  try {
+    const draft = await app.inject({ method: 'POST', url: '/novels/drafts', payload: { title: '按动作后台准入' } });
+    assert.equal(draft.statusCode, 201, draft.body);
+    const novelId = draft.json().data.id as string;
+    const capability = (await app.inject({ method: 'GET', url: '/novels/async-transport-capability' })).json().data;
+    assert.deepEqual(capability.enabledActions, ['setting_generate']);
+    const attestation = { expectedSubmissionScopeId: capability.submissionScopeId,
+      expectedCapabilityRevision: capability.capabilityRevision,
+      expectedCapabilityExpiresAt: capability.expiresAt };
+    const directionUrl = `/novels/${novelId}/directions/generate`;
+    const staleDirection = await app.inject({ method: 'POST', url: directionUrl, payload: attestation });
+    assert.equal(staleDirection.statusCode, 409, staleDirection.body);
+    assert.equal(repository.getGenerationTasks().length, 0);
+    const directions = await app.inject({ method: 'POST', url: directionUrl, payload: {} });
+    assert.equal(directions.statusCode, 200, directions.body);
+    const candidateId = directions.json().data.candidates.find(
+      (candidate: { id: string; score: number }) => candidate.score >= 75
+    ).id as string;
+    assert.equal((await app.inject({ method: 'POST', url: `/novels/${novelId}/directions/${candidateId}/adopt`,
+      payload: { currentVersionId: null, idempotencyKey: 'partial-adopt-direction-0001', reason: '确认方向' } })).statusCode, 200);
+    const before = repository.getGenerationTasks().length;
+    const chapterPlan = await app.inject({ method: 'POST', url: `/novels/${novelId}/chapter-plans/generate`,
+      payload: attestation });
+    assert.equal(chapterPlan.statusCode, 409, chapterPlan.body);
+    assert.equal(repository.getGenerationTasks().length, before);
+    const setting = await app.inject({ method: 'POST', url: `/novels/${novelId}/settings/generate`,
+      headers: { 'idempotency-key': 'partial-setting-submit-0001' }, payload: attestation });
+    assert.equal(setting.statusCode, 202, setting.body);
+    assert.equal(setting.json().data.action, 'setting_generate');
+    enabledActions = ['direction_generate'];
+    const staleSetting = await app.inject({ method: 'POST', url: `/novels/${novelId}/settings/generate`,
+      headers: { 'idempotency-key': 'partial-setting-submit-0001' }, payload: attestation });
+    assert.equal(staleSetting.statusCode, 409, staleSetting.body);
+    assert.equal(repository.getGenerationTasks().length, before + 1);
+  } finally {
+    await app.close();
+  }
+});

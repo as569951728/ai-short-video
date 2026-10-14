@@ -115,6 +115,32 @@ it('checks the capability contract and does not create a task', async () => {
   }
 })
 
+it('rejects malformed partial capabilities and prevents an unsupported action from posting', async () => {
+  const oldFetch = globalThis.fetch
+  let calls = 0
+  let actions: unknown = ['direction_generate', 'direction_generate']
+  globalThis.fetch = async () => {
+    calls += 1
+    return Response.json({ success: true, data: { ...enabledCapability, enabledActions: actions },
+      error: null, requestId: 'req-partial' })
+  }
+  try {
+    await assert.rejects(getAsyncNovelTransportCapability,
+      (error) => error instanceof ApiClientError && error.code === 'INVALID_RESPONSE')
+    actions = ['direction_generate']
+    const partial = await getAsyncNovelTransportCapability()
+    assert.deepEqual(partial.enabled && partial.enabledActions, ['direction_generate'])
+    const beforeSubmit = calls
+    await assert.rejects(() => submitAsyncNovelGeneration({ novelId: 'novel-1',
+      action: 'chapter_plan_generate', request: {}, idempotencyKey: 'blocked-plan',
+      capability: partial as Extract<NovelAsyncTransportCapabilityV1, { enabled: true }> }),
+    (error) => error instanceof ApiClientError && error.code === 'INVALID_RESPONSE')
+    assert.equal(calls, beforeSubmit)
+  } finally {
+    globalThis.fetch = oldFetch
+  }
+})
+
 it('distinguishes 202 accepted from 200 existing and preserves the same submission key', async () => {
   const oldFetch = globalThis.fetch
   const requests: Array<{ key: string | null; body: Record<string, unknown> }> = []

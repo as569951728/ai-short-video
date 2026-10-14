@@ -1,10 +1,12 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { ErrorCode, TaskStatus, isPlaceholderActorIdentifier, type NovelProviderAction, type TaskDispatchResponseV1 } from '@ai-shortvideo/shared';
+import { ErrorCode, TaskStatus, isNovelAsyncTransportActionEnabled, isPlaceholderActorIdentifier,
+  type NovelProviderAction, type TaskDispatchResponseV1 } from '@ai-shortvideo/shared';
 import { BusinessError } from '../../../shared/errors.js';
 import { sendOk } from '../../../shared/reply.js';
 import { NovelService, type NovelServiceOptions } from '../services/novelService.js';
 import { resolveRequestIdempotencyKey } from '../services/taskClaim.js';
-import { assertAsyncCapabilitySubmission, type CapabilityPolicySnapshotResolver } from '../services/asyncTransportCapability.js';
+import { assertAsyncCapabilitySubmission, assertLegacyNovelSubmissionAllowed,
+  type CapabilityPolicySnapshotResolver } from '../services/asyncTransportCapability.js';
 import { isInMemoryNovelRepository } from '../repositories/inMemoryNovelRepository.js';
 import type {
   AdoptDirectionRequest,
@@ -359,7 +361,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
       const capability = options.capabilityPolicySnapshotResolver
         ? await options.capabilityPolicySnapshotResolver(request)
         : { contractVersion: 'v1' as const, enabled: false as const, reasonCode: 'POLICY_DISABLED' as const };
-      if (capability.enabled) {
+      if (isNovelAsyncTransportActionEnabled(capability, 'direction_generate')) {
         const authoritativeNow = await options.repository.getAuthoritativeTaskTime();
         assertAsyncCapabilitySubmission(capability, (request.body ?? {}) as Record<string, unknown>, authoritativeNow);
         const queued = await novelService.queueDirections(novelId,
@@ -369,9 +371,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
         reply.status(dispatch.kind === 'accepted' ? 202 : 200);
         return sendOk(request, reply, dispatch);
       }
-      if (!['POLICY_DISABLED', 'UNSUPPORTED_ENVIRONMENT'].includes(capability.reasonCode)) {
-        throw new BusinessError(ErrorCode.GateBlocked, '暂时无法确认任务提交方式，请重新检查。');
-      }
+      assertLegacyNovelSubmissionAllowed(capability, (request.body ?? {}) as Record<string, unknown>);
       const data = await novelService.generateDirections(
         novelId,
         withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as GenerateDirectionsRequest),
@@ -543,7 +543,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
       const capability = options.capabilityPolicySnapshotResolver
         ? await options.capabilityPolicySnapshotResolver(request)
         : { contractVersion: 'v1' as const, enabled: false as const, reasonCode: 'POLICY_DISABLED' as const };
-      if (capability.enabled) {
+      if (isNovelAsyncTransportActionEnabled(capability, 'setting_generate')) {
         const authoritativeNow = await options.repository.getAuthoritativeTaskTime();
         assertAsyncCapabilitySubmission(capability, (request.body ?? {}) as Record<string, unknown>, authoritativeNow);
         const queued = await novelService.queueSetting(novelId,
@@ -553,9 +553,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
         reply.status(dispatch.kind === 'accepted' ? 202 : 200);
         return sendOk(request, reply, dispatch);
       }
-      if (!['POLICY_DISABLED', 'UNSUPPORTED_ENVIRONMENT'].includes(capability.reasonCode)) {
-        throw new BusinessError(ErrorCode.GateBlocked, '暂时无法确认任务提交方式，请重新检查。');
-      }
+      assertLegacyNovelSubmissionAllowed(capability, (request.body ?? {}) as Record<string, unknown>);
       const data = await novelService.generateSetting(
         novelId,
         withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as GenerateStructureAssetRequest),
@@ -607,7 +605,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
       const capability = options.capabilityPolicySnapshotResolver
         ? await options.capabilityPolicySnapshotResolver(request)
         : { contractVersion: 'v1' as const, enabled: false as const, reasonCode: 'POLICY_DISABLED' as const };
-      if (capability.enabled) {
+      if (isNovelAsyncTransportActionEnabled(capability, 'outline_generate')) {
         const authoritativeNow = await options.repository.getAuthoritativeTaskTime();
         assertAsyncCapabilitySubmission(capability, (request.body ?? {}) as Record<string, unknown>, authoritativeNow);
         const queued = await novelService.queueOutline(novelId,
@@ -617,9 +615,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
         reply.status(dispatch.kind === 'accepted' ? 202 : 200);
         return sendOk(request, reply, dispatch);
       }
-      if (!['POLICY_DISABLED', 'UNSUPPORTED_ENVIRONMENT'].includes(capability.reasonCode)) {
-        throw new BusinessError(ErrorCode.GateBlocked, '暂时无法确认任务提交方式，请重新检查。');
-      }
+      assertLegacyNovelSubmissionAllowed(capability, (request.body ?? {}) as Record<string, unknown>);
       const data = await novelService.generateOutline(
         novelId,
         withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as GenerateStructureAssetRequest),
@@ -671,7 +667,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
       const capability = options.capabilityPolicySnapshotResolver
         ? await options.capabilityPolicySnapshotResolver(request)
         : { contractVersion: 'v1' as const, enabled: false as const, reasonCode: 'POLICY_DISABLED' as const };
-      if (capability.enabled) {
+      if (isNovelAsyncTransportActionEnabled(capability, 'stage_outline_generate')) {
         const authoritativeNow = await options.repository.getAuthoritativeTaskTime();
         assertAsyncCapabilitySubmission(capability, (request.body ?? {}) as Record<string, unknown>, authoritativeNow);
         const queued = await novelService.queueStageOutline(novelId,
@@ -681,9 +677,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
         reply.status(dispatch.kind === 'accepted' ? 202 : 200);
         return sendOk(request, reply, dispatch);
       }
-      if (!['POLICY_DISABLED', 'UNSUPPORTED_ENVIRONMENT'].includes(capability.reasonCode)) {
-        throw new BusinessError(ErrorCode.GateBlocked, '暂时无法确认任务提交方式，请重新检查。');
-      }
+      assertLegacyNovelSubmissionAllowed(capability, (request.body ?? {}) as Record<string, unknown>);
       const data = await novelService.generateStageOutline(
         novelId,
         withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as GenerateStructureAssetRequest),
@@ -735,7 +729,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
       const capability = options.capabilityPolicySnapshotResolver
         ? await options.capabilityPolicySnapshotResolver(request)
         : { contractVersion: 'v1' as const, enabled: false as const, reasonCode: 'POLICY_DISABLED' as const };
-      if (capability.enabled) {
+      if (isNovelAsyncTransportActionEnabled(capability, 'chapter_plan_generate')) {
         const authoritativeNow = await options.repository.getAuthoritativeTaskTime();
         assertAsyncCapabilitySubmission(capability, (request.body ?? {}) as Record<string, unknown>, authoritativeNow);
         const queued = await novelService.queueChapterPlan(novelId,
@@ -745,9 +739,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
         reply.status(dispatch.kind === 'accepted' ? 202 : 200);
         return sendOk(request, reply, dispatch);
       }
-      if (!['POLICY_DISABLED', 'UNSUPPORTED_ENVIRONMENT'].includes(capability.reasonCode)) {
-        throw new BusinessError(ErrorCode.GateBlocked, '暂时无法确认任务提交方式，请重新检查。');
-      }
+      assertLegacyNovelSubmissionAllowed(capability, (request.body ?? {}) as Record<string, unknown>);
       const data = await novelService.generateChapterPlan(
         novelId,
         withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as GenerateStructureAssetRequest),
@@ -866,7 +858,9 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
       const capability = options.capabilityPolicySnapshotResolver
         ? await options.capabilityPolicySnapshotResolver(request)
         : { contractVersion: 'v1' as const, enabled: false as const, reasonCode: 'POLICY_DISABLED' as const };
-      if (capability.enabled) {
+      const trialAction = ((request.body ?? {}) as GenerateTrialRequest).trialRunId
+        ? 'trial_followup_generate' : 'trial_chapter_one_generate';
+      if (isNovelAsyncTransportActionEnabled(capability, trialAction)) {
         const authoritativeNow = await options.repository.getAuthoritativeTaskTime();
         assertAsyncCapabilitySubmission(capability, (request.body ?? {}) as Record<string, unknown>, authoritativeNow);
         const trialRequest = withRequestIdempotency(
@@ -875,14 +869,11 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
         const queued = await novelService.queueTrial(
           novelId, trialRequest, await resolveProviderContext(options.requestContextResolver, request), authoritativeNow
         );
-        const action = trialRequest.trialRunId ? 'trial_followup_generate' : 'trial_chapter_one_generate';
-        const dispatch = toTaskDispatchResponse(action, trialRequest.trialRunId || novelId, queued.task, queued.reused);
+        const dispatch = toTaskDispatchResponse(trialAction, trialRequest.trialRunId || novelId, queued.task, queued.reused);
         reply.status(dispatch.kind === 'accepted' ? 202 : 200);
         return sendOk(request, reply, dispatch);
       }
-      if (!['POLICY_DISABLED', 'UNSUPPORTED_ENVIRONMENT'].includes(capability.reasonCode)) {
-        throw new BusinessError(ErrorCode.GateBlocked, '暂时无法确认任务提交方式，请重新检查。');
-      }
+      assertLegacyNovelSubmissionAllowed(capability, (request.body ?? {}) as Record<string, unknown>);
       const data = await novelService.generateTrial(
         novelId,
         withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as GenerateTrialRequest),
@@ -1196,7 +1187,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
       const capability = options.capabilityPolicySnapshotResolver
         ? await options.capabilityPolicySnapshotResolver(request)
         : { contractVersion: 'v1' as const, enabled: false as const, reasonCode: 'POLICY_DISABLED' as const };
-      if (capability.enabled) {
+      if (isNovelAsyncTransportActionEnabled(capability, 'novel_full_review')) {
         const authoritativeNow = await options.repository.getAuthoritativeTaskTime();
         assertAsyncCapabilitySubmission(capability, (request.body ?? {}) as Record<string, unknown>, authoritativeNow);
         const reviewRequest = withRequestIdempotency(
@@ -1209,9 +1200,7 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
         reply.status(dispatch.kind === 'accepted' ? 202 : 200);
         return sendOk(request, reply, dispatch);
       }
-      if (!['POLICY_DISABLED', 'UNSUPPORTED_ENVIRONMENT'].includes(capability.reasonCode)) {
-        throw new BusinessError(ErrorCode.GateBlocked, '暂时无法确认任务提交方式，请重新检查。');
-      }
+      assertLegacyNovelSubmissionAllowed(capability, (request.body ?? {}) as Record<string, unknown>);
       const data = await novelService.startFullReview(
         novelId,
         withRequestIdempotency(request.headers['idempotency-key'], request.body as StartFullReviewRequest),
