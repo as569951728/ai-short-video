@@ -129,10 +129,7 @@ const idempotencyKeySchema = { type: 'string', minLength: 8, maxLength: 120, pat
 
 const UNMIGRATED_PROVIDER_ROUTES = new Set([
   '/novels/:novelId/chapters/batch-generate',
-  '/novels/:novelId/chapters/:chapterId/generate',
-  '/novels/:novelId/chapters/:chapterId/rewrite',
-  '/novels/:novelId/chapters/:chapterId/content-versions/:versionId/adopt',
-  '/novels/:novelId/chapters/:chapterId/impact-assessments'
+  '/novels/:novelId/chapters/:chapterId/generate'
 ]);
 
 interface AcceptanceSeedRouteAccess {
@@ -1087,21 +1084,43 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
             instruction: { type: ['string', 'null'], maxLength: 1000 },
             reason: { type: ['string', 'null'], maxLength: 1000 },
             currentContentVersionId: { type: ['string', 'null'], maxLength: 80 },
-            idempotencyKey: idempotencyKeySchema
+            idempotencyKey: idempotencyKeySchema,
+            expectedSubmissionScopeId: { type: 'string', minLength: 43, maxLength: 43 },
+            expectedCapabilityRevision: { type: 'string', minLength: 43, maxLength: 43 },
+            expectedCapabilityExpiresAt: { type: 'string', format: 'date-time' }
           },
           additionalProperties: false
         },
         response: {
-          200: responseEnvelopeSchema
+          200: responseEnvelopeSchema, 202: responseEnvelopeSchema
         }
       }
     },
     async (request, reply) => {
       const { novelId, chapterId } = request.params as { novelId: string; chapterId: string };
+      const capability = options.capabilityPolicySnapshotResolver
+        ? await options.capabilityPolicySnapshotResolver(request)
+        : { contractVersion: 'v1' as const, enabled: false as const, reasonCode: 'POLICY_DISABLED' as const };
+      const rewriteRequest = withRequestIdempotency(
+        request.headers['idempotency-key'], (request.body ?? {}) as RewriteChapterRequest
+      );
+      if (isNovelAsyncTransportActionEnabled(capability, 'chapter_rewrite')) {
+        const authoritativeNow = await options.repository.getAuthoritativeTaskTime();
+        assertAsyncCapabilitySubmission(capability, (request.body ?? {}) as Record<string, unknown>, authoritativeNow);
+        const queued = await novelService.queueChapterRewrite(novelId, chapterId, rewriteRequest,
+          await resolveProviderContext(options.requestContextResolver, request), authoritativeNow);
+        const dispatch = toTaskDispatchResponse('chapter_rewrite', chapterId, queued.task, queued.reused);
+        reply.status(dispatch.kind === 'accepted' ? 202 : 200);
+        return sendOk(request, reply, dispatch);
+      }
+      if (capability.enabled) {
+        throw new BusinessError(ErrorCode.GateBlocked, '该生成动作尚未开放后台执行，任务未创建。');
+      }
+      assertLegacyNovelSubmissionAllowed(capability, (request.body ?? {}) as Record<string, unknown>);
       const data = await novelService.rewriteChapter(
         novelId,
         chapterId,
-        withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as RewriteChapterRequest),
+        rewriteRequest,
         await resolveProviderContext(options.requestContextResolver, request)
       );
 
@@ -1120,22 +1139,44 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
             reason: { type: ['string', 'null'], maxLength: 1000 },
             currentContentVersionId: { type: ['string', 'null'], maxLength: 80 },
             pageVersionSnapshot: { type: ['object', 'null'], additionalProperties: true },
-            idempotencyKey: idempotencyKeySchema
+            idempotencyKey: idempotencyKeySchema,
+            expectedSubmissionScopeId: { type: 'string', minLength: 43, maxLength: 43 },
+            expectedCapabilityRevision: { type: 'string', minLength: 43, maxLength: 43 },
+            expectedCapabilityExpiresAt: { type: 'string', format: 'date-time' }
           },
           additionalProperties: false
         },
         response: {
-          200: responseEnvelopeSchema
+          200: responseEnvelopeSchema, 202: responseEnvelopeSchema
         }
       }
     },
     async (request, reply) => {
       const { novelId, chapterId, versionId } = request.params as { novelId: string; chapterId: string; versionId: string };
+      const capability = options.capabilityPolicySnapshotResolver
+        ? await options.capabilityPolicySnapshotResolver(request)
+        : { contractVersion: 'v1' as const, enabled: false as const, reasonCode: 'POLICY_DISABLED' as const };
+      const adoptionRequest = withRequestIdempotency(
+        request.headers['idempotency-key'], (request.body ?? {}) as AdoptChapterContentVersionRequest
+      );
+      if (isNovelAsyncTransportActionEnabled(capability, 'chapter_adopt_impact_assess')) {
+        const authoritativeNow = await options.repository.getAuthoritativeTaskTime();
+        assertAsyncCapabilitySubmission(capability, (request.body ?? {}) as Record<string, unknown>, authoritativeNow);
+        const queued = await novelService.queueChapterAdoptImpactAssessment(novelId, chapterId, versionId, adoptionRequest,
+          await resolveProviderContext(options.requestContextResolver, request), authoritativeNow);
+        const dispatch = toTaskDispatchResponse('chapter_adopt_impact_assess', chapterId, queued.task, queued.reused);
+        reply.status(dispatch.kind === 'accepted' ? 202 : 200);
+        return sendOk(request, reply, dispatch);
+      }
+      if (capability.enabled) {
+        throw new BusinessError(ErrorCode.GateBlocked, '该生成动作尚未开放后台执行，任务未创建。');
+      }
+      assertLegacyNovelSubmissionAllowed(capability, (request.body ?? {}) as Record<string, unknown>);
       const data = await novelService.adoptChapterContentVersion(
         novelId,
         chapterId,
         versionId,
-        withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as AdoptChapterContentVersionRequest),
+        adoptionRequest,
         await resolveProviderContext(options.requestContextResolver, request)
       );
 
@@ -1153,21 +1194,43 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
           properties: {
             reason: { type: ['string', 'null'], maxLength: 1000 },
             currentContentVersionId: { type: ['string', 'null'], maxLength: 80 },
-            idempotencyKey: idempotencyKeySchema
+            idempotencyKey: idempotencyKeySchema,
+            expectedSubmissionScopeId: { type: 'string', minLength: 43, maxLength: 43 },
+            expectedCapabilityRevision: { type: 'string', minLength: 43, maxLength: 43 },
+            expectedCapabilityExpiresAt: { type: 'string', format: 'date-time' }
           },
           additionalProperties: false
         },
         response: {
-          200: responseEnvelopeSchema
+          200: responseEnvelopeSchema, 202: responseEnvelopeSchema
         }
       }
     },
     async (request, reply) => {
       const { novelId, chapterId } = request.params as { novelId: string; chapterId: string };
+      const capability = options.capabilityPolicySnapshotResolver
+        ? await options.capabilityPolicySnapshotResolver(request)
+        : { contractVersion: 'v1' as const, enabled: false as const, reasonCode: 'POLICY_DISABLED' as const };
+      const impactRequest = withRequestIdempotency(
+        request.headers['idempotency-key'], (request.body ?? {}) as CreateImpactAssessmentRequest
+      );
+      if (isNovelAsyncTransportActionEnabled(capability, 'chapter_impact_assess')) {
+        const authoritativeNow = await options.repository.getAuthoritativeTaskTime();
+        assertAsyncCapabilitySubmission(capability, (request.body ?? {}) as Record<string, unknown>, authoritativeNow);
+        const queued = await novelService.queueChapterImpactAssessment(novelId, chapterId, impactRequest,
+          await resolveProviderContext(options.requestContextResolver, request), authoritativeNow);
+        const dispatch = toTaskDispatchResponse('chapter_impact_assess', chapterId, queued.task, queued.reused);
+        reply.status(dispatch.kind === 'accepted' ? 202 : 200);
+        return sendOk(request, reply, dispatch);
+      }
+      if (capability.enabled) {
+        throw new BusinessError(ErrorCode.GateBlocked, '该生成动作尚未开放后台执行，任务未创建。');
+      }
+      assertLegacyNovelSubmissionAllowed(capability, (request.body ?? {}) as Record<string, unknown>);
       const data = await novelService.createImpactAssessment(
         novelId,
         chapterId,
-        withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as CreateImpactAssessmentRequest),
+        impactRequest,
         await resolveProviderContext(options.requestContextResolver, request)
       );
 

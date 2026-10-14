@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { resolveIsolatedNovelAsyncEnabled } from '../../src/config/isolatedNovelAsyncPolicy.js';
 import { buildApp } from '../../src/app.js';
-import { disconnectPrismaClient } from '../../src/infrastructure/database/prisma.js';
+import { disconnectPrismaClient, getPrismaClient } from '../../src/infrastructure/database/prisma.js';
+import { evaluateChapterLength } from '../../src/modules/novels/domain/chapterLengthPolicy.js';
 import { MockBodyProvider } from '../../src/modules/novels/providers/mockBodyProvider.js';
 import { MockDirectionProvider } from '../../src/modules/novels/providers/mockDirectionProvider.js';
 import { MockFullReviewProvider } from '../../src/modules/novels/providers/mockFullReviewProvider.js';
@@ -26,7 +27,7 @@ const port = Number(process.env.PORT);
 const browserAction = process.env.E1_BROWSER_ACTION ?? 'direction';
 if (!Number.isSafeInteger(delayMs) || delayMs < 120_000 || delayMs > 300_000
   || !Number.isSafeInteger(port) || port < 1024 || port > 65535
-  || !['direction', 'directionEdit', 'trial', 'fullReview'].includes(browserAction)) {
+  || !['direction', 'directionEdit', 'trial', 'fullReview', 'overlength', 'chapterActions'].includes(browserAction)) {
   throw new Error('Set a 2-5 minute delay and an explicit unprivileged port.');
 }
 
@@ -35,6 +36,8 @@ class IsolatedPrismaRepository extends PrismaNovelRepository {
     super({ enabledLeasedTaskTypes: new Set(browserAction === 'direction' ? ['novel_direction_generate']
       : browserAction === 'directionEdit' ? ['novel_direction_fuse', 'novel_direction_optimize']
       : browserAction === 'trial' ? ['trial_writing_generate', 'trial_followup_generate']
+      : browserAction === 'overlength' ? ['chapter_overlength_revise']
+      : browserAction === 'chapterActions' ? ['chapter_body_rewrite', 'chapter_impact_assess']
         : ['novel_full_review']) });
   }
 
@@ -67,7 +70,67 @@ let asyncEnabled = !['trial', 'directionEdit'].includes(browserAction);
 const enabledActions = browserAction === 'direction' ? ['direction_generate'] as const
   : browserAction === 'directionEdit' ? ['direction_fuse', 'direction_optimize'] as const
   : browserAction === 'trial' ? ['trial_chapter_one_generate', 'trial_followup_generate'] as const
+  : browserAction === 'overlength' ? ['chapter_overlength_revise'] as const
+  : browserAction === 'chapterActions' ? ['chapter_rewrite', 'chapter_impact_assess', 'chapter_adopt_impact_assess'] as const
     : ['novel_full_review'] as const;
+const bodyProvider = new MockBodyProvider();
+if (browserAction === 'chapterActions') {
+  const calls = new Map<string, number>();
+  const delayed = async <T>(action: string, generate: () => Promise<T>): Promise<T> => {
+    const call = (calls.get(action) ?? 0) + 1;
+    calls.set(action, call);
+    process.stdout.write(`E1_CHAPTER_MOCK_STARTED=${JSON.stringify({ action, call, at: new Date().toISOString() })}\n`);
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    const result = await generate();
+    process.stdout.write(`E1_CHAPTER_MOCK_FINISHED=${JSON.stringify({ action, call, at: new Date().toISOString() })}\n`);
+    return result;
+  };
+  const rewrite = bodyProvider.rewriteChapter.bind(bodyProvider);
+  bodyProvider.rewriteChapter = (input) => delayed(input.action, () => rewrite(input));
+  const assess = bodyProvider.assessImpact.bind(bodyProvider);
+  bodyProvider.assessImpact = (input) => delayed(input.action, () => assess(input));
+}
+if (browserAction === 'chapterActions') {
+  await repository.getAuthoritativeTaskTime();
+  const prisma = getPrismaClient();
+  const actor = { tenantId: 'e1_browser_mysql_tenant', userId: 'e1_browser_mysql_user',
+    requestId: `e1-browser-chapter-actions-${randomUUID()}` };
+  const { novel } = await repository.createDraft({ request: { title: 'E1 章节重写评估采用贯通验收' },
+    context: actor, now: new Date() });
+  const scope = { tenantId: actor.tenantId, novelId: novel.id };
+  const chapter = await prisma.novelChapter.create({ data: { ...scope,
+    chapterNo: 4, title: '正式正文与重写候选', wordTarget: 1800, mainStatus: 'completed', wordCount: 1800
+  } });
+  await prisma.novel.update({ where: { id: novel.id }, data: { creationStage: 'BODY', stageStatus: 'NOT_STARTED' } });
+  const formal = await prisma.chapterContentVersion.create({ data: { ...scope,
+    chapterId: chapter.id, versionNo: 1, status: 'CURRENT', sourceType: 'manual', sourceVersionRefs: {},
+    content: '甲'.repeat(1800), wordCount: 1800, summary: '主角保存证据并确认事实。',
+    reviewScore: 80, createdBy: actor.userId
+  } });
+  const candidate = await prisma.chapterContentVersion.create({ data: { ...scope,
+    chapterId: chapter.id, versionNo: 2, status: 'CANDIDATE', sourceType: 'mock_ai',
+    sourceVersionRefs: { currentContentVersionId: formal.id }, rewriteReason: '仅优化表达',
+    content: '乙'.repeat(1800), wordCount: 1800, summary: '主角更清晰地呈现已有证据。',
+    reviewScore: 85, createdBy: actor.userId,
+    metadata: { summaryCompare: { currentSummary: formal.summary, candidateSummary: '主角更清晰地呈现已有证据。',
+      benefit: '表达更清晰', newRisks: [], possibleImpact: '仅调整本章表达', aiSuggestion: '核对后采用' } }
+  } });
+  await prisma.novelChapter.update({ where: { id: chapter.id }, data: { currentContentVersionId: formal.id } });
+  process.stdout.write(`E1_CHAPTER_ACTIONS_BROWSER_FIXTURE=${JSON.stringify({ ...scope,
+    chapterId: chapter.id, formalVersionId: formal.id, seedCandidateId: candidate.id })}\n`);
+}
+if (browserAction === 'overlength') {
+  const revise = bodyProvider.reviseOverlengthChapter.bind(bodyProvider);
+  let calls = 0;
+  bodyProvider.reviseOverlengthChapter = async (input) => {
+    const call = ++calls;
+    process.stdout.write(`E1_OVERLENGTH_MOCK_STARTED=${JSON.stringify({ call, at: new Date().toISOString() })}\n`);
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    const result = await revise(input);
+    process.stdout.write(`E1_OVERLENGTH_MOCK_FINISHED=${JSON.stringify({ call, at: new Date().toISOString() })}\n`);
+    return result;
+  };
+}
 const fullReviewProvider = new MockFullReviewProvider();
 if (browserAction === 'fullReview') {
   const generateFullReview = fullReviewProvider.generateFullReview.bind(fullReviewProvider);
@@ -79,6 +142,7 @@ if (browserAction === 'fullReview') {
 const app = await buildApp({
   logger: false,
   novelRepository: repository,
+  bodyProvider,
   fullReviewProvider,
   requestContextResolver: async () => ({ tenantId: 'e1_browser_mysql_tenant', userId: 'e1_browser_mysql_user' }),
   asyncTransportPolicy: () => ({
@@ -143,6 +207,51 @@ if (browserAction === 'fullReview') {
   );
   process.stdout.write(`E1_FULL_REVIEW_BROWSER_NOVEL_ID=${seed.novelId}\n`);
 }
+if (browserAction === 'overlength') {
+  await repository.getAuthoritativeTaskTime();
+  const prisma = getPrismaClient();
+  const actor = { tenantId: 'e1_browser_mysql_tenant', userId: 'e1_browser_mysql_user',
+    requestId: `e1-browser-overlength-${randomUUID()}` };
+  const { novel } = await repository.createDraft({ request: { title: 'E1 超长正文精简长等待验收' },
+    context: actor, now: new Date() });
+  const scope = { tenantId: actor.tenantId, novelId: novel.id };
+  const plan = await prisma.creativeVersion.create({ data: { ...scope,
+    objectType: 'chapter_plan', objectId: 'chapter_plan', versionNo: 1, status: 'CURRENT',
+    contentJson: { title: '隔离章节目录', summary: '第 3 章正式正文保留，第 4 章原稿待精简' },
+    createdBy: actor.userId
+  } });
+  const formalChapter = await prisma.novelChapter.create({ data: { ...scope,
+    chapterNo: 3, title: '已确认的前章', wordTarget: 1000, mainStatus: 'completed'
+  } });
+  const formalContent = '本章正式内容已经确认，主角保留证据。'.repeat(50);
+  const formalVersion = await prisma.chapterContentVersion.create({ data: { ...scope,
+    chapterId: formalChapter.id, versionNo: 1, status: 'CURRENT', sourceType: 'manual',
+    content: formalContent, wordCount: evaluateChapterLength(formalContent, 1000).actual,
+    createdBy: actor.userId
+  } });
+  await prisma.novelChapter.update({ where: { id: formalChapter.id }, data: {
+    currentContentVersionId: formalVersion.id, wordCount: formalVersion.wordCount
+  } });
+  const chapter = await prisma.novelChapter.create({ data: { ...scope,
+    chapterNo: 4, title: '保留原稿等待精简', wordTarget: 1000, statusNote: '超长原稿待处理'
+  } });
+  await prisma.novel.update({ where: { id: novel.id }, data: {
+    currentChapterPlanVersionId: plan.id, creationStage: 'BODY', stageStatus: 'BLOCKED'
+  } });
+  const content = '甲'.repeat(1110) + '这是一句可以删除的冗余描写。'.repeat(4);
+  const lengthGate = evaluateChapterLength(content, 1000);
+  if (lengthGate.status !== 'too_long') throw new Error('Overlength fixture must fail the length gate.');
+  const original = await prisma.chapterContentVersion.create({ data: { ...scope,
+    chapterId: chapter.id, versionNo: 1, status: 'CANDIDATE', sourceType: 'ai_overlength_original',
+    sourceVersionRefs: { currentChapterPlanVersionId: plan.id }, content,
+    wordCount: lengthGate.actual, createdBy: actor.userId, summary: '隔离测试超长原稿，尚未复核。',
+    metadata: { chapterNo: chapter.chapterNo, title: chapter.title, lengthRecovery: 'original',
+      lengthGate: { ...lengthGate }, reviewRequired: true, riskLevel: 'medium' }
+  } });
+  process.stdout.write(`E1_OVERLENGTH_BROWSER_FIXTURE=${JSON.stringify({ ...scope,
+    chapterId: chapter.id, originalId: original.id, formalChapterId: formalChapter.id,
+    formalVersionId: formalVersion.id, chapterPlanVersionId: plan.id })}\n`);
+}
 const directionProvider = new MockDirectionProvider();
 const generate = directionProvider.generateCandidates.bind(directionProvider);
 if (browserAction === 'direction') {
@@ -183,7 +292,7 @@ const worker = new NovelTaskWorkerRuntime({
     pollIntervalMs: 100, shutdownGracePeriodMs: 1000 },
   ...createLeasedActionExecutor({ repository, providers: {
     directionProvider, structureProvider: new MockStructureProvider(),
-    trialProvider, bodyProvider: new MockBodyProvider(),
+    trialProvider, bodyProvider,
     fullReviewProvider
   } }),
   onRuntimeError: (stage) => app.log.warn({ stage }, 'E1 browser MySQL worker operation failed.')
@@ -192,3 +301,7 @@ const recoveryLoop = createNovelRecoveryLoop({ repository });
 await app.listen({ host: '127.0.0.1', port });
 recoveryLoop.start();
 worker.start();
+process.stdout.write(`E1_BROWSER_READY=${port}\n`);
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.once(signal, () => { void app.close().catch(() => { process.exitCode = 1; }); });
+}

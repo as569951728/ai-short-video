@@ -18,6 +18,7 @@ import {
 import { getPrismaClient } from '../../../infrastructure/database/prisma.js';
 import { Prisma } from '../../../generated/prisma/client.js';
 import { evaluateChapterLength, isBoundedOverlengthRevision } from '../domain/chapterLengthPolicy.js';
+import { matchesChapterAdoptionContract } from '../domain/chapterAdoptionContract.js';
 import { bindGeneratedBodyChapter } from '../domain/bodyChapterBinding.js';
 import { bindTrialFollowupChapters } from '../domain/trialFollowupBinding.js';
 import { fullReviewRequestFingerprintFromExecution, validateFullReviewDraftForPersistence, type BodyChapterProviderDraft, type TrialFollowupChapterProviderDraft } from '../services/actionExecutionPlan.js';
@@ -452,6 +453,8 @@ export class PrismaNovelRepository implements NovelRepository {
     ]);
     if (refs.currentContentVersionId && (!currentContent || currentContent.chapterId !== chapter?.id)) return null;
     if (refs.candidateVersionId && (!candidate || candidate.chapterId !== chapter?.id || candidate.status === VersionStatus.Discarded)) return null;
+    if (input.action === 'chapter_adopt_impact_assess'
+      && !matchesChapterAdoptionContract(chapter, currentContent, candidate, toRecord(input.normalizedRequest).pageVersionSnapshot)) return null;
     if (input.action === 'chapter_overlength_revise' && (!chapter || chapter.currentContentVersionId || !candidate ||
       candidate.status !== VersionStatus.Candidate || candidate.sourceType !== 'ai_overlength_original' ||
       toRecord(toRecord(candidate.metadata).lengthGate).target !== chapter.wordTarget ||

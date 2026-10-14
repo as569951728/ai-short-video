@@ -3,12 +3,15 @@ import type { FastifyRequest } from 'fastify';
 import { ErrorCode, NOVEL_ASYNC_TRANSPORT_ACTIONS, isPlaceholderActorIdentifier,
   type NovelAsyncTransportAction, type NovelAsyncTransportCapabilityV1 } from '@ai-shortvideo/shared';
 import { BusinessError } from '../../../shared/errors.js';
+import { ISOLATED_E1_ACTIONS } from '../../../config/isolatedNovelAsyncPolicy.js';
 import type { RequestContextResolver } from '../domain/novelDomain.js';
 
 export type { NovelAsyncTransportCapabilityV1 } from '@ai-shortvideo/shared';
 
 export interface AsyncTransportPolicy {
   novelAsyncDispatchEnabled: boolean;
+  // Trusted server declaration only, after validating the persistent repository and worker configuration.
+  durableRuntimeConfigured?: boolean;
   policyRevision?: string;
   capabilityTtlMs?: number;
   scopeSecret?: string | Uint8Array;
@@ -60,7 +63,12 @@ export function createCapabilityPolicySnapshotResolver(
   return async (request) => {
     const policy = typeof options.policy === 'function' ? options.policy() : options.policy;
     if (policy.novelAsyncDispatchEnabled !== true) return disabled('POLICY_DISABLED');
-    if (options.runtimeEnvironment !== 'development' || options.providerMode !== 'mock') {
+    const durableRuntime = policy.durableRuntimeConfigured === true;
+    const supportedEnvironment = durableRuntime
+      ? ['development', 'production'].includes(options.runtimeEnvironment)
+        && ['mock', 'deepseek'].includes(options.providerMode)
+      : options.runtimeEnvironment === 'development' && options.providerMode === 'mock';
+    if (!supportedEnvironment) {
       return disabled('UNSUPPORTED_ENVIRONMENT');
     }
 
@@ -94,6 +102,13 @@ export function createCapabilityPolicySnapshotResolver(
     }
     const expiresAt = new Date(expiryMs).toISOString();
     const enabledActions = normalizeEnabledActions(policy.enabledActions);
+    if (durableRuntime) {
+      if (!enabledActions?.length) return disabled('POLICY_DISABLED');
+      const allowed = new Set<NovelAsyncTransportAction>(ISOLATED_E1_ACTIONS);
+      if (enabledActions.some((action) => !allowed.has(action))) {
+        throw new Error('Durable async transport requires an E1-only action policy');
+      }
+    }
     if (enabledActions?.length === 0) return disabled('POLICY_DISABLED');
     const submissionScopeId = hmacBase64Url(secret, [
       'rp02b2-scope', 'v1', apiAudience, tenantId, userId
@@ -101,7 +116,8 @@ export function createCapabilityPolicySnapshotResolver(
     const capabilityRevision = hmacBase64Url(secret, [
       'rp02b2-capability', 'v1', policy.policyRevision ?? '',
       String(ttlMs), options.runtimeEnvironment, options.providerMode,
-      apiAudience, tenantId, userId, expiresAt, JSON.stringify(enabledActions ?? ['*'])
+      apiAudience, tenantId, userId, expiresAt, JSON.stringify(enabledActions ?? ['*']),
+      ...(durableRuntime ? ['durable-runtime-configured'] : [])
     ]);
     return { contractVersion: 'v1', enabled: true, capabilityRevision, submissionScopeId, expiresAt,
       ...(enabledActions ? { enabledActions } : {}) };

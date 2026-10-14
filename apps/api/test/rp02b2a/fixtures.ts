@@ -169,8 +169,9 @@ export async function createRouteAuthorityFixture(
     ...providers
   });
   const prepared = await prepareTarget(app, repository, action);
-  const novel = await repository.findById('tenant_test', prepared.novelId);
-  if (!novel) throw new Error(`missing prepared novel for ${action}`);
+  const loadedNovel = await repository.findById('tenant_test', prepared.novelId);
+  if (!loadedNovel) throw new Error(`missing prepared novel for ${action}`);
+  const novel = loadedNovel;
   const originalLoad = repository.loadGenerationAuthority.bind(repository);
   let captureAuthority = false;
   let loadCount = 0;

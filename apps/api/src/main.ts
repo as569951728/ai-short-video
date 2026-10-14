@@ -1,6 +1,7 @@
 import { buildApp } from './app.js';
 import { randomUUID } from 'node:crypto';
 import { env } from './config/env.js';
+import { resolveNovelAsyncDispatchConfig } from './config/novelAsyncDispatch.js';
 import { isPlaceholderActorIdentifier } from '@ai-shortvideo/shared';
 import { createInMemoryNovelRepository } from './modules/novels/repositories/inMemoryNovelRepository.js';
 import { PrismaNovelRepository } from './modules/novels/repositories/prismaNovelRepository.js';
@@ -22,6 +23,15 @@ const deploymentActor = Object.freeze({
   tenantId: env.DEPLOYMENT_ACTOR_TENANT_ID!,
   userId: env.DEPLOYMENT_ACTOR_USER_ID!
 });
+const durableAsyncConfig = resolveNovelAsyncDispatchConfig({
+  flag: env.NOVEL_ASYNC_DISPATCH_ENABLED,
+  runtimeEnvironment: env.NODE_ENV,
+  providerMode: process.env.AI_PROVIDER_MODE ?? 'mock',
+  databaseUrl: env.DATABASE_URL,
+  deploymentActor,
+  scopeSecret: env.NOVEL_ASYNC_SCOPE_SECRET,
+  apiAudience: env.NOVEL_ASYNC_API_AUDIENCE
+});
 const developmentAsyncEnabled = env.NOVEL_ASYNC_DISPATCH_DEV_ENABLED === 'true'
   && env.NODE_ENV === 'development' && !env.DATABASE_URL && resolveAiProviderMode() === 'mock';
 const isolatedMysqlAsyncEnabled = resolveIsolatedNovelAsyncEnabled({
@@ -36,14 +46,15 @@ const developmentLeasedTaskTypes = new Set([
   'stage_outline_generate', 'chapter_plan_generate', 'novel_full_review'
 ]);
 const novelRepository = env.DATABASE_URL ? new PrismaNovelRepository({
-  enabledLeasedTaskTypes: isolatedMysqlAsyncEnabled ? ISOLATED_E1_TASK_TYPES : undefined
+  enabledLeasedTaskTypes: durableAsyncConfig?.enabledLeasedTaskTypes
+    ?? (isolatedMysqlAsyncEnabled ? ISOLATED_E1_TASK_TYPES : undefined)
 }) : createInMemoryNovelRepository({
   enabledLeasedTaskTypes: developmentAsyncEnabled ? developmentLeasedTaskTypes : undefined
 });
 const app = await buildApp({
   novelRepository,
   requestContextResolver: async () => deploymentActor,
-  asyncTransportPolicy: {
+  asyncTransportPolicy: durableAsyncConfig?.asyncTransportPolicy ?? {
     novelAsyncDispatchEnabled: developmentAsyncEnabled || isolatedMysqlAsyncEnabled,
     enabledActions: isolatedMysqlAsyncEnabled ? ISOLATED_E1_ACTIONS : undefined,
     scopeSecret: env.NOVEL_ASYNC_SCOPE_SECRET,

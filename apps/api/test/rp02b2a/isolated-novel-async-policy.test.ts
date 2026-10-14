@@ -18,6 +18,11 @@ describe('isolated E1 MySQL async policy', () => {
     assert.equal(resolveIsolatedNovelAsyncEnabled(valid()), true);
     assert.equal(ISOLATED_E1_ACTIONS.includes('chapter_plan_generate'), false);
     assert.equal(ISOLATED_E1_TASK_TYPES.has('chapter_plan_generate'), false);
+    for (const action of ['chapter_rewrite', 'chapter_impact_assess', 'chapter_adopt_impact_assess'] as const) {
+      assert.equal(ISOLATED_E1_ACTIONS.includes(action), true);
+    }
+    assert.equal(ISOLATED_E1_TASK_TYPES.has('chapter_body_rewrite'), true);
+    assert.equal(ISOLATED_E1_TASK_TYPES.has('chapter_impact_assess'), true);
   });
 
   it('refuses unsafe environments, provider modes, and databases', () => {

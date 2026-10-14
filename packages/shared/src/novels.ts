@@ -12,7 +12,8 @@ export type NovelProviderAction = (typeof NOVEL_PROVIDER_ACTIONS)[number];
 
 export const NOVEL_ASYNC_TRANSPORT_ACTIONS = [
   'direction_generate', 'direction_fuse', 'direction_optimize', 'setting_generate', 'outline_generate', 'stage_outline_generate',
-  'chapter_plan_generate', 'trial_chapter_one_generate', 'trial_followup_generate', 'chapter_overlength_revise', 'novel_full_review'
+  'chapter_plan_generate', 'trial_chapter_one_generate', 'trial_followup_generate', 'chapter_overlength_revise',
+  'chapter_rewrite', 'chapter_impact_assess', 'chapter_adopt_impact_assess', 'novel_full_review'
 ] as const satisfies readonly NovelProviderAction[];
 
 export type NovelAsyncTransportAction = (typeof NOVEL_ASYNC_TRANSPORT_ACTIONS)[number];
@@ -1743,7 +1744,13 @@ export interface ConfirmVideoReadinessRequest {
   confirmRisk?: boolean;
 }
 
-export interface RewriteChapterRequest {
+export interface ChapterAsyncSubmissionExpectation {
+  expectedSubmissionScopeId?: string;
+  expectedCapabilityRevision?: string;
+  expectedCapabilityExpiresAt?: string;
+}
+
+export interface RewriteChapterRequest extends ChapterAsyncSubmissionExpectation {
   instruction?: string | null;
   reason?: string | null;
   currentContentVersionId?: string | null;
@@ -1755,14 +1762,14 @@ export interface ReviseOverlengthChapterRequest {
   idempotencyKey?: string | null;
 }
 
-export interface AdoptChapterContentVersionRequest {
+export interface AdoptChapterContentVersionRequest extends ChapterAsyncSubmissionExpectation {
   reason?: string | null;
   currentContentVersionId?: string | null;
   pageVersionSnapshot?: unknown;
   idempotencyKey?: string | null;
 }
 
-export interface CreateImpactAssessmentRequest {
+export interface CreateImpactAssessmentRequest extends ChapterAsyncSubmissionExpectation {
   reason?: string | null;
   currentContentVersionId?: string | null;
   idempotencyKey?: string | null;

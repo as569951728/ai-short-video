@@ -5,6 +5,7 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(3001),
   DATABASE_URL: z.string().min(1).optional(),
+  NOVEL_ASYNC_DISPATCH_ENABLED: z.enum(['true', 'false']).default('false'),
   NOVEL_ASYNC_DISPATCH_DEV_ENABLED: z.enum(['true', 'false']).default('false'),
   NOVEL_ASYNC_DISPATCH_E1_MYSQL_ENABLED: z.enum(['true', 'false']).default('false'),
   E1_MYSQL_SMOKE_URL: z.string().optional(),

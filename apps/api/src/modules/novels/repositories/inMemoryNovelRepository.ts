@@ -16,6 +16,7 @@ import {
   type VideoReadinessCheckItemDTO
 } from '@ai-shortvideo/shared';
 import { evaluateChapterLength, isBoundedOverlengthRevision } from '../domain/chapterLengthPolicy.js';
+import { matchesChapterAdoptionContract } from '../domain/chapterAdoptionContract.js';
 import { bindTrialFollowupChapters } from '../domain/trialFollowupBinding.js';
 import { bindGeneratedBodyChapter } from '../domain/bodyChapterBinding.js';
 import {
@@ -366,6 +367,8 @@ export function createInMemoryNovelRepository(options: {
     const candidateRefId = refs.candidateVersionId ?? refs.selectedChapterOneCandidateId;
     const candidate = contentById(candidateRefId);
     if (refs.candidateVersionId && (!candidate || candidate.chapterId !== chapter?.id || candidate.status === VersionStatus.Discarded)) return null;
+    if (input.action === 'chapter_adopt_impact_assess'
+      && !matchesChapterAdoptionContract(chapter, currentContent, candidate, asRecord(input.normalizedRequest).pageVersionSnapshot)) return null;
     if (input.action === 'chapter_overlength_revise' && (!chapter || chapter.currentContentVersionId || !candidate ||
       candidate.status !== VersionStatus.Candidate || candidate.sourceType !== 'ai_overlength_original' ||
       asRecord(asRecord(candidate.metadata).lengthGate).target !== chapter.wordTarget ||
@@ -1528,10 +1531,9 @@ export function createInMemoryNovelRepository(options: {
         const candidate = chapterContentVersions.find((item) => item.tenantId === task.tenantId
           && item.novelId === novel.id && item.chapterId === chapter?.id
           && item.id === refs.candidateVersionId && item.status === VersionStatus.Candidate);
-        if (!chapter || !candidate || chapter.currentContentVersionId !== (currentContent?.id ?? null)
-          || (refs.currentContentVersionId != null && !currentContent)
-          || evaluateChapterLength(candidate.content, chapter.wordTarget).status !== 'pass'
-          || asRecord(candidate.metadata).reviewRequired === true || candidate.sourceType?.startsWith('ai_overlength_')) {
+        if (!chapter || !candidate || !matchesChapterAdoptionContract(
+          chapter, currentContent, candidate, asRecord(envelope.normalizedRequest).pageVersionSnapshot
+        )) {
           return this.failLeasedAction({ ...input, expectedPhase: 'provider_result_validated', reason: 'source_stale' });
         }
         if (!validLeasedImpactDraft(input.validatedResult)) {
@@ -1539,7 +1541,8 @@ export function createInMemoryNovelRepository(options: {
         }
         const impact = input.validatedResult;
         const request = asRecord(envelope.normalizedRequest);
-        const suppliedReason = typeof request.reason === 'string' ? request.reason.trim() : '';
+        const suppliedReason = typeof request.reason === 'string'
+          && request.reason.trim() !== '采用候选前影响评估' ? request.reason.trim() : '';
         if (impact.blocksFullReview && !suppliedReason) {
           return this.failLeasedAction({ ...input, expectedPhase: 'provider_result_validated', reason: 'worker_payload_unsupported' });
         }

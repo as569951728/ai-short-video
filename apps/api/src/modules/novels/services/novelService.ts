@@ -132,6 +132,7 @@ import { MockBodyProvider, type BodyProvider } from '../providers/mockBodyProvid
 import { MockFullReviewProvider, type FullReviewProvider } from '../providers/mockFullReviewProvider.js';
 import { UnavailableHotspotReferenceGateway, type HotspotReferenceGateway } from '../integrations/hotspotReferenceGateway.js';
 import { NovelStatusService } from './novelStatusService.js';
+import { queueChapterAction } from './chapterAsyncSubmission.js';
 import { toRecentTaskSummaryDTO } from '../../tasks/services/taskService.js';
 import {
   createActorScopedIdempotencyToken,
@@ -1426,6 +1427,24 @@ export class NovelService {
       affectedObjects: [],
       nextAction: bodyGeneration.recommendedAction
     };
+  }
+
+  async queueChapterRewrite(novelId: string, chapterId: string, request: RewriteChapterRequest,
+    context: RequestContext, authoritativeNow: Date) {
+    return queueChapterAction({ action: 'chapter_rewrite', novelId, chapterId, request, context,
+      authoritativeNow, repository: this.options.repository, provider: this.bodyProvider });
+  }
+
+  async queueChapterImpactAssessment(novelId: string, chapterId: string, request: CreateImpactAssessmentRequest,
+    context: RequestContext, authoritativeNow: Date) {
+    return queueChapterAction({ action: 'chapter_impact_assess', novelId, chapterId, request, context,
+      authoritativeNow, repository: this.options.repository, provider: this.bodyProvider });
+  }
+
+  async queueChapterAdoptImpactAssessment(novelId: string, chapterId: string, candidateVersionId: string,
+    request: AdoptChapterContentVersionRequest, context: RequestContext, authoritativeNow: Date) {
+    return queueChapterAction({ action: 'chapter_adopt_impact_assess', novelId, chapterId, candidateVersionId,
+      request, context, authoritativeNow, repository: this.options.repository, provider: this.bodyProvider });
   }
 
   async rewriteChapter(novelId: string, chapterId: string, request: RewriteChapterRequest, context: RequestContext): Promise<ChapterRewriteResultDTO> {
