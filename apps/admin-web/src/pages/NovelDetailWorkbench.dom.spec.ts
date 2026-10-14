@@ -187,6 +187,29 @@ describe('NovelDetailWorkbench DOM behavior', () => {
     expect(mocks.generateDirections).not.toHaveBeenCalled()
   })
 
+  it('locks duplicate trial generation and explains the running task instead of a missing chapter plan', async () => {
+    mocks.route.query = { step: 'trial' }
+    mocks.getNovelDetail.mockResolvedValue(createNovelDetail({
+      creationStage: NovelCreationStage.Trial,
+      currentAssets: { direction: {}, setting: {}, outline: {}, stageOutline: {}, chapterPlan: { id: 'plan-current' } },
+      recentTask: {
+        id: 'trial-task-processing', taskType: 'trial_writing_generate',
+        status: TaskStatus.Processing, statusText: '生成中', progress: 0,
+        currentStep: '正在调用模型', resultVersionIds: [],
+      },
+    }))
+
+    wrapper = mount(NovelDetailWorkbench, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    const generateButton = wrapper.findAll('button').find((button) => button.text() === '生成第 1 章候选')
+    expect(generateButton?.attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('已有生成任务正在执行，请先查看最近任务。')
+    expect(wrapper.text()).not.toContain('需先采用章节目录后可生成试写。')
+    await generateButton?.trigger('click')
+    expect(mocks.generateTrial).not.toHaveBeenCalled()
+  })
+
   it('shows task progress without a false cancel or regenerate action while setting generation is processing', async () => {
     mocks.route.query = { step: 'setting' }
     mocks.getNovelDetail.mockResolvedValue(createNovelDetail({
@@ -604,6 +627,49 @@ describe('NovelDetailWorkbench DOM behavior', () => {
     await nextTick()
     expect(document.getElementById('trial-candidate-trial-generated')?.classList.contains('result-focus-card')).toBe(false)
     scrollIntoView.mockRestore()
+  })
+
+  it('uses the trial header to inspect existing candidates rather than start another paid call', async () => {
+    mocks.route.query = { step: 'trial' }
+    mocks.getNovelDetail.mockResolvedValue(createNovelDetail({
+      creationStage: NovelCreationStage.Trial,
+      currentAssets: { direction: {}, setting: {}, outline: {}, stageOutline: {}, chapterPlan: { id: 'plan-current' } },
+      latestTrialRun: createTrialRunFixture(),
+    }))
+
+    wrapper = mount(NovelDetailWorkbench, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    const inspectButton = wrapper.findAll('button').find((button) => button.text() === '查看第 1 章候选')
+    expect(inspectButton?.attributes('disabled')).toBeUndefined()
+    await inspectButton?.trigger('click')
+    expect(mocks.generateTrial).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('选这个继续试写')
+  })
+
+  it('locks trial candidate selection and optimization while followup is processing', async () => {
+    mocks.route.query = { step: 'trial' }
+    mocks.getNovelDetail.mockResolvedValue(createNovelDetail({
+      creationStage: NovelCreationStage.Trial,
+      currentAssets: { direction: {}, setting: {}, outline: {}, stageOutline: {}, chapterPlan: { id: 'plan-current' } },
+      latestTrialRun: createTrialRunFixture(),
+      recentTask: {
+        id: 'trial-followup-processing', taskType: 'trial_followup_generate',
+        status: TaskStatus.Processing, statusText: '生成中', progress: 0,
+        currentStep: '正在调用模型', resultVersionIds: [],
+      },
+    }))
+
+    wrapper = mount(NovelDetailWorkbench, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    const selectButton = wrapper.findAll('button').find((button) => button.text() === '选这个继续试写')
+    const optimizeButton = wrapper.findAll('button').find((button) => button.text() === '基于此版优化')
+    expect(selectButton?.attributes('disabled')).toBeDefined()
+    expect(optimizeButton?.attributes('disabled')).toBeDefined()
+    await selectButton?.trigger('click')
+    await optimizeButton?.trigger('click')
+    expect(mocks.generateTrial).not.toHaveBeenCalled()
   })
 
   it('renders the non-whitespace length gate and blocks an under-length trial candidate from selection', async () => {

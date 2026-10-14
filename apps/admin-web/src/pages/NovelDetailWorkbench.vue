@@ -684,7 +684,7 @@
                   <p class="muted">先比较第 1 章候选，选定后才继续生成第 2-3 章和试写总评。</p>
                 </div>
                 <div class="task-notice-actions">
-                  <el-button v-if="showTrialAuthoringActions && detail?.latestTrialRun" :disabled="!canGenerateTrial" :loading="generatingTrial" @click="() => handleRegenerateTrial('重新生成第 1 章候选')">重新生成 3 个</el-button>
+                  <el-button v-if="showTrialAuthoringActions && detail?.latestTrialRun" :disabled="!canGenerateTrial || hasLocalPendingWait" :loading="generatingTrial" @click="() => handleRegenerateTrial('重新生成第 1 章候选')">重新生成 3 个</el-button>
                 </div>
               </div>
 
@@ -697,7 +697,7 @@
               />
 
               <el-empty v-else-if="!detail?.latestTrialRun" description="暂无试写候选">
-                <el-button v-if="showTrialAuthoringActions" type="primary" :disabled="!canGenerateTrial" :loading="generatingTrial" @click="() => handleGenerateTrial()">生成第 1 章候选</el-button>
+                <el-button v-if="showTrialAuthoringActions" type="primary" :disabled="!canGenerateTrial || hasLocalPendingWait" :loading="generatingTrial" @click="() => handleGenerateTrial()">生成第 1 章候选</el-button>
               </el-empty>
 
               <template v-else>
@@ -760,14 +760,14 @@
                       <el-button
                         v-if="showTrialCandidateAction(candidate)"
                         size="small"
-                        :disabled="!candidate.canSelect"
+                        :disabled="!candidate.canSelect || hasLocalPendingWait"
                         :title="candidate.selectDisabledReason || undefined"
                         :loading="selectingTrialCandidateId === candidate.id"
                         @click="handleSelectTrialCandidate(candidate)"
                       >
                         选这个继续试写
                       </el-button>
-                      <el-button v-if="showTrialAuthoringActions" size="small" :loading="generatingTrial" @click="handleRegenerateTrial(`基于 ${candidate.versionLabel} 优化开篇并满足长度门禁`)">
+                      <el-button v-if="showTrialAuthoringActions" size="small" :disabled="!canGenerateTrial || hasLocalPendingWait" :loading="generatingTrial" @click="handleRegenerateTrial(`基于 ${candidate.versionLabel} 优化开篇并满足长度门禁`)">
                         {{ candidate.lengthGate && !candidate.lengthGate.canAdopt ? '重新生成字符数合格候选' : '基于此版优化' }}
                       </el-button>
                     </div>
@@ -2241,11 +2241,17 @@ const workbenchSteps = computed<WorkbenchStepView[]>(() => {
       name: '试写调试',
       description: '先试写 1-3 章，确认文风、爽点和可持续性。',
       gateText: hasTrialStrategy ? '试写策略快照已生成，批量正文已解锁。' : hasChapterPlan ? '完成第 1-3 章试写并确认总评后，批量正文才会解锁。' : '需要先采用章节目录。',
-      nextAction: hasTrialStrategy ? '试写策略已确认。' : hasChapterPlan ? '生成第 1 章候选，并继续 2-3 章试写。' : '先确认章节目录。',
-      primaryActionLabel: '生成试写',
-      primaryAction: () => handleGenerateTrial(),
-      primaryLoading: generatingTrial.value || isNovelActionRunning('trial_generate'),
-      primaryDisabled: !canGenerateTrial.value || hasLocalPendingWait.value,
+      nextAction: hasTrialStrategy ? '试写策略已确认。'
+        : detail.value?.latestTrialRun?.trialReview ? '查看试写总评并确认后续正文策略。'
+          : detail.value?.latestTrialRun ? '比较第 1 章候选，选定一版继续试写。'
+            : hasChapterPlan ? '生成第 1 章候选，并继续 2-3 章试写。' : '先确认章节目录。',
+      primaryActionLabel: detail.value?.latestTrialRun?.trialReview ? '查看试写总评'
+        : detail.value?.latestTrialRun ? '查看第 1 章候选' : '生成试写',
+      primaryAction: detail.value?.latestTrialRun
+        ? () => setActiveSubStep(detail.value?.latestTrialRun?.trialReview ? 'review' : 'chapterOne')
+        : () => handleGenerateTrial(),
+      primaryLoading: !detail.value?.latestTrialRun && (generatingTrial.value || isNovelActionRunning('trial_generate')),
+      primaryDisabled: !detail.value?.latestTrialRun && (!canGenerateTrial.value || hasLocalPendingWait.value),
       state: stateWithIssue(hasTrialStrategy ? 'done' : hasChapterPlan ? 'active' : 'locked', [NovelCreationStage.Trial]),
       progress: hasTrialStrategy ? 100 : detail.value?.latestTrialRun?.trialReview ? 82 : detail.value?.latestTrialRun ? 52 : hasChapterPlan ? 20 : 0,
       subSteps: createSubSteps([
@@ -2324,7 +2330,10 @@ function createStep(input: Omit<WorkbenchStepView, 'stateText' | 'tagType' | 'pr
   const stateText = getStepStateText(input.state)
   return {
     ...input,
-    disabledReason: input.primaryDisabled && input.state !== 'done' ? input.disabledReason || getWorkbenchStepLockedReason(input.key) : input.disabledReason ?? '',
+    disabledReason: input.primaryDisabled && hasLocalPendingWait.value
+      ? asyncTransport.message.value || '已有生成任务正在执行，请先查看最近任务。'
+      : input.primaryDisabled && input.state !== 'done'
+        ? input.disabledReason || getWorkbenchStepLockedReason(input.key) : input.disabledReason ?? '',
     stateText,
     tagType: getStepTagType(input.state),
     progressText: stateText,
@@ -2911,6 +2920,11 @@ async function handleGenerateTrial(regenerateReason?: string) {
 }
 
 async function handleRegenerateTrial(regenerateReason: string) {
+  if (hasLocalPendingWait.value) {
+    ElMessage.info('已有生成任务在等待中，请先查看最近任务或取消等待。')
+    return
+  }
+
   try {
     await ElMessageBox.confirm(
       '这会发起一次新的模型调用，可能产生新的模型费用。上一次不合格结果不会被采用或自动续写；取消不会产生新调用。',

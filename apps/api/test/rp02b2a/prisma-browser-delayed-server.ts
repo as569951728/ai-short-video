@@ -25,14 +25,18 @@ if (target.protocol !== 'mysql:' || !['127.0.0.1', 'localhost'].includes(target.
 }
 const delayMs = Number(process.env.E1_BROWSER_MODEL_DELAY_MS);
 const port = Number(process.env.PORT);
+const browserAction = process.env.E1_BROWSER_ACTION ?? 'direction';
 if (!Number.isSafeInteger(delayMs) || delayMs < 120_000 || delayMs > 300_000
-  || !Number.isSafeInteger(port) || port < 1024 || port > 65535) {
+  || !Number.isSafeInteger(port) || port < 1024 || port > 65535
+  || !['direction', 'trial'].includes(browserAction)) {
   throw new Error('Set a 2-5 minute delay and an explicit unprivileged port.');
 }
 
 class IsolatedPrismaRepository extends PrismaNovelRepository {
   override async getLeasedExecutionCapability(taskType: string) {
-    return taskType === 'novel_direction_generate' ? 'enabled' as const : super.getLeasedExecutionCapability(taskType);
+    const allowed = browserAction === 'direction' ? ['novel_direction_generate']
+      : ['trial_writing_generate', 'trial_followup_generate'];
+    return allowed.includes(taskType) ? 'enabled' as const : super.getLeasedExecutionCapability(taskType);
   }
 
   override async getAuthoritativeTaskTime() {
@@ -60,21 +64,66 @@ function errorCode(error: unknown): string {
 }
 
 const repository = new IsolatedPrismaRepository();
+let asyncEnabled = browserAction === 'direction';
 const app = await buildApp({
+  logger: false,
   novelRepository: repository,
   requestContextResolver: async () => ({ tenantId: 'e1_browser_mysql_tenant', userId: 'e1_browser_mysql_user' }),
-  asyncTransportPolicy: {
-    novelAsyncDispatchEnabled: true,
+  asyncTransportPolicy: () => ({
+    novelAsyncDispatchEnabled: asyncEnabled,
     scopeSecret: process.env.NOVEL_ASYNC_SCOPE_SECRET,
     apiAudience: process.env.NOVEL_ASYNC_API_AUDIENCE
-  }
+  })
 });
+app.addHook('onClose', async () => {
+  await worker.stop();
+  await recoveryLoop.stop();
+  await disconnectPrismaClient();
+});
+if (browserAction === 'trial') {
+  const post = async (path: string, body: Record<string, unknown> = {}) => {
+    const response = await app.inject({ method: 'POST', url: path, payload: body });
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw new Error(`Trial browser fixture setup failed: ${path} ${response.statusCode}`);
+    }
+    return response.json().data as Record<string, any>;
+  };
+  const novel = await post('/novels/drafts', { title: '都市重生：旧案与第一次反击' });
+  const novelId = String(novel.id);
+  const direction = await post(`/novels/${novelId}/directions/generate`);
+  const directionCandidate = direction.candidates.find((candidate: { score: number }) => candidate.score >= 75);
+  if (!directionCandidate) throw new Error('Trial browser fixture has no adoptable direction.');
+  await post(`/novels/${novelId}/directions/${directionCandidate.id}/adopt`, {
+    currentVersionId: null, idempotencyKey: `e1-trial-browser-direction-${novelId}`, reason: '确认试写测试方向'
+  });
+  for (const path of ['settings', 'outlines', 'stage-outlines', 'chapter-plans']) {
+    const generated = await post(`/novels/${novelId}/${path}/generate`);
+    await post(`/novels/${novelId}/${path}/${generated.candidate.id}/adopt`, { reason: '确认试写测试资产' });
+  }
+  asyncEnabled = true;
+  process.stdout.write(`E1_TRIAL_BROWSER_NOVEL_ID=${novelId}\n`);
+}
 const directionProvider = new MockDirectionProvider();
 const generate = directionProvider.generateCandidates.bind(directionProvider);
-directionProvider.generateCandidates = async (input) => {
-  await new Promise((resolve) => setTimeout(resolve, delayMs));
-  return generate(input);
-};
+if (browserAction === 'direction') {
+  directionProvider.generateCandidates = async (input) => {
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    return generate(input);
+  };
+}
+const trialProvider = new MockTrialProvider();
+if (browserAction === 'trial') {
+  const generateChapterOne = trialProvider.generateChapterOneCandidates.bind(trialProvider);
+  trialProvider.generateChapterOneCandidates = async (input) => {
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    return generateChapterOne(input);
+  };
+  const generateFollowup = trialProvider.generateFollowup.bind(trialProvider);
+  trialProvider.generateFollowup = async (input) => {
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    return generateFollowup(input);
+  };
+}
 const worker = new NovelTaskWorkerRuntime({
   repository, clock: { now: () => repository.getAuthoritativeTaskTime() },
   scheduler: createSystemNovelTaskWorkerScheduler(), workerId: `e1-browser-mysql:${randomUUID()}`,
@@ -82,17 +131,12 @@ const worker = new NovelTaskWorkerRuntime({
     pollIntervalMs: 100, shutdownGracePeriodMs: 1000 },
   ...createLeasedActionExecutor({ repository, providers: {
     directionProvider, structureProvider: new MockStructureProvider(),
-    trialProvider: new MockTrialProvider(), bodyProvider: new MockBodyProvider(),
+    trialProvider, bodyProvider: new MockBodyProvider(),
     fullReviewProvider: new MockFullReviewProvider()
   } }),
   onRuntimeError: (stage) => app.log.warn({ stage }, 'E1 browser MySQL worker operation failed.')
 });
 const recoveryLoop = createNovelRecoveryLoop({ repository });
-app.addHook('onClose', async () => {
-  await worker.stop();
-  await recoveryLoop.stop();
-  await disconnectPrismaClient();
-});
 await app.listen({ host: '127.0.0.1', port });
 recoveryLoop.start();
 worker.start();
