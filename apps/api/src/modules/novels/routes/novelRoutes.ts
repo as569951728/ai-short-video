@@ -128,8 +128,6 @@ const fullReviewParamsSchema = {
 const idempotencyKeySchema = { type: 'string', minLength: 8, maxLength: 120, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{7,119}$' } as const;
 
 const UNMIGRATED_PROVIDER_ROUTES = new Set([
-  '/novels/:novelId/directions/fuse',
-  '/novels/:novelId/directions/:versionId/optimize',
   '/novels/:novelId/chapters/batch-generate',
   '/novels/:novelId/chapters/:chapterId/generate',
   '/novels/:novelId/chapters/:chapterId/overlength-revisions',
@@ -399,17 +397,35 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
               uniqueItems: true
             },
             reason: { type: ['string', 'null'], maxLength: 500 },
-            idempotencyKey: idempotencyKeySchema
+            idempotencyKey: idempotencyKeySchema,
+            expectedSubmissionScopeId: { type: 'string', minLength: 43, maxLength: 43 },
+            expectedCapabilityRevision: { type: 'string', minLength: 43, maxLength: 43 },
+            expectedCapabilityExpiresAt: { type: 'string', format: 'date-time' }
           },
           additionalProperties: false
         },
         response: {
-          200: responseEnvelopeSchema
+          200: responseEnvelopeSchema,
+          202: responseEnvelopeSchema
         }
       }
     },
     async (request, reply) => {
       const { novelId } = request.params as { novelId: string };
+      const capability = options.capabilityPolicySnapshotResolver
+        ? await options.capabilityPolicySnapshotResolver(request)
+        : { contractVersion: 'v1' as const, enabled: false as const, reasonCode: 'POLICY_DISABLED' as const };
+      if (isNovelAsyncTransportActionEnabled(capability, 'direction_fuse')) {
+        const authoritativeNow = await options.repository.getAuthoritativeTaskTime();
+        assertAsyncCapabilitySubmission(capability, (request.body ?? {}) as Record<string, unknown>, authoritativeNow);
+        const queued = await novelService.queueDirectionFuse(novelId,
+          withRequestIdempotency(request.headers['idempotency-key'], request.body as FuseDirectionsRequest),
+          await resolveProviderContext(options.requestContextResolver, request), authoritativeNow);
+        const dispatch = toTaskDispatchResponse('direction_fuse', novelId, queued.task, queued.reused);
+        reply.status(dispatch.kind === 'accepted' ? 202 : 200);
+        return sendOk(request, reply, dispatch);
+      }
+      assertLegacyNovelSubmissionAllowed(capability, (request.body ?? {}) as Record<string, unknown>);
       const data = await novelService.fuseDirections(
         novelId,
         withRequestIdempotency(request.headers['idempotency-key'], request.body as FuseDirectionsRequest),
@@ -430,21 +446,47 @@ export async function registerNovelRoutes(app: FastifyInstance, options: NovelRo
           required: ['instruction'],
           properties: {
             instruction: { type: 'string', minLength: 1, maxLength: 500 },
-            idempotencyKey: idempotencyKeySchema
+            versionId: { type: 'string', minLength: 1, maxLength: 80 },
+            idempotencyKey: idempotencyKeySchema,
+            expectedSubmissionScopeId: { type: 'string', minLength: 43, maxLength: 43 },
+            expectedCapabilityRevision: { type: 'string', minLength: 43, maxLength: 43 },
+            expectedCapabilityExpiresAt: { type: 'string', format: 'date-time' }
           },
           additionalProperties: false
         },
         response: {
-          200: responseEnvelopeSchema
+          200: responseEnvelopeSchema,
+          202: responseEnvelopeSchema
         }
       }
     },
     async (request, reply) => {
       const { novelId, versionId } = request.params as { novelId: string; versionId: string };
+      const body = (request.body ?? {}) as OptimizeDirectionRequest & { versionId?: string };
+      if (body.versionId !== undefined && body.versionId !== versionId) {
+        throw new BusinessError(ErrorCode.ValidationError, '方向优化来源版本与请求路径不一致。');
+      }
+      const capability = options.capabilityPolicySnapshotResolver
+        ? await options.capabilityPolicySnapshotResolver(request)
+        : { contractVersion: 'v1' as const, enabled: false as const, reasonCode: 'POLICY_DISABLED' as const };
+      if (isNovelAsyncTransportActionEnabled(capability, 'direction_optimize')) {
+        const authoritativeNow = await options.repository.getAuthoritativeTaskTime();
+        assertAsyncCapabilitySubmission(capability, body as unknown as Record<string, unknown>, authoritativeNow);
+        if (!body.versionId) {
+          throw new BusinessError(ErrorCode.ValidationError, '后台方向优化需要明确来源版本。');
+        }
+        const queued = await novelService.queueDirectionOptimize(novelId, versionId,
+          withRequestIdempotency(request.headers['idempotency-key'], body),
+          await resolveProviderContext(options.requestContextResolver, request), authoritativeNow);
+        const dispatch = toTaskDispatchResponse('direction_optimize', versionId, queued.task, queued.reused);
+        reply.status(dispatch.kind === 'accepted' ? 202 : 200);
+        return sendOk(request, reply, dispatch);
+      }
+      assertLegacyNovelSubmissionAllowed(capability, body as unknown as Record<string, unknown>);
       const data = await novelService.optimizeDirection(
         novelId,
         versionId,
-        withRequestIdempotency(request.headers['idempotency-key'], (request.body ?? {}) as OptimizeDirectionRequest),
+        withRequestIdempotency(request.headers['idempotency-key'], body),
         await resolveProviderContext(options.requestContextResolver, request)
       );
 

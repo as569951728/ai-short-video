@@ -1,12 +1,12 @@
 import type { NovelAsyncTransportAction } from '@ai-shortvideo/shared';
 
 export const ISOLATED_E1_ACTIONS = [
-  'direction_generate', 'setting_generate', 'outline_generate', 'stage_outline_generate',
+  'direction_generate', 'direction_fuse', 'direction_optimize', 'setting_generate', 'outline_generate', 'stage_outline_generate',
   'trial_chapter_one_generate', 'trial_followup_generate', 'novel_full_review'
 ] as const satisfies readonly NovelAsyncTransportAction[];
 
 export const ISOLATED_E1_TASK_TYPES = new Set([
-  'novel_direction_generate', 'novel_setting_generate', 'novel_outline_generate',
+  'novel_direction_generate', 'novel_direction_fuse', 'novel_direction_optimize', 'novel_setting_generate', 'novel_outline_generate',
   'stage_outline_generate', 'trial_writing_generate', 'trial_followup_generate',
   'novel_full_review'
 ]);

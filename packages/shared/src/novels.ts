@@ -11,7 +11,7 @@ export const NOVEL_PROVIDER_ACTIONS = [
 export type NovelProviderAction = (typeof NOVEL_PROVIDER_ACTIONS)[number];
 
 export const NOVEL_ASYNC_TRANSPORT_ACTIONS = [
-  'direction_generate', 'setting_generate', 'outline_generate', 'stage_outline_generate',
+  'direction_generate', 'direction_fuse', 'direction_optimize', 'setting_generate', 'outline_generate', 'stage_outline_generate',
   'chapter_plan_generate', 'trial_chapter_one_generate', 'trial_followup_generate', 'novel_full_review'
 ] as const satisfies readonly NovelProviderAction[];
 

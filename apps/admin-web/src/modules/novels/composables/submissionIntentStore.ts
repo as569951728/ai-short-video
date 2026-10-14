@@ -12,7 +12,7 @@ type FieldRule = 'id' | 'text' | 'boolean' | 'positiveInt' | 'nullablePositiveIn
 const REQUEST_FIELDS: Record<NovelProviderAction, Record<string, FieldRule>> = {
   direction_generate: { regenerateReason: 'nullableText' },
   direction_fuse: { versionIds: 'ids', reason: 'nullableText' },
-  direction_optimize: { instruction: 'nullableText' },
+  direction_optimize: { versionId: 'id', instruction: 'text' },
   setting_generate: { regenerateReason: 'nullableText', optimization: 'optimization' },
   outline_generate: { regenerateReason: 'nullableText', optimization: 'optimization' },
   stage_outline_generate: { regenerateReason: 'nullableText', optimization: 'optimization' },
@@ -43,6 +43,7 @@ const REQUEST_FIELDS: Record<NovelProviderAction, Record<string, FieldRule>> = {
 
 const REQUIRED_FIELDS: Partial<Record<NovelProviderAction, readonly string[]>> = {
   direction_fuse: ['versionIds'],
+  direction_optimize: ['versionId', 'instruction'],
   body_batch_generate: ['strategySnapshotId', 'expectedStrategySnapshotVersion'],
   chapter_body_generate: ['strategySnapshotId', 'expectedStrategySnapshotVersion'],
   chapter_overlength_revise: ['sourceCandidateVersionId'],

@@ -3519,10 +3519,22 @@ async function confirmFuseDirections() {
 
   fusing.value = true
   apiError.value = ''
-  startNovelActionPendingTask('direction_fuse')
-  const pendingTaskId = pendingTask.value?.id
+  let pendingTaskId: string | undefined
 
   try {
+    const decision = await asyncTransport.submit('direction_fuse', {
+      versionIds: selectedCandidateIds.value,
+      reason: fuseDialog.reason.trim() || '融合所选方向的爽点和视频化钩子',
+    })
+    if (decision.kind === 'blocked') return
+    if (decision.kind === 'task') {
+      fuseDialog.open = false
+      selectedCandidateIds.value = []
+      ElMessage.info('融合任务已提交，结果生成后将在候选池中展示。')
+      return
+    }
+    startNovelActionPendingTask('direction_fuse')
+    pendingTaskId = pendingTask.value?.id
     const result = await fuseDirections(novelId.value, {
       versionIds: selectedCandidateIds.value,
       reason: fuseDialog.reason.trim() || '融合所选方向的爽点和视频化钩子',
@@ -3538,7 +3550,7 @@ async function confirmFuseDirections() {
     await loadDetail(true)
   } finally {
     fusing.value = false
-    clearLocalPendingTask(pendingTaskId)
+    if (pendingTaskId) clearLocalPendingTask(pendingTaskId)
   }
 }
 
@@ -3676,10 +3688,18 @@ async function confirmOptimizeDirection() {
 
   optimizingId.value = versionId
   apiError.value = ''
-  startNovelActionPendingTask('direction_optimize')
-  const pendingTaskId = pendingTask.value?.id
+  let pendingTaskId: string | undefined
 
   try {
+    const decision = await asyncTransport.submit('direction_optimize', { versionId, instruction })
+    if (decision.kind === 'blocked') return
+    if (decision.kind === 'task') {
+      optimizeDialog.open = false
+      ElMessage.info('优化任务已提交，结果生成后将在候选池中展示。')
+      return
+    }
+    startNovelActionPendingTask('direction_optimize')
+    pendingTaskId = pendingTask.value?.id
     const result = await optimizeDirection(novelId.value, versionId, {
       instruction,
     })
@@ -3693,7 +3713,7 @@ async function confirmOptimizeDirection() {
     await loadDetail(true)
   } finally {
     optimizingId.value = ''
-    clearLocalPendingTask(pendingTaskId)
+    if (pendingTaskId) clearLocalPendingTask(pendingTaskId)
   }
 }
 

@@ -59,6 +59,10 @@ test('keeps structure optimization in the strict replay payload', () => {
   const request = { optimization: { sourceVersionId: 'cv-1', instruction: '调整人物动机' } }
   assert.deepEqual(normalizeReplayRequest('outline_generate', request), request)
   assert.throws(() => normalizeReplayRequest('direction_generate', request))
+  assert.deepEqual(normalizeReplayRequest('direction_optimize', {
+    versionId: 'cv-1', instruction: '强化冲突',
+  }), { versionId: 'cv-1', instruction: '强化冲突' })
+  assert.throws(() => normalizeReplayRequest('direction_optimize', { instruction: '强化冲突' }))
 })
 
 test('IndexedDB commit, scoped replay, monotonic revision and retired receipt', async () => {

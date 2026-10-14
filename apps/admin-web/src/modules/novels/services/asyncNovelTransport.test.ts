@@ -26,6 +26,14 @@ it('normalizes only bounded, action-specific replay fields', () => {
   assert.throws(() => normalizeGenerationRequest('direction_generate', {
     optimization: { sourceVersionId: 'cv-1', instruction: '改进节奏' },
   }))
+  assert.deepEqual(normalizeGenerationRequest('direction_fuse', {
+    versionIds: ['cv-2', 'cv-1'], reason: ' 融合钩子 ',
+  }), { versionIds: ['cv-1', 'cv-2'], reason: '融合钩子' })
+  assert.throws(() => normalizeGenerationRequest('direction_fuse', { versionIds: ['cv-1', 'cv-1'] }))
+  assert.deepEqual(normalizeGenerationRequest('direction_optimize', {
+    versionId: ' cv-1 ', instruction: ' 强化冲突 ',
+  }), { versionId: 'cv-1', instruction: '强化冲突' })
+  assert.throws(() => normalizeGenerationRequest('direction_optimize', { instruction: '强化冲突' }))
   assert.throws(() => normalizeGenerationRequest('setting_generate', { unsafe: 'secret' } as never))
   assert.deepEqual(normalizeGenerationRequest('trial_chapter_one_generate', { chapterCount: 3 }), { chapterCount: 3 })
   assert.deepEqual(normalizeGenerationRequest('trial_followup_generate', {
@@ -45,6 +53,36 @@ it('normalizes only bounded, action-specific replay fields', () => {
   }), { expectedNovelVersion: '2030-01-01T00:00:00.000Z', reviewPolicyVersionId: 'policy-v1' })
   assert.throws(() => normalizeGenerationRequest('novel_full_review', { regenerateReason: 'retry' }))
   assert.throws(() => normalizeGenerationRequest('novel_full_review', { expectedNovelVersion: 'invalid' }))
+})
+
+it('submits direction fusion and optimization with stable replay targets', async () => {
+  const oldFetch = globalThis.fetch
+  const requests: Array<{ url: string; body: Record<string, unknown> }> = []
+  globalThis.fetch = async (url, init) => {
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+    requests.push({ url: String(url), body })
+    const optimize = String(url).endsWith('/directions/cv-1/optimize')
+    return Response.json({ success: true, data: {
+      kind: 'accepted', taskId: optimize ? 'task-optimize' : 'task-fuse',
+      action: optimize ? 'direction_optimize' : 'direction_fuse',
+      objectId: optimize ? 'cv-1' : 'novel-1', status: 'queued', reused: false,
+      pollUrl: optimize ? '/tasks/task-optimize' : '/tasks/task-fuse',
+    }, error: null, requestId: 'req-direction' }, { status: 202 })
+  }
+  try {
+    await submitAsyncNovelGeneration({ novelId: 'novel-1', action: 'direction_fuse',
+      request: { versionIds: ['cv-2', 'cv-1'], reason: '融合钩子' },
+      idempotencyKey: 'fuse-stable-key', capability: enabledCapability })
+    await submitAsyncNovelGeneration({ novelId: 'novel-1', action: 'direction_optimize',
+      request: { versionId: 'cv-1', instruction: '强化冲突' },
+      idempotencyKey: 'optimize-stable-key', capability: enabledCapability })
+    assert.match(requests[0]!.url, /\/novels\/novel-1\/directions\/fuse$/)
+    assert.deepEqual(requests[0]!.body.versionIds, ['cv-1', 'cv-2'])
+    assert.match(requests[1]!.url, /\/novels\/novel-1\/directions\/cv-1\/optimize$/)
+    assert.equal(requests[1]!.body.versionId, 'cv-1')
+  } finally {
+    globalThis.fetch = oldFetch
+  }
 })
 
 it('submits full review through its task endpoint with one stable request', async () => {

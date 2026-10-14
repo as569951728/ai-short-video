@@ -11,6 +11,10 @@ export type AsyncNovelGenerationAction = NovelAsyncTransportAction
 
 export interface NormalizedGenerationRequest {
   regenerateReason?: string
+  versionIds?: string[]
+  reason?: string
+  versionId?: string
+  instruction?: string
   optimization?: { sourceVersionId: string; instruction: string }
   chapterCount?: number
   trialRunId?: string
@@ -46,6 +50,8 @@ export function classifyAsyncDispatchFailure(error: unknown): AsyncDispatchFailu
 
 const actionPaths: Record<AsyncNovelGenerationAction, string> = {
   direction_generate: 'directions/generate',
+  direction_fuse: 'directions/fuse',
+  direction_optimize: 'directions',
   setting_generate: 'settings/generate',
   outline_generate: 'outlines/generate',
   stage_outline_generate: 'stage-outlines/generate',
@@ -65,7 +71,11 @@ export function normalizeGenerationRequest(
   const trialOne = action === 'trial_chapter_one_generate'
   const trialFollowup = action === 'trial_followup_generate'
   const fullReview = action === 'novel_full_review'
-  const allowedFields = fullReview ? ['expectedNovelVersion', 'reviewPolicyVersionId']
+  const fuse = action === 'direction_fuse'
+  const optimize = action === 'direction_optimize'
+  const allowedFields = fuse ? ['versionIds', 'reason']
+    : optimize ? ['versionId', 'instruction']
+    : fullReview ? ['expectedNovelVersion', 'reviewPolicyVersionId']
     : trialOne ? ['chapterCount', 'regenerateReason']
     : trialFollowup ? ['trialRunId', 'selectedCandidateId', 'confirmRisk', 'selectionReason']
       : ['regenerateReason', 'optimization']
@@ -73,6 +83,29 @@ export function normalizeGenerationRequest(
     throw new Error('生成参数包含不支持的字段。')
   }
   const normalized: NormalizedGenerationRequest = {}
+  if (fuse) {
+    if (!Array.isArray(request.versionIds) || request.versionIds.length < 2 || request.versionIds.length > 5
+      || request.versionIds.some((id) => typeof id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/.test(id))
+      || new Set(request.versionIds).size !== request.versionIds.length) {
+      throw new Error('请至少选择两个有效的方向候选。')
+    }
+    normalized.versionIds = [...request.versionIds].sort()
+    if (request.reason !== undefined) {
+      if (typeof request.reason !== 'string' || request.reason.trim().length > 500) throw new Error('融合原因无效。')
+      if (request.reason.trim()) normalized.reason = request.reason.trim()
+    }
+    return normalized
+  }
+  if (optimize) {
+    if (typeof request.versionId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/.test(request.versionId.trim())
+      || typeof request.instruction !== 'string' || !request.instruction.trim()
+      || request.instruction.trim().length > 500) {
+      throw new Error('方向优化来源或建议无效。')
+    }
+    normalized.versionId = request.versionId.trim()
+    normalized.instruction = request.instruction.trim()
+    return normalized
+  }
   if (fullReview) {
     if (request.expectedNovelVersion !== undefined) {
       if (typeof request.expectedNovelVersion !== 'string'
@@ -184,8 +217,11 @@ export async function submitAsyncNovelGeneration(input: {
     throw new ApiClientError('INVALID_RESPONSE', '任务提交方式已失效，请重新检查。')
   }
   const request = normalizeGenerationRequest(action, input.request)
+  const path = action === 'direction_optimize'
+    ? `${actionPaths[action]}/${encodeURIComponent(request.versionId!)}/optimize`
+    : actionPaths[action]
   const { status, data } = await apiRequestWithStatus<TaskDispatchResponseV1>(
-    `/novels/${encodeURIComponent(novelId)}/${actionPaths[action]}`,
+    `/novels/${encodeURIComponent(novelId)}/${path}`,
     {
       method: 'POST',
       headers: { 'Idempotency-Key': idempotencyKey },
@@ -197,7 +233,8 @@ export async function submitAsyncNovelGeneration(input: {
       },
     },
   )
-  const expectedObjectId = action === 'trial_followup_generate' ? request.trialRunId : novelId
+  const expectedObjectId = action === 'trial_followup_generate' ? request.trialRunId
+    : action === 'direction_optimize' ? request.versionId : novelId
   if (!data || data.action !== action || data.objectId !== expectedObjectId
     || !data.taskId || data.pollUrl !== `/tasks/${data.taskId}`
     || (status === 202 && (data.kind !== 'accepted' || !['queued', 'processing'].includes(data.status)))

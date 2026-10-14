@@ -487,6 +487,36 @@ export class NovelService {
     return this.toDirectionActionResult(result.novel, result.task, versions, result.version);
   }
 
+  async queueDirectionFuse(novelId: string, request: FuseDirectionsRequest, context: RequestContext, authoritativeNow: Date) {
+    const novel = await this.findNovelOrThrow(context.tenantId, novelId);
+    const versionIds = [...request.versionIds].sort();
+    if (versionIds.length < 2 || new Set(versionIds).size !== versionIds.length) {
+      throw new BusinessError(ErrorCode.ValidationError, '至少选择两个方向候选进行融合');
+    }
+    const rawIdempotencyKey = request.idempotencyKey?.trim() ?? '';
+    const idempotencyToken = createActorScopedIdempotencyToken({
+      tenantId: context.tenantId, userId: context.userId, action: 'direction_fuse',
+      objectId: novel.id, rawIdempotencyKey
+    });
+    const existingTask = await this.options.repository.findTaskByIdempotencyToken(
+      context.tenantId, 'novel_direction_fuse', idempotencyToken
+    );
+    if (!existingTask) {
+      this.ensureLifecycleActive(novel);
+      this.ensureDirectionWorkStage(novel);
+      await this.findDirectionVersionsOrThrow(context.tenantId, novelId, versionIds);
+    }
+    return claimQueuedGeneration({
+      action: 'direction_fuse', repository: this.options.repository, novel,
+      idempotencyKey: rawIdempotencyKey,
+      effectiveRequest: { versionIds, reason: request.reason?.trim() || null },
+      sourceVersionRefs: existingTask?.sourceVersionRefs ?? { sourceVersionIds: versionIds },
+      context, now: () => authoritativeNow,
+      durationDeadlineAt: new Date(authoritativeNow.getTime() + 15 * 60_000),
+      providerCapability: this.directionProvider
+    });
+  }
+
   async optimizeDirection(novelId: string, versionId: string, request: OptimizeDirectionRequest, context: RequestContext): Promise<DirectionActionResultDTO> {
     const novel = await this.findNovelOrThrow(context.tenantId, novelId);
     this.ensureLifecycleActive(novel);
@@ -531,6 +561,39 @@ export class NovelService {
     const result = execution.value;
 
     return this.toDirectionActionResult(result.novel, result.task, versions, result.version);
+  }
+
+  async queueDirectionOptimize(novelId: string, versionId: string, request: OptimizeDirectionRequest,
+    context: RequestContext, authoritativeNow: Date) {
+    const novel = await this.findNovelOrThrow(context.tenantId, novelId);
+    const instruction = request.instruction.trim();
+    if (!instruction) {
+      throw new BusinessError(ErrorCode.ValidationError, '方向优化要求不能为空。', {
+        issues: [{ path: 'instruction', message: 'instruction is required' }]
+      });
+    }
+    const rawIdempotencyKey = request.idempotencyKey?.trim() ?? '';
+    const idempotencyToken = createActorScopedIdempotencyToken({
+      tenantId: context.tenantId, userId: context.userId, action: 'direction_optimize',
+      objectId: versionId, rawIdempotencyKey
+    });
+    const existingTask = await this.options.repository.findTaskByIdempotencyToken(
+      context.tenantId, 'novel_direction_optimize', idempotencyToken
+    );
+    if (!existingTask) {
+      this.ensureLifecycleActive(novel);
+      const source = await this.findDirectionVersionOrThrow(context.tenantId, novelId, versionId);
+      this.ensureDirectionOptimizationAllowed(novel, source);
+    }
+    return claimQueuedGeneration({
+      action: 'direction_optimize', repository: this.options.repository, novel,
+      objectId: versionId, idempotencyKey: rawIdempotencyKey,
+      effectiveRequest: { versionId, instruction },
+      sourceVersionRefs: existingTask?.sourceVersionRefs ?? { sourceVersionIds: [versionId] },
+      context, now: () => authoritativeNow,
+      durationDeadlineAt: new Date(authoritativeNow.getTime() + 15 * 60_000),
+      providerCapability: this.directionProvider
+    });
   }
 
   async editDirectionCandidate(novelId: string, versionId: string, request: EditDirectionCandidateRequest, context: RequestContext): Promise<DirectionActionResultDTO> {

@@ -94,6 +94,86 @@ it('accepts an attested direction task as 202 and recovers the same task after s
   }
 });
 
+it('queues fuse and optimize against exact source versions without auto-adopting results', async () => {
+  const repository = createInMemoryNovelRepository();
+  repository.getLeasedExecutionCapability = async (taskType) =>
+    ['novel_direction_fuse', 'novel_direction_optimize'].includes(taskType) ? 'enabled' : 'unsupported';
+  const now = new Date('2030-01-01T00:00:10.000Z');
+  repository.getAuthoritativeTaskTime = async () => now;
+  let policyEnabled = false;
+  const app = await buildApp({ logger: false, novelRepository: repository,
+    aiProviderEnv: { AI_PROVIDER_MODE: 'mock' },
+    asyncTransportPolicy: () => ({ novelAsyncDispatchEnabled: policyEnabled,
+      scopeSecret: 'direction-edit-async-scope-secret-32-bytes-min', apiAudience: 'novel-api' }),
+    requestContextResolver: async () => ({ tenantId: 'tenant-direction-edit', userId: 'user-direction-edit' }),
+    now: () => now });
+  try {
+    const draft = await app.inject({ method: 'POST', url: '/novels/drafts', payload: { title: '方向融合与优化异步提交' } });
+    const novelId = draft.json().data.id as string;
+    const generated = await app.inject({ method: 'POST', url: `/novels/${novelId}/directions/generate`, payload: {} });
+    assert.equal(generated.statusCode, 200, generated.body);
+    const versionIds = generated.json().data.candidates.slice(0, 2).map((candidate: { id: string }) => candidate.id) as string[];
+    policyEnabled = true;
+    const capability = (await app.inject({ method: 'GET', url: '/novels/async-transport-capability' })).json().data;
+    const attestation = { expectedSubmissionScopeId: capability.submissionScopeId,
+      expectedCapabilityRevision: capability.capabilityRevision,
+      expectedCapabilityExpiresAt: capability.expiresAt };
+    const fuseUrl = `/novels/${novelId}/directions/fuse`;
+    const fusePayload = { ...attestation, versionIds: [...versionIds].reverse(), reason: '强化视频钩子' };
+    const fuseKey = 'direction-fuse-async-0001';
+    assert.equal((await app.inject({ method: 'POST', url: fuseUrl, payload: fusePayload })).statusCode, 400);
+    const fuse = await app.inject({ method: 'POST', url: fuseUrl,
+      headers: { 'idempotency-key': fuseKey }, payload: fusePayload });
+    assert.equal(fuse.statusCode, 202, fuse.body);
+    const fuseTaskId = fuse.json().data.taskId as string;
+    assert.equal(fuse.json().data.objectId, novelId);
+    const replay = await app.inject({ method: 'POST', url: fuseUrl,
+      headers: { 'idempotency-key': fuseKey }, payload: fusePayload });
+    assert.equal(replay.statusCode, 202, replay.body);
+    assert.equal(replay.json().data.taskId, fuseTaskId);
+    assert.equal(repository.getGenerationTasks().filter((task) => task.id === fuseTaskId).length, 1);
+    const handlers = createLeasedActionExecutor({ repository, providers: {
+      directionProvider: new MockDirectionProvider(), structureProvider: new MockStructureProvider(),
+      trialProvider: new MockTrialProvider(), bodyProvider: new MockBodyProvider(),
+      fullReviewProvider: new MockFullReviewProvider()
+    } });
+    const fuseLease = await repository.leaseNextQueuedTask('worker-fuse', 'lease-fuse', now,
+      new Date(now.getTime() + 60_000));
+    assert.equal(fuseLease?.id, fuseTaskId);
+    const fuseResult = await handlers.execute({ task: fuseLease!, leaseOwnerId: 'worker-fuse', leaseToken: 'lease-fuse',
+      signal: new AbortController().signal, mutate: (operation) => operation() });
+    await handlers.settle({ task: fuseLease!, leaseOwnerId: 'worker-fuse', leaseToken: 'lease-fuse',
+      authoritativeNow: now, outcome: { kind: 'fulfilled', value: fuseResult } });
+    assert.equal((await repository.findTaskById('tenant-direction-edit', fuseTaskId))?.status, TaskStatus.WaitingConfirmation);
+    assert.equal(repository.getCreativeVersions().filter((version) => version.sourceTaskId === fuseTaskId).length, 1);
+    assert.equal((await repository.findById('tenant-direction-edit', novelId))?.currentDirectionVersionId, null);
+
+    const optimizeUrl = `/novels/${novelId}/directions/${versionIds[0]}/optimize`;
+    const optimizePayload = { ...attestation, versionId: versionIds[0], instruction: '强化冲突' };
+    const wrongSource = await app.inject({ method: 'POST', url: optimizeUrl,
+      headers: { 'idempotency-key': 'direction-optimize-wrong-0001' },
+      payload: { ...optimizePayload, versionId: versionIds[1] } });
+    assert.equal(wrongSource.statusCode, 400, wrongSource.body);
+    const optimized = await app.inject({ method: 'POST', url: optimizeUrl,
+      headers: { 'idempotency-key': 'direction-optimize-async-0001' }, payload: optimizePayload });
+    assert.equal(optimized.statusCode, 202, optimized.body);
+    const optimizeTaskId = optimized.json().data.taskId as string;
+    assert.equal(optimized.json().data.objectId, versionIds[0]);
+    const optimizeLease = await repository.leaseNextQueuedTask('worker-optimize', 'lease-optimize', now,
+      new Date(now.getTime() + 60_000));
+    assert.equal(optimizeLease?.id, optimizeTaskId);
+    const optimizeResult = await handlers.execute({ task: optimizeLease!, leaseOwnerId: 'worker-optimize', leaseToken: 'lease-optimize',
+      signal: new AbortController().signal, mutate: (operation) => operation() });
+    await handlers.settle({ task: optimizeLease!, leaseOwnerId: 'worker-optimize', leaseToken: 'lease-optimize',
+      authoritativeNow: now, outcome: { kind: 'fulfilled', value: optimizeResult } });
+    assert.equal((await repository.findTaskById('tenant-direction-edit', optimizeTaskId))?.status, TaskStatus.WaitingConfirmation);
+    assert.equal(repository.getCreativeVersions().filter((version) => version.sourceTaskId === optimizeTaskId).length, 1);
+    assert.equal((await repository.findById('tenant-direction-edit', novelId))?.currentDirectionVersionId, null);
+  } finally {
+    await app.close();
+  }
+});
+
 it('queues an attested setting task and keeps its result as a candidate', async () => {
   const repository = createInMemoryNovelRepository();
   repository.getLeasedExecutionCapability = async (taskType) =>
