@@ -31,7 +31,6 @@
       <p v-else-if="isProcessing" class="task-progress-hint">阶段进度：正在调用模型或保存结果，当前不展示精确百分比。</p>
       <p class="task-progress-step">{{ displayTask?.currentStep || '等待任务状态更新' }}</p>
       <div v-if="displayTask" class="task-progress-meta">
-        <span>状态 {{ displayTask.status }}</span>
         <span v-if="taskStartedAt">开始 {{ formatDateTime(taskStartedAt) }}</span>
         <span v-if="elapsedText">已耗时 {{ elapsedText }}</span>
       </div>
@@ -69,7 +68,7 @@
       <div v-if="detail" class="task-detail-actions">
         <el-button v-if="detail.retryable" type="primary" :loading="actionLoading" @click="$emit('retry')">重试任务</el-button>
         <el-button v-if="detail.cancellable" :loading="actionLoading" @click="$emit('cancel')">取消任务</el-button>
-        <span class="muted">{{ detail.nextAction.reasonText }}</span>
+        <span v-if="detail.nextAction.reasonText !== visibleFailureReason" class="muted">{{ detail.nextAction.reasonText }}</span>
       </div>
 
       <el-timeline v-if="detail?.events.length" class="task-event-list">

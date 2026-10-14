@@ -31,6 +31,7 @@ const ACTIVE_TASK_STATUSES = [TaskStatus.Queued, TaskStatus.Processing, TaskStat
 const PROVIDER_BACKED_TASK_TYPES = new Set(listActionExecutionPlans().map((plan) => plan.taskType));
 const PROVIDER_FAILURE_PUBLIC_MESSAGE = '任务执行失败，未写入新的候选或正式内容。';
 const PROVIDER_FAILURE_PUBLIC_ERROR_CODE = 'PROVIDER_ERROR';
+const PROVIDER_OUTCOME_UNKNOWN_MESSAGE = '模型调用结果无法确认，可能已产生费用；系统不会自动重试。请核对任务与模型账单后，再决定是否重新生成。';
 const OUTPUT_PARSE_FAILURE_PUBLIC_MESSAGE = '模型输出格式不符合约定，本次未生成报告。';
 const CONTENT_LENGTH_FAILURE_CATEGORY = 'content_length_out_of_range';
 const CONTENT_LENGTH_FAILURE_ERROR_CODE = 'NOVEL_CONTENT_LENGTH_OUT_OF_RANGE';
@@ -166,7 +167,9 @@ export class TaskService {
       status: task.status,
       statusText: getTaskStatusText(task.status),
       progress: task.progress,
-      currentStep: providerBackedFailed ? isContentLengthFailure(task) || task.failureCategory === 'output_parse_failed' ? providerFailureMessage : '生成任务失败，暂不支持直接重试' : task.currentStep,
+      currentStep: providerBackedFailed ? isProviderOutcomeUnknown(task) ? '模型调用结果未确认'
+        : isContentLengthFailure(task) || task.failureCategory === 'output_parse_failed'
+          ? providerFailureMessage : '生成任务失败，暂不支持直接重试' : task.currentStep,
       userAcceptedResult: task.userAcceptedResult,
       novelId: task.novelId,
       objectType: task.objectType,
@@ -208,7 +211,9 @@ export function toRecentTaskSummaryDTO(task: GenerationTaskRecord) {
     status: task.status,
     statusText: getTaskStatusText(task.status),
     progress: task.progress,
-    currentStep: providerBackedFailed ? isContentLengthFailure(task) || task.failureCategory === 'output_parse_failed' ? providerFailureMessage : '生成任务失败，暂不支持直接重试' : task.currentStep,
+    currentStep: providerBackedFailed ? isProviderOutcomeUnknown(task) ? '模型调用结果未确认'
+      : isContentLengthFailure(task) || task.failureCategory === 'output_parse_failed'
+        ? providerFailureMessage : '生成任务失败，暂不支持直接重试' : task.currentStep,
     resultVersionIds: task.resultVersionIds,
     userAcceptedResult: task.userAcceptedResult,
     failureCategory: task.failureCategory,
@@ -229,7 +234,8 @@ function toTaskEventDTO(event: GenerationTaskEventRecord, providerFailureMessage
     statusText: getTaskStatusText(event.status),
     eventType: event.eventType,
     eventTypeText: getEventTypeText(event.eventType),
-    message: providerFailureMessage ?? event.message ?? '',
+    message: providerFailureMessage ? getSafeProviderTaskEventMessage(event.eventType, providerFailureMessage)
+      : event.message ?? '',
     progress: event.progress,
     requestId: getRequestId(event.payload),
     createdAt: event.createdAt.toISOString()
@@ -246,6 +252,9 @@ function getTaskStatusText(status: TaskStatus | string) {
 }
 
 function getEventTypeText(eventType: string) {
+  if (eventType === 'task_claimed') return '任务已受理';
+  if (eventType === 'task_leased') return '后台已领取';
+  if (eventType === 'task_recovered') return '中断恢复';
   if (eventType === 'preparing_context') return '准备上下文';
   if (eventType === 'calling_model') return '调用模型';
   if (eventType === 'parsing_output') return '解析输出';
@@ -262,6 +271,18 @@ function getEventTypeText(eventType: string) {
   return '任务事件';
 }
 
+function getSafeProviderTaskEventMessage(eventType: string, failureMessage: string) {
+  if (eventType === 'task_claimed' || eventType === 'task_created') return '任务已受理，等待后台执行。';
+  if (eventType === 'task_leased' || eventType === 'task_processing') return '后台已领取任务。';
+  if (eventType === 'preparing_context') return '正在准备生成上下文。';
+  if (eventType === 'calling_model') return '正在调用模型。';
+  if (eventType === 'parsing_output') return '正在解析模型结果。';
+  if (eventType === 'quality_checking') return '正在检查生成结果。';
+  if (eventType === 'saving_result') return '正在保存生成结果。';
+  if (eventType === 'task_failed' || eventType === 'task_recovered') return failureMessage;
+  return '任务状态已更新。';
+}
+
 function getFailureCategoryText(category: string | null) {
   if (!category) return null;
   if (category === 'provider_error') return '生成服务异常';
@@ -271,6 +292,7 @@ function getFailureCategoryText(category: string | null) {
   if (category === 'output_parse_failed') return '模型输出解析失败';
   if (category === CONTENT_LENGTH_FAILURE_CATEGORY) return '正文字符数不合格';
   if (category === 'source_stale') return '上游版本已变化';
+  if (category === 'provider_outcome_unknown') return '模型调用结果未确认';
   if (category === 'validation_error') return '生成结果结构异常';
   if (category === 'cancelled') return '用户取消';
   return '任务异常';
@@ -294,6 +316,9 @@ function getTaskNextAction(
   cancellable: boolean,
   sourceStale: boolean
 ): RecommendedActionDTO {
+  if (isProviderOutcomeUnknown(task)) {
+    return createAction('disabled', '先核对调用结果', PROVIDER_OUTCOME_UNKNOWN_MESSAGE, 'disabled', true);
+  }
   if (isProviderBackedFailedTask(task)) {
     return createAction('disabled', '暂不支持任务重试', RETRY_FREEZE_REASON, 'disabled', true);
   }
@@ -356,6 +381,7 @@ function isProviderBackedFailedTask(task: GenerationTaskRecord) {
 }
 
 function getProviderFailureMessage(task: GenerationTaskRecord) {
+  if (isProviderOutcomeUnknown(task)) return PROVIDER_OUTCOME_UNKNOWN_MESSAGE;
   if (isContentLengthFailure(task)) {
     return task.errorMessage || '正文字符数不在允许范围内，本次结果未保存。';
   }
@@ -365,7 +391,13 @@ function getProviderFailureMessage(task: GenerationTaskRecord) {
 }
 
 function getProviderFailureErrorCode(task: GenerationTaskRecord) {
+  if (isProviderOutcomeUnknown(task)) return 'PROVIDER_OUTCOME_UNKNOWN';
   return isContentLengthFailure(task) ? CONTENT_LENGTH_FAILURE_ERROR_CODE : PROVIDER_FAILURE_PUBLIC_ERROR_CODE;
+}
+
+function isProviderOutcomeUnknown(task: GenerationTaskRecord) {
+  return task.status === TaskStatus.Failed && task.failureCategory === 'provider_outcome_unknown'
+    && task.errorCode === 'PROVIDER_OUTCOME_UNKNOWN';
 }
 
 function isContentLengthFailure(task: GenerationTaskRecord) {

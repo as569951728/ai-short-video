@@ -1481,6 +1481,46 @@ describe('novel package 3 structure routes', () => {
 });
 
 describe('novel package 4 task center routes', () => {
+  it('explains an unknown paid-call outcome without exposing raw errors or offering a retry', async () => {
+    const repository = createInMemoryNovelRepository();
+    const app = await buildApp({ logger: false, novelRepository: repository });
+    const novelId = await createDraft(app, '调用结果未知提示测试');
+    const generated = await generateDirections(app, novelId);
+    const task = repository.getGenerationTasks().find((item) => item.id === generated.task.id)!;
+    Object.assign(task, { status: TaskStatus.Failed, failureCategory: 'provider_outcome_unknown',
+      errorCode: 'PROVIDER_OUTCOME_UNKNOWN', errorMessage: 'RAW_PROVIDER_CANARY',
+      statusNote: 'RAW_PROVIDER_CANARY', currentStep: 'RAW_PROVIDER_CANARY' });
+    const event = repository.getGenerationTaskEvents().find((item) => item.taskId === task.id
+      && item.eventType === 'calling_model')!;
+    event.message = 'RAW_PROVIDER_CANARY';
+    repository.getGenerationTaskEvents().push({ ...event, id: 'event-outcome-unknown-recovered',
+      eventType: 'task_recovered', status: TaskStatus.Failed, message: 'RAW_PROVIDER_CANARY' });
+
+    const response = await app.inject({ method: 'GET', url: `/tasks/${task.id}` });
+    assert.equal(response.statusCode, 200);
+    const detail = response.json().data;
+    assert.equal(detail.errorCode, 'PROVIDER_OUTCOME_UNKNOWN');
+    assert.equal(detail.failureCategoryText, '模型调用结果未确认');
+    assert.match(detail.userFailureReason, /可能已产生费用.*不会自动重试/);
+    assert.equal(detail.retryable, false);
+    assert.equal(detail.nextAction.label, '先核对调用结果');
+    assert.equal(detail.nextAction.disabled, true);
+    assert.equal(detail.events.find((item: { eventType: string }) => item.eventType === 'calling_model')?.message,
+      '正在调用模型。');
+    assert.match(detail.events.find((item: { eventType: string }) => item.eventType === 'task_recovered')?.message,
+      /可能已产生费用/);
+    assert.doesNotMatch(JSON.stringify(detail), /RAW_PROVIDER_CANARY/);
+    const summary = toRecentTaskSummaryDTO(task);
+    assert.equal(summary.errorCode, 'PROVIDER_OUTCOME_UNKNOWN');
+    assert.equal(summary.currentStep, '模型调用结果未确认');
+    assert.doesNotMatch(JSON.stringify(summary), /RAW_PROVIDER_CANARY/);
+    const events = (await app.inject({ method: 'GET', url: `/tasks/${task.id}/events` })).json().data.items;
+    assert.equal(events.find((item: { eventType: string }) => item.eventType === 'calling_model')?.message,
+      '正在调用模型。');
+    assert.doesNotMatch(JSON.stringify(events), /RAW_PROVIDER_CANARY/);
+    await app.close();
+  });
+
   it('returns task detail and progress events for generation tasks', async () => {
     const repository = createInMemoryNovelRepository();
     const app = await buildApp({

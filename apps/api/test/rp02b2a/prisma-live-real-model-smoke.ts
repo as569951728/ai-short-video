@@ -32,13 +32,14 @@ if (!apiKey || new URL(baseUrl).protocol !== 'https:' || new URL(baseUrl).hostna
   throw new Error('Real-model smoke requires a configured DeepSeek key and the official HTTPS host.');
 }
 const action = process.env.E1_REAL_MODEL_ACTION || 'direction_generate';
-if (!['direction_generate', 'setting_generate', 'outline_generate'].includes(action)) {
-  throw new Error('Real-model smoke supports only direction, setting, or outline generation.');
+if (!['direction_generate', 'setting_generate', 'outline_generate', 'stage_outline_generate'].includes(action)) {
+  throw new Error('Real-model smoke supports only direction, setting, outline, or stage-outline generation.');
 }
 
 class IsolatedPrismaRepository extends PrismaNovelRepository {
   override async getLeasedExecutionCapability(taskType: string) {
-    const expectedType = action === 'outline_generate' ? 'novel_outline_generate'
+    const expectedType = action === 'stage_outline_generate' ? 'stage_outline_generate'
+      : action === 'outline_generate' ? 'novel_outline_generate'
       : action === 'setting_generate' ? 'novel_setting_generate' : 'novel_direction_generate';
     return taskType === expectedType
       ? 'enabled' as const
@@ -113,7 +114,7 @@ try {
     await setup.adoptDirection(novel.id, seed.id, {
       idempotencyKey: `e1-real-seed-adopt-${suffix}`, currentVersionId: null
     }, context);
-    if (action === 'outline_generate') {
+    if (action === 'outline_generate' || action === 'stage_outline_generate') {
       await setup.generateSetting(novel.id, { idempotencyKey: `e1-real-seed-setting-${suffix}` }, context);
       const settings = await repository.listStructureVersions(context.tenantId, novel.id);
       const setting = settings.find((version) => version.objectType === 'setting'
@@ -121,9 +122,20 @@ try {
       assert.ok(setting, 'Mock setting setup did not produce an adoptable candidate.');
       await setup.adoptSetting(novel.id, setting.id, { currentVersionId: null }, context);
     }
+    if (action === 'stage_outline_generate') {
+      await setup.generateOutline(novel.id, { idempotencyKey: `e1-real-seed-outline-${suffix}` }, context);
+      const outlines = await repository.listStructureVersions(context.tenantId, novel.id);
+      const outline = outlines.find((version) => version.objectType === 'outline'
+        && version.status === 'candidate');
+      assert.ok(outline, 'Mock outline setup did not produce an adoptable candidate.');
+      await setup.adoptOutline(novel.id, outline.id, { currentVersionId: null }, context);
+    }
   }
   const now = await repository.getAuthoritativeTaskTime();
-  const queued = action === 'outline_generate'
+  const queued = action === 'stage_outline_generate'
+    ? await new NovelService({ repository, structureProvider: providers.structureProvider })
+      .queueStageOutline(novel.id, { idempotencyKey: `e1-real-once-${suffix}` }, context, now)
+    : action === 'outline_generate'
     ? await new NovelService({ repository, structureProvider: providers.structureProvider })
       .queueOutline(novel.id, { idempotencyKey: `e1-real-once-${suffix}` }, context, now)
     : action === 'setting_generate'
@@ -172,10 +184,12 @@ try {
     assert.ok(candidates.length >= 1 && candidates.length <= (action === 'direction_generate' ? 10 : 5));
     assert.ok(candidates.every((candidate) => candidate.status === 'CANDIDATE'
       && candidate.sourceType === 'deepseek'
-      && candidate.objectType === (action === 'outline_generate' ? 'outline'
+      && candidate.objectType === (action === 'stage_outline_generate' ? 'stage_outline'
+        : action === 'outline_generate' ? 'outline'
         : action === 'setting_generate' ? 'setting' : 'direction')));
     const currentNovel = await repository.findById(context.tenantId, novel.id);
-    assert.equal(action === 'outline_generate' ? currentNovel?.currentOutlineVersionId
+    assert.equal(action === 'stage_outline_generate' ? currentNovel?.currentStageOutlineVersionId
+      : action === 'outline_generate' ? currentNovel?.currentOutlineVersionId
       : action === 'setting_generate' ? currentNovel?.currentSettingVersionId
         : currentNovel?.currentDirectionVersionId, null);
     assert.equal((await repository.listTaskEvents(context.tenantId, task.id))
